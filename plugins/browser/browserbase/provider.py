@@ -5,10 +5,10 @@ ABC introduced in PR #25214). The legacy in-tree module
 ``tools.browser_providers.browserbase`` was removed in the same PR; this file
 is now the canonical implementation.
 
-Browserbase requires direct ``BROWSERBASE_API_KEY`` and ``BROWSERBASE_PROJECT_ID``
-credentials. Managed Nous gateway support has been removed — the Nous
-subscription now routes through Browser Use instead (see
-``plugins/browser/browser_use/``).
+Browserbase requires a direct ``BROWSERBASE_API_KEY`` credential. Browserbase
+infers the project from that key when ``BROWSERBASE_PROJECT_ID`` is omitted.
+Managed Nous gateway support has been removed — the Nous subscription now routes
+through Browser Use instead (see ``plugins/browser/browser_use/``).
 
 Config keys this provider responds to::
 
@@ -18,7 +18,7 @@ Config keys this provider responds to::
 Auth env vars::
 
     BROWSERBASE_API_KEY=...       # https://browserbase.com
-    BROWSERBASE_PROJECT_ID=...
+    BROWSERBASE_PROJECT_ID=...    # optional legacy override
 
 Optional feature knobs::
 
@@ -68,7 +68,7 @@ class BrowserbaseBrowserProvider(BrowserProvider):
     def _get_config_or_none(self) -> Optional[Dict[str, Any]]:
         api_key = os.environ.get("BROWSERBASE_API_KEY")
         project_id = os.environ.get("BROWSERBASE_PROJECT_ID")
-        if api_key and project_id:
+        if api_key:
             return {
                 "api_key": api_key,
                 "project_id": project_id,
@@ -82,8 +82,7 @@ class BrowserbaseBrowserProvider(BrowserProvider):
         config = self._get_config_or_none()
         if config is None:
             raise ValueError(
-                "Browserbase requires BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID "
-                "environment variables."
+                "Browserbase requires the BROWSERBASE_API_KEY environment variable."
             )
         return config
 
@@ -112,7 +111,9 @@ class BrowserbaseBrowserProvider(BrowserProvider):
             "custom_timeout": False,
         }
 
-        session_config: Dict[str, object] = {"projectId": config["project_id"]}
+        session_config: Dict[str, object] = {}
+        if config.get("project_id"):
+            session_config["projectId"] = config["project_id"]
 
         if enable_keep_alive:
             session_config["keepAlive"] = True
@@ -231,7 +232,11 @@ class BrowserbaseBrowserProvider(BrowserProvider):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "projectId": config["project_id"],
+                    **(
+                        {"projectId": config["project_id"]}
+                        if config.get("project_id")
+                        else {}
+                    ),
                     "status": "REQUEST_RELEASE",
                 },
                 timeout=10,
@@ -267,7 +272,11 @@ class BrowserbaseBrowserProvider(BrowserProvider):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "projectId": config["project_id"],
+                    **(
+                        {"projectId": config["project_id"]}
+                        if config.get("project_id")
+                        else {}
+                    ),
                     "status": "REQUEST_RELEASE",
                 },
                 timeout=5,
@@ -287,10 +296,6 @@ class BrowserbaseBrowserProvider(BrowserProvider):
                     "key": "BROWSERBASE_API_KEY",
                     "prompt": "Browserbase API key",
                     "url": "https://browserbase.com",
-                },
-                {
-                    "key": "BROWSERBASE_PROJECT_ID",
-                    "prompt": "Browserbase project ID",
                 },
             ],
             "post_setup": "agent_browser",

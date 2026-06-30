@@ -340,15 +340,20 @@ def check_systemd_timing_alignment(drain_timeout: float) -> Optional[Dict[str, A
     if not invocation_id:
         return None  # Not running under systemd (or at least not directly)
 
-    # Try to identify our unit name and ask systemctl for its config.
+    # Try to identify our unit name and ask systemctl for its effective config.
     unit_name: Optional[str] = None
+    cgroup_path = ""
     try:
-        # /proc/self/cgroup gives us "0::/user.slice/.../hermes-gateway.service"
+        # /proc/self/cgroup gives us either a user-manager path such as
+        # "0::/user.slice/.../hermes-gateway.service" or a system-manager path
+        # such as "0::/system.slice/hermes-gateway.service". The manager matters:
+        # querying the wrong manager can return a stale sibling unit and miss
+        # effective drop-in overrides from the real one.
         with open("/proc/self/cgroup", encoding="utf-8") as fh:
             for line in fh:
-                # systemd cgroup line ends with the unit name
                 if ".service" in line:
-                    parts = line.strip().split("/")
+                    cgroup_path = line.strip().split(":", 2)[-1]
+                    parts = cgroup_path.split("/")
                     for p in reversed(parts):
                         if p.endswith(".service"):
                             unit_name = p
@@ -360,11 +365,17 @@ def check_systemd_timing_alignment(drain_timeout: float) -> Optional[Dict[str, A
     if not unit_name:
         return None
 
-    # Query systemctl for TimeoutStopUSec.  Use --user OR system depending
-    # on which manager actually owns the unit.  Try user first since
-    # that's the common case for hermes.
+    # Query systemctl for TimeoutStopUSec. Prefer the manager indicated by
+    # /proc/self/cgroup so system services honor system drop-ins and user
+    # services honor user drop-ins. Fall back to the other manager only if the
+    # indicated one is unavailable.
+    if "/system.slice/" in cgroup_path:
+        manager_flags = ([], ["--user"])
+    else:
+        manager_flags = (["--user"], [])
+
     timeout_us: Optional[int] = None
-    for flag in (["--user"], []):
+    for flag in manager_flags:
         try:
             result = subprocess.run(
                 ["systemctl", *flag, "show", unit_name, "--property=TimeoutStopUSec"],

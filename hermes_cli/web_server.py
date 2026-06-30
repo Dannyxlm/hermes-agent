@@ -12042,6 +12042,46 @@ def _ws_client_is_allowed(ws: "WebSocket") -> bool:
     return client_host in _LOOPBACK_HOSTS
 
 
+
+def _ws_origin_matches_dashboard_public_url(origin: str) -> bool:
+    """True when a browser/Electron Origin matches dashboard.public_url.
+
+    Reverse-proxied Desktop deployments bind uvicorn to 127.0.0.1 while the
+    real browser origin is the public HTTPS hostname. Keep the loopback Host
+    guard intact, but allow the explicitly configured public dashboard origin.
+    """
+    try:
+        parsed_origin = urllib.parse.urlparse(origin)
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.netloc:
+        return False
+
+    candidates = [os.environ.get("HERMES_DASHBOARD_PUBLIC_URL", "")]
+    try:
+        cfg = load_config()
+        dashboard = cfg.get("dashboard") if isinstance(cfg, dict) else None
+        if isinstance(dashboard, dict):
+            candidates.append(str(dashboard.get("public_url", "") or ""))
+    except Exception:
+        _log.debug("failed to load dashboard public_url for WS origin allow-list", exc_info=True)
+
+    origin_scheme = parsed_origin.scheme.lower()
+    origin_netloc = parsed_origin.netloc.lower()
+    for raw in candidates:
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed_candidate = urllib.parse.urlparse(raw)
+        except ValueError:
+            continue
+        if parsed_candidate.scheme.lower() != origin_scheme:
+            continue
+        if parsed_candidate.netloc.lower() == origin_netloc:
+            return True
+    return False
+
 def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     """Return a Host/Origin rejection reason, or None when allowed.
 
@@ -12072,6 +12112,8 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
         return f"origin_mismatch origin={origin} bound={bound_host}"
 
     if not _is_accepted_host(parsed.netloc, bound_host):
+        if _ws_origin_matches_dashboard_public_url(origin):
+            return None
         return f"origin_mismatch origin={origin} bound={bound_host}"
     return None
 
