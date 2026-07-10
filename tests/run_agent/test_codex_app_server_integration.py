@@ -193,6 +193,7 @@ class TestRunConversationCodexPath:
         agent = _make_codex_agent()
         agent._memory_manager = MagicMock()
         agent._memory_manager.build_system_prompt.return_value = ""
+        agent._memory_manager.prefetch_all.return_value = ""
 
         with patch.object(agent, "_spawn_background_review", return_value=None):
             result = agent.run_conversation("hello")
