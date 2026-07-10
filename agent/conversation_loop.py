@@ -633,6 +633,8 @@ def run_conversation(
             messages=messages,
             effective_task_id=effective_task_id,
             should_review_memory=_should_review_memory,
+            plugin_user_context=_plugin_user_context,
+            ext_prefetch_cache=_ext_prefetch_cache,
         )
 
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:

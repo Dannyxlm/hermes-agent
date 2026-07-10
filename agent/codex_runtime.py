@@ -306,6 +306,8 @@ def run_codex_app_server_turn(
     messages: List[Dict[str, Any]],
     effective_task_id: str,
     should_review_memory: bool = False,
+    plugin_user_context: str = "",
+    ext_prefetch_cache: str = "",
 ) -> Dict[str, Any]:
     """Codex app-server runtime path. Hands the entire turn to a `codex
     app-server` subprocess and projects its events back into Hermes'
@@ -382,12 +384,27 @@ def run_codex_app_server_turn(
             on_event=_on_codex_event,
         )
 
-    # NOTE: the user message is ALREADY appended to messages by the
-    # standard run_conversation() flow (line ~11823) before the early
-    # return reaches us. Do NOT append again — that would duplicate.
+    # NOTE: the user message is ALREADY appended to messages by the standard
+    # run_conversation() flow before the early return reaches us. Do NOT append
+    # or mutate it here — that would duplicate the turn or persist ephemeral
+    # context. Enrich only the app-server request, with the same ordering as the
+    # classic API path: fenced external-memory context first, plugin context
+    # second.
+    request_user_message = user_message
+    context_parts: list[str] = []
+    if ext_prefetch_cache:
+        from agent.memory_manager import build_memory_context_block
+
+        memory_context = build_memory_context_block(ext_prefetch_cache)
+        if memory_context:
+            context_parts.append(memory_context)
+    if plugin_user_context:
+        context_parts.append(plugin_user_context)
+    if context_parts:
+        request_user_message += "\n\n" + "\n\n".join(context_parts)
 
     try:
-        turn = agent._codex_session.run_turn(user_input=user_message)
+        turn = agent._codex_session.run_turn(user_input=request_user_message)
     except Exception as exc:
         logger.exception("codex app-server turn failed")
         # Crash → unconditionally drop the session so the next turn
