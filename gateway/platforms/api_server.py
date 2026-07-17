@@ -1744,7 +1744,6 @@ class APIServerAdapter(BasePlatformAdapter):
         from hermes_cli.tools_config import _get_platform_tools
 
         runtime_kwargs = _resolve_runtime_agent_kwargs()
-        reasoning_config = GatewayRunner._load_reasoning_config()
         model = _resolve_gateway_model()
 
         # When the primary provider's auth fails (expired token / 429 quota
@@ -1803,6 +1802,12 @@ class APIServerAdapter(BasePlatformAdapter):
                 "api_server model route skipped: session /model override wins for %s",
                 gateway_session_key or session_id,
             )
+
+        # Resolve reasoning only after model routing so per-model
+        # agent.reasoning_overrides apply to the effective routed model rather
+        # than the global default. This keeps API clients that select a fast
+        # model from silently inheriting the default model's reasoning effort.
+        reasoning_config = GatewayRunner._load_reasoning_config(model)
 
         user_config = _load_gateway_config()
         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))

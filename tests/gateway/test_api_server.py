@@ -4141,6 +4141,37 @@ class TestModelRoutesHandlers:
 
 
 class TestModelRoutesAgentCreation:
+    def test_route_resolves_reasoning_for_effective_model(self, monkeypatch):
+        """A routed model must receive its own per-model reasoning override."""
+        captured = {}
+        resolved_models = []
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        _patch_create_agent_runtime(monkeypatch, captured, FakeAgent)
+        monkeypatch.setattr(
+            "gateway.run.GatewayRunner._load_reasoning_config",
+            staticmethod(
+                lambda model="": resolved_models.append(model)
+                or {"enabled": True, "effort": "xhigh"}
+            ),
+        )
+        adapter = _make_routing_adapter(
+            {"ava-voice-fast": {"model": "gpt-5.6-luna", "provider": "openai-codex"}}
+        )
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        monkeypatch.setattr(adapter, "_session_model_override_for", lambda *_: None)
+
+        adapter._create_agent(
+            session_id="voice-1", route=adapter._resolve_route("ava-voice-fast")
+        )
+
+        assert captured["model"] == "gpt-5.6-luna"
+        assert captured["reasoning_config"] == {"enabled": True, "effort": "xhigh"}
+        assert resolved_models == ["gpt-5.6-luna"]
+
     def test_route_overrides_model_and_credentials(self, monkeypatch):
         captured = {}
 
