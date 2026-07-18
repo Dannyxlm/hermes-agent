@@ -13,6 +13,8 @@ from plugins.memory.honcho.capabilities import (
     HonchoCapabilityProbeDependencies,
     REQUIRED_CAPABILITIES,
     build_public_capability_receipt,
+    current_provider_source_sha256,
+    current_sdk_identity,
     load_public_capability_receipt,
     probe_honcho_capabilities,
     probe_required_honcho_capabilities,
@@ -254,3 +256,11 @@ def test_public_supported_receipt_rejects_missing_check_or_raw_unknown_field():
     forged = dict(receipt)
     forged["raw_payload"] = "private"
     assert not validate_public_capability_receipt(forged)
+
+
+def test_runtime_provider_and_sdk_identity_are_nonempty_sha256_bindings():
+    provider_hash = current_provider_source_sha256()
+    sdk_version, sdk_hash = current_sdk_identity()
+    assert len(provider_hash) == 64
+    assert len(sdk_hash) == 64
+    assert sdk_version

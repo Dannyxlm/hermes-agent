@@ -179,7 +179,12 @@ class HonchoSessionManager:
         return peer
 
     def _get_or_create_honcho_session(
-        self, session_id: str, user_peer: Any, assistant_peer: Any
+        self,
+        session_id: str,
+        user_peer: Any,
+        assistant_peer: Any,
+        *,
+        hydrate_history: bool = True,
     ) -> tuple[Any, list]:
         """
         Get or create a Honcho session with peers configured.
@@ -237,36 +242,42 @@ class HonchoSessionManager:
                 session_id, e,
             )
 
-        # Load existing messages via context() - single call for messages + metadata
         existing_messages = []
-        try:
-            ctx = session.context(summary=True, tokens=self._context_tokens)
-            existing_messages = ctx.messages or []
+        if hydrate_history:
+            # Load existing messages via context() - single call for messages + metadata
+            try:
+                ctx = session.context(summary=True, tokens=self._context_tokens)
+                existing_messages = ctx.messages or []
 
-            # Verify chronological ordering
-            if existing_messages and len(existing_messages) > 1:
-                timestamps = [m.created_at for m in existing_messages if m.created_at]
-                if timestamps and timestamps != sorted(timestamps):
-                    logger.warning(
-                        "Honcho messages not chronologically ordered for session '%s', sorting",
-                        session_id,
-                    )
-                    existing_messages = sorted(
-                        existing_messages,
-                        key=lambda m: m.created_at or datetime.min,
-                    )
+                # Verify chronological ordering
+                if existing_messages and len(existing_messages) > 1:
+                    timestamps = [m.created_at for m in existing_messages if m.created_at]
+                    if timestamps and timestamps != sorted(timestamps):
+                        logger.warning(
+                            "Honcho messages not chronologically ordered for session '%s', sorting",
+                            session_id,
+                        )
+                        existing_messages = sorted(
+                            existing_messages,
+                            key=lambda m: m.created_at or datetime.min,
+                        )
 
-            if existing_messages:
-                logger.info(
-                    "Honcho session '%s' retrieved (%d existing messages)",
-                    session_id, len(existing_messages),
+                if existing_messages:
+                    logger.info(
+                        "Honcho session '%s' retrieved (%d existing messages)",
+                        session_id, len(existing_messages),
+                    )
+                else:
+                    logger.info("Honcho session '%s' created (new)", session_id)
+            except Exception as e:
+                logger.warning(
+                    "Honcho session '%s' loaded (failed to fetch context: %s)",
+                    session_id, e,
                 )
-            else:
-                logger.info("Honcho session '%s' created (new)", session_id)
-        except Exception as e:
-            logger.warning(
-                "Honcho session '%s' loaded (failed to fetch context: %s)",
-                session_id, e,
+        else:
+            logger.debug(
+                "Honcho session '%s' handles acquired without history hydration",
+                session_id,
             )
 
         self._sessions_cache[session_id] = session
@@ -360,41 +371,46 @@ class HonchoSessionManager:
 
         return self._session_key_fallback_peer_id(key)
 
-    def get_or_create(self, key: str) -> HonchoSession:
-        """
-        Get an existing session or create a new one.
-
-        Args:
-            key: Session key (usually channel:chat_id).
-
-        Returns:
-            The session.
-        """
+    def get_or_create(
+        self,
+        key: str,
+        *,
+        hydrate_history: bool = True,
+        create_remote_session: bool = True,
+    ) -> HonchoSession:
+        """Get/create local handles, optionally materializing the remote session."""
         with self._cache_lock:
-            if key in self._cache:
+            cached = self._cache.get(key)
+            if cached is not None and (
+                not create_remote_session
+                or cached.metadata.get("_remote_session_ready") is True
+            ):
                 logger.debug("Local session cache hit: %s", key)
-                return self._cache[key]
+                return cached
 
-        # Determine peer IDs — no lock needed (read-only, no shared state mutation).
-        # Gateway sessions normally use the runtime user identity (the
-        # platform-native ID: Telegram UID, Discord snowflake, Slack user,
-        # etc.) so multi-user bots scope memory per user.  Config can alias
-        # known runtime IDs or prefix unknown IDs.  For a single-user
-        # deployment, ``pinPeerName`` still pins all runtime identities to
-        # ``peerName`` (see #14984).
-        user_peer_id = self._resolve_user_peer_id(key)
+        if cached is not None:
+            user_peer_id = cached.user_peer_id
+            assistant_peer_id = cached.assistant_peer_id
+            honcho_session_id = cached.honcho_session_id
+        else:
+            user_peer_id = self._resolve_user_peer_id(key)
+            assistant_peer_id = self._sanitize_id(
+                self._config.ai_peer if self._config else "hermes-assistant"
+            )
+            honcho_session_id = self._sanitize_id(key)
 
-        assistant_peer_id = self._sanitize_id(
-            self._config.ai_peer if self._config else "hermes-assistant"
-        )
-
-        # All expensive I/O outside the lock — Honcho's persistence is source of truth
-        honcho_session_id = self._sanitize_id(key)
+        # SDK peer handles are local objects. Merely asking for one must not
+        # create a remote session or hydrate context in tools-only mode.
         user_peer = self._get_or_create_peer(user_peer_id)
         assistant_peer = self._get_or_create_peer(assistant_peer_id)
-        honcho_session, existing_messages = self._get_or_create_honcho_session(
-            honcho_session_id, user_peer, assistant_peer
-        )
+        existing_messages: list[Any] = []
+        if create_remote_session:
+            _, existing_messages = self._get_or_create_honcho_session(
+                honcho_session_id,
+                user_peer,
+                assistant_peer,
+                hydrate_history=hydrate_history,
+            )
 
         local_messages = []
         for msg in existing_messages:
@@ -406,18 +422,43 @@ class HonchoSessionManager:
                 "_synced": True,
             })
 
-        session = HonchoSession(
-            key=key,
-            user_peer_id=user_peer_id,
-            assistant_peer_id=assistant_peer_id,
-            honcho_session_id=honcho_session_id,
-            messages=local_messages,
-        )
+        if cached is None:
+            session = HonchoSession(
+                key=key,
+                user_peer_id=user_peer_id,
+                assistant_peer_id=assistant_peer_id,
+                honcho_session_id=honcho_session_id,
+                messages=local_messages,
+                metadata={"_remote_session_ready": bool(create_remote_session)},
+            )
+        else:
+            session = cached
+            if local_messages:
+                session.messages = local_messages + [
+                    message for message in session.messages if not message.get("_synced")
+                ]
+            if create_remote_session:
+                session.metadata["_remote_session_ready"] = True
 
-        # Write to cache under lock — only one writer wins
         with self._cache_lock:
-            self._cache[key] = session
-        return session
+            winner = self._cache.get(key)
+            if winner is None or winner is cached:
+                self._cache[key] = session
+                return session
+            return winner
+
+    def ensure_remote_session(
+        self,
+        key: str,
+        *,
+        hydrate_history: bool = False,
+    ) -> HonchoSession:
+        """Upgrade local handles to one remote session for an eligible operation."""
+        return self.get_or_create(
+            key,
+            hydrate_history=hydrate_history,
+            create_remote_session=True,
+        )
 
     def _flush_session(self, session: HonchoSession) -> bool:
         """Internal: write unsynced messages to Honcho synchronously."""
@@ -429,9 +470,10 @@ class HonchoSessionManager:
         honcho_session = self._sessions_cache.get(session.honcho_session_id)
 
         if not honcho_session:
-            honcho_session, _ = self._get_or_create_honcho_session(
-                session.honcho_session_id, user_peer, assistant_peer
-            )
+            self.ensure_remote_session(session.key, hydrate_history=False)
+            honcho_session = self._sessions_cache.get(session.honcho_session_id)
+        if not honcho_session:
+            return False
 
         new_messages = [m for m in session.messages if not m.get("_synced")]
         if not new_messages:
@@ -671,6 +713,111 @@ class HonchoSessionManager:
         except Exception as e:
             logger.warning("Honcho dialectic query failed: %s", e)
             return ""
+
+    @staticmethod
+    def _strict_value(value: Any, key: str, default: Any = "") -> Any:
+        if isinstance(value, dict):
+            return value.get(key, default)
+        return getattr(value, key, default)
+
+    def strict_peer_card(self, session_key: str, peer: str) -> list[str]:
+        """Read one canonical card slot with exactly one SDK call and no fallback."""
+        session = self._cache[session_key]
+        observer_id, target_id = self._resolve_observer_target(session, peer)
+        observer = self._get_or_create_peer(observer_id)
+        card = observer.get_card(target=target_id)
+        return [str(item) for item in (card or [])]
+
+    def strict_human_search(
+        self,
+        session_key: str,
+        query: str,
+        *,
+        limit: int,
+    ) -> list[dict[str, str]]:
+        """Run one workspace search and retain only canonical human-authored messages."""
+        session = self._cache[session_key]
+        results = self.honcho.search(
+            query=query,
+            filters={"peer_id": session.user_peer_id},
+            top_k=limit,
+            peer_perspective=session.user_peer_id,
+        )
+        output: list[dict[str, str]] = []
+        for item in results or []:
+            author = str(self._strict_value(item, "peer_id", ""))
+            if author != session.user_peer_id:
+                continue
+            output.append({
+                "id": str(self._strict_value(item, "id", "")),
+                "session_id": str(self._strict_value(item, "session_id", "")),
+                "content": str(self._strict_value(item, "content", "")),
+            })
+        return output
+
+    def strict_peer_context(self, session_key: str, peer: str) -> dict[str, Any]:
+        """Fetch one peer-level context result; never calls session.context()."""
+        session = self._cache[session_key]
+        observer_id, target_id = self._resolve_observer_target(session, peer)
+        observer = self._get_or_create_peer(observer_id)
+        context = observer.context(target=target_id, tokens=self._context_tokens)
+        return {
+            "representation": str(self._strict_value(context, "representation", "")),
+            "card": [str(item) for item in (self._strict_value(context, "peer_card", []) or [])],
+        }
+
+    def strict_conclusions(
+        self,
+        session_key: str,
+        peer: str,
+        *,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, str]]:
+        """List or query conclusions through exactly one terminal SDK call."""
+        session = self._cache[session_key]
+        observer_id, target_id = self._resolve_observer_target(session, peer)
+        scope = self._get_or_create_peer(observer_id).conclusions_of(target_id)
+        values = scope.query(query=query, top_k=limit) if query else scope.list(limit=limit)
+        output: list[dict[str, str]] = []
+        for item in values or []:
+            output.append({
+                "id": str(self._strict_value(item, "id", "")),
+                "content": str(self._strict_value(item, "content", "")),
+            })
+        return output
+
+    def strict_reasoning_call(
+        self,
+        session_key: str,
+        query: str,
+        *,
+        peer: str,
+        reasoning_level: str,
+    ) -> str:
+        """Make the single paid SDK call supplied to the provider reasoning guard."""
+        session = self._cache[session_key]
+        observer_id, target_id = self._resolve_observer_target(session, peer)
+        observer = self._get_or_create_peer(observer_id)
+        return str(observer.chat(
+            query,
+            target=target_id,
+            reasoning_level=reasoning_level,
+        ) or "")
+
+    def strict_create_conclusion(
+        self,
+        session_key: str,
+        content: str,
+        *,
+        peer: str = "user",
+    ) -> bool:
+        """Create one conclusion after the provider has verified write authority."""
+        session = self.ensure_remote_session(session_key, hydrate_history=False)
+        observer_id, target_id = self._resolve_observer_target(session, peer)
+        scope = self._get_or_create_peer(observer_id).conclusions_of(target_id)
+        scope.create(content, session_id=session.honcho_session_id)
+        return True
 
     def prefetch_context(self, session_key: str, user_message: str | None = None) -> None:
         """

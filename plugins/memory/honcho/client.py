@@ -488,18 +488,24 @@ class HonchoClientConfig:
     canonical_host_present: bool = False
     effective_host_count: int = 0
     provider_state: str = "legacy"
+    provider_state_explicit: bool = False
     capability_state: str = "unsupported_api"
     capability_receipt_sha256: str = ""
+    capability_receipt_path: str = ""
+    capability_config_revision: str = ""
     trusted_principal_ids: list[str] = field(default_factory=list)
     eligible_profiles: list[str] = field(default_factory=lambda: ["default"])
     allow_local_cli_writes: bool = False
     policy_revision: str = ""
     writer_release: str = ""
     tool_deadline_seconds: float = 2.0
+    reasoning_deadline_seconds: float = 8.0
+    reasoning_estimated_cost_usd: float = 0.0
+    reasoning_receipt_path: str = ""
 
     def tools_activation_errors(self) -> list[str]:
         """Return deterministic fail-closed reasons for H2 tools-only activation."""
-        if self.recall_mode != "tools":
+        if self.recall_mode != "tools" or not self.provider_state_explicit:
             return []
         errors: list[str] = []
         if not self.config_valid:
@@ -533,6 +539,10 @@ class HonchoClientConfig:
             errors.append("unsupported_capability_state")
         if not re.fullmatch(r"[0-9a-f]{64}", self.capability_receipt_sha256 or ""):
             errors.append("missing_capability_receipt")
+        if not self.capability_receipt_path or not Path(self.capability_receipt_path).is_absolute():
+            errors.append("invalid_capability_receipt_path")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.capability_config_revision or ""):
+            errors.append("missing_capability_config_revision")
         expected_profile = "default"
         if self.host.startswith(f"{HOST}_"):
             expected_profile = self.host[len(HOST) + 1:] or "default"
@@ -544,6 +554,12 @@ class HonchoClientConfig:
             errors.append("policy_revision_mismatch")
         if self.writer_release != "hermes-memory-boundary/v1":
             errors.append("writer_release_mismatch")
+        if not self.reasoning_receipt_path or not Path(self.reasoning_receipt_path).is_absolute():
+            errors.append("invalid_reasoning_receipt_path")
+        if not 0 <= self.reasoning_estimated_cost_usd <= 1000:
+            errors.append("invalid_reasoning_estimated_cost")
+        if not 0.1 <= self.reasoning_deadline_seconds <= 30:
+            errors.append("invalid_reasoning_deadline")
         return errors
 
     @classmethod
@@ -878,11 +894,20 @@ class HonchoClientConfig:
             provider_state=_parse_optional_string(
                 host_block, raw, "providerState", "legacy"
             ),
+            provider_state_explicit=(
+                "providerState" in host_block or "providerState" in raw
+            ),
             capability_state=_parse_optional_string(
                 host_block, raw, "capabilityState", "unsupported_api"
             ),
             capability_receipt_sha256=_parse_optional_string(
                 host_block, raw, "capabilityReceiptSha256", ""
+            ),
+            capability_receipt_path=_parse_optional_string(
+                host_block, raw, "capabilityReceiptPath", ""
+            ),
+            capability_config_revision=_parse_optional_string(
+                host_block, raw, "capabilityConfigRevision", ""
             ),
             trusted_principal_ids=_parse_string_list(
                 host_block, raw, "trustedPrincipalIds"
@@ -904,7 +929,20 @@ class HonchoClientConfig:
             tool_deadline_seconds=_parse_float_config(
                 host_block.get("toolDeadlineSeconds"),
                 raw.get("toolDeadlineSeconds"),
-                default=2.0,
+                2.0,
+            ),
+            reasoning_deadline_seconds=_parse_float_config(
+                host_block.get("reasoningDeadlineSeconds"),
+                raw.get("reasoningDeadlineSeconds"),
+                8.0,
+            ),
+            reasoning_estimated_cost_usd=_parse_float_config(
+                host_block.get("reasoningEstimatedCostUsd"),
+                raw.get("reasoningEstimatedCostUsd"),
+                0.0,
+            ),
+            reasoning_receipt_path=_parse_optional_string(
+                host_block, raw, "reasoningReceiptPath", ""
             ),
         )
 

@@ -304,6 +304,10 @@ def test_tool_receipt_is_sealed_content_free_principal_bound_and_single_use():
     assert isinstance(receipt, MemoryToolReceipt)
     assert "I prefer concise answers" not in repr(receipt)
     assert "content" not in {field.name for field in fields(receipt)}
+    assert len(receipt.session_hmac) == 64
+    assert len(receipt.tool_call_hmac) == 64
+    assert receipt.session_id not in receipt.session_hmac
+    assert receipt.tool_call_id not in receipt.tool_call_hmac
     assert principal_matches(
         receipt,
         principal_id="fixture-user-123",

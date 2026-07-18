@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import threading
 import time
+import json
+import os
 
 import pytest
+
+from agent.memory_provenance import (
+    issue_authenticated_origin,
+    issue_memory_tool_receipt,
+    issue_turn_envelope,
+)
 
 from plugins.memory.honcho.reasoning_budget import (
     FAILURE,
@@ -23,9 +31,12 @@ from plugins.memory.honcho.reasoning_budget import (
     OfflineReasoningManifest,
     PaidReasoningGuard,
     UnknownOutcomeError,
+    append_public_reasoning_receipt,
+    build_public_reasoning_receipt,
     issue_explicit_approval,
     issue_trusted_tool_call_id,
     is_trusted_tool_call_id,
+    validate_public_reasoning_receipt,
 )
 
 
@@ -45,6 +56,30 @@ def _guard(*, sink=None, reservations=None, manifest=None):
 
 def _call_id():
     return issue_trusted_tool_call_id(SECRET)
+
+
+def _executor_receipt():
+    origin = issue_authenticated_origin(
+        runtime_class="gateway",
+        origin_class="authenticated_human_gateway",
+        platform="telegram",
+        profile="default",
+        principal_id="fixture-danny",
+        adapter_receipt_id="adapter",
+        source_observation_id="observation",
+    )
+    turn = issue_turn_envelope(
+        origin,
+        session_id="private-session",
+        turn_id="private-turn",
+        message_id="private-message",
+        user_content="private query content",
+    )
+    return issue_memory_tool_receipt(
+        turn,
+        tool_name="honcho_reasoning",
+        tool_call_id="runtime-tool-call",
+    )
 
 
 def test_tool_call_ids_are_trusted_opaque_hmac_tokens():
@@ -338,3 +373,57 @@ def test_guard_result_repr_never_exposes_answer_or_exception_payload():
     )
     assert "private synthesized answer" not in repr(success)
     assert "private backend payload" not in repr(failure)
+
+
+def test_public_reasoning_receipts_are_content_free_schema_valid_and_fsynced(tmp_path):
+    executor = _executor_receipt()
+    call_id = _call_id()
+    reserved = build_public_reasoning_receipt(
+        tool_receipt=executor,
+        reasoning_call_id=call_id,
+        phase="reserved",
+        status="reserved",
+        tier=LOW,
+        estimated_cost_usd=0.02,
+        observed_at="2026-07-18T21:00:00Z",
+    )
+    terminal = build_public_reasoning_receipt(
+        tool_receipt=executor,
+        reasoning_call_id=call_id,
+        phase="terminal",
+        status="succeeded",
+        tier=LOW,
+        estimated_cost_usd=0.02,
+        observed_at="2026-07-18T21:00:01Z",
+    )
+    assert validate_public_reasoning_receipt(reserved)
+    assert validate_public_reasoning_receipt(terminal)
+    serialized = json.dumps([reserved, terminal])
+    for private_value in (
+        "private-session", "private-turn", "runtime-tool-call", "private query content"
+    ):
+        assert private_value not in serialized
+
+    ledger = tmp_path / "reasoning.jsonl"
+    assert append_public_reasoning_receipt(str(ledger), reserved)
+    assert append_public_reasoning_receipt(str(ledger), terminal)
+    assert os.stat(ledger).st_mode & 0o077 == 0
+    lines = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert [line["phase"] for line in lines] == ["reserved", "terminal"]
+    assert lines[0]["reasoning_call_id"] == lines[1]["reasoning_call_id"]
+
+
+def test_reasoning_receipt_append_rejects_symlink(tmp_path):
+    receipt = build_public_reasoning_receipt(
+        tool_receipt=_executor_receipt(),
+        reasoning_call_id=_call_id(),
+        phase="reserved",
+        status="reserved",
+        tier=LOW,
+        estimated_cost_usd=0.01,
+    )
+    target = tmp_path / "target.jsonl"
+    target.write_text("")
+    link = tmp_path / "link.jsonl"
+    link.symlink_to(target)
+    assert append_public_reasoning_receipt(str(link), receipt) is False

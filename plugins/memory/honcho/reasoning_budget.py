@@ -14,9 +14,14 @@ spend authority, including after a failure or timeout.
 from __future__ import annotations
 
 import base64
+import datetime as dt
+import fcntl
 import hashlib
 import hmac
+import json
+import os
 import secrets
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -701,6 +706,166 @@ make_trusted_tool_call_id = issue_trusted_tool_call_id
 make_explicit_approval = issue_explicit_approval
 
 
+PUBLIC_REASONING_RECEIPT_SCHEMA = "honcho-reasoning-receipt-v1"
+_PUBLIC_TERMINAL_STATUSES = frozenset(("succeeded", "failed", "timed_out", "unknown_outcome"))
+
+
+def build_public_reasoning_receipt(
+    *,
+    tool_receipt: Any,
+    reasoning_call_id: str,
+    phase: str,
+    status: str,
+    tier: str,
+    estimated_cost_usd: float,
+    error_class: str | None = None,
+    observed_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a content-free CloudSeed receipt from sealed executor HMACs."""
+    if phase not in {"reserved", "terminal"}:
+        raise ValueError("invalid reasoning receipt phase")
+    if phase == "reserved" and status != "reserved":
+        raise ValueError("reservation receipt must have reserved status")
+    if phase == "terminal" and status not in _PUBLIC_TERMINAL_STATUSES:
+        raise ValueError("invalid terminal reasoning status")
+    if tier not in VALID_TIERS:
+        raise ValueError("invalid reasoning tier")
+    timestamp = observed_at or dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    opaque_call_id = hashlib.sha256(str(reasoning_call_id).encode("utf-8")).hexdigest()
+    receipt: dict[str, Any] = {
+        "schema_version": PUBLIC_REASONING_RECEIPT_SCHEMA,
+        "receipt_id": f"rr:{phase}:{opaque_call_id[:20]}:{secrets.token_hex(8)}",
+        "reasoning_call_id": opaque_call_id,
+        "phase": phase,
+        "status": status,
+        "tier": tier,
+        "profile": str(getattr(tool_receipt, "profile", "") or ""),
+        "session_hmac": str(getattr(tool_receipt, "session_hmac", "") or ""),
+        "turn_hmac": str(getattr(tool_receipt, "turn_binding_hmac", "") or ""),
+        "tool_call_hmac": str(getattr(tool_receipt, "tool_call_hmac", "") or ""),
+        "policy_revision": str(getattr(tool_receipt, "policy_revision", "") or ""),
+        "writer_release": str(getattr(tool_receipt, "writer_release", "") or ""),
+        "estimated_cost_usd": max(0.0, float(estimated_cost_usd)),
+        "observed_at": timestamp,
+        "content_free": True,
+    }
+    if error_class:
+        cleaned = "".join(
+            char for char in str(error_class)
+            if char.isalnum() or char in "._:-"
+        )[:96]
+        if cleaned:
+            receipt["error_class"] = cleaned
+    if not validate_public_reasoning_receipt(receipt):
+        raise ValueError("invalid public reasoning receipt")
+    return receipt
+
+
+def validate_public_reasoning_receipt(receipt: Mapping[str, Any]) -> bool:
+    required = {
+        "schema_version", "receipt_id", "reasoning_call_id", "phase", "status",
+        "tier", "profile", "session_hmac", "turn_hmac", "tool_call_hmac",
+        "policy_revision", "writer_release", "estimated_cost_usd", "observed_at",
+        "content_free",
+    }
+    allowed = required | {"error_class", "offline_manifest_sha256", "explicit_approval_id"}
+    if not isinstance(receipt, Mapping):
+        return False
+    if not required.issubset(receipt) or not set(receipt).issubset(allowed):
+        return False
+    if receipt.get("schema_version") != PUBLIC_REASONING_RECEIPT_SCHEMA:
+        return False
+    if receipt.get("content_free") is not True:
+        return False
+    for key in ("reasoning_call_id", "session_hmac", "turn_hmac", "tool_call_hmac"):
+        value = receipt.get(key)
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            return False
+    if receipt.get("phase") == "reserved":
+        if receipt.get("status") != "reserved":
+            return False
+    elif receipt.get("phase") == "terminal":
+        if receipt.get("status") not in _PUBLIC_TERMINAL_STATUSES:
+            return False
+    else:
+        return False
+    if receipt.get("tier") not in VALID_TIERS:
+        return False
+    if receipt.get("tier") in {HIGH, MAX} and "offline_manifest_sha256" not in receipt:
+        return False
+    if receipt.get("tier") == MAX and "explicit_approval_id" not in receipt:
+        return False
+    if not isinstance(receipt.get("profile"), str) or not receipt.get("profile"):
+        return False
+    if not isinstance(receipt.get("policy_revision"), str) or not receipt.get("policy_revision"):
+        return False
+    if not isinstance(receipt.get("writer_release"), str) or not receipt.get("writer_release"):
+        return False
+    cost = receipt.get("estimated_cost_usd")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not 0 <= cost <= 1000:
+        return False
+    try:
+        dt.datetime.fromisoformat(str(receipt.get("observed_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    receipt_id = receipt.get("receipt_id")
+    return bool(
+        isinstance(receipt_id, str)
+        and 8 <= len(receipt_id) <= 160
+        and all(c.isalnum() or c in "._:-" for c in receipt_id)
+    )
+
+
+def append_public_reasoning_receipt(
+    path: str,
+    receipt: Mapping[str, Any],
+    *,
+    max_bytes: int = 16 * 1024 * 1024,
+) -> bool:
+    """Append one fsynced JSONL receipt with no-follow and private-mode checks."""
+    if not validate_public_reasoning_receipt(receipt):
+        return False
+    try:
+        absolute = os.path.abspath(str(path or ""))
+        if not os.path.isabs(str(path or "")) or absolute != str(path):
+            return False
+        parent = os.path.dirname(absolute)
+        if os.path.realpath(parent) != parent or not os.path.isdir(parent):
+            return False
+        if os.path.lexists(absolute) and stat.S_ISLNK(os.lstat(absolute).st_mode):
+            return False
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(absolute, flags, 0o600)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                return False
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                return False
+            payload = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            if info.st_size + len(payload) > max_bytes:
+                return False
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                if os.fstat(fd).st_size + len(payload) > max_bytes:
+                    return False
+                view = memoryview(payload)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        return False
+                    view = view[written:]
+                os.fsync(fd)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 __all__ = [
     "AtomicReservationStore",
     "DENIED",
@@ -720,6 +885,7 @@ __all__ = [
     "OfflineReasoningManifest",
     "OneCallReasoningGuard",
     "PaidReasoningGuard",
+    "PUBLIC_REASONING_RECEIPT_SCHEMA",
     "PolicyDecision",
     "ReasoningReceipt",
     "RecordingReceiptSink",
@@ -734,8 +900,11 @@ __all__ = [
     "is_trusted_tool_call_id",
     "issue_explicit_approval",
     "issue_trusted_tool_call_id",
+    "append_public_reasoning_receipt",
+    "build_public_reasoning_receipt",
     "make_explicit_approval",
     "make_trusted_tool_call_id",
     "validate_reasoning_request",
+    "validate_public_reasoning_receipt",
     "validate_tier",
 ]

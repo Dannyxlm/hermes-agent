@@ -145,8 +145,10 @@ class MemoryToolReceipt:
 
     schema_revision: str
     session_id: str
+    session_hmac: str
     turn_id: str
     turn_binding_hmac: str
+    tool_call_hmac: str
     runtime_class: str
     origin_class: str
     platform: str
@@ -403,6 +405,7 @@ def issue_memory_tool_receipt(
     return MemoryToolReceipt(
         schema_revision=_SCHEMA_REVISION,
         session_id=turn_envelope.session_id,
+        session_hmac=_digest("session", turn_envelope.session_id),
         turn_id=turn_envelope.turn_id,
         turn_binding_hmac=_digest(
             "turn-binding",
@@ -419,6 +422,7 @@ def issue_memory_tool_receipt(
         source_observation_id=turn_envelope.source_observation_id,
         tool_name=tool_name,
         tool_call_id=tool_call_id,
+        tool_call_hmac=_digest("tool-call", tool_name, tool_call_id),
         policy_revision=turn_envelope.policy_revision,
         writer_release=turn_envelope.writer_release,
         issued_at=float(time.monotonic() if issued_at is None else issued_at),
@@ -452,6 +456,8 @@ def validate_memory_tool_receipt(
     if receipt.tool_name != str(tool_name or "").strip():
         return False
     if receipt.tool_call_id != str(tool_call_id or "").strip():
+        return False
+    if not receipt.session_hmac or not receipt.tool_call_hmac:
         return False
     if turn_envelope is not None:
         if not _sealed_eligible_turn(turn_envelope):

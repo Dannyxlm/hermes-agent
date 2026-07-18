@@ -253,11 +253,17 @@ class TestFromGlobalConfig:
                     },
                     "capabilityState": "supported",
                     "capabilityReceiptSha256": "a" * 64,
+                    "capabilityReceiptPath": str(tmp_path / "capability-receipt.json"),
+                    "capabilityConfigRevision": "b" * 64,
                     "trustedPrincipalIds": ["fixture-danny-id"],
                     "eligibleProfiles": ["default"],
                     "allowLocalCliWrites": True,
                     "policyRevision": "memory-source-policy/v1",
                     "writerRelease": "hermes-memory-boundary/v1",
+                    "toolDeadlineSeconds": 2,
+                    "reasoningDeadlineSeconds": 8,
+                    "reasoningEstimatedCostUsd": 0.02,
+                    "reasoningReceiptPath": str(tmp_path / "reasoning-receipts.jsonl"),
                 }
             },
         }))

@@ -294,17 +294,77 @@ class HonchoMemoryProvider(MemoryProvider):
 
         # Cron and flush contexts disable the plugin entirely.
         self._cron_skipped = False
+        self._provider_disabled_reason = ""
+        self._capability_receipt: Optional[dict] = None
+        self._capability_verified = False
 
     @property
     def name(self) -> str:
         return "honcho"
 
+    @staticmethod
+    def _runtime_capability_identity() -> tuple[str, str, str]:
+        from plugins.memory.honcho.capabilities import (
+            current_provider_source_sha256,
+            current_sdk_identity,
+        )
+
+        sdk_version, sdk_source = current_sdk_identity()
+        return current_provider_source_sha256(), sdk_version, sdk_source
+
+    @staticmethod
+    def _verified_tools_capability(cfg) -> tuple[Optional[dict], str]:
+        """Validate effective H2 config and its exact content-free capability file."""
+        errors = cfg.tools_activation_errors()
+        if errors:
+            return None, errors[0]
+        try:
+            from plugins.memory.honcho.capabilities import load_public_capability_receipt
+
+            receipt = load_public_capability_receipt(
+                cfg.capability_receipt_path,
+                expected_file_sha256=cfg.capability_receipt_sha256,
+                expected_config_revision_sha256=cfg.capability_config_revision,
+            )
+        except Exception:
+            receipt = None
+        if not receipt or receipt.get("state") != "supported":
+            return None, "invalid_capability_receipt"
+        try:
+            provider_hash, sdk_version, sdk_source_hash = (
+                HonchoMemoryProvider._runtime_capability_identity()
+            )
+        except Exception:
+            return None, "runtime_capability_identity_unavailable"
+        if not provider_hash or receipt.get("provider_source_sha256") != provider_hash:
+            return None, "provider_source_receipt_mismatch"
+        if not sdk_version or receipt.get("sdk_version") != sdk_version:
+            return None, "sdk_version_receipt_mismatch"
+        if not sdk_source_hash or receipt.get("sdk_source_sha256") != sdk_source_hash:
+            return None, "sdk_source_receipt_mismatch"
+        return receipt, ""
+
+    def _strict_tools_mode(self) -> bool:
+        cfg = self._config
+        return bool(
+            self._recall_mode == "tools"
+            and cfg is not None
+            and getattr(cfg, "provider_state_explicit", False)
+            and getattr(cfg, "provider_state", "") == "tools_only"
+            and self._capability_verified
+        )
+
     def is_available(self) -> bool:
-        """Check if Honcho is configured. No network calls."""
+        """Check if Honcho is configured and any tools activation is verified."""
         try:
             from plugins.memory.honcho.client import HonchoClientConfig
             cfg = HonchoClientConfig.from_global_config()
-            return cfg.enabled and bool(cfg.api_key or cfg.base_url)
+            if not (cfg.enabled and bool(cfg.api_key or cfg.base_url)):
+                return False
+            if cfg.recall_mode == "tools" and cfg.provider_state_explicit:
+                receipt, _ = self._verified_tools_capability(cfg)
+                return receipt is not None
+            return True
         except Exception:
             return False
 
@@ -363,6 +423,20 @@ class HonchoMemoryProvider(MemoryProvider):
 
             self._recall_mode = cfg.recall_mode  # "context", "tools", or "hybrid"
             logger.debug("Honcho recall_mode: %s", self._recall_mode)
+
+            if self._recall_mode == "tools" and cfg.provider_state_explicit:
+                receipt, reason = self._verified_tools_capability(cfg)
+                if receipt is None:
+                    self._provider_disabled_reason = reason or "invalid_tools_activation"
+                    self._capability_verified = False
+                    logger.warning(
+                        "Honcho tools-only activation refused: %s",
+                        self._provider_disabled_reason,
+                    )
+                    return
+                self._capability_receipt = receipt
+                self._capability_verified = True
+                self._provider_disabled_reason = ""
 
             self._injection_frequency = cfg.injection_frequency
             self._context_cadence = cfg.context_cadence
@@ -486,23 +560,41 @@ class HonchoMemoryProvider(MemoryProvider):
         # synchronous setup has finished; background startup sets _manager before
         # get_or_create()/migration/prewarm are complete, and lifecycle hooks must
         # not treat that partially initialized state as usable.
-        session = self._manager.get_or_create(self._session_key)
+        if self._strict_tools_mode():
+            session = self._manager.get_or_create(
+                self._session_key,
+                hydrate_history=False,
+                create_remote_session=False,
+            )
+        elif self._recall_mode == "tools":
+            session = self._manager.get_or_create(
+                self._session_key,
+                hydrate_history=False,
+            )
+        else:
+            session = self._manager.get_or_create(self._session_key)
 
         # Skip under per-session strategy: every Hermes run creates a fresh
         # Honcho session by design, so uploading MEMORY.md/USER.md/SOUL.md to
         # each one would flood the backend with short-lived duplicates instead
         # of performing a one-time migration.
         try:
-            if not session.messages and cfg.session_strategy != "per-session":
+            if (
+                not self._strict_tools_mode()
+                and not session.messages
+                and cfg.session_strategy != "per-session"
+            ):
                 from hermes_constants import get_hermes_home
                 mem_dir = str(get_hermes_home() / "memories")
                 self._manager.migrate_memory_files(self._session_key, mem_dir)
                 logger.debug("Honcho memory file migration attempted for new session: %s", self._session_key)
-            elif cfg.session_strategy == "per-session":
+            elif not self._strict_tools_mode() and cfg.session_strategy == "per-session":
                 logger.debug(
                     "Honcho memory file migration skipped: per-session strategy creates a fresh session per run (%s)",
                     self._session_key,
                 )
+            elif self._strict_tools_mode():
+                logger.debug("Honcho strict tools-only initialization skips ambient memory migration")
         except Exception as e:
             logger.debug("Honcho memory file migration skipped: %s", e)
 
@@ -630,7 +722,7 @@ class HonchoMemoryProvider(MemoryProvider):
         that doesn't change between turns (prompt-cache friendly).
         Live context (representation, card) is injected via prefetch().
         """
-        if self._cron_skipped:
+        if self._cron_skipped or self._provider_disabled_reason:
             return ""
         if not self._manager or not self._session_key:
             if not self._config:
@@ -1325,12 +1417,25 @@ class HonchoMemoryProvider(MemoryProvider):
             ),
         }
 
-    def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+        turn_envelope: Any = None,
+    ) -> None:
         """Record the conversation turn in Honcho (non-blocking).
 
         Messages exceeding the Honcho API limit (default 25k chars) are
         split into multiple messages with continuation markers.
+
+        ``turn_envelope`` is accepted for the provider lifecycle contract but
+        is intentionally not interpreted until Honcho provenance policy is
+        implemented.
         """
+        if self._config is not None and getattr(self._config, "save_messages", True) is False:
+            return
         if self._cron_skipped:
             return
         if self._recall_mode == "tools" and not self._session_ready():
@@ -1367,6 +1472,7 @@ class HonchoMemoryProvider(MemoryProvider):
         target: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
+        write_receipt: Any = None,
     ) -> None:
         """Mirror built-in user profile writes as Honcho conclusions.
 
@@ -1379,7 +1485,50 @@ class HonchoMemoryProvider(MemoryProvider):
             return
         if self._cron_skipped:
             return
-        if self._recall_mode == "tools" and not self._session_ready():
+
+        if self._strict_tools_mode():
+            try:
+                from agent.memory_provenance import (
+                    principal_matches,
+                    validate_memory_write_receipt,
+                )
+
+                cfg = self._config
+                valid = bool(
+                    cfg is not None
+                    and validate_memory_write_receipt(
+                        write_receipt,
+                        tool_call_id=str(getattr(write_receipt, "tool_call_id", "")),
+                        action=action,
+                        target=target,
+                        content=content,
+                        consume=True,
+                    )
+                    and write_receipt.profile in cfg.eligible_profiles
+                    and write_receipt.policy_revision == cfg.policy_revision
+                    and write_receipt.writer_release == cfg.writer_release
+                    and (
+                        (
+                            write_receipt.runtime_class == "local_cli"
+                            and cfg.allow_local_cli_writes
+                        )
+                        or any(
+                            principal_matches(
+                                write_receipt,
+                                platform=write_receipt.platform,
+                                principal_id=raw_id,
+                            )
+                            for raw_id in cfg.trusted_principal_ids
+                        )
+                    )
+                )
+            except Exception:
+                valid = False
+            if not valid:
+                return
+            if not self._session_initialized and not self._ensure_session():
+                return
+        elif self._recall_mode == "tools" and not self._session_ready():
             return
         if not self._session_ready():
             self._start_session_init_background()
@@ -1387,7 +1536,14 @@ class HonchoMemoryProvider(MemoryProvider):
 
         def _write():
             try:
-                self._manager.create_conclusion(self._session_key, content)
+                if self._strict_tools_mode():
+                    self._manager.strict_create_conclusion(
+                        self._session_key,
+                        content[:2000],
+                        peer="user",
+                    )
+                else:
+                    self._manager.create_conclusion(self._session_key, content)
             except Exception as e:
                 logger.debug("Honcho memory mirror failed: %s", e)
 
@@ -1396,6 +1552,8 @@ class HonchoMemoryProvider(MemoryProvider):
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Flush all pending messages to Honcho on session end."""
+        if self._config is not None and getattr(self._config, "save_messages", True) is False:
+            return
         if self._cron_skipped:
             return
         if not self._manager:
@@ -1415,14 +1573,281 @@ class HonchoMemoryProvider(MemoryProvider):
 
         Context-only mode exposes no Honcho tools.
         """
-        if self._cron_skipped:
+        if self._cron_skipped or self._provider_disabled_reason:
             return []
         if self._recall_mode == "context":
             return []
         return list(ALL_TOOL_SCHEMAS)
 
+    def _trusted_tool_authority(
+        self,
+        tool_name: str,
+        kwargs: dict[str, Any],
+        *,
+        consume: bool,
+    ) -> bool:
+        """Validate executor-minted authority and canonical Danny principal scope."""
+        receipt = kwargs.get("tool_receipt")
+        tool_call_id = str(kwargs.get("tool_call_id") or "")
+        try:
+            from agent.memory_provenance import (
+                principal_matches,
+                validate_memory_tool_receipt,
+            )
+
+            if not validate_memory_tool_receipt(
+                receipt,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                consume=consume,
+            ):
+                return False
+            cfg = self._config
+            if cfg is None or receipt.profile not in cfg.eligible_profiles:
+                return False
+            if receipt.policy_revision != cfg.policy_revision or receipt.writer_release != cfg.writer_release:
+                return False
+            if receipt.runtime_class == "local_cli":
+                return bool(cfg.allow_local_cli_writes)
+            return any(
+                principal_matches(
+                    receipt,
+                    principal_id=raw_id,
+                    platform=receipt.platform,
+                )
+                for raw_id in cfg.trusted_principal_ids
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _strict_peer(args: dict[str, Any]) -> str | None:
+        peer = str(args.get("peer", "user") or "user")
+        return peer if peer in {"user", "ai"} else None
+
+    def _strict_deadline(self) -> float:
+        raw = getattr(self._config, "tool_deadline_seconds", 2.0)
+        try:
+            return min(5.0, max(0.1, float(raw)))
+        except (TypeError, ValueError):
+            return 2.0
+
+    @staticmethod
+    def _degraded(code: str) -> str:
+        return json.dumps({"status": "degraded", "code": code, "result": None})
+
+    def _handle_strict_tool(self, tool_name: str, args: dict, kwargs: dict[str, Any]) -> str:
+        """H2 tools-only lane: canonical scope, one call, bounded output, no fallback."""
+        from plugins.memory.honcho.bounds import (
+            cap_records,
+            cap_string_list,
+            cap_text,
+            run_bounded,
+        )
+
+        assert self._manager is not None and self._session_key is not None
+        peer = self._strict_peer(args)
+        if peer is None:
+            return tool_error("Only canonical peer aliases 'user' and 'ai' are available.")
+        deadline = self._strict_deadline()
+
+        if tool_name == "honcho_profile":
+            if "card" in args and args.get("card") is not None:
+                return tool_error("Profile mutation is disabled in tools-only mode.")
+            outcome = run_bounded(
+                lambda: self._manager.strict_peer_card(self._session_key, peer),
+                timeout_seconds=deadline,
+            )
+            if outcome.status != "ok":
+                return self._degraded(outcome.error_code)
+            card = cap_string_list(outcome.value or [], max_items=16, max_chars=2400)
+            return json.dumps({"status": "ok", "result": card})
+
+        if tool_name == "honcho_search":
+            query = str(args.get("query") or "").strip()
+            if not query:
+                return tool_error("Missing required parameter: query")
+            query = cap_text(query, max_chars=2000)
+            try:
+                requested_tokens = int(args.get("max_tokens", 800))
+            except (TypeError, ValueError):
+                requested_tokens = 800
+            max_chars = min(4000, max(500, min(requested_tokens, 1000) * 4))
+            outcome = run_bounded(
+                lambda: self._manager.strict_human_search(
+                    self._session_key, query, limit=8
+                ),
+                timeout_seconds=deadline,
+            )
+            if outcome.status != "ok":
+                return self._degraded(outcome.error_code)
+            records = cap_records(
+                outcome.value or [],
+                max_items=8,
+                max_chars=max_chars,
+                allowed_keys=("id", "session_id", "content"),
+            )
+            return json.dumps({"status": "ok", "results": records, "count": len(records)})
+
+        if tool_name == "honcho_context":
+            outcome = run_bounded(
+                lambda: self._manager.strict_peer_context(self._session_key, peer),
+                timeout_seconds=deadline,
+            )
+            if outcome.status != "ok":
+                return self._degraded(outcome.error_code)
+            value = outcome.value if isinstance(outcome.value, dict) else {}
+            result = {
+                "representation": cap_text(value.get("representation"), max_chars=2400),
+                "card": cap_string_list(value.get("card") or [], max_items=16, max_chars=1200),
+            }
+            return json.dumps({"status": "ok", "result": result})
+
+        if tool_name == "honcho_reasoning":
+            query = cap_text(args.get("query"), max_chars=4000)
+            if not query:
+                return tool_error("Missing required parameter: query")
+            level = str(args.get("reasoning_level") or "low")
+            if level not in {"minimal", "low", "medium"}:
+                return tool_error("Interactive reasoning permits only minimal, low, or medium.")
+            if not self._trusted_tool_authority(tool_name, kwargs, consume=True):
+                return tool_error("Paid reasoning requires a trusted executor receipt.")
+            from plugins.memory.honcho.reasoning_budget import (
+                FAILURE,
+                SUCCESS,
+                TIMEOUT,
+                UNKNOWN_OUTCOME,
+                PaidReasoningGuard,
+                append_public_reasoning_receipt,
+                build_public_reasoning_receipt,
+                issue_trusted_tool_call_id,
+            )
+            import secrets
+
+            if not hasattr(self, "_reasoning_secret"):
+                self._reasoning_secret = secrets.token_bytes(32)
+                self._reasoning_guard = PaidReasoningGuard(self._reasoning_secret)
+            call_id = issue_trusted_tool_call_id(self._reasoning_secret)
+            tool_receipt = kwargs.get("tool_receipt")
+            estimated_cost = float(
+                getattr(self._config, "reasoning_estimated_cost_usd", 0.0)
+            )
+            receipt_path = str(getattr(self._config, "reasoning_receipt_path", ""))
+            appender = getattr(
+                self,
+                "_reasoning_receipt_appender",
+                append_public_reasoning_receipt,
+            )
+            try:
+                reservation_receipt = build_public_reasoning_receipt(
+                    tool_receipt=tool_receipt,
+                    reasoning_call_id=call_id,
+                    phase="reserved",
+                    status="reserved",
+                    tier=level,
+                    estimated_cost_usd=estimated_cost,
+                )
+            except Exception:
+                return tool_error("Paid reasoning reservation receipt could not be built.")
+            if not appender(receipt_path, reservation_receipt):
+                return tool_error("Paid reasoning reservation could not be persisted; no call was made.")
+
+            try:
+                reasoning_deadline = min(
+                    30.0,
+                    max(0.1, float(getattr(self._config, "reasoning_deadline_seconds", 8.0))),
+                )
+            except (TypeError, ValueError):
+                reasoning_deadline = 8.0
+            result = self._reasoning_guard.execute(
+                lambda: self._manager.strict_reasoning_call(
+                    self._session_key,
+                    query,
+                    peer=peer,
+                    reasoning_level=level,
+                ),
+                tier=level,
+                tool_call_id=call_id,
+                timeout=reasoning_deadline,
+            )
+            terminal_status = {
+                SUCCESS: "succeeded",
+                FAILURE: "failed",
+                TIMEOUT: "timed_out",
+                UNKNOWN_OUTCOME: "unknown_outcome",
+            }.get(result.status, "unknown_outcome")
+            terminal_receipt = build_public_reasoning_receipt(
+                tool_receipt=tool_receipt,
+                reasoning_call_id=call_id,
+                phase="terminal",
+                status=terminal_status,
+                tier=level,
+                estimated_cost_usd=estimated_cost,
+                error_class=(type(result.error).__name__ if result.error is not None else None),
+            )
+            if not appender(receipt_path, terminal_receipt):
+                return self._degraded("terminal_receipt_persistence_failed")
+            if result.status != SUCCESS:
+                return self._degraded(str(result.status))
+            answer = cap_text(result.value, max_chars=4000)
+            return json.dumps({"status": "ok", "result": answer})
+
+        if tool_name == "honcho_conclude":
+            delete_id = str(args.get("delete_id") or "").strip()
+            conclusion = str(args.get("conclusion") or "").strip()
+            list_mode = bool(args.get("list"))
+            if sum((bool(delete_id), bool(conclusion), list_mode)) != 1:
+                return tool_error("Exactly one of conclusion, delete_id, or list must be provided.")
+            query = str(args.get("query") or "").strip()
+            if query and not list_mode:
+                return tool_error("query is only valid when list is true.")
+            if delete_id:
+                return tool_error("Conclusion deletion requires a separate approved maintenance action.")
+            if list_mode:
+                query = cap_text(query, max_chars=1000) if query else None
+                outcome = run_bounded(
+                    lambda: self._manager.strict_conclusions(
+                        self._session_key,
+                        peer,
+                        query=query,
+                        limit=10,
+                    ),
+                    timeout_seconds=deadline,
+                )
+                if outcome.status != "ok":
+                    return self._degraded(outcome.error_code)
+                records = cap_records(
+                    outcome.value or [],
+                    max_items=10,
+                    max_chars=4000,
+                    allowed_keys=("id", "content"),
+                )
+                return json.dumps({"status": "ok", "conclusions": records})
+            if peer != "user":
+                return tool_error("Governed conclusion creation is limited to canonical user scope.")
+            conclusion = cap_text(conclusion, max_chars=2000)
+            if not self._trusted_tool_authority(tool_name, kwargs, consume=True):
+                return tool_error("Conclusion creation requires a trusted executor receipt.")
+            outcome = run_bounded(
+                lambda: self._manager.strict_create_conclusion(
+                    self._session_key, conclusion, peer="user"
+                ),
+                timeout_seconds=deadline,
+            )
+            if outcome.status != "ok":
+                return self._degraded(
+                    "unknown_outcome" if outcome.error_code == "deadline_exceeded" else outcome.error_code
+                )
+            return json.dumps({"status": "ok", "result": "Conclusion saved."})
+
+        return tool_error(f"Unknown tool: {tool_name}")
+
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         """Handle a Honcho tool call, with lazy session init for tools-only mode."""
+        if self._provider_disabled_reason:
+            return tool_error(
+                f"Honcho is disabled ({self._provider_disabled_reason}); local memory remains available."
+            )
         if self._cron_skipped:
             return tool_error("Honcho is not active (cron context).")
 
@@ -1434,6 +1859,9 @@ class HonchoMemoryProvider(MemoryProvider):
 
         if not self._manager or not self._session_key:
             return tool_error("Honcho is not active for this session.")
+
+        if self._strict_tools_mode():
+            return self._handle_strict_tool(tool_name, args, kwargs)
 
         try:
             if tool_name == "honcho_profile":
@@ -1541,7 +1969,10 @@ class HonchoMemoryProvider(MemoryProvider):
             if t and t.is_alive():
                 t.join(timeout=5.0)
         # Flush any remaining messages
-        if self._manager and not (self._init_thread and self._init_thread.is_alive() and not self._session_initialized):
+        save_messages = self._config is None or getattr(self._config, "save_messages", True)
+        if save_messages and self._manager and not (
+            self._init_thread and self._init_thread.is_alive() and not self._session_initialized
+        ):
             try:
                 self._manager.flush_all()
             except Exception:
