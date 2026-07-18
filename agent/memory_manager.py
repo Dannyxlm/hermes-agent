@@ -840,6 +840,23 @@ class MemoryManager:
         provider = self._tool_to_provider.get(tool_name)
         if provider is None:
             return tool_error(f"No memory provider handles tool '{tool_name}'")
+        # A caller can never supply its own capability. Replace any incoming
+        # value only with a receipt minted from the sealed runtime turn.
+        kwargs.pop("tool_receipt", None)
+        try:
+            from agent.memory_provenance import issue_memory_tool_receipt
+
+            tool_receipt = issue_memory_tool_receipt(
+                kwargs.get("turn_envelope"),
+                tool_name=tool_name,
+                tool_call_id=str(kwargs.get("tool_call_id") or ""),
+            )
+            if tool_receipt is not None:
+                kwargs["tool_receipt"] = tool_receipt
+        except Exception:
+            # Invalid/missing provenance remains a no-receipt call. Providers
+            # decide which read-only operations are still available.
+            pass
         try:
             return provider.handle_tool_call(tool_name, args, **kwargs)
         except Exception as e:

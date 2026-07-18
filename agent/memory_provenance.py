@@ -139,6 +139,30 @@ class MemoryWriteReceipt:
     _seal: object = field(repr=False, compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class MemoryToolReceipt:
+    """Proof that the runtime dispatched one concrete external-memory tool call."""
+
+    schema_revision: str
+    session_id: str
+    turn_id: str
+    turn_binding_hmac: str
+    runtime_class: str
+    origin_class: str
+    platform: str
+    profile: str
+    principal_hmac: str
+    principal_alias: str
+    source_observation_id: str
+    tool_name: str
+    tool_call_id: str
+    policy_revision: str
+    writer_release: str
+    issued_at: float
+    nonce: str
+    _seal: object = field(repr=False, compare=False)
+
+
 def _valid_origin(receipt: Any) -> bool:
     return (
         type(receipt) is MemoryOriginReceipt
@@ -324,7 +348,7 @@ def principal_matches(
 ) -> bool:
     """Compare a private configured principal to an opaque envelope HMAC."""
 
-    if type(envelope) not in {MemoryTurnEnvelope, MemoryWriteReceipt}:
+    if type(envelope) not in {MemoryTurnEnvelope, MemoryWriteReceipt, MemoryToolReceipt}:
         return False
     if envelope._seal is not _CAPABILITY:
         return False
@@ -361,6 +385,102 @@ def _sealed_eligible_turn(envelope: Any) -> bool:
         and bool(envelope.policy_revision)
         and bool(envelope.writer_release)
     )
+
+
+def issue_memory_tool_receipt(
+    turn_envelope: Any,
+    *,
+    tool_name: str,
+    tool_call_id: str,
+    issued_at: Optional[float] = None,
+) -> Optional[MemoryToolReceipt]:
+    """Mint a content-free capability for one executor-issued memory tool call."""
+
+    tool_name = str(tool_name or "").strip()
+    tool_call_id = str(tool_call_id or "").strip()
+    if not _sealed_eligible_turn(turn_envelope) or not tool_name or not tool_call_id:
+        return None
+    return MemoryToolReceipt(
+        schema_revision=_SCHEMA_REVISION,
+        session_id=turn_envelope.session_id,
+        turn_id=turn_envelope.turn_id,
+        turn_binding_hmac=_digest(
+            "turn-binding",
+            turn_envelope.nonce,
+            turn_envelope.content_hmac,
+            turn_envelope.principal_hmac,
+        ),
+        runtime_class=turn_envelope.runtime_class,
+        origin_class=turn_envelope.origin_class,
+        platform=turn_envelope.platform,
+        profile=turn_envelope.profile,
+        principal_hmac=turn_envelope.principal_hmac,
+        principal_alias=turn_envelope.principal_alias,
+        source_observation_id=turn_envelope.source_observation_id,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        policy_revision=turn_envelope.policy_revision,
+        writer_release=turn_envelope.writer_release,
+        issued_at=float(time.monotonic() if issued_at is None else issued_at),
+        nonce=secrets.token_hex(16),
+        _seal=_CAPABILITY,
+    )
+
+
+def validate_memory_tool_receipt(
+    receipt: Any,
+    *,
+    tool_name: str,
+    tool_call_id: str,
+    turn_envelope: Any = None,
+    consume: bool = False,
+    now: Optional[float] = None,
+    max_age_seconds: float = _DEFAULT_MAX_AGE_SECONDS,
+) -> bool:
+    """Validate an executor-issued tool capability, optionally consuming it once."""
+
+    if type(receipt) is not MemoryToolReceipt or receipt._seal is not _CAPABILITY:
+        return False
+    if receipt.schema_revision != _SCHEMA_REVISION:
+        return False
+    if receipt.runtime_class not in _ALLOWED_RUNTIME_CLASSES:
+        return False
+    if receipt.origin_class not in _ALLOWED_ORIGIN_CLASSES:
+        return False
+    if not receipt.principal_hmac and not receipt.principal_alias:
+        return False
+    if receipt.tool_name != str(tool_name or "").strip():
+        return False
+    if receipt.tool_call_id != str(tool_call_id or "").strip():
+        return False
+    if turn_envelope is not None:
+        if not _sealed_eligible_turn(turn_envelope):
+            return False
+        expected_binding = _digest(
+            "turn-binding",
+            turn_envelope.nonce,
+            turn_envelope.content_hmac,
+            turn_envelope.principal_hmac,
+        )
+        if not hmac.compare_digest(receipt.turn_binding_hmac, expected_binding):
+            return False
+        if receipt.session_id != turn_envelope.session_id or receipt.turn_id != turn_envelope.turn_id:
+            return False
+        if receipt.principal_hmac != turn_envelope.principal_hmac:
+            return False
+        if receipt.policy_revision != turn_envelope.policy_revision:
+            return False
+        if receipt.writer_release != turn_envelope.writer_release:
+            return False
+    if not receipt.policy_revision or not receipt.writer_release:
+        return False
+    current = float(time.monotonic() if now is None else now)
+    age = current - receipt.issued_at
+    if age < -1.0 or age > max(0.0, float(max_age_seconds)):
+        return False
+    if consume and not _consume_nonce(receipt.nonce, receipt.issued_at):
+        return False
+    return True
 
 
 def issue_memory_write_receipt(

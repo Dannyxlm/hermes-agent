@@ -9,6 +9,12 @@ from unittest.mock import MagicMock
 
 from agent.memory_provider import MemoryProvider
 from agent.memory_manager import MemoryManager, inject_memory_provider_tools
+from agent.memory_provenance import (
+    MemoryToolReceipt,
+    issue_authenticated_origin,
+    issue_turn_envelope,
+    validate_memory_tool_receipt,
+)
 
 # ---------------------------------------------------------------------------
 # Concrete test provider
@@ -378,6 +384,49 @@ class TestMemoryManager:
             "tool_call_id": "call-1",
             "session_id": "session-1",
         }
+
+    def test_tool_routing_mints_sealed_receipt_for_valid_runtime_envelope(self):
+        mgr = MemoryManager()
+        provider = FakeMemoryProvider(tools=[{
+            "name": "honcho_conclude",
+            "description": "external write",
+            "parameters": {"type": "object", "properties": {}},
+        }])
+        mgr.add_provider(provider)
+        origin = issue_authenticated_origin(
+            runtime_class="gateway",
+            origin_class="authenticated_human_gateway",
+            platform="telegram",
+            profile="default",
+            principal_id="fixture-user",
+            adapter_receipt_id="adapter-receipt",
+            source_observation_id="observation-receipt",
+        )
+        envelope = issue_turn_envelope(
+            origin,
+            session_id="session-1",
+            turn_id="turn-1",
+            message_id="message-1",
+            user_content="remember this",
+        )
+
+        mgr.handle_tool_call(
+            "honcho_conclude",
+            {"conclusion": "stable fact"},
+            turn_envelope=envelope,
+            tool_call_id="call-1",
+            session_id="session-1",
+        )
+
+        receipt = provider.last_tool_kwargs["tool_receipt"]
+        assert isinstance(receipt, MemoryToolReceipt)
+        assert validate_memory_tool_receipt(
+            receipt,
+            tool_name="honcho_conclude",
+            tool_call_id="call-1",
+            turn_envelope=envelope,
+            consume=False,
+        )
 
     # -- Lifecycle hooks -----------------------------------------------------
 

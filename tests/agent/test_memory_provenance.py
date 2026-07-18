@@ -3,6 +3,7 @@ from dataclasses import fields
 import pytest
 
 from agent.memory_provenance import (
+    MemoryToolReceipt,
     MemoryTurnEnvelope,
     MemoryWriteReceipt,
     authenticated_local_cli_origin,
@@ -10,9 +11,11 @@ from agent.memory_provenance import (
     clear_memory_origin,
     issue_authenticated_origin,
     issue_deny_origin,
+    issue_memory_tool_receipt,
     issue_memory_write_receipt,
     issue_turn_envelope,
     principal_matches,
+    validate_memory_tool_receipt,
     validate_turn_envelope,
     validate_memory_write_receipt,
 )
@@ -289,3 +292,38 @@ def test_failed_or_untrusted_memory_write_cannot_mint_receipt():
         content="fact",
         committed=True,
     ) is None
+
+
+def test_tool_receipt_is_sealed_content_free_principal_bound_and_single_use():
+    turn = _turn()
+    receipt = issue_memory_tool_receipt(
+        turn,
+        tool_name="honcho_conclude",
+        tool_call_id="call-123",
+    )
+    assert isinstance(receipt, MemoryToolReceipt)
+    assert "I prefer concise answers" not in repr(receipt)
+    assert "content" not in {field.name for field in fields(receipt)}
+    assert principal_matches(
+        receipt,
+        principal_id="fixture-user-123",
+        platform="telegram",
+    )
+    assert not validate_memory_tool_receipt(
+        receipt,
+        tool_name="honcho_search",
+        tool_call_id="call-123",
+        consume=False,
+    )
+    assert validate_memory_tool_receipt(
+        receipt,
+        tool_name="honcho_conclude",
+        tool_call_id="call-123",
+        consume=True,
+    )
+    assert not validate_memory_tool_receipt(
+        receipt,
+        tool_name="honcho_conclude",
+        tool_call_id="call-123",
+        consume=True,
+    )
