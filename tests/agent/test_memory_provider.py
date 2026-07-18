@@ -33,6 +33,7 @@ class FakeMemoryProvider(MemoryProvider):
         self.shutdown_called = False
         self._prefetch_result = ""
         self._prompt_block = ""
+        self.last_tool_kwargs = None
 
     @property
     def name(self) -> str:
@@ -62,6 +63,7 @@ class FakeMemoryProvider(MemoryProvider):
         return self._tools
 
     def handle_tool_call(self, tool_name, args, **kwargs):
+        self.last_tool_kwargs = kwargs
         return json.dumps({"handled": tool_name, "args": args})
 
     def shutdown(self):
@@ -352,6 +354,30 @@ class TestMemoryManager:
         assert r1["handled"] == "builtin_tool"
         r2 = json.loads(mgr.handle_tool_call("ext_tool", {"b": 2}))
         assert r2["handled"] == "ext_tool"
+
+    def test_tool_routing_forwards_runtime_provenance_kwargs(self):
+        mgr = MemoryManager()
+        provider = FakeMemoryProvider(tools=[{
+            "name": "ext_tool",
+            "description": "external",
+            "parameters": {"type": "object", "properties": {}},
+        }])
+        mgr.add_provider(provider)
+        envelope = object()
+
+        mgr.handle_tool_call(
+            "ext_tool",
+            {},
+            turn_envelope=envelope,
+            tool_call_id="call-1",
+            session_id="session-1",
+        )
+
+        assert provider.last_tool_kwargs == {
+            "turn_envelope": envelope,
+            "tool_call_id": "call-1",
+            "session_id": "session-1",
+        }
 
     # -- Lifecycle hooks -----------------------------------------------------
 

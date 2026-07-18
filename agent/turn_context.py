@@ -114,6 +114,8 @@ class TurnContext:
     plugin_user_context: str = ""
     # External-memory prefetch result, reused across loop iterations.
     ext_prefetch_cache: str = ""
+    # Sealed, content-free provenance capability for this exact user turn.
+    memory_turn_envelope: Any = None
 
 
 def build_turn_context(
@@ -339,6 +341,36 @@ def build_turn_context(
 
     # Preserve the original user message (no nudge injection).
     original_user_message = persist_user_message if persist_user_message is not None else user_message
+
+    # Snapshot authenticated origin before any model call. The envelope binds
+    # to the clean/persisted user value rather than API-local notes or skill
+    # scaffolding, and is never reconstructed from message/history dictionaries.
+    from agent.memory_provenance import issue_turn_envelope
+    try:
+        from gateway.session_context import get_session_env
+
+        memory_message_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "")
+    except Exception:
+        memory_message_id = ""
+    if not memory_message_id:
+        memory_message_id = f"{turn_id}:user"
+    try:
+        memory_user_content = summarize_user_message_for_log(
+            original_user_message,
+            sep="\n",
+        )
+    except TypeError:
+        # Lightweight tests and third-party embeddings may expose the historic
+        # one-argument callable; plain-string behavior is equivalent.
+        memory_user_content = summarize_user_message_for_log(original_user_message)
+    memory_turn_envelope = issue_turn_envelope(
+        None,
+        session_id=agent.session_id or "",
+        turn_id=turn_id,
+        message_id=memory_message_id,
+        user_content=memory_user_content,
+    )
+    agent._current_turn_envelope = memory_turn_envelope
 
     # Track memory nudge trigger (turn-based, checked here).
     should_review_memory = False
@@ -622,4 +654,5 @@ def build_turn_context(
         should_review_memory=should_review_memory,
         plugin_user_context=plugin_user_context,
         ext_prefetch_cache=ext_prefetch_cache,
+        memory_turn_envelope=memory_turn_envelope,
     )

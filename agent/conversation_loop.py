@@ -643,6 +643,7 @@ def run_conversation(
     _should_review_memory = _ctx.should_review_memory
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
+    _memory_turn_envelope = _ctx.memory_turn_envelope
 
     # Commentary deduplication spans all provider continuations and tool calls
     # within one user turn, but must not suppress the same phrase next turn.
@@ -5671,6 +5672,7 @@ def run_conversation(
         turn_id=turn_id,
         user_message=user_message,
         original_user_message=original_user_message,
+        memory_turn_envelope=_memory_turn_envelope,
         _should_review_memory=_should_review_memory,
         _turn_exit_reason=_turn_exit_reason,
         _pending_verification_response=_pending_verification_response,

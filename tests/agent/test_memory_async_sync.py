@@ -23,6 +23,7 @@ import pytest
 
 from agent.memory_provider import MemoryProvider
 from agent.memory_manager import MemoryManager
+from agent.memory_provenance import issue_authenticated_origin, issue_turn_envelope
 
 
 class _SlowProvider(MemoryProvider):
@@ -92,6 +93,50 @@ def test_background_work_still_completes():
     assert mgr.flush_pending(timeout=10) is True
     assert p.sync_done is True
     assert p.prefetch_done is True
+
+
+def test_sync_all_forwards_exact_turn_envelope_only_to_opted_in_provider():
+    class _EnvelopeProvider(_SlowProvider):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.envelope = None
+
+        def sync_turn(
+            self,
+            user_content,
+            assistant_content,
+            *,
+            session_id="",
+            messages=None,
+            turn_envelope=None,
+        ):
+            self.envelope = turn_envelope
+            self.sync_done = True
+
+    origin = issue_authenticated_origin(
+        runtime_class="gateway",
+        origin_class="authenticated_human_gateway",
+        platform="telegram",
+        profile="default",
+        principal_id="owner-1",
+        adapter_receipt_id="auth-1",
+        source_observation_id="observation-1",
+    )
+    envelope = issue_turn_envelope(
+        origin,
+        session_id="s1",
+        turn_id="t1",
+        message_id="m1",
+        user_content="hi",
+    )
+    mgr = MemoryManager()
+    provider = _EnvelopeProvider()
+    mgr.add_provider(provider)
+
+    mgr.sync_all("hi", "hey", session_id="s1", turn_envelope=envelope)
+
+    assert mgr.flush_pending(timeout=2)
+    assert provider.envelope is envelope
 
 
 def test_flush_pending_no_executor_is_true():

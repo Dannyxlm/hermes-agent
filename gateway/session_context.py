@@ -169,6 +169,7 @@ def set_session_vars(
     cwd: str = "",
     async_delivery: bool = True,
     ui_session_id: str = "",
+    memory_origin_receipt: Any = None,
 ) -> list:
     """Set all session context variables and return reset tokens.
 
@@ -190,6 +191,19 @@ def set_session_vars(
     # "ContextVar-authoritative, strip on _UNSET" — see session_context_engaged.
     global _session_context_engaged
     _session_context_engaged = True
+    # External-memory authority is task-local and wire-invisible. Every bind,
+    # including TUI/cron/synthetic callers, writes this slot so absent authority
+    # cannot inherit from the task that happened to spawn this one.
+    from agent.memory_provenance import bind_memory_origin, issue_deny_origin
+
+    if memory_origin_receipt is None:
+        memory_origin_receipt = issue_deny_origin(
+            runtime_class=source or platform or "unknown",
+            origin_class="missing_authenticated_origin",
+            platform=platform,
+            profile=profile,
+        )
+    bind_memory_origin(memory_origin_receipt)
     tokens = [
         _SESSION_PLATFORM.set(platform),
         _SESSION_SOURCE.set(source),
@@ -246,6 +260,12 @@ def clear_session_vars(tokens: list) -> None:
     # stateless adapter.
     _SESSION_ASYNC_DELIVERY.set(_UNSET)
     try:
+        from agent.memory_provenance import clear_memory_origin
+
+        clear_memory_origin()
+    except Exception:
+        pass
+    try:
         from agent.runtime_cwd import clear_session_cwd
 
         clear_session_cwd()
@@ -293,6 +313,12 @@ def reset_session_vars() -> None:
     # same inheritance-leak reason as the mapped vars above — see clear_session_vars,
     # which resets this var on the handler-exit path for the symmetric concern.
     _SESSION_ASYNC_DELIVERY.set(_UNSET)
+    try:
+        from agent.memory_provenance import clear_memory_origin
+
+        clear_memory_origin()
+    except Exception:
+        pass
     try:
         from agent.runtime_cwd import clear_session_cwd
 

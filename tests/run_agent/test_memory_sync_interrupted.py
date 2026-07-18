@@ -130,6 +130,20 @@ class TestSyncExternalMemoryForTurn:
             messages=messages,
         )
 
+    def test_completed_turn_forwards_exact_runtime_turn_envelope(self):
+        agent = _bare_agent()
+        envelope = object()
+        agent._current_turn_envelope = envelope
+
+        agent._sync_external_memory_for_turn(
+            original_user_message="hello",
+            final_response="hi",
+            interrupted=False,
+            turn_envelope=envelope,
+        )
+
+        assert agent._memory_manager.sync_all.call_args.kwargs["turn_envelope"] is envelope
+
     def test_completed_skill_turn_keeps_original_message_for_memory_manager(self):
         """Provider-specific query shaping belongs inside the provider.
 

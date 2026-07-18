@@ -2944,6 +2944,54 @@ async def _dispose_unused_adapter(adapter: "BasePlatformAdapter | None") -> None
         )
 
 
+def _issue_post_auth_memory_origin(source: SessionSource, *, internal: bool):
+    """Mint a wire-invisible memory origin after gateway authorization.
+
+    Callers invoke this only after ``_is_user_authorized`` accepts the inbound
+    event. Internal events, bot authors, anonymous authors, and system/webhook
+    platforms receive a sealed deny capability. The raw principal id is HMACed
+    inside ``agent.memory_provenance`` and is not retained in the receipt.
+    """
+    import secrets
+
+    from agent.memory_provenance import (
+        issue_authenticated_origin,
+        issue_deny_origin,
+    )
+
+    platform = getattr(getattr(source, "platform", None), "value", "") or ""
+    profile = getattr(source, "profile", "") or "default"
+    principal_id = str(getattr(source, "user_id", "") or "").strip()
+    denied = (
+        internal
+        or getattr(source, "is_bot", False) is True
+        or not principal_id
+        or platform in {"homeassistant", "webhook"}
+    )
+    runtime_class = "api" if platform == "api_server" else "gateway"
+    if denied:
+        return issue_deny_origin(
+            runtime_class=runtime_class,
+            origin_class="synthetic_or_unattributed_gateway_event",
+            platform=platform,
+            profile=profile,
+        )
+
+    return issue_authenticated_origin(
+        runtime_class=runtime_class,
+        origin_class=(
+            "authenticated_human_api"
+            if runtime_class == "api"
+            else "authenticated_human_gateway"
+        ),
+        platform=platform,
+        profile=profile,
+        principal_id=principal_id,
+        adapter_receipt_id=secrets.token_hex(16),
+        source_observation_id=secrets.token_hex(16),
+    )
+
+
 class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
     """
     Main gateway controller.
@@ -11389,8 +11437,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Build session context
         context = build_session_context(source, self.config, session_entry)
         
-        # Set session context variables for tools (task-local, concurrency-safe)
-        _session_env_tokens = self._set_session_env(context)
+        # Set session context variables for tools (task-local, concurrency-safe).
+        # The external-memory origin is minted only here, after the authorization
+        # gate above; wire payloads and restored SessionSource dictionaries never
+        # carry it.
+        _memory_origin_receipt = _issue_post_auth_memory_origin(
+            source,
+            internal=is_internal,
+        )
+        _session_env_tokens = self._set_session_env(
+            context,
+            memory_origin_receipt=_memory_origin_receipt,
+        )
         
         # Read privacy.redact_pii from config (re-read per message)
         _redact_pii = False
@@ -15541,7 +15599,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         return delivered
 
-    def _set_session_env(self, context: SessionContext) -> list:
+    def _set_session_env(
+        self,
+        context: SessionContext,
+        *,
+        memory_origin_receipt=None,
+    ) -> list:
         """Set session context variables for the current async task.
 
         Uses ``contextvars`` instead of ``os.environ`` so that concurrent
@@ -15572,6 +15635,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             message_id=str(context.source.message_id) if context.source.message_id else "",
             profile=getattr(context.source, "profile", "") or "",
             async_delivery=_async_delivery,
+            memory_origin_receipt=memory_origin_receipt,
         )
 
     def _clear_session_env(self, tokens: list) -> None:

@@ -120,6 +120,7 @@ class MemoryProvider(ABC):
         *,
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
+        turn_envelope: Any = None,
     ) -> None:
         """Persist a completed turn to the backend.
 
@@ -129,6 +130,10 @@ class MemoryProvider(ABC):
         ``messages`` is the OpenAI-style conversation message list as of the
         completed turn, including any assistant tool calls and tool results.
         Providers that do not need raw turn context can ignore it.
+
+        ``turn_envelope`` is a sealed, content-free runtime provenance object.
+        Providers that perform user-model writes should require and validate it;
+        legacy providers may ignore it until separately migrated.
         """
 
     @abstractmethod
@@ -283,6 +288,7 @@ class MemoryProvider(ABC):
         target: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
+        write_receipt: Any = None,
     ) -> None:
         """Called when the built-in memory tool writes an entry.
 
@@ -292,6 +298,8 @@ class MemoryProvider(ABC):
         metadata: structured provenance for the write, when available. Common
           keys include ``write_origin``, ``execution_context``, ``session_id``,
           ``parent_session_id``, ``platform``, and ``tool_name``.
+        write_receipt: sealed proof that the built-in mutation committed during
+          a trusted turn. Providers that mirror human memory should require it.
 
         Use to mirror built-in memory writes to your backend.
         """
