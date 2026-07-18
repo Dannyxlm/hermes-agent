@@ -227,6 +227,85 @@ class TestFromGlobalConfig:
         config = HonchoClientConfig.from_global_config(config_path=config_file)
         # Should fall back to from_env without crashing
         assert isinstance(config, HonchoClientConfig)
+        assert config.config_valid is False
+        assert config.enabled is False
+
+    def test_exact_tools_activation_config_is_valid_and_binds_revision(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "baseUrl": "http://localhost:8000",
+            "hosts": {
+                "hermes": {
+                    "enabled": True,
+                    "providerState": "tools_only",
+                    "recallMode": "tools",
+                    "initOnSessionStart": False,
+                    "saveMessages": False,
+                    "peerName": "danny",
+                    "pinUserPeer": True,
+                    "dialecticDepth": 1,
+                    "dialecticDynamic": False,
+                    "reasoningHeuristic": False,
+                    "queryRewrite": False,
+                    "observation": {
+                        "user": {"observeMe": True, "observeOthers": False},
+                        "ai": {"observeMe": False, "observeOthers": False},
+                    },
+                    "capabilityState": "supported",
+                    "capabilityReceiptSha256": "a" * 64,
+                    "trustedPrincipalIds": ["fixture-danny-id"],
+                    "eligibleProfiles": ["default"],
+                    "allowLocalCliWrites": True,
+                    "policyRevision": "memory-source-policy/v1",
+                    "writerRelease": "hermes-memory-boundary/v1",
+                }
+            },
+        }))
+
+        config = HonchoClientConfig.from_global_config(config_path=config_file)
+
+        assert config.config_valid is True
+        assert config.config_revision == __import__("hashlib").sha256(
+            config_file.read_bytes()
+        ).hexdigest()
+        assert config.tools_activation_errors() == []
+
+    def test_tools_activation_fails_closed_on_duplicate_profile_alias_or_missing_capability(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        block = {
+            "enabled": True,
+            "providerState": "tools_only",
+            "recallMode": "tools",
+            "initOnSessionStart": False,
+            "saveMessages": False,
+            "peerName": "danny",
+            "pinUserPeer": True,
+            "dialecticDepth": 1,
+            "dialecticDynamic": False,
+            "reasoningHeuristic": False,
+            "queryRewrite": False,
+            "observationMode": "unified",
+            "trustedPrincipalIds": ["fixture-danny-id"],
+            "eligibleProfiles": ["atlas"],
+            "policyRevision": "memory-source-policy/v1",
+            "writerRelease": "hermes-memory-boundary/v1",
+        }
+        config_file.write_text(json.dumps({
+            "baseUrl": "http://localhost:8000",
+            "hosts": {
+                "hermes_atlas": block,
+                "hermes.atlas": dict(block),
+            },
+        }))
+
+        config = HonchoClientConfig.from_global_config(
+            host="hermes_atlas",
+            config_path=config_file,
+        )
+        errors = config.tools_activation_errors()
+        assert "ambiguous_host_config" in errors
+        assert "unsupported_capability_state" in errors
+        assert "missing_capability_receipt" in errors
 
     def test_api_key_env_fallback(self, tmp_path):
         config_file = tmp_path / "config.json"
