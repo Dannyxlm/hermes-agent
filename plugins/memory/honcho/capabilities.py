@@ -14,6 +14,8 @@ That makes the receipt safe to persist or attach to an operational audit event.
 from __future__ import annotations
 
 import hashlib
+import importlib
+import importlib.metadata
 import json
 import os
 import stat
@@ -43,6 +45,57 @@ REQUIRED_CAPABILITIES = frozenset({
     "conclusion_create",
     "reasoning_chat",
 })
+
+_PROVIDER_SOURCE_FILES = (
+    "__init__.py", "bounds.py", "capabilities.py", "client.py",
+    "reasoning_budget.py", "session.py",
+)
+
+
+def _hash_source_files(root: Path, files: Sequence[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(files, key=lambda item: str(item.relative_to(root))):
+        relative = str(path.relative_to(root)).replace(os.sep, "/")
+        data = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative.encode("utf-8"))
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def current_provider_source_sha256() -> str:
+    """Hash every provider source file that participates in the H2 boundary."""
+    root = Path(__file__).resolve().parent
+    files = [root / name for name in _PROVIDER_SOURCE_FILES]
+    if any(not path.is_file() or path.is_symlink() for path in files):
+        return ""
+    return _hash_source_files(root, files)
+
+
+def current_sdk_identity() -> tuple[str, str]:
+    """Return installed Honcho version and a deterministic Python-source hash."""
+    try:
+        module = importlib.import_module("honcho")
+        module_file = Path(module.__file__).resolve()
+        root = module_file.parent
+        files = [path for path in root.rglob("*.py") if path.is_file() and not path.is_symlink()]
+        if not files or len(files) > 2000:
+            return "", ""
+        total = sum(path.stat().st_size for path in files)
+        if total > 64 * 1024 * 1024:
+            return "", ""
+        version = str(getattr(module, "__version__", "") or "")
+        if not version:
+            for distribution in ("honcho-ai", "honcho"):
+                try:
+                    version = importlib.metadata.version(distribution)
+                    break
+                except importlib.metadata.PackageNotFoundError:
+                    continue
+        return version, _hash_source_files(root, files)
+    except (ImportError, OSError, TypeError, ValueError):
+        return "", ""
 
 _ACCEPTED_STATUSES = frozenset({"accepted", "passed", "supported"})
 _KNOWN_FAILURE_STATUSES = frozenset(
@@ -736,6 +789,8 @@ __all__ = [
     "SUPPORTED",
     "UNSUPPORTED_API",
     "build_public_capability_receipt",
+    "current_provider_source_sha256",
+    "current_sdk_identity",
     "load_public_capability_receipt",
     "manifest_hash",
     "probe_capabilities",
