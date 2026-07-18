@@ -502,12 +502,17 @@ class HonchoClientConfig:
     reasoning_deadline_seconds: float = 8.0
     reasoning_estimated_cost_usd: float = 0.0
     reasoning_receipt_path: str = ""
+    reasoning_reservation_path: str = ""
+    reasoning_reservation_key_path: str = ""
+    reasoning_reservation_key_sha256: str = ""
 
     def tools_activation_errors(self) -> list[str]:
         """Return deterministic fail-closed reasons for H2 tools-only activation."""
-        if self.recall_mode != "tools" or not self.provider_state_explicit:
+        if self.recall_mode != "tools":
             return []
         errors: list[str] = []
+        if not self.provider_state_explicit:
+            errors.append("missing_explicit_provider_state")
         if not self.config_valid:
             errors.append("invalid_config")
         if not self.canonical_host_present:
@@ -543,19 +548,26 @@ class HonchoClientConfig:
             errors.append("invalid_capability_receipt_path")
         if not re.fullmatch(r"[0-9a-f]{64}", self.capability_config_revision or ""):
             errors.append("missing_capability_config_revision")
-        expected_profile = "default"
-        if self.host.startswith(f"{HOST}_"):
-            expected_profile = self.host[len(HOST) + 1:] or "default"
-        if expected_profile not in self.eligible_profiles:
-            errors.append("profile_not_eligible")
-        if not self.trusted_principal_ids and not self.allow_local_cli_writes:
+        if self.eligible_profiles != ["default"]:
+            errors.append("write_eligible_profiles_not_default_only")
+        if not self.trusted_principal_ids:
             errors.append("missing_trusted_principal")
+        if self.allow_local_cli_writes:
+            errors.append("local_cli_writes_not_disabled")
         if self.policy_revision != "memory-source-policy/v1":
             errors.append("policy_revision_mismatch")
         if self.writer_release != "hermes-memory-boundary/v1":
             errors.append("writer_release_mismatch")
         if not self.reasoning_receipt_path or not Path(self.reasoning_receipt_path).is_absolute():
             errors.append("invalid_reasoning_receipt_path")
+        if not self.reasoning_reservation_path or not Path(self.reasoning_reservation_path).is_absolute():
+            errors.append("invalid_reasoning_reservation_path")
+        if not self.reasoning_reservation_key_path or not Path(self.reasoning_reservation_key_path).is_absolute():
+            errors.append("invalid_reasoning_reservation_key_path")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.reasoning_reservation_key_sha256 or ""):
+            errors.append("invalid_reasoning_reservation_key_sha256")
+        if self.reasoning_reservation_path == self.reasoning_receipt_path:
+            errors.append("reasoning_reservation_and_receipt_paths_overlap")
         if not 0 <= self.reasoning_estimated_cost_usd <= 1000:
             errors.append("invalid_reasoning_estimated_cost")
         if not 0.1 <= self.reasoning_deadline_seconds <= 30:
@@ -943,6 +955,15 @@ class HonchoClientConfig:
             ),
             reasoning_receipt_path=_parse_optional_string(
                 host_block, raw, "reasoningReceiptPath", ""
+            ),
+            reasoning_reservation_path=_parse_optional_string(
+                host_block, raw, "reasoningReservationPath", ""
+            ),
+            reasoning_reservation_key_path=_parse_optional_string(
+                host_block, raw, "reasoningReservationKeyPath", ""
+            ),
+            reasoning_reservation_key_sha256=_parse_optional_string(
+                host_block, raw, "reasoningReservationKeySha256", ""
             ),
         )
 

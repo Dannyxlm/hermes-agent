@@ -1,5 +1,6 @@
 """Focused tests for Honcho cost-hygiene behavior."""
 
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -142,6 +143,9 @@ def test_tools_initialization_requests_no_history_hydration(monkeypatch):
         reasoning_deadline_seconds=8.0,
         reasoning_estimated_cost_usd=0.02,
         reasoning_receipt_path="/tmp/honcho-reasoning-receipts.jsonl",
+        reasoning_reservation_path="/tmp/honcho-reasoning-reservations.jsonl",
+        reasoning_reservation_key_path="/tmp/honcho-reasoning.key",
+        reasoning_reservation_key_sha256=hashlib.sha256(b"fixture-key" * 3).hexdigest(),
     )
     manager = MagicMock()
     manager.get_or_create.return_value = SimpleNamespace(messages=[])
@@ -241,3 +245,38 @@ def test_tools_activation_rejects_stale_provider_or_sdk_receipt(monkeypatch):
     receipt, reason = HonchoMemoryProvider._verified_tools_capability(config)
     assert receipt is None
     assert reason == "provider_source_receipt_mismatch"
+
+
+def test_tools_mode_without_explicit_provider_state_disables_before_client_or_session(monkeypatch):
+    config = HonchoClientConfig(
+        api_key="fixture-key",
+        enabled=True,
+        recall_mode="tools",
+        provider_state="legacy",
+        provider_state_explicit=False,
+        canonical_host_present=True,
+        effective_host_count=1,
+    )
+    client_factory = MagicMock()
+    manager_factory = MagicMock()
+    monkeypatch.setattr(
+        "plugins.memory.honcho.client.HonchoClientConfig.from_global_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "plugins.memory.honcho.client.get_honcho_client",
+        client_factory,
+    )
+    monkeypatch.setattr(
+        "plugins.memory.honcho.session.HonchoSessionManager",
+        manager_factory,
+    )
+
+    provider = HonchoMemoryProvider()
+    provider.initialize("telegram:legacy-tools")
+
+    assert "missing_explicit_provider_state" in config.tools_activation_errors()
+    assert provider.is_available() is False
+    assert provider.get_tool_schemas() == []
+    client_factory.assert_not_called()
+    manager_factory.assert_not_called()

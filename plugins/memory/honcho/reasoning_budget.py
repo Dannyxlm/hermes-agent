@@ -235,6 +235,61 @@ def issue_trusted_tool_call_id(secret: bytes | bytearray | str) -> str:
     return f"{body.decode('ascii')}.{signature}"
 
 
+def derive_trusted_tool_call_id(
+    secret: bytes | bytearray | str,
+    *,
+    session_id: str,
+    turn_id: str,
+    tool_name: str,
+    runtime_tool_call_id: str,
+) -> str:
+    """Derive a stable opaque reservation ID for one runtime tool invocation."""
+    key = _secret_bytes(secret)
+    components = tuple(
+        str(value or "").strip()
+        for value in (session_id, turn_id, tool_name, runtime_tool_call_id)
+    )
+    if any(not value or len(value) > 4096 for value in components):
+        raise ValueError("complete bounded runtime tool identity is required")
+    payload = bytearray(b"honcho-reasoning-reservation-v1\0")
+    for component in components:
+        encoded = component.encode("utf-8")
+        payload.extend(len(encoded).to_bytes(4, "big"))
+        payload.extend(encoded)
+    nonce = hmac.new(key, bytes(payload), hashlib.sha256).digest()[:24]
+    nonce_part = _b64(nonce)
+    body = f"{_CALL_ID_PREFIX}.{nonce_part}".encode("ascii")
+    signature = _b64(hmac.new(key, body, hashlib.sha256).digest())
+    return f"{body.decode('ascii')}.{signature}"
+
+
+def load_private_reasoning_key(path: str) -> bytes | None:
+    """Read one stable mode-private 32-byte key without following symlinks."""
+    try:
+        if not isinstance(path, str) or not os.path.isabs(path):
+            return None
+        parent = os.path.dirname(path)
+        if os.path.realpath(parent) != os.path.abspath(parent):
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            info = os.fstat(fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_mode & 0o077
+                or info.st_size != 32
+            ):
+                return None
+            value = os.read(fd, 33)
+            return value if len(value) == 32 else None
+        finally:
+            os.close(fd)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def is_trusted_tool_call_id(secret: bytes | bytearray | str, call_id: str) -> bool:
     """Verify an opaque HMAC-backed tool-call ID in constant time."""
 
@@ -373,6 +428,133 @@ class InMemoryReservationStore:
     def reservations(self) -> list[OfflineManifestEntry]:
         with self._lock:
             return [OfflineManifestEntry(call_id, tier) for call_id, tier in self._reserved.items()]
+
+
+class DurableFileReservationStore:
+    """Process-shared append-only reservation ledger; reservations never release."""
+
+    _SCHEMA = "honcho-reasoning-reservation-v1"
+    _MAX_BYTES = 16 * 1024 * 1024
+
+    def __init__(self, path: str) -> None:
+        if not isinstance(path, str) or not os.path.isabs(path):
+            raise ValueError("reservation ledger path must be absolute")
+        self.path = path
+
+    def _open(self) -> int:
+        parent = os.path.dirname(self.path)
+        if os.path.realpath(parent) != os.path.abspath(parent):
+            raise OSError("reservation ledger parent must not contain symlinks")
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_APPEND
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        fd = os.open(self.path, flags, 0o600)
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_mode & 0o077
+            or info.st_size > self._MAX_BYTES
+        ):
+            os.close(fd)
+            raise OSError("unsafe reservation ledger")
+        return fd
+
+    def _entries_locked(self, fd: int) -> dict[str, str]:
+        os.lseek(fd, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = self._MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(fd, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > self._MAX_BYTES:
+            raise OSError("reservation ledger exceeds size limit")
+        entries: dict[str, str] = {}
+        for raw_line in payload.splitlines():
+            if not raw_line:
+                continue
+            value = json.loads(raw_line)
+            if (
+                not isinstance(value, dict)
+                or set(value) != {"schema", "call_id", "tier", "reserved_at"}
+                or value.get("schema") != self._SCHEMA
+                or value.get("tier") not in VALID_TIERS
+                or not isinstance(value.get("call_id"), str)
+                or not isinstance(value.get("reserved_at"), str)
+            ):
+                raise OSError("reservation ledger entry is invalid")
+            call_id = value["call_id"]
+            tier = value["tier"]
+            if call_id in entries and entries[call_id] != tier:
+                raise OSError("reservation ledger contains a conflicting duplicate")
+            entries[call_id] = tier
+        return entries
+
+    def reserve(self, call_id: str, tier: str) -> bool:
+        fd = self._open()
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            entries = self._entries_locked(fd)
+            if call_id in entries:
+                return False
+            value = {
+                "schema": self._SCHEMA,
+                "call_id": call_id,
+                "tier": tier,
+                "reserved_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+            line = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            if os.fstat(fd).st_size + len(line) > self._MAX_BYTES:
+                raise OSError("reservation ledger exceeds size limit")
+            view = memoryview(line)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short reservation ledger write")
+                view = view[written:]
+            os.fsync(fd)
+            directory_fd = os.open(os.path.dirname(self.path), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            return True
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def contains(self, call_id: str) -> bool:
+        fd = self._open()
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            return call_id in self._entries_locked(fd)
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def reservations(self) -> list[OfflineManifestEntry]:
+        fd = self._open()
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            entries = self._entries_locked(fd)
+            return [OfflineManifestEntry(call_id, tier) for call_id, tier in entries.items()]
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 class InMemoryReceiptSink:
@@ -524,6 +706,7 @@ class PaidReasoningGuard:
         mode: str = INTERACTIVE,
         offline_manifest: OfflineReasoningManifest | Mapping[str, str] | Iterable[Any] | None = None,
         explicit_approval: str | None = None,
+        on_reserved: Callable[[], bool | None] | None = None,
         deadline: float | None = None,
         timeout: float | None = None,
     ) -> GuardResult:
@@ -579,6 +762,18 @@ class PaidReasoningGuard:
                     duplicate = False
             reason = "duplicate trusted tool-call ID" if duplicate else "reservation failed"
             return self._denied(resolved_call_id, tier, reason)
+
+        if on_reserved is not None:
+            try:
+                write_ahead_persisted = on_reserved()
+            except Exception:
+                write_ahead_persisted = False
+            if write_ahead_persisted is False:
+                return self._denied(
+                    resolved_call_id,
+                    tier,
+                    "reservation receipt could not be persisted",
+                )
 
         invocation = _Invocation(lock=threading.Lock(), done=threading.Event())
 
@@ -869,6 +1064,7 @@ def append_public_reasoning_receipt(
 __all__ = [
     "AtomicReservationStore",
     "DENIED",
+    "DurableFileReservationStore",
     "FAILURE",
     "HIGH",
     "HonchoReasoningGuard",
@@ -898,8 +1094,10 @@ __all__ = [
     "VALID_TIERS",
     "GuardResult",
     "is_trusted_tool_call_id",
+    "derive_trusted_tool_call_id",
     "issue_explicit_approval",
     "issue_trusted_tool_call_id",
+    "load_private_reasoning_key",
     "append_public_reasoning_receipt",
     "build_public_reasoning_receipt",
     "make_explicit_approval",

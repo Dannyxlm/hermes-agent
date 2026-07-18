@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -12,6 +13,7 @@ from agent.memory_provenance import (
     issue_turn_envelope,
 )
 from plugins.memory.honcho import HonchoMemoryProvider
+from plugins.memory.honcho.reasoning_budget import InMemoryReservationStore
 
 
 def _provider(*, deadline: float = 0.2):
@@ -27,17 +29,22 @@ def _provider(*, deadline: float = 0.2):
         tool_deadline_seconds=deadline,
         eligible_profiles=["default"],
         trusted_principal_ids=["fixture-danny"],
-        allow_local_cli_writes=True,
+        allow_local_cli_writes=False,
         policy_revision="memory-source-policy/v1",
         writer_release="hermes-memory-boundary/v1",
         reasoning_deadline_seconds=0.5,
         reasoning_estimated_cost_usd=0.02,
         reasoning_receipt_path="/fixture/reasoning.jsonl",
+        reasoning_reservation_path="/fixture/reasoning-reservations.jsonl",
+        reasoning_reservation_key_path="/fixture/reasoning.key",
+        reasoning_reservation_key_sha256=hashlib.sha256(b"k" * 32).hexdigest(),
     )
     provider._reasoning_public_receipts = []
     provider._reasoning_receipt_appender = (
         lambda _path, receipt: provider._reasoning_public_receipts.append(receipt) or True
     )
+    provider._reasoning_key_loader = lambda _path: b"k" * 32
+    provider._reasoning_reservation_store = InMemoryReservationStore()
     return provider
 
 
@@ -278,6 +285,63 @@ def test_paid_reasoning_allows_one_bounded_call_and_denies_high_or_replay():
     assert "trusted executor receipt" in replay
     assert provider._manager.strict_reasoning_call.call_count == 1
     assert len(provider._reasoning_public_receipts) == 2
+
+    fresh_receipt_same_runtime_call = _tool_authority("honcho_reasoning", call_id)
+    duplicate_dispatch = json.loads(provider.handle_tool_call(
+        "honcho_reasoning",
+        {"query": "What changed?", "reasoning_level": "low", "peer": "user"},
+        tool_call_id=call_id,
+        tool_receipt=fresh_receipt_same_runtime_call,
+    ))
+    assert duplicate_dispatch == {
+        "status": "degraded",
+        "code": "duplicate_paid_reasoning_invocation",
+        "result": None,
+    }
+    assert provider._manager.strict_reasoning_call.call_count == 1
+    assert len(provider._reasoning_public_receipts) == 2
+
+
+def test_paid_reasoning_durable_reservation_blocks_redispatch_after_provider_restart(tmp_path):
+    key_path = tmp_path / "reasoning.key"
+    key_path.write_bytes(b"z" * 32)
+    key_path.chmod(0o600)
+    ledger_path = tmp_path / "reservations.jsonl"
+    receipt_path = tmp_path / "receipts.jsonl"
+    call_id = "call-restart-safe"
+
+    first = _provider()
+    del first._reasoning_key_loader
+    del first._reasoning_reservation_store
+    first._config.reasoning_reservation_key_path = str(key_path)
+    first._config.reasoning_reservation_key_sha256 = hashlib.sha256(b"z" * 32).hexdigest()
+    first._config.reasoning_reservation_path = str(ledger_path)
+    first._config.reasoning_receipt_path = str(receipt_path)
+    first._manager.strict_reasoning_call.return_value = "one paid answer"
+    allowed = json.loads(first.handle_tool_call(
+        "honcho_reasoning",
+        {"query": "one", "reasoning_level": "low", "peer": "user"},
+        tool_call_id=call_id,
+        tool_receipt=_tool_authority("honcho_reasoning", call_id),
+    ))
+    assert allowed["status"] == "ok"
+    first._manager.strict_reasoning_call.assert_called_once()
+
+    restarted = _provider()
+    del restarted._reasoning_key_loader
+    del restarted._reasoning_reservation_store
+    restarted._config.reasoning_reservation_key_path = str(key_path)
+    restarted._config.reasoning_reservation_key_sha256 = hashlib.sha256(b"z" * 32).hexdigest()
+    restarted._config.reasoning_reservation_path = str(ledger_path)
+    restarted._config.reasoning_receipt_path = str(receipt_path)
+    denied = json.loads(restarted.handle_tool_call(
+        "honcho_reasoning",
+        {"query": "one", "reasoning_level": "low", "peer": "user"},
+        tool_call_id=call_id,
+        tool_receipt=_tool_authority("honcho_reasoning", call_id),
+    ))
+    assert denied["code"] == "duplicate_paid_reasoning_invocation"
+    restarted._manager.strict_reasoning_call.assert_not_called()
 
 
 def test_paid_reasoning_never_calls_backend_when_reservation_receipt_fails():

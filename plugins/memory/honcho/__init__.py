@@ -373,7 +373,7 @@ class HonchoMemoryProvider(MemoryProvider):
             cfg = HonchoClientConfig.from_global_config()
             if not (cfg.enabled and bool(cfg.api_key or cfg.base_url)):
                 return False
-            if cfg.recall_mode == "tools" and cfg.provider_state_explicit:
+            if cfg.recall_mode == "tools":
                 receipt, _ = self._verified_tools_capability(cfg)
                 return receipt is not None
             return True
@@ -436,7 +436,7 @@ class HonchoMemoryProvider(MemoryProvider):
             self._recall_mode = cfg.recall_mode  # "context", "tools", or "hybrid"
             logger.debug("Honcho recall_mode: %s", self._recall_mode)
 
-            if self._recall_mode == "tools" and cfg.provider_state_explicit:
+            if self._recall_mode == "tools":
                 receipt, reason = self._verified_tools_capability(cfg)
                 if receipt is None:
                     self._provider_disabled_reason = reason or "invalid_tools_activation"
@@ -1674,6 +1674,8 @@ class HonchoMemoryProvider(MemoryProvider):
             return []
         if self._recall_mode == "context":
             return []
+        if self._recall_mode == "tools" and not self._strict_tools_mode():
+            return []
         return list(ALL_TOOL_SCHEMAS)
 
     def _trusted_tool_authority(
@@ -1866,18 +1868,57 @@ class HonchoMemoryProvider(MemoryProvider):
                 SUCCESS,
                 TIMEOUT,
                 UNKNOWN_OUTCOME,
+                DurableFileReservationStore,
                 PaidReasoningGuard,
                 append_public_reasoning_receipt,
                 build_public_reasoning_receipt,
-                issue_trusted_tool_call_id,
+                derive_trusted_tool_call_id,
+                load_private_reasoning_key,
             )
-            import secrets
 
-            if not hasattr(self, "_reasoning_secret"):
-                self._reasoning_secret = secrets.token_bytes(32)
-                self._reasoning_guard = PaidReasoningGuard(self._reasoning_secret)
-            call_id = issue_trusted_tool_call_id(self._reasoning_secret)
             tool_receipt = kwargs.get("tool_receipt")
+            key_path = str(
+                getattr(self._config, "reasoning_reservation_key_path", "")
+            )
+            reservation_path = str(
+                getattr(self._config, "reasoning_reservation_path", "")
+            )
+            key_loader = getattr(self, "_reasoning_key_loader", load_private_reasoning_key)
+            reasoning_secret = key_loader(key_path)
+            if not reasoning_secret:
+                return tool_error("Paid reasoning reservation key is unavailable; no call was made.")
+            import hashlib
+
+            expected_key_sha256 = str(
+                getattr(self._config, "reasoning_reservation_key_sha256", "")
+            )
+            if hashlib.sha256(reasoning_secret).hexdigest() != expected_key_sha256:
+                return tool_error("Paid reasoning reservation key fingerprint mismatch; no call was made.")
+            try:
+                call_id = derive_trusted_tool_call_id(
+                    reasoning_secret,
+                    session_id=tool_receipt.session_id,
+                    turn_id=tool_receipt.turn_id,
+                    tool_name=tool_name,
+                    runtime_tool_call_id=str(kwargs.get("tool_call_id") or ""),
+                )
+            except Exception:
+                return tool_error("Paid reasoning runtime identity is invalid; no call was made.")
+            guard_identity = (key_path, reservation_path)
+            if getattr(self, "_reasoning_guard_identity", None) != guard_identity:
+                try:
+                    reservation_store = getattr(
+                        self,
+                        "_reasoning_reservation_store",
+                        None,
+                    ) or DurableFileReservationStore(reservation_path)
+                    self._reasoning_guard = PaidReasoningGuard(
+                        reasoning_secret,
+                        reservation_store=reservation_store,
+                    )
+                    self._reasoning_guard_identity = guard_identity
+                except Exception:
+                    return tool_error("Paid reasoning reservation ledger is unavailable; no call was made.")
             estimated_cost = float(
                 getattr(self._config, "reasoning_estimated_cost_usd", 0.0)
             )
@@ -1898,8 +1939,6 @@ class HonchoMemoryProvider(MemoryProvider):
                 )
             except Exception:
                 return tool_error("Paid reasoning reservation receipt could not be built.")
-            if not appender(receipt_path, reservation_receipt):
-                return tool_error("Paid reasoning reservation could not be persisted; no call was made.")
 
             try:
                 reasoning_deadline = min(
@@ -1917,8 +1956,17 @@ class HonchoMemoryProvider(MemoryProvider):
                 ),
                 tier=level,
                 tool_call_id=call_id,
+                on_reserved=lambda: appender(receipt_path, reservation_receipt),
                 timeout=reasoning_deadline,
             )
+            if not result.allowed:
+                if result.reason == "duplicate trusted tool-call ID":
+                    return self._degraded("duplicate_paid_reasoning_invocation")
+                if result.reason == "reservation receipt could not be persisted":
+                    return tool_error(
+                        "Paid reasoning reservation could not be persisted; no call was made."
+                    )
+                return self._degraded("paid_reasoning_reservation_failed")
             terminal_status = {
                 SUCCESS: "succeeded",
                 FAILURE: "failed",

@@ -26,6 +26,7 @@ from plugins.memory.honcho.reasoning_budget import (
     SUCCESS,
     TIMEOUT,
     UNKNOWN_OUTCOME,
+    DurableFileReservationStore,
     InMemoryReceiptSink,
     InMemoryReservationStore,
     OfflineReasoningManifest,
@@ -33,9 +34,11 @@ from plugins.memory.honcho.reasoning_budget import (
     UnknownOutcomeError,
     append_public_reasoning_receipt,
     build_public_reasoning_receipt,
+    derive_trusted_tool_call_id,
     issue_explicit_approval,
     issue_trusted_tool_call_id,
     is_trusted_tool_call_id,
+    load_private_reasoning_key,
     validate_public_reasoning_receipt,
 )
 
@@ -427,3 +430,110 @@ def test_reasoning_receipt_append_rejects_symlink(tmp_path):
     link = tmp_path / "link.jsonl"
     link.symlink_to(target)
     assert append_public_reasoning_receipt(str(link), receipt) is False
+
+
+def test_deterministic_paid_call_id_is_bound_to_runtime_identity():
+    key = b"k" * 32
+    first = derive_trusted_tool_call_id(
+        key,
+        session_id="session-1",
+        turn_id="turn-1",
+        tool_name="honcho_reasoning",
+        runtime_tool_call_id="call-1",
+    )
+    duplicate = derive_trusted_tool_call_id(
+        key,
+        session_id="session-1",
+        turn_id="turn-1",
+        tool_name="honcho_reasoning",
+        runtime_tool_call_id="call-1",
+    )
+    other_turn = derive_trusted_tool_call_id(
+        key,
+        session_id="session-1",
+        turn_id="turn-2",
+        tool_name="honcho_reasoning",
+        runtime_tool_call_id="call-1",
+    )
+    assert first == duplicate
+    assert first != other_turn
+    assert is_trusted_tool_call_id(key, first)
+
+
+def test_private_reasoning_key_loader_requires_regular_mode_private_32_bytes(tmp_path):
+    key_path = tmp_path / "reasoning.key"
+    key_path.write_bytes(b"k" * 32)
+    os.chmod(key_path, 0o600)
+    assert load_private_reasoning_key(str(key_path)) == b"k" * 32
+
+    os.chmod(key_path, 0o644)
+    assert load_private_reasoning_key(str(key_path)) is None
+    os.chmod(key_path, 0o600)
+    link = tmp_path / "reasoning-key-link"
+    link.symlink_to(key_path)
+    assert load_private_reasoning_key(str(link)) is None
+
+
+def test_durable_reservation_survives_store_recreation_and_orders_write_ahead_before_call(tmp_path):
+    path = tmp_path / "reservations.jsonl"
+    key = b"k" * 32
+    call_id = derive_trusted_tool_call_id(
+        key,
+        session_id="session-1",
+        turn_id="turn-1",
+        tool_name="honcho_reasoning",
+        runtime_tool_call_id="runtime-call-1",
+    )
+    events: list[str] = []
+    first_guard = PaidReasoningGuard(
+        key,
+        reservation_store=DurableFileReservationStore(str(path)),
+    )
+    first = first_guard.execute(
+        lambda: events.append("paid-call") or "answer",
+        tier=LOW,
+        tool_call_id=call_id,
+        on_reserved=lambda: events.append("public-reservation") or True,
+    )
+    assert first.status == SUCCESS
+    assert events == ["public-reservation", "paid-call"]
+    assert path.stat().st_mode & 0o777 == 0o600
+
+    second_guard = PaidReasoningGuard(
+        key,
+        reservation_store=DurableFileReservationStore(str(path)),
+    )
+    duplicate = second_guard.execute(
+        lambda: events.append("second-paid-call"),
+        tier=LOW,
+        tool_call_id=call_id,
+        on_reserved=lambda: events.append("second-reservation") or True,
+    )
+    assert duplicate.allowed is False
+    assert duplicate.reason == "duplicate trusted tool-call ID"
+    assert events == ["public-reservation", "paid-call"]
+
+
+def test_failed_public_reservation_receipt_consumes_durable_authority_without_call(tmp_path):
+    path = tmp_path / "reservations.jsonl"
+    key = b"k" * 32
+    call_id = derive_trusted_tool_call_id(
+        key,
+        session_id="session-1",
+        turn_id="turn-1",
+        tool_name="honcho_reasoning",
+        runtime_tool_call_id="runtime-call-2",
+    )
+    store = DurableFileReservationStore(str(path))
+    calls: list[str] = []
+    guard = PaidReasoningGuard(key, reservation_store=store)
+    denied = guard.execute(
+        lambda: calls.append("paid"),
+        tier=LOW,
+        tool_call_id=call_id,
+        on_reserved=lambda: False,
+    )
+    assert denied.allowed is False
+    assert denied.reason == "reservation receipt could not be persisted"
+    assert calls == []
+    assert DurableFileReservationStore(str(path)).contains(call_id)

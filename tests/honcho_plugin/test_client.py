@@ -1,6 +1,7 @@
 """Tests for plugins/memory/honcho/client.py — Honcho client configuration."""
 
 import importlib.util
+import hashlib
 import json
 import os
 import sys
@@ -257,13 +258,16 @@ class TestFromGlobalConfig:
                     "capabilityConfigRevision": "b" * 64,
                     "trustedPrincipalIds": ["fixture-danny-id"],
                     "eligibleProfiles": ["default"],
-                    "allowLocalCliWrites": True,
+                    "allowLocalCliWrites": False,
                     "policyRevision": "memory-source-policy/v1",
                     "writerRelease": "hermes-memory-boundary/v1",
                     "toolDeadlineSeconds": 2,
                     "reasoningDeadlineSeconds": 8,
                     "reasoningEstimatedCostUsd": 0.02,
                     "reasoningReceiptPath": str(tmp_path / "reasoning-receipts.jsonl"),
+                    "reasoningReservationPath": str(tmp_path / "reasoning-reservations.jsonl"),
+                    "reasoningReservationKeyPath": str(tmp_path / "reasoning.key"),
+                    "reasoningReservationKeySha256": hashlib.sha256(b"k" * 32).hexdigest(),
                 }
             },
         }))
