@@ -92,6 +92,35 @@ def _write_authority(call_id: str, content: str, *, principal: str = "fixture-da
     )
 
 
+def _turn_authority(
+    content: str,
+    *,
+    principal: str = "fixture-danny",
+    runtime_class: str = "gateway",
+):
+    origin_class = {
+        "gateway": "authenticated_human_gateway",
+        "api": "authenticated_human_api",
+        "cli": "authenticated_human_cli",
+    }[runtime_class]
+    origin = issue_authenticated_origin(
+        runtime_class=runtime_class,
+        origin_class=origin_class,
+        platform="telegram" if runtime_class == "gateway" else runtime_class,
+        profile="default",
+        principal_id=principal,
+        adapter_receipt_id="adapter-turn",
+        source_observation_id="observation-turn",
+    )
+    return issue_turn_envelope(
+        origin,
+        session_id="telegram:session",
+        turn_id=f"turn-{runtime_class}-{principal}",
+        message_id=f"message-{runtime_class}-{principal}",
+        user_content=content,
+    )
+
+
 def test_profile_is_canonical_read_only_bounded_and_tui_readable():
     provider = _provider()
     provider._manager.strict_peer_card.return_value = [f"fact-{i}-" + "x" * 500 for i in range(30)]
@@ -126,10 +155,38 @@ def test_search_and_context_use_only_strict_bounded_manager_methods():
         "honcho_search", {"query": "specific fact", "max_tokens": 1000, "peer": "user"}
     ))
     assert search["count"] <= 8
+    assert search["truncated"] is True
     assert sum(len(value) for row in search["results"] for value in row.values()) <= 4000
-    context = json.loads(provider.handle_tool_call("honcho_context", {"peer": "user"}))
+    context = json.loads(provider.handle_tool_call(
+        "honcho_context",
+        {
+            "peer": "user",
+            "query": "current projects",
+            "search_top_k": 5,
+            "search_max_distance": 0.3,
+            "include_most_frequent": False,
+            "max_conclusions": 8,
+        },
+    ))
     assert len(context["result"]["representation"]) <= 2400
     assert sum(map(len, context["result"]["card"])) <= 1200
+    assert context["truncated"] is True
+    provider._manager.strict_human_search.assert_called_once_with(
+        "telegram:session",
+        "specific fact",
+        limit=8,
+        policy_revision="memory-source-policy/v1",
+        writer_release="hermes-memory-boundary/v1",
+    )
+    provider._manager.strict_peer_context.assert_called_once_with(
+        "telegram:session",
+        "user",
+        search_query="current projects",
+        search_top_k=5,
+        search_max_distance=0.3,
+        include_most_frequent=False,
+        max_conclusions=8,
+    )
     provider._manager.search_context.assert_not_called()
     provider._manager.get_session_context.assert_not_called()
 
@@ -315,3 +372,67 @@ def test_builtin_memory_mirror_rejects_non_authoritative_group_principal():
     provider.on_memory_write("add", "user", content, write_receipt=receipt)
     time.sleep(0.02)
     provider._manager.strict_create_conclusion.assert_not_called()
+
+
+def test_governed_turn_sync_writes_only_once_for_authenticated_human_and_never_assistant():
+    provider = _provider()
+    provider._config.save_messages = True
+    local_session = MagicMock()
+    provider._manager.get_or_create.return_value = local_session
+    content = "Human-authored governed message"
+    envelope = _turn_authority(content)
+
+    provider.sync_turn(
+        content,
+        "assistant response must never be stored",
+        session_id="telegram:session",
+        turn_envelope=envelope,
+    )
+    provider._sync_thread.join(1)
+
+    provider._manager.get_or_create.assert_called_once_with(
+        "telegram:session",
+        hydrate_history=False,
+        create_remote_session=False,
+    )
+    local_session.add_message.assert_called_once()
+    role, stored_content = local_session.add_message.call_args.args
+    metadata = local_session.add_message.call_args.kwargs["metadata"]
+    assert role == "user"
+    assert stored_content == content
+    assert metadata == {
+        "human_authored": True,
+        "eligible": True,
+        "policy_revision": "memory-source-policy/v1",
+        "writer_release": "hermes-memory-boundary/v1",
+        "source_observation_id": "observation-turn",
+    }
+    assert "assistant response" not in repr(local_session.add_message.call_args_list)
+    provider._manager._flush_session.assert_called_once_with(local_session)
+
+    provider.sync_turn(
+        content,
+        "assistant response must never be stored",
+        session_id="telegram:session",
+        turn_envelope=envelope,
+    )
+    assert local_session.add_message.call_count == 1
+
+
+def test_governed_turn_sync_denies_other_group_principal_cli_and_missing_provenance():
+    provider = _provider()
+    provider._config.save_messages = True
+    content = "denied message"
+    for envelope in (
+        _turn_authority(content, principal="other-group-member"),
+        _turn_authority(content, principal="fixture-danny", runtime_class="cli"),
+        None,
+    ):
+        provider.sync_turn(
+            content,
+            "assistant",
+            session_id="telegram:session",
+            turn_envelope=envelope,
+        )
+    provider._manager.get_or_create.assert_not_called()
+    provider._manager._flush_session.assert_not_called()

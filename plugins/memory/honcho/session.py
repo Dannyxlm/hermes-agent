@@ -482,7 +482,18 @@ class HonchoSessionManager:
         honcho_messages = []
         for msg in new_messages:
             peer = user_peer if msg["role"] == "user" else assistant_peer
-            honcho_messages.append(peer.message(msg["content"]))
+            metadata = msg.get("metadata")
+            configuration = msg.get("configuration")
+            if metadata is None and configuration is None:
+                honcho_messages.append(peer.message(msg["content"]))
+            else:
+                honcho_messages.append(
+                    peer.message(
+                        msg["content"],
+                        metadata=metadata,
+                        configuration=configuration,
+                    )
+                )
 
         try:
             honcho_session.add_messages(honcho_messages)
@@ -734,19 +745,35 @@ class HonchoSessionManager:
         query: str,
         *,
         limit: int,
+        policy_revision: str,
+        writer_release: str,
     ) -> list[dict[str, str]]:
         """Run one workspace search and retain only canonical human-authored messages."""
         session = self._cache[session_key]
+        eligibility = {
+            "human_authored": True,
+            "eligible": True,
+            "policy_revision": policy_revision,
+            "writer_release": writer_release,
+        }
         results = self.honcho.search(
             query=query,
-            filters={"peer_id": session.user_peer_id},
-            top_k=limit,
-            peer_perspective=session.user_peer_id,
+            filters={
+                "AND": [
+                    {"peer_id": session.user_peer_id},
+                    {"metadata": eligibility},
+                ]
+            },
+            limit=limit,
         )
         output: list[dict[str, str]] = []
         for item in results or []:
-            author = str(self._strict_value(item, "peer_id", ""))
-            if author != session.user_peer_id:
+            if str(self._strict_value(item, "peer_id", "")) != session.user_peer_id:
+                continue
+            metadata = self._strict_value(item, "metadata", {})
+            if not isinstance(metadata, dict) or any(
+                metadata.get(key) != value for key, value in eligibility.items()
+            ):
                 continue
             output.append({
                 "id": str(self._strict_value(item, "id", "")),
@@ -755,12 +782,29 @@ class HonchoSessionManager:
             })
         return output
 
-    def strict_peer_context(self, session_key: str, peer: str) -> dict[str, Any]:
+    def strict_peer_context(
+        self,
+        session_key: str,
+        peer: str,
+        *,
+        search_query: str | None,
+        search_top_k: int,
+        search_max_distance: float,
+        include_most_frequent: bool,
+        max_conclusions: int,
+    ) -> dict[str, Any]:
         """Fetch one peer-level context result; never calls session.context()."""
         session = self._cache[session_key]
         observer_id, target_id = self._resolve_observer_target(session, peer)
         observer = self._get_or_create_peer(observer_id)
-        context = observer.context(target=target_id, tokens=self._context_tokens)
+        context = observer.context(
+            target=target_id,
+            search_query=search_query,
+            search_top_k=search_top_k if search_query else None,
+            search_max_distance=search_max_distance if search_query else None,
+            include_most_frequent=include_most_frequent if search_query else None,
+            max_conclusions=max_conclusions if search_query else None,
+        )
         return {
             "representation": str(self._strict_value(context, "representation", "")),
             "card": [str(item) for item in (self._strict_value(context, "peer_card", []) or [])],

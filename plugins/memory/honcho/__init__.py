@@ -160,14 +160,10 @@ REASONING_SCHEMA = {
 CONTEXT_SCHEMA = {
     "name": "honcho_context",
     "description": (
-        "Retrieve the standing SNAPSHOT Honcho holds for the current session — "
-        "session summary, the peer's representation, the peer card, and the most "
-        "recent messages — in one call. No query, no LLM synthesis (cheaper than "
-        "honcho_reasoning). Use it to orient yourself on what Honcho currently "
-        "knows about this conversation and peer. This is a fixed snapshot, not a "
-        "search: to look up a specific past fact use honcho_search; to ask a "
-        "question and get a synthesized answer use honcho_reasoning; for just the "
-        "compact card use honcho_profile."
+        "Retrieve bounded peer-level context without paid reasoning. In governed "
+        "tools-only mode this calls peer.context exactly once, never session.context, "
+        "and supports query-scoped representation controls. Use honcho_search for raw "
+        "message evidence and honcho_reasoning only when synthesis is required."
     ),
     "parameters": {
         "type": "object",
@@ -175,6 +171,22 @@ CONTEXT_SCHEMA = {
             "peer": {
                 "type": "string",
                 "description": "Peer to query. Built-in aliases: 'user' (default), 'ai'. Or pass any peer ID from this workspace.",
+            },
+            "query": {
+                "type": "string",
+                "description": "Optional query used to curate the peer representation.",
+            },
+            "search_top_k": {
+                "type": "integer", "minimum": 1, "maximum": 20, "default": 5,
+            },
+            "search_max_distance": {
+                "type": "number", "minimum": 0, "maximum": 1, "default": 0.35,
+            },
+            "include_most_frequent": {
+                "type": "boolean", "default": False,
+            },
+            "max_conclusions": {
+                "type": "integer", "minimum": 1, "maximum": 20, "default": 8,
             },
         },
         "required": [],
@@ -1417,6 +1429,44 @@ class HonchoMemoryProvider(MemoryProvider):
             ),
         }
 
+    def _trusted_turn_authority(
+        self,
+        envelope: Any,
+        *,
+        user_content: str,
+        session_id: str,
+    ) -> bool:
+        """Authorize one automatic human-message write; TUI/CLI is intentionally excluded."""
+        try:
+            from agent.memory_provenance import principal_matches, validate_turn_envelope
+
+            cfg = self._config
+            if cfg is None or getattr(envelope, "runtime_class", "") not in {"gateway", "api"}:
+                return False
+            expected_session = str(session_id or getattr(envelope, "session_id", ""))
+            if not validate_turn_envelope(
+                envelope,
+                user_content=user_content,
+                session_id=expected_session,
+                turn_id=str(getattr(envelope, "turn_id", "")),
+                consume=True,
+                expected_policy_revision=cfg.policy_revision,
+                expected_writer_release=cfg.writer_release,
+            ):
+                return False
+            if envelope.profile not in cfg.eligible_profiles:
+                return False
+            return any(
+                principal_matches(
+                    envelope,
+                    platform=envelope.platform,
+                    principal_id=raw_id,
+                )
+                for raw_id in cfg.trusted_principal_ids
+            )
+        except Exception:
+            return False
+
     def sync_turn(
         self,
         user_content: str,
@@ -1430,14 +1480,61 @@ class HonchoMemoryProvider(MemoryProvider):
         Messages exceeding the Honcho API limit (default 25k chars) are
         split into multiple messages with continuation markers.
 
-        ``turn_envelope`` is accepted for the provider lifecycle contract but
-        is intentionally not interpreted until Honcho provenance policy is
-        implemented.
+        ``turn_envelope`` is a sealed generic external-memory capability. Governed
+        tools-only observation consumes it once, records only the authenticated human
+        message with policy metadata, and never stores the assistant response.
         """
         if self._config is not None and getattr(self._config, "save_messages", True) is False:
             return
         if self._cron_skipped:
             return
+
+        if self._strict_tools_mode():
+            if not self._trusted_turn_authority(
+                turn_envelope,
+                user_content=user_content,
+                session_id=session_id,
+            ):
+                return
+            if not self._session_initialized and not self._ensure_session():
+                return
+            if not self._session_ready():
+                return
+            msg_limit = getattr(self._config, "message_max_chars", 25000)
+            clean_user_content = sanitize_context(user_content or "").strip()
+            if not clean_user_content:
+                return
+            metadata = {
+                "human_authored": True,
+                "eligible": True,
+                "policy_revision": self._config.policy_revision,
+                "writer_release": self._config.writer_release,
+                "source_observation_id": str(turn_envelope.source_observation_id),
+            }
+
+            def _sync_governed_user() -> None:
+                try:
+                    session = self._manager.get_or_create(
+                        self._session_key,
+                        hydrate_history=False,
+                        create_remote_session=False,
+                    )
+                    for chunk in self._chunk_message(clean_user_content, msg_limit):
+                        session.add_message("user", chunk, metadata=metadata)
+                    self._manager._flush_session(session)
+                except Exception as exc:
+                    logger.debug("Honcho governed sync_turn failed: %s", exc)
+
+            if self._sync_thread and self._sync_thread.is_alive():
+                self._sync_thread.join(timeout=5.0)
+            self._sync_thread = threading.Thread(
+                target=_sync_governed_user,
+                daemon=True,
+                name="honcho-sync-governed-user",
+            )
+            self._sync_thread.start()
+            return
+
         if self._recall_mode == "tools" and not self._session_ready():
             return
         if not self._session_ready():
@@ -1660,8 +1757,13 @@ class HonchoMemoryProvider(MemoryProvider):
             )
             if outcome.status != "ok":
                 return self._degraded(outcome.error_code)
-            card = cap_string_list(outcome.value or [], max_items=16, max_chars=2400)
-            return json.dumps({"status": "ok", "result": card})
+            raw_card = list(outcome.value or [])
+            card = cap_string_list(raw_card, max_items=16, max_chars=2400)
+            return json.dumps({
+                "status": "ok",
+                "result": card,
+                "truncated": card != [str(item) for item in raw_card],
+            })
 
         if tool_name == "honcho_search":
             query = str(args.get("query") or "").strip()
@@ -1675,33 +1777,80 @@ class HonchoMemoryProvider(MemoryProvider):
             max_chars = min(4000, max(500, min(requested_tokens, 1000) * 4))
             outcome = run_bounded(
                 lambda: self._manager.strict_human_search(
-                    self._session_key, query, limit=8
+                    self._session_key,
+                    query,
+                    limit=8,
+                    policy_revision=self._config.policy_revision,
+                    writer_release=self._config.writer_release,
                 ),
                 timeout_seconds=deadline,
             )
             if outcome.status != "ok":
                 return self._degraded(outcome.error_code)
+            raw_records = list(outcome.value or [])
             records = cap_records(
-                outcome.value or [],
+                raw_records,
                 max_items=8,
                 max_chars=max_chars,
                 allowed_keys=("id", "session_id", "content"),
             )
-            return json.dumps({"status": "ok", "results": records, "count": len(records)})
+            return json.dumps({
+                "status": "ok",
+                "results": records,
+                "count": len(records),
+                "truncated": (
+                    len(records) < len(raw_records)
+                    or any(
+                        records[index].get("content", "")
+                        != str(raw_records[index].get("content", ""))
+                        for index in range(len(records))
+                        if isinstance(raw_records[index], dict)
+                    )
+                ),
+            })
 
         if tool_name == "honcho_context":
+            search_query = cap_text(args.get("query"), max_chars=1000) or None
+            try:
+                search_top_k = min(20, max(1, int(args.get("search_top_k", 5))))
+                max_conclusions = min(20, max(1, int(args.get("max_conclusions", 8))))
+                search_max_distance = min(
+                    1.0, max(0.0, float(args.get("search_max_distance", 0.35)))
+                )
+            except (TypeError, ValueError):
+                return tool_error("Invalid context scope controls.")
+            include_most_frequent = args.get("include_most_frequent", False)
+            if not isinstance(include_most_frequent, bool):
+                return tool_error("include_most_frequent must be a boolean.")
             outcome = run_bounded(
-                lambda: self._manager.strict_peer_context(self._session_key, peer),
+                lambda: self._manager.strict_peer_context(
+                    self._session_key,
+                    peer,
+                    search_query=search_query,
+                    search_top_k=search_top_k,
+                    search_max_distance=search_max_distance,
+                    include_most_frequent=include_most_frequent,
+                    max_conclusions=max_conclusions,
+                ),
                 timeout_seconds=deadline,
             )
             if outcome.status != "ok":
                 return self._degraded(outcome.error_code)
             value = outcome.value if isinstance(outcome.value, dict) else {}
+            raw_representation = str(value.get("representation") or "")
+            raw_card = list(value.get("card") or [])
             result = {
-                "representation": cap_text(value.get("representation"), max_chars=2400),
-                "card": cap_string_list(value.get("card") or [], max_items=16, max_chars=1200),
+                "representation": cap_text(raw_representation, max_chars=2400),
+                "card": cap_string_list(raw_card, max_items=16, max_chars=1200),
             }
-            return json.dumps({"status": "ok", "result": result})
+            return json.dumps({
+                "status": "ok",
+                "result": result,
+                "truncated": (
+                    result["representation"] != raw_representation
+                    or result["card"] != [str(item) for item in raw_card]
+                ),
+            })
 
         if tool_name == "honcho_reasoning":
             query = cap_text(args.get("query"), max_chars=4000)
@@ -1789,8 +1938,13 @@ class HonchoMemoryProvider(MemoryProvider):
                 return self._degraded("terminal_receipt_persistence_failed")
             if result.status != SUCCESS:
                 return self._degraded(str(result.status))
-            answer = cap_text(result.value, max_chars=4000)
-            return json.dumps({"status": "ok", "result": answer})
+            raw_answer = str(result.value or "")
+            answer = cap_text(raw_answer, max_chars=4000)
+            return json.dumps({
+                "status": "ok",
+                "result": answer,
+                "truncated": answer != raw_answer,
+            })
 
         if tool_name == "honcho_conclude":
             delete_id = str(args.get("delete_id") or "").strip()
@@ -1816,13 +1970,18 @@ class HonchoMemoryProvider(MemoryProvider):
                 )
                 if outcome.status != "ok":
                     return self._degraded(outcome.error_code)
+                raw_records = list(outcome.value or [])
                 records = cap_records(
-                    outcome.value or [],
+                    raw_records,
                     max_items=10,
                     max_chars=4000,
                     allowed_keys=("id", "content"),
                 )
-                return json.dumps({"status": "ok", "conclusions": records})
+                return json.dumps({
+                    "status": "ok",
+                    "conclusions": records,
+                    "truncated": len(records) < len(raw_records),
+                })
             if peer != "user":
                 return tool_error("Governed conclusion creation is limited to canonical user scope.")
             conclusion = cap_text(conclusion, max_chars=2000)

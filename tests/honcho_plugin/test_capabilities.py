@@ -242,7 +242,7 @@ def test_public_receipt_matches_cloudseed_contract_and_loads_by_exact_bytes(tmp_
 
 def test_public_supported_receipt_rejects_missing_check_or_raw_unknown_field():
     probe = _complete_probe_receipt()
-    probe["checks"].pop("human_message_search")
+    probe["checks"].pop("human_message_search_filters")
     receipt = build_public_capability_receipt(
         probe,
         config_revision_sha256="d" * 64,

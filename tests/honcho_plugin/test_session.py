@@ -269,22 +269,57 @@ class TestStrictToolsQueries:
         manager, session = self._manager_with_session()
         fake_honcho = MagicMock()
         fake_honcho.search.return_value = [
-            SimpleNamespace(id="u1", session_id="s", peer_id="danny", content="human"),
-            SimpleNamespace(id="a1", session_id="s", peer_id="ava", content="assistant"),
+            SimpleNamespace(
+                id="u1",
+                session_id="s",
+                peer_id="danny",
+                content="human",
+                metadata={
+                    "human_authored": True,
+                    "eligible": True,
+                    "policy_revision": "policy-v1",
+                    "writer_release": "writer-v1",
+                },
+            ),
+            SimpleNamespace(
+                id="legacy",
+                session_id="s",
+                peer_id="danny",
+                content="untagged legacy",
+                metadata={},
+            ),
+            SimpleNamespace(
+                id="a1", session_id="s", peer_id="ava", content="assistant", metadata={}
+            ),
         ]
         with patch.object(
             HonchoSessionManager,
             "honcho",
             new_callable=lambda: property(lambda self: fake_honcho),
         ):
-            result = manager.strict_human_search(session.key, "fact", limit=8)
+            result = manager.strict_human_search(
+                session.key,
+                "fact",
+                limit=8,
+                policy_revision="policy-v1",
+                writer_release="writer-v1",
+            )
 
         assert result == [{"id": "u1", "session_id": "s", "content": "human"}]
         fake_honcho.search.assert_called_once_with(
             query="fact",
-            filters={"peer_id": "danny"},
-            top_k=8,
-            peer_perspective="danny",
+            filters={
+                "AND": [
+                    {"peer_id": "danny"},
+                    {"metadata": {
+                        "human_authored": True,
+                        "eligible": True,
+                        "policy_revision": "policy-v1",
+                        "writer_release": "writer-v1",
+                    }},
+                ]
+            },
+            limit=8,
         )
 
     def test_peer_context_calls_peer_once_and_never_session_context(self):
@@ -299,13 +334,28 @@ class TestStrictToolsQueries:
         manager._resolve_observer_target = MagicMock(return_value=("ava", "danny"))
         manager._get_or_create_peer = MagicMock(return_value=observer)
 
-        result = manager.strict_peer_context(session.key, "user")
+        result = manager.strict_peer_context(
+            session.key,
+            "user",
+            search_query="current projects",
+            search_top_k=5,
+            search_max_distance=0.35,
+            include_most_frequent=False,
+            max_conclusions=8,
+        )
 
         assert result == {
             "representation": "bounded representation",
             "card": ["Name: Danny"],
         }
-        observer.context.assert_called_once_with(target="danny", tokens=None)
+        observer.context.assert_called_once_with(
+            target="danny",
+            search_query="current projects",
+            search_top_k=5,
+            search_max_distance=0.35,
+            include_most_frequent=False,
+            max_conclusions=8,
+        )
         remote_session.context.assert_not_called()
 
 
