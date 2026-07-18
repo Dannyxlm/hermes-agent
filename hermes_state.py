@@ -887,7 +887,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_usage_covering
+    ON sessions(id, started_at, source);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+-- Usage analytics must not fetch large message rows merely to inspect compact
+-- tool metadata. These partial indexes cover both analytics queries while
+-- avoiding write/index overhead for messages that cannot contribute.
+CREATE INDEX IF NOT EXISTS idx_messages_tool_usage
+    ON messages(session_id, tool_name)
+    WHERE role = 'tool' AND tool_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_assistant_tool_calls
+    ON messages(session_id, timestamp, tool_calls)
+    WHERE role = 'assistant' AND tool_calls IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_session ON session_model_usage(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_model ON session_model_usage(model);
@@ -990,16 +1001,18 @@ class SessionDB:
     _WRITE_RETRY_MAX_S = 0.150   # 150ms
     # Attempt a WAL checkpoint every N successful writes (PASSIVE mode).
     _CHECKPOINT_EVERY_N_WRITES = 50
-    # Merge fragmented FTS5 segments every N successful writes. The message
-    # triggers append one segment per insert; left unmaintained these grow
-    # into tens of thousands of segments, so every MATCH must scan them all
-    # and every insert pays a growing automerge cost — which lengthens the
-    # write-lock hold time and starves competing writers (gateway + cron
-    # processes share one state.db), surfacing as "database is locked".
-    # 'optimize' is a no-op once the index is already merged, so an idle DB
-    # pays almost nothing; the cadence is deliberately coarse so the one-off
-    # merge cost is amortised far below the checkpoint cadence.
-    _OPTIMIZE_EVERY_N_WRITES = 1000
+    # Incrementally merge fragmented FTS5 segments every N successful writes.
+    # The message triggers append one segment per insert; left unmaintained
+    # these grow into tens of thousands of segments, so every MATCH must scan
+    # them all and every insert pays a growing automerge cost.
+    #
+    # Do NOT call the full FTS5 ``optimize`` command from this live write path:
+    # it rewrites the entire index and can monopolize SQLite's single WAL
+    # writer for minutes on a multi-gigabyte state.db, starving gateway/cron
+    # writers until their retry budgets expire. A positive ``merge`` command
+    # bounds each maintenance pass to roughly _MERGE_MAX_PAGES pages.
+    _MERGE_EVERY_N_WRITES = 1000
+    _MERGE_MAX_PAGES = 64
     # Session imports intentionally use a lower cap than exports: import holds
     # one BEGIN IMMEDIATE transaction, so bounded batches avoid starving live
     # gateway/CLI writers. The dashboard accepts one exported JSON/JSONL file
@@ -1283,12 +1296,12 @@ class SessionDB:
                         except Exception:
                             pass
                         raise
-                # Success — periodic best-effort checkpoint + FTS merge.
+                # Success — periodic best-effort checkpoint + bounded FTS merge.
                 self._write_count += 1
                 if self._write_count % self._CHECKPOINT_EVERY_N_WRITES == 0:
                     self._try_wal_checkpoint()
-                if self._write_count % self._OPTIMIZE_EVERY_N_WRITES == 0:
-                    self._try_optimize_fts()
+                if self._write_count % self._MERGE_EVERY_N_WRITES == 0:
+                    self._try_merge_fts()
                 return result
             except sqlite3.OperationalError as exc:
                 err_msg = str(exc).lower()
@@ -1416,19 +1429,18 @@ class SessionDB:
         except Exception as exc:
             logger.warning("WAL checkpoint (PASSIVE) failed: %s", exc)
 
-    def _try_optimize_fts(self) -> None:
-        """Best-effort FTS5 segment merge. Never raises.
+    def _try_merge_fts(self) -> None:
+        """Best-effort bounded FTS5 segment maintenance. Never raises.
 
-        Runs on the ``_OPTIMIZE_EVERY_N_WRITES`` cadence from the write hot
-        path (off the lock — ``optimize_fts`` re-acquires ``self._lock``
-        itself, mirroring ``_try_wal_checkpoint``). ``read_only`` connections
-        never reach the write path, so this is implicitly skipped for them.
-        Once the index is merged the 'optimize' command is close to free, so
-        the steady-state cost is negligible; the expensive case is only the
-        first merge of a long-neglected index.
+        The live write path must use incremental ``merge`` rather than full
+        ``optimize``. SQLite documents that optimize may take a long time
+        because it rewrites the entire index; merge limits one invocation to
+        roughly ``_MERGE_MAX_PAGES`` pages and releases the WAL writer between
+        cadence ticks. Full optimization remains available explicitly through
+        :meth:`optimize_fts` for offline maintenance.
         """
         try:
-            self.optimize_fts()
+            self.merge_fts(max_pages=self._MERGE_MAX_PAGES)
         except Exception:
             pass  # Best effort — never fatal.
 
@@ -5701,6 +5713,89 @@ class SessionDB:
             cursor = self._conn.execute(f"SELECT COUNT(*) FROM sessions s{where_sql}", params)
             return cursor.fetchone()[0]
 
+    def count_recent_active_listable_sessions(
+        self,
+        *,
+        cutoff: float,
+        limit: int = 50,
+    ) -> int:
+        """Count recent open conversations using dashboard list semantics.
+
+        This is the lightweight status counterpart to ``list_sessions_rich``:
+        roots and explicit branches surface, delegate/subagent rows stay hidden,
+        and a compression root is projected to its current continuation tip.
+        Only the small status page is considered, matching the historical
+        ``limit=50`` contract without selecting previews or payload columns.
+        """
+        bounded_limit = max(1, int(limit))
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT
+                    s.id,
+                    s.started_at,
+                    s.ended_at,
+                    s.end_reason,
+                    COALESCE(
+                        (SELECT MAX(m.timestamp)
+                         FROM messages AS m
+                         WHERE m.session_id = s.id),
+                        s.started_at,
+                        0
+                    ) AS last_active
+                FROM sessions AS s
+                WHERE {_LISTABLE_CHILD_SQL}
+                  AND {_delegate_from_json('s.model_config')} IS NULL
+                  AND COALESCE(s.archived, 0) = 0
+                ORDER BY s.started_at DESC
+                LIMIT ?
+                """,
+                (bounded_limit,),
+            ).fetchall()
+
+        surfaced = {row["id"]: dict(row) for row in rows}
+        tip_by_root: Dict[str, str] = {}
+        for row in rows:
+            if row["end_reason"] == "compression":
+                tip_by_root[row["id"]] = self.get_compression_tip(row["id"])
+
+        distinct_tips = sorted({
+            tip_id
+            for root_id, tip_id in tip_by_root.items()
+            if tip_id and tip_id != root_id
+        })
+        if distinct_tips:
+            placeholders = ",".join("?" for _ in distinct_tips)
+            with self._lock:
+                tip_rows = self._conn.execute(
+                    f"""
+                    SELECT
+                        s.id,
+                        s.started_at,
+                        s.ended_at,
+                        s.end_reason,
+                        COALESCE(
+                            (SELECT MAX(m.timestamp)
+                             FROM messages AS m
+                             WHERE m.session_id = s.id),
+                            s.started_at,
+                            0
+                        ) AS last_active
+                    FROM sessions AS s
+                    WHERE s.id IN ({placeholders})
+                    """,
+                    distinct_tips,
+                ).fetchall()
+            surfaced.update({row["id"]: dict(row) for row in tip_rows})
+
+        active = 0
+        for row in rows:
+            surfaced_id = tip_by_root.get(row["id"], row["id"])
+            projected = surfaced.get(surfaced_id, dict(row))
+            if projected.get("ended_at") is None and projected.get("last_active", 0) > cutoff:
+                active += 1
+        return active
+
     def message_count(self, session_id: str = None) -> int:
         """Count messages, optionally for a specific session."""
         with self._lock:
@@ -7317,6 +7412,35 @@ class SessionDB:
             return True
         except sqlite3.OperationalError:
             return False
+
+    def merge_fts(self, max_pages: int = 64) -> int:
+        """Perform one bounded incremental merge pass per FTS5 index.
+
+        SQLite's positive ``merge`` command writes roughly *max_pages* pages
+        before yielding. This is suitable for periodic live maintenance;
+        callers that can take the database offline may use :meth:`optimize_fts`
+        for a complete one-shot merge.
+
+        Returns the number of existing FTS indexes offered a merge pass.
+        """
+        max_pages = int(max_pages)
+        if max_pages < 1:
+            raise ValueError("max_pages must be positive")
+
+        merged = 0
+        with self._lock:
+            for tbl in self._FTS_TABLES:
+                if not self._fts_table_exists(tbl):
+                    continue
+                try:
+                    self._conn.execute(
+                        f"INSERT INTO {tbl}({tbl}, rank) VALUES('merge', ?)",
+                        (max_pages,),
+                    )
+                    merged += 1
+                except sqlite3.OperationalError as exc:
+                    logger.warning("FTS incremental merge failed for %s: %s", tbl, exc)
+        return merged
 
     def optimize_fts(self) -> int:
         """Merge fragmented FTS5 b-tree segments into one per index.

@@ -353,7 +353,7 @@ class TestAdapterInit:
         )
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {"enabled": True, "effort": "xhigh"}),
+            staticmethod(lambda _model=None: {"enabled": True, "effort": "xhigh"}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("hermes_cli.tools_config._get_platform_tools", lambda *_: set())
@@ -386,7 +386,7 @@ class TestAdapterInit:
         monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {"agent": {"max_turns": 200}})
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {}),
+            staticmethod(lambda _model=None: {}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("gateway.run._current_max_iterations", lambda: 200)
@@ -426,7 +426,7 @@ class TestAdapterInit:
         monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {})
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {}),
+            staticmethod(lambda _model=None: {}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("gateway.run._current_max_iterations", lambda: 90)
@@ -464,7 +464,7 @@ class TestAdapterInit:
         monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {})
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {}),
+            staticmethod(lambda _model=None: {}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("gateway.run._current_max_iterations", lambda: 90)
@@ -4141,6 +4141,37 @@ class TestModelRoutesHandlers:
 
 
 class TestModelRoutesAgentCreation:
+    def test_route_resolves_reasoning_for_effective_model(self, monkeypatch):
+        """A routed model must receive its own per-model reasoning override."""
+        captured = {}
+        resolved_models = []
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        _patch_create_agent_runtime(monkeypatch, captured, FakeAgent)
+        monkeypatch.setattr(
+            "gateway.run.GatewayRunner._load_reasoning_config",
+            staticmethod(
+                lambda model="": resolved_models.append(model)
+                or {"enabled": True, "effort": "xhigh"}
+            ),
+        )
+        adapter = _make_routing_adapter(
+            {"ava-voice-fast": {"model": "gpt-5.6-luna", "provider": "openai-codex"}}
+        )
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        monkeypatch.setattr(adapter, "_session_model_override_for", lambda *_: None)
+
+        adapter._create_agent(
+            session_id="voice-1", route=adapter._resolve_route("ava-voice-fast")
+        )
+
+        assert captured["model"] == "gpt-5.6-luna"
+        assert captured["reasoning_config"] == {"enabled": True, "effort": "xhigh"}
+        assert resolved_models == ["gpt-5.6-luna"]
+
     def test_route_overrides_model_and_credentials(self, monkeypatch):
         captured = {}
 

@@ -148,7 +148,7 @@ class TestBundledPluginsRegister:
 class TestIsAvailable:
     """Each plugin's ``is_available()`` reflects env-var presence accurately."""
 
-    def test_browserbase_requires_both_api_key_and_project_id(
+    def test_browserbase_requires_api_key_only(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _ensure_plugins_loaded()
@@ -158,11 +158,11 @@ class TestIsAvailable:
         assert p is not None
         assert p.is_available() is False
 
-        # API key alone is insufficient.
+        # API key alone is sufficient; Browserbase infers the project.
         monkeypatch.setenv("BROWSERBASE_API_KEY", "key")
-        assert p.is_available() is False
+        assert p.is_available() is True
 
-        # Both env vars set → available.
+        # Legacy explicit project id remains supported.
         monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "proj")
         assert p.is_available() is True
 
@@ -263,7 +263,6 @@ class TestRegistryResolution:
         # Both available — browser-use should win.
         monkeypatch.setenv("BROWSER_USE_API_KEY", "k1")
         monkeypatch.setenv("BROWSERBASE_API_KEY", "k2")
-        monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "p")
 
         provider = _resolve(None)
         assert provider is not None
@@ -277,7 +276,6 @@ class TestRegistryResolution:
         from agent.browser_registry import _resolve
 
         monkeypatch.setenv("BROWSERBASE_API_KEY", "k")
-        monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "p")
 
         provider = _resolve(None)
         assert provider is not None
