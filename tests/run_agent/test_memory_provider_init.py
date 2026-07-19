@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from agent.memory_runtime import CONFIG_ENV
+
 
 class RecordingMemoryProvider:
     name = "recording"
@@ -57,6 +59,47 @@ def test_blank_memory_provider_does_not_auto_enable_honcho():
     from_global_config.assert_not_called()
     load_memory_provider.assert_not_called()
     save_config.assert_not_called()
+
+
+def test_partial_memory_v3_config_keeps_fail_closed_manager_without_provider():
+    """A broken V3 rollout must not fall back to built-in durable writes."""
+
+    cfg = {
+        "memory": {
+            "provider": "",
+            "memory_enabled": True,
+            "user_profile_enabled": True,
+        },
+        "agent": {},
+    }
+    with (
+        patch.dict("os.environ", {CONFIG_ENV: "/missing/memory-v3-config.json"}),
+        patch("hermes_cli.config.load_config", return_value=cfg),
+        patch("plugins.memory.load_memory_provider") as load_memory_provider,
+        patch("agent.model_metadata.get_model_context_length", return_value=204_800),
+        patch("run_agent.get_tool_definitions", return_value=[]),
+        patch("run_agent.check_toolset_requirements", return_value={}),
+        patch("run_agent.OpenAI"),
+    ):
+        from run_agent import AIAgent
+
+        agent = AIAgent(
+            api_key="test-key-1234567890",
+            base_url="https://openrouter.ai/api/v1",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=False,
+        )
+
+    assert agent._memory_manager is not None
+    assert agent._memory_manager.memory_v3_active is True
+    assert agent._memory_store is None
+    assert agent._memory_enabled is False
+    assert agent._user_profile_enabled is False
+    assert "governed_write_denied" in agent._memory_manager.authorize_builtin_memory_tool(
+        {"action": "add", "content": "must not persist"}
+    )
+    load_memory_provider.assert_not_called()
 
 
 def test_aiagent_forwards_user_id_alt_to_memory_provider():

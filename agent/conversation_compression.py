@@ -1021,11 +1021,28 @@ def compress_context(
         # Notify external memory provider before compression discards context.
         # The provider's on_pre_compress() may return a string of insights it
         # wants surfaced inside the compression summary; capture and forward it
-        # instead of silently discarding the provider's return value.
+        # instead of silently discarding the provider's return value. Memory V3
+        # hooks are invoked only with the subject-scoped provenance boundary.
         memory_context = ""
         if agent._memory_manager:
             try:
-                _maybe_ctx = agent._memory_manager.on_pre_compress(messages)
+                _pre_compress = agent._memory_manager.on_pre_compress
+                if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                    from agent.memory_provenance import memory_boundary_kwargs
+
+                    _boundary_kwargs = memory_boundary_kwargs(
+                        _pre_compress,
+                        memory_provenance=getattr(
+                            agent, "_current_memory_provenance", None
+                        ),
+                    )
+                    _maybe_ctx = (
+                        _pre_compress(messages, **_boundary_kwargs)
+                        if _boundary_kwargs is not None
+                        else None
+                    )
+                else:
+                    _maybe_ctx = _pre_compress(messages)
                 if isinstance(_maybe_ctx, str):
                     memory_context = sanitize_memory_context(_maybe_ctx)
             except Exception:
@@ -1421,12 +1438,26 @@ def compress_context(
         # the transcript was compacted so it doesn't double-count dropped turns).
         try:
             if _is_boundary and agent._memory_manager:
-                agent._memory_manager.on_session_switch(
-                    agent.session_id or "",
-                    parent_session_id=_boundary_parent,
-                    reset=False,
-                    reason="compression",
-                )
+                from agent.memory_provenance import memory_boundary_kwargs
+
+                _session_switch = agent._memory_manager.on_session_switch
+                _switch_kwargs = {
+                    "parent_session_id": _boundary_parent,
+                    "reset": False,
+                    "reason": "compression",
+                }
+                if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                    _boundary_kwargs = memory_boundary_kwargs(
+                        _session_switch,
+                        memory_provenance=getattr(
+                            agent, "_current_memory_provenance", None
+                        ),
+                    )
+                    if _boundary_kwargs is not None:
+                        _switch_kwargs.update(_boundary_kwargs)
+                        _session_switch(agent.session_id or "", **_switch_kwargs)
+                else:
+                    _session_switch(agent.session_id or "", **_switch_kwargs)
         except Exception as _me_err:
             logger.debug("memory manager on_session_switch (compression): %s", _me_err)
 

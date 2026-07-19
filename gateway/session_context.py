@@ -169,6 +169,7 @@ def set_session_vars(
     cwd: str = "",
     async_delivery: bool = True,
     ui_session_id: str = "",
+    memory_ingress: Any = None,
 ) -> list:
     """Set all session context variables and return reset tokens.
 
@@ -190,6 +191,50 @@ def set_session_vars(
     # "ContextVar-authoritative, strip on _UNSET" — see session_context_engaged.
     global _session_context_engaged
     _session_context_engaged = True
+    # Bind an explicit one-shot memory ingress for turn construction.  Every
+    # session bind writes this slot, including synthetic/cron/TUI paths, so an
+    # asyncio task can never inherit a sibling turn's authority.  The value is
+    # consumed by agent.turn_context and is not an ambient provider auth flag.
+    try:
+        from agent.memory_provenance import (
+            bind_memory_ingress,
+            issue_synthetic_ingress,
+        )
+
+        if memory_ingress is None:
+            runtime = (source or platform or "background").strip().lower()
+            if runtime == "cron":
+                origin = "cron"
+            elif runtime in {"delegated", "delegate", "subagent"}:
+                origin = "delegated"
+            elif runtime in {"desktop", "desktop_websocket", "websocket"}:
+                origin = "desktop_websocket"
+            elif runtime in {"api", "api_server", "photon", "photon_api"}:
+                origin = "photon_api"
+            elif runtime in {"webhook", "homeassistant", "system"}:
+                origin = "webhook"
+            elif runtime == "cli":
+                origin = "cli"
+            elif runtime == "tui" or runtime == "local":
+                origin = "tui"
+            else:
+                origin = "background"
+            memory_ingress = issue_synthetic_ingress(
+                origin=origin,
+                reason="missing_authenticated_ingress",
+                platform=platform or runtime,
+                profile=profile or "default",
+            )
+        bind_memory_ingress(memory_ingress)
+    except Exception:
+        # Provenance is optional and fail-closed.  If even denial construction
+        # fails, clear the slot and let the local chat turn continue.
+        try:
+            from agent.memory_provenance import clear_memory_ingress
+
+            clear_memory_ingress()
+        except Exception:
+            pass
     tokens = [
         _SESSION_PLATFORM.set(platform),
         _SESSION_SOURCE.set(source),
@@ -246,6 +291,12 @@ def clear_session_vars(tokens: list) -> None:
     # stateless adapter.
     _SESSION_ASYNC_DELIVERY.set(_UNSET)
     try:
+        from agent.memory_provenance import clear_memory_ingress
+
+        clear_memory_ingress()
+    except Exception:
+        pass
+    try:
         from agent.runtime_cwd import clear_session_cwd
 
         clear_session_cwd()
@@ -293,6 +344,12 @@ def reset_session_vars() -> None:
     # same inheritance-leak reason as the mapped vars above — see clear_session_vars,
     # which resets this var on the handler-exit path for the symmetric concern.
     _SESSION_ASYNC_DELIVERY.set(_UNSET)
+    try:
+        from agent.memory_provenance import clear_memory_ingress
+
+        clear_memory_ingress()
+    except Exception:
+        pass
     try:
         from agent.runtime_cwd import clear_session_cwd
 

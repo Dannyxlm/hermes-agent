@@ -523,6 +523,108 @@ class TestRunAgentViaProxy:
         assert messages[0]["role"] == "user"
         assert messages[0]["content"] == "hello"
 
+    @pytest.mark.asyncio
+    async def test_signs_identified_ingress_with_separate_memory_key(
+        self, monkeypatch, tmp_path
+    ):
+        from agent.memory_provenance import (
+            PROXY_PROOF_HEADER,
+            canonical_proxy_json_bytes,
+            issue_authenticated_ingress,
+            verify_memory_proxy_proof,
+        )
+
+        monkeypatch.setenv("GATEWAY_PROXY_URL", "http://host:8642")
+        monkeypatch.setenv("GATEWAY_PROXY_KEY", "transport-key")
+        key_path = tmp_path / "memory-proof.key"
+        key_path.write_bytes(b"m" * 32)
+        key_path.chmod(0o600)
+        monkeypatch.setenv("HERMES_MEMORY_PROXY_PROOF_KEY_FILE", str(key_path))
+        monkeypatch.setenv("HERMES_MEMORY_PROXY_PROOF_KEY_ID", "memory-key-v1")
+        monkeypatch.setenv("HERMES_MEMORY_PROXY_PROOF_AUDIENCE", "remote-hermes")
+        monkeypatch.setenv(
+            "HERMES_MEMORY_PROXY_REPLAY_STATE", str(tmp_path / "proxy-replay.json")
+        )
+        ingress = issue_authenticated_ingress(
+            origin="telegram_private",
+            platform="telegram",
+            principal_id="transport-principal",
+            subject_id="danny",
+        )
+        runner = _make_runner()
+        session = _FakeSession(
+            _FakeSSEResponse(
+                status=200,
+                sse_chunks=[b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'],
+            )
+        )
+
+        with patch("gateway.run._load_gateway_config", return_value={}):
+            with _patch_aiohttp(session):
+                with patch("aiohttp.ClientTimeout"):
+                    await runner._run_agent_via_proxy(
+                        message="hello",
+                        context_prompt="",
+                        history=[],
+                        source=_make_source(),
+                        session_id="test",
+                        memory_ingress=ingress,
+                    )
+
+        proof = session.captured_headers[PROXY_PROOF_HEADER]
+        verified = verify_memory_proxy_proof(
+            proof,
+            canonical_proxy_json_bytes(session.captured_json),
+            method="POST",
+            path="/v1/chat/completions",
+        )
+        assert verified.subject_id == "danny"
+        assert session.captured_headers["Authorization"] == "Bearer transport-key"
+
+    @pytest.mark.asyncio
+    async def test_transport_key_never_substitutes_for_memory_proof_key(
+        self, monkeypatch
+    ):
+        from agent.memory_provenance import PROXY_PROOF_HEADER, issue_authenticated_ingress
+
+        monkeypatch.setenv("GATEWAY_PROXY_URL", "http://host:8642")
+        monkeypatch.setenv("GATEWAY_PROXY_KEY", "transport-key-only")
+        for key in (
+            "HERMES_MEMORY_PROXY_PROOF_KEY_FILE",
+            "HERMES_MEMORY_PROXY_PROOF_KEY_ID",
+            "HERMES_MEMORY_PROXY_PROOF_AUDIENCE",
+            "HERMES_MEMORY_PROXY_REPLAY_STATE",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        ingress = issue_authenticated_ingress(
+            origin="telegram_private",
+            platform="telegram",
+            principal_id="transport-principal",
+            subject_id="danny",
+        )
+        runner = _make_runner()
+        session = _FakeSession(
+            _FakeSSEResponse(
+                status=200,
+                sse_chunks=[b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'],
+            )
+        )
+
+        with patch("gateway.run._load_gateway_config", return_value={}):
+            with _patch_aiohttp(session):
+                with patch("aiohttp.ClientTimeout"):
+                    await runner._run_agent_via_proxy(
+                        message="hello",
+                        context_prompt="",
+                        history=[],
+                        source=_make_source(),
+                        session_id="test",
+                        memory_ingress=ingress,
+                    )
+
+        assert session.captured_headers["Authorization"] == "Bearer transport-key-only"
+        assert PROXY_PROOF_HEADER not in session.captured_headers
+
 
 class TestEnvVarRegistration:
     """Verify GATEWAY_PROXY_URL and GATEWAY_PROXY_KEY are registered."""

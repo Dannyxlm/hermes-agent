@@ -263,6 +263,8 @@ class TurnContext:
     plugin_user_context: str = ""
     # External-memory prefetch result, reused across loop iterations.
     ext_prefetch_cache: str = ""
+    # Immutable, content-free provenance bound to this exact user turn.
+    memory_provenance: Any = None
 
 
 def build_turn_context(
@@ -489,6 +491,56 @@ def build_turn_context(
 
     # Preserve the original user message (no nudge injection).
     original_user_message = persist_user_message if persist_user_message is not None else user_message
+
+    # Consume the trusted ingress exactly once and mint a provenance record for
+    # this session + turn + triggering message.  No message/history metadata is
+    # consulted for authority.  Any failure disables optional memory work but
+    # cannot prevent the local conversation from continuing.
+    memory_provenance = None
+    try:
+        from agent.memory_provenance import (
+            consume_memory_ingress,
+            issue_synthetic_ingress,
+            mint_turn_provenance,
+        )
+
+        ingress = consume_memory_ingress()
+        if ingress is None:
+            runtime = str(getattr(agent, "platform", "") or "background").lower()
+            if runtime == "cron":
+                fallback_origin = "cron"
+            elif runtime in {"desktop", "desktop_websocket", "websocket"}:
+                fallback_origin = "desktop_websocket"
+            elif runtime in {"api", "api_server", "photon", "photon_api"}:
+                fallback_origin = "photon_api"
+            elif runtime == "cli":
+                fallback_origin = "cli"
+            elif runtime in {"tui", "local"}:
+                fallback_origin = "tui"
+            else:
+                fallback_origin = "background"
+            ingress = issue_synthetic_ingress(
+                origin=fallback_origin,
+                reason="missing_turn_ingress",
+                platform=runtime,
+            )
+        try:
+            from gateway.session_context import get_session_env
+
+            memory_message_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "")
+        except Exception:
+            memory_message_id = ""
+        if not memory_message_id:
+            memory_message_id = f"{turn_id}:user"
+        memory_provenance = mint_turn_provenance(
+            ingress,
+            session_id=agent.session_id or "",
+            turn_id=turn_id,
+            message_id=memory_message_id,
+        )
+    except Exception:
+        memory_provenance = None
+    agent._current_memory_provenance = memory_provenance
 
     # Track memory nudge trigger (turn-based, checked here).
     should_review_memory = False
@@ -787,8 +839,24 @@ def build_turn_context(
     # Notify memory providers of the new turn (BEFORE prefetch_all).
     if agent._memory_manager:
         try:
+            from agent.memory_provenance import memory_boundary_kwargs
+
             _turn_msg = original_user_message if isinstance(original_user_message, str) else ""
-            agent._memory_manager.on_turn_start(agent._user_turn_count, _turn_msg)
+            _turn_start = agent._memory_manager.on_turn_start
+            if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                _boundary_kwargs = memory_boundary_kwargs(
+                    _turn_start,
+                    memory_provenance=memory_provenance,
+                )
+                if _boundary_kwargs is not None:
+                    _turn_start(
+                        agent._user_turn_count,
+                        _turn_msg,
+                        **_boundary_kwargs,
+                    )
+            else:
+                # Non-V3/legacy managers keep their exact upstream lifecycle.
+                agent._memory_manager.on_turn_start(agent._user_turn_count, _turn_msg)
         except Exception:
             pass
 
@@ -796,8 +864,23 @@ def build_turn_context(
     ext_prefetch_cache = ""
     if agent._memory_manager:
         try:
+            from agent.memory_provenance import memory_boundary_kwargs
+
             _query = original_user_message if isinstance(original_user_message, str) else ""
-            ext_prefetch_cache = agent._memory_manager.prefetch_all(_query) or ""
+            _prefetch = agent._memory_manager.prefetch_all
+            if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                _boundary_kwargs = memory_boundary_kwargs(
+                    _prefetch,
+                    memory_provenance=memory_provenance,
+                )
+                if _boundary_kwargs is not None:
+                    ext_prefetch_cache = _prefetch(
+                        _query,
+                        **_boundary_kwargs,
+                    ) or ""
+            else:
+                # Non-V3/legacy managers keep their exact upstream prefetch.
+                ext_prefetch_cache = agent._memory_manager.prefetch_all(_query) or ""
         except Exception:
             pass
 
@@ -899,4 +982,5 @@ def build_turn_context(
         should_review_memory=should_review_memory,
         plugin_user_context=plugin_user_context,
         ext_prefetch_cache=ext_prefetch_cache,
+        memory_provenance=memory_provenance,
     )
