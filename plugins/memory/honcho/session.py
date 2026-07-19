@@ -108,6 +108,9 @@ class HonchoSessionManager:
         # Write frequency state
         write_frequency = (config.write_frequency if config else "async")
         self._write_frequency = write_frequency
+        self._writes_enabled = bool(
+            config is None or getattr(config, "save_messages", True) is not False
+        )
         self._turn_counter: int = 0
 
         # Prefetch cache: session_key → last context result (consumed once per turn).
@@ -143,7 +146,7 @@ class HonchoSessionManager:
         # Async write queue — started lazily on first enqueue
         self._async_queue: queue.Queue | None = None
         self._async_thread: threading.Thread | None = None
-        if write_frequency == "async":
+        if self._writes_enabled and write_frequency == "async":
             self._async_queue = queue.Queue()
             self._async_thread = threading.Thread(
                 target=self._async_writer_loop,
@@ -421,6 +424,8 @@ class HonchoSessionManager:
 
     def _flush_session(self, session: HonchoSession) -> bool:
         """Internal: write unsynced messages to Honcho synchronously."""
+        if not self._writes_enabled:
+            return False
         if not session.messages:
             return True
 
@@ -506,6 +511,8 @@ class HonchoSessionManager:
           "session" — defer until flush_session() is called explicitly
           N (int)   — flush every N turns
         """
+        if not self._writes_enabled:
+            return
         self._turn_counter += 1
         wf = self._write_frequency
 
@@ -527,6 +534,8 @@ class HonchoSessionManager:
         Called at session end for "session" write_frequency, or to force
         a sync before process exit regardless of mode.
         """
+        if not self._writes_enabled:
+            return
         with self._cache_lock:
             sessions = list(self._cache.values())
         for session in sessions:
@@ -547,6 +556,8 @@ class HonchoSessionManager:
 
     def shutdown(self) -> None:
         """Gracefully shut down the async writer thread."""
+        if not self._writes_enabled:
+            return
         if self._async_queue is not None and self._async_thread is not None:
             self.flush_all()
             self._async_queue.put(_ASYNC_SHUTDOWN)
