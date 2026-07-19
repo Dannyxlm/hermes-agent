@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:policy-decision",
+  "title": "MemoryPolicyDecisionV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "decision_id", "observation_id", "policy_digest", "authority", "action", "outcome", "reason_code", "decided_at"],
+  "properties": {
+    "schema_version": {"const": "memory-policy-decision/v1"},
+    "decision_id": {"type": "string", "format": "uuid"},
+    "observation_id": {"type": "string", "format": "uuid"},
+    "policy_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "authority": {"enum": ["postgres", "markdown", "session", "valkey", "none"]},
+    "action": {"enum": ["read", "propose", "capture", "project", "delete", "rectify"]},
+    "outcome": {"enum": ["allow", "deny", "local_only"]},
+    "reason_code": {"type": "string", "minLength": 1, "maxLength": 100},
+    "decided_at": {"type": "string", "format": "date-time"}
+  }
+}

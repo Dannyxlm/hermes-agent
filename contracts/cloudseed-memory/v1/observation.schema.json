@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:observation",
+  "title": "MemoryObservationV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observation_id", "provenance_id", "source_revision", "data_class", "payload_digest", "created_at"],
+  "properties": {
+    "schema_version": {"const": "memory-observation/v1"},
+    "observation_id": {"type": "string", "format": "uuid"},
+    "provenance_id": {"type": "string", "format": "uuid"},
+    "source_revision": {"type": "string", "minLength": 1, "maxLength": 240},
+    "data_class": {"enum": ["operational", "narrative", "relationship", "conversation_continuity"]},
+    "payload_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

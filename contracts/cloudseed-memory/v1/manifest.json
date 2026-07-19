@@ -1,0 +1,49 @@
+{
+  "schema_version": "memory-protocol-bundle/v1",
+  "protocol_version": 1,
+  "minimum_protocol_version": 1,
+  "policy_version": 1,
+  "minimum_policy_version": 1,
+  "capability_version": 1,
+  "minimum_capability_version": 1,
+  "security_epoch": 1,
+  "deployment_modes": [
+    "local_only",
+    "tools_only_read_containment"
+  ],
+  "files": [
+    {
+      "path": "capability-snapshot.schema.json",
+      "sha256": "db426e8c1048c7026c91c8b1d7dea99216ee589287c33ee561d6ec64e7afd528"
+    },
+    {
+      "path": "capability-envelope.schema.json",
+      "sha256": "789693b644557d4fc666b33a949011ed26fd5f1734a65f3d0463da194030c89e"
+    },
+    {
+      "path": "denial.schema.json",
+      "sha256": "4997595e71fdabba1d7c7f400da3b741511a1b5ba69e40fb991bdee6929eb157"
+    },
+    {
+      "path": "error.schema.json",
+      "sha256": "9263bd087b3ee3377d6c0631e612d0baeb7e87b682db2a5461dc899af3c46db3"
+    },
+    {
+      "path": "observation.schema.json",
+      "sha256": "a1ceebd95951231fadad1c537282d1c787e2e893690fb9251c65eae9e5dc366c"
+    },
+    {
+      "path": "policy-decision.schema.json",
+      "sha256": "eb1832ad79dec9a475ee2a7779001f8edce700d6516379960aa8303986ce9e14"
+    },
+    {
+      "path": "provenance.schema.json",
+      "sha256": "de5118ec6fb1a00950352127567d51e65b307c9071a9bb3a01330f427917b672"
+    },
+    {
+      "path": "receipt.schema.json",
+      "sha256": "675fe3ded8fd61902f378af8175b86adb4d68b10989c20f46e0efc548b17573e"
+    }
+  ],
+  "bundle_digest": "84ddd5ec305341d053c6f3cf15be0be85fce7b877f149018288979b52fc12bb4"
+}

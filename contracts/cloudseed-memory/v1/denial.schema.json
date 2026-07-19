@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:denial",
+  "title": "MemoryDenialV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "denial_id", "reason_code", "action", "local_reply_allowed", "retryable", "created_at"],
+  "properties": {
+    "schema_version": {"const": "memory-denial/v1"},
+    "denial_id": {"type": "string", "format": "uuid"},
+    "reason_code": {"enum": ["missing_provenance", "invalid_provenance", "capability_unavailable", "capability_expired", "security_downgrade", "protocol_mismatch", "policy_mismatch", "write_contained", "approval_required"]},
+    "action": {"type": "string", "minLength": 1, "maxLength": 100},
+    "local_reply_allowed": {"const": true},
+    "retryable": {"type": "boolean"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

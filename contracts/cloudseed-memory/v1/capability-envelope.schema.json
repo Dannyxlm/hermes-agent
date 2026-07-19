@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cloudseed.local/memory/protocol/v1/capability-envelope.schema.json",
+  "title": "Memory V3 signed capability envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "protected", "snapshot", "signature"],
+  "properties": {
+    "schema_version": {"const": "memory-capability-envelope/v1"},
+    "protected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "signature_encoding", "key_id"],
+      "properties": {
+        "algorithm": {"const": "Ed25519"},
+        "signature_encoding": {"enum": ["ed25519-raw", "sshsig"]},
+        "key_id": {"type": "string", "minLength": 1, "maxLength": 120}
+      }
+    },
+    "snapshot": {"$ref": "capability-snapshot.schema.json"},
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32768,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    }
+  }
+}
