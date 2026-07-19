@@ -717,6 +717,7 @@ class TestAgentExecution:
             user_message="hello",
             conversation_history=[],
             task_id="session-123",
+            memory_ingress=None,
         )
 
 
