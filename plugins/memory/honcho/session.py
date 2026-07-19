@@ -822,7 +822,7 @@ class HonchoSessionManager:
         session = self._cache[session_key]
         observer_id, target_id = self._resolve_observer_target(session, peer)
         scope = self._get_or_create_peer(observer_id).conclusions_of(target_id)
-        values = scope.query(query=query, top_k=limit) if query else scope.list(limit=limit)
+        values = scope.query(query=query, top_k=limit) if query else scope.list(size=limit)
         output: list[dict[str, str]] = []
         for item in values or []:
             output.append({
@@ -860,7 +860,10 @@ class HonchoSessionManager:
         session = self.ensure_remote_session(session_key, hydrate_history=False)
         observer_id, target_id = self._resolve_observer_target(session, peer)
         scope = self._get_or_create_peer(observer_id).conclusions_of(target_id)
-        scope.create(content, session_id=session.honcho_session_id)
+        scope.create([{
+            "content": content,
+            "session_id": session.honcho_session_id,
+        }])
         return True
 
     def prefetch_context(self, session_key: str, user_message: str | None = None) -> None:

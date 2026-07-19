@@ -358,6 +358,38 @@ class TestStrictToolsQueries:
         )
         remote_session.context.assert_not_called()
 
+    def test_strict_conclusions_uses_installed_sdk_size_keyword(self):
+        manager, session = self._manager_with_session()
+        observer = MagicMock()
+        scope = MagicMock()
+        scope.list.return_value = [SimpleNamespace(id="c1", content="fact")]
+        observer.conclusions_of.return_value = scope
+        manager._resolve_observer_target = MagicMock(return_value=("ava", "danny"))
+        manager._get_or_create_peer = MagicMock(return_value=observer)
+
+        result = manager.strict_conclusions(session.key, "user", limit=3)
+
+        assert result == [{"id": "c1", "content": "fact"}]
+        scope.list.assert_called_once_with(size=3)
+
+    def test_strict_create_conclusion_uses_installed_sdk_batch_shape(self):
+        manager, session = self._manager_with_session()
+        observer = MagicMock()
+        scope = MagicMock()
+        observer.conclusions_of.return_value = scope
+        manager.ensure_remote_session = MagicMock(return_value=session)
+        manager._resolve_observer_target = MagicMock(return_value=("ava", "danny"))
+        manager._get_or_create_peer = MagicMock(return_value=observer)
+
+        assert manager.strict_create_conclusion(
+            session.key,
+            "User prefers focused retrieval",
+        ) is True
+        scope.create.assert_called_once_with([{
+            "content": "User prefers focused retrieval",
+            "session_id": session.honcho_session_id,
+        }])
+
 
 class TestPeerLookupHelpers:
     def _make_cached_manager(self):
