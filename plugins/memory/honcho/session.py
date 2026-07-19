@@ -399,12 +399,14 @@ class HonchoSessionManager:
             )
             honcho_session_id = self._sanitize_id(key)
 
-        # SDK peer handles are local objects. Merely asking for one must not
-        # create a remote session or hydrate context in tools-only mode.
-        user_peer = self._get_or_create_peer(user_peer_id)
-        assistant_peer = self._get_or_create_peer(assistant_peer_id)
         existing_messages: list[Any] = []
         if create_remote_session:
+            # honcho-ai 2.2.0's ``peer()`` calls ``_ensure_workspace()`` and can
+            # therefore perform network I/O.  Tools-only startup retains IDs
+            # only; even SDK peer handles are deferred until an explicit tool
+            # operation materializes remote state.
+            user_peer = self._get_or_create_peer(user_peer_id)
+            assistant_peer = self._get_or_create_peer(assistant_peer_id)
             _, existing_messages = self._get_or_create_honcho_session(
                 honcho_session_id,
                 user_peer,
