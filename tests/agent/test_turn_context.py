@@ -177,6 +177,104 @@ def test_returns_turn_context_with_user_message_appended():
     assert ctx.messages[-1] == {"role": "user", "content": "hello"}
     assert ctx.current_turn_user_idx == len(ctx.messages) - 1
     assert ctx.active_system_prompt == "SYSTEM"
+    assert ctx.memory_provenance is agent._current_memory_provenance
+    assert ctx.memory_provenance.authorizes_private_memory is False
+
+
+def test_turn_context_consumes_explicit_authenticated_ingress_once():
+    from agent.memory_provenance import (
+        issue_authenticated_ingress,
+        memory_ingress_scope,
+        validate_memory_turn_provenance,
+    )
+
+    agent = _FakeAgent()
+    ingress = issue_authenticated_ingress(
+        origin="telegram_private",
+        platform="telegram",
+        principal_id="owner-1",
+        subject_id="danny",
+    )
+    with memory_ingress_scope(ingress):
+        ctx = _build(agent)
+
+    assert ctx.memory_provenance.authorizes_private_memory is True
+    assert validate_memory_turn_provenance(
+        ctx.memory_provenance,
+        session_id="sess-1",
+        turn_id=ctx.turn_id,
+        message_id=f"{ctx.turn_id}:user",
+    )
+
+
+def test_provenance_failure_does_not_block_local_turn():
+    agent = _FakeAgent()
+    with patch(
+        "agent.memory_provenance.mint_turn_provenance",
+        side_effect=RuntimeError("denial sink unavailable"),
+    ):
+        ctx = _build(agent)
+
+    assert ctx.user_message == "hello"
+    assert ctx.messages[-1]["content"] == "hello"
+    assert ctx.memory_provenance is None
+
+
+def test_legacy_memory_manager_lifecycle_remains_unchanged():
+    class _LegacyManager:
+        def __init__(self):
+            self.turn = None
+            self.query = None
+
+        def on_turn_start(self, count, message):
+            self.turn = (count, message)
+
+        def prefetch_all(self, query):
+            self.query = query
+            return "legacy-prefetch"
+
+    agent = _FakeAgent()
+    manager = _LegacyManager()
+    agent._memory_manager = manager
+
+    ctx = _build(agent)
+
+    assert manager.turn == (1, "hello")
+    assert manager.query == "hello"
+    assert ctx.ext_prefetch_cache == "legacy-prefetch"
+
+
+def test_explicit_memory_manager_lifecycle_receives_bound_provenance():
+    class _StrictManager:
+        memory_v3_active = True
+
+        def __init__(self):
+            self.provenances = []
+
+        def on_turn_start(self, _count, _message, *, memory_provenance):
+            self.provenances.append(memory_provenance)
+
+        def prefetch_all(self, _query, *, memory_provenance):
+            self.provenances.append(memory_provenance)
+            return "strict-prefetch"
+
+    from agent.memory_provenance import issue_authenticated_ingress, memory_ingress_scope
+
+    agent = _FakeAgent()
+    manager = _StrictManager()
+    agent._memory_manager = manager
+    ingress = issue_authenticated_ingress(
+        origin="telegram_private",
+        platform="telegram",
+        principal_id="owner-1",
+        subject_id="danny",
+    )
+
+    with memory_ingress_scope(ingress):
+        ctx = _build(agent)
+
+    assert ctx.ext_prefetch_cache == "strict-prefetch"
+    assert manager.provenances == [ctx.memory_provenance, ctx.memory_provenance]
 
 
 def test_applies_agent_side_effects():
@@ -450,4 +548,3 @@ def test_expired_cooldown_allows_preflight(tmp_path):
     assert isinstance(ctx, TurnContext)
     agent._emit_status.assert_called_once()
     agent._compress_context.assert_called()
-

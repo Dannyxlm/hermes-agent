@@ -324,7 +324,16 @@ def _run_agent_tool_execution_middleware(
     return result, observed_args
 
 
-def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:
+def execute_tool_calls_concurrent(
+    agent,
+    assistant_message,
+    messages: list,
+    effective_task_id: str,
+    api_call_count: int = 0,
+    *,
+    finalize: bool = True,
+    memory_provenance=None,
+) -> None:
     """Execute multiple tool calls concurrently using a thread pool.
 
     Results are collected in the original tool-call order and appended to
@@ -1025,7 +1034,16 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
 
 
-def execute_tool_calls_sequential(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, *, finalize: bool = True) -> None:
+def execute_tool_calls_sequential(
+    agent,
+    assistant_message,
+    messages: list,
+    effective_task_id: str,
+    api_call_count: int = 0,
+    *,
+    finalize: bool = True,
+    memory_provenance=None,
+) -> None:
     """Execute tool calls sequentially (original behavior). Used for single calls or interactive tools.
 
     ``finalize=False`` skips the end-of-batch aggregate budget enforcement
@@ -1294,6 +1312,39 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 agent._vprint(f"  {_get_cute_tool_message_impl('session_search', function_args, tool_duration, result=function_result)}")
         elif function_name == "memory":
             def _execute(next_args: dict) -> Any:
+                # Memory V3 is read-only.  Its manager owns the explicit
+                # pre-write decision, which must run before the built-in tool
+                # can touch the local store.  Older managers (or no manager)
+                # keep the exact upstream path.
+                if agent._memory_manager:
+                    _authorize_write = getattr(
+                        agent._memory_manager,
+                        "authorize_builtin_memory_tool",
+                        None,
+                    )
+                    if callable(_authorize_write):
+                        from agent.memory_provenance import (
+                            memory_boundary_kwargs,
+                            memory_denial_json,
+                        )
+
+                        if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                            _memory_kwargs = memory_boundary_kwargs(
+                                _authorize_write,
+                                memory_provenance=memory_provenance,
+                                tool_call_id=getattr(tool_call, "id", "") or "",
+                            )
+                            if _memory_kwargs is None:
+                                return memory_denial_json()
+                            _denial = _authorize_write(
+                                next_args,
+                                **_memory_kwargs,
+                            )
+                        else:
+                            _denial = _authorize_write(next_args)
+                        if _denial:
+                            return _denial
+
                 target = next_args.get("target", "memory")
                 operations = next_args.get("operations")
                 from tools.memory_tool import memory_tool as _memory_tool
@@ -1309,14 +1360,35 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 # providers. All gating/op-expansion lives behind the manager
                 # interface (MemoryManager.notify_memory_tool_write).
                 if agent._memory_manager:
-                    agent._memory_manager.notify_memory_tool_write(
-                        result,
-                        next_args,
-                        build_metadata=lambda: agent._build_memory_write_metadata(
-                            task_id=effective_task_id,
-                            tool_call_id=getattr(tool_call, "id", None),
-                        ),
-                    )
+                    from agent.memory_provenance import memory_boundary_kwargs
+
+                    _notify_write = agent._memory_manager.notify_memory_tool_write
+                    if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                        _memory_kwargs = memory_boundary_kwargs(
+                            _notify_write,
+                            memory_provenance=memory_provenance,
+                            tool_call_id=getattr(tool_call, "id", "") or "",
+                        )
+                        if _memory_kwargs is not None:
+                            _notify_write(
+                                result,
+                                next_args,
+                                build_metadata=lambda: agent._build_memory_write_metadata(
+                                    task_id=effective_task_id,
+                                    tool_call_id=getattr(tool_call, "id", None),
+                                ),
+                                **_memory_kwargs,
+                            )
+                    else:
+                        # Preserve upstream behavior for non-V3 managers.
+                        _notify_write(
+                            result,
+                            next_args,
+                            build_metadata=lambda: agent._build_memory_write_metadata(
+                                task_id=effective_task_id,
+                                tool_call_id=getattr(tool_call, "id", None),
+                            ),
+                        )
                 return result
             function_result, function_args = _run_agent_tool_execution_middleware(
                 agent,
@@ -1452,7 +1524,27 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             _mem_result = None
             try:
                 def _execute(next_args: dict) -> Any:
-                    return agent._memory_manager.handle_tool_call(function_name, next_args)
+                    from agent.memory_provenance import (
+                        memory_boundary_kwargs,
+                        memory_denial_json,
+                    )
+
+                    _handle_memory = agent._memory_manager.handle_tool_call
+                    if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                        _memory_kwargs = memory_boundary_kwargs(
+                            _handle_memory,
+                            memory_provenance=memory_provenance,
+                            tool_call_id=getattr(tool_call, "id", "") or "",
+                        )
+                        if _memory_kwargs is None:
+                            return memory_denial_json()
+                        return _handle_memory(
+                            function_name,
+                            next_args,
+                            **_memory_kwargs,
+                        )
+                    # Preserve upstream behavior for non-V3 managers.
+                    return _handle_memory(function_name, next_args)
                 function_result, function_args = _run_agent_tool_execution_middleware(
                     agent,
                     function_name=function_name,
@@ -1739,7 +1831,16 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
 
 
 
-def execute_tool_calls_segmented(agent, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0, segments=None) -> None:
+def execute_tool_calls_segmented(
+    agent,
+    assistant_message,
+    messages: list,
+    effective_task_id: str,
+    api_call_count: int = 0,
+    segments=None,
+    *,
+    memory_provenance=None,
+) -> None:
     """Execute a mixed tool-call batch as ordered parallel/sequential segments.
 
     ``segments`` is the ``(kind, calls)`` plan from
@@ -1775,11 +1876,13 @@ def execute_tool_calls_segmented(agent, assistant_message, messages: list, effec
             execute_tool_calls_concurrent(
                 agent, segment_message, messages, effective_task_id, api_call_count,
                 finalize=False,
+                memory_provenance=memory_provenance,
             )
         else:
             execute_tool_calls_sequential(
                 agent, segment_message, messages, effective_task_id, api_call_count,
                 finalize=False,
+                memory_provenance=memory_provenance,
             )
 
     # ── Whole-turn finalize (budget + /steer) ─────────────────────────

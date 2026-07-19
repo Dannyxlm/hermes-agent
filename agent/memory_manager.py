@@ -358,7 +358,12 @@ class MemoryManager:
     provider is allowed.  Failures in one provider never block the other.
     """
 
-    def __init__(self, *, external_prefetch_timeout: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        *,
+        external_prefetch_timeout: Optional[float] = None,
+        memory_runtime: Any = None,
+    ) -> None:
         self._providers: List[MemoryProvider] = []
         self._tool_to_provider: Dict[str, MemoryProvider] = {}
         self._has_external: bool = False  # True once a non-builtin provider is added
@@ -388,6 +393,18 @@ class MemoryManager:
             "abandoned_prefetches": 0,
             "active_tasks": 0,
         }
+        # ``None`` preserves upstream behavior exactly.  An explicit active
+        # controller is the fail-closed Memory V3 lane: only authenticated,
+        # snapshot-authorized tool reads may reach a provider; every ambient
+        # lifecycle/write path becomes a local no-op.
+        self._memory_runtime = memory_runtime
+
+    @property
+    def memory_v3_active(self) -> bool:
+        return bool(
+            self._memory_runtime is not None
+            and getattr(self._memory_runtime, "active", False) is True
+        )
 
     # -- Registration --------------------------------------------------------
 
@@ -399,6 +416,16 @@ class MemoryManager:
         attempt is rejected with a warning.
         """
         is_builtin = provider.name == "builtin"
+        if self.memory_v3_active:
+            expected_provider = str(
+                getattr(self._memory_runtime, "provider_name", "") or ""
+            )
+            if expected_provider and provider.name != expected_provider:
+                logger.warning(
+                    "Memory V3 rejected provider '%s' because it does not match the frozen runtime",
+                    provider.name,
+                )
+                return
 
         if not is_builtin:
             if self._has_external:
@@ -486,10 +513,16 @@ class MemoryManager:
                 if block and block.strip():
                     blocks.append(block)
             except Exception as e:
-                logger.warning(
-                    "Memory provider '%s' system_prompt_block() failed: %s",
-                    provider.name, e,
-                )
+                if self.memory_v3_active:
+                    logger.warning(
+                        "Memory V3 provider '%s' system prompt failed with a contained error",
+                        provider.name,
+                    )
+                else:
+                    logger.warning(
+                        "Memory provider '%s' system_prompt_block() failed: %s",
+                        provider.name, e,
+                    )
         return "\n\n".join(blocks)
 
     # -- Prefetch / recall ---------------------------------------------------
@@ -512,12 +545,22 @@ class MemoryManager:
         """
         return extract_user_instruction_from_skill_message(text)
 
-    def prefetch_all(self, query: str, *, session_id: str = "") -> str:
+    def prefetch_all(
+        self,
+        query: str,
+        *,
+        session_id: str = "",
+        memory_provenance: Any = None,
+    ) -> str:
         """Collect prefetch context from all providers.
 
         Returns merged context text labeled by provider. Empty providers
         are skipped. Failures in one provider don't block others.
         """
+        if self.memory_v3_active:
+            # The first Memory V3 generation is tools-only.  No user text may
+            # trigger an ambient read, regardless of provenance.
+            return ""
         clean_query = self._strip_skill_scaffolding(query)
         if not clean_query:
             return ""
@@ -584,13 +627,21 @@ class MemoryManager:
             raise error_box["value"]
         return result_box.get("value", "")
 
-    def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
+    def queue_prefetch_all(
+        self,
+        query: str,
+        *,
+        session_id: str = "",
+        memory_provenance: Any = None,
+    ) -> None:
         """Queue background prefetch on all providers for the next turn.
 
         Provider work is dispatched to a background worker so a slow or
         wedged provider can never block the caller. See ``sync_all`` for
         the full rationale (agent stuck "running" minutes after a turn).
         """
+        if self.memory_v3_active:
+            return
         providers = list(self._providers)
         if not providers:
             return
@@ -632,6 +683,7 @@ class MemoryManager:
         *,
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
+        memory_provenance: Any = None,
     ) -> None:
         """Sync a completed turn to all providers.
 
@@ -650,6 +702,8 @@ class MemoryManager:
         before turn N+1; provider implementations don't need their own
         ordering guarantees.
         """
+        if self.memory_v3_active:
+            return
         providers = list(self._providers)
         if not providers:
             return
@@ -802,10 +856,16 @@ class MemoryManager:
                         schemas.append(schema)
                         seen.add(name)
             except Exception as e:
-                logger.warning(
-                    "Memory provider '%s' get_tool_schemas() failed: %s",
-                    provider.name, e,
-                )
+                if self.memory_v3_active:
+                    logger.warning(
+                        "Memory V3 provider '%s' tool schema load failed with a contained error",
+                        provider.name,
+                    )
+                else:
+                    logger.warning(
+                        "Memory provider '%s' get_tool_schemas() failed: %s",
+                        provider.name, e,
+                    )
         return schemas
 
     def get_all_tool_names(self) -> set:
@@ -817,7 +877,13 @@ class MemoryManager:
         return tool_name in self._tool_to_provider
 
     def handle_tool_call(
-        self, tool_name: str, args: Dict[str, Any], **kwargs
+        self,
+        tool_name: str,
+        args: Dict[str, Any],
+        *,
+        memory_provenance: Any = None,
+        tool_call_id: str = "",
+        **kwargs,
     ) -> str:
         """Route a tool call to the correct provider.
 
@@ -827,9 +893,38 @@ class MemoryManager:
         provider = self._tool_to_provider.get(tool_name)
         if provider is None:
             return tool_error(f"No memory provider handles tool '{tool_name}'")
+        if self.memory_v3_active:
+            from agent.memory_provenance import memory_denial_json
+
+            if provider.name != str(
+                getattr(self._memory_runtime, "provider_name", "") or ""
+            ):
+                return memory_denial_json("memory_provider_mismatch")
+            try:
+                authorization = self._memory_runtime.authorize_explicit_read(
+                    memory_provenance=memory_provenance,
+                    tool_call_id=tool_call_id,
+                )
+            except Exception:
+                return memory_denial_json("memory_capability_unavailable")
+            if not getattr(authorization, "allowed", False):
+                return memory_denial_json(
+                    str(getattr(authorization, "code", "memory_capability_denied"))
+                )
         try:
             return provider.handle_tool_call(tool_name, args, **kwargs)
         except Exception as e:
+            if self.memory_v3_active:
+                # Provider exceptions may contain private response fragments or
+                # endpoint details.  Strict mode emits only a stable code.
+                logger.warning(
+                    "Memory V3 provider '%s' tool '%s' failed with a contained error",
+                    provider.name,
+                    tool_name,
+                )
+                from agent.memory_provenance import memory_denial_json
+
+                return memory_denial_json("memory_provider_unavailable")
             logger.error(
                 "Memory provider '%s' handle_tool_call(%s) failed: %s",
                 provider.name, tool_name, e,
@@ -838,11 +933,20 @@ class MemoryManager:
 
     # -- Lifecycle hooks -----------------------------------------------------
 
-    def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
+    def on_turn_start(
+        self,
+        turn_number: int,
+        message: str,
+        *,
+        memory_provenance: Any = None,
+        **kwargs,
+    ) -> None:
         """Notify all providers of a new turn.
 
         kwargs may include: remaining_tokens, model, platform, tool_count.
         """
+        if self.memory_v3_active:
+            return
         for provider in self._providers:
             try:
                 provider.on_turn_start(turn_number, message, **kwargs)
@@ -852,8 +956,15 @@ class MemoryManager:
                     provider.name, e,
                 )
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+    def on_session_end(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        memory_provenance: Any = None,
+    ) -> None:
         """Notify all providers of session end."""
+        if self.memory_v3_active:
+            return
         for provider in self._providers:
             try:
                 provider.on_session_end(messages)
@@ -871,6 +982,7 @@ class MemoryManager:
         new_session_id: str,
         parent_session_id: str = "",
         reason: str = "new_session",
+        memory_provenance: Any = None,
     ) -> None:
         """Queue old-session extraction + provider rebinding as ONE serialized task.
 
@@ -892,6 +1004,8 @@ class MemoryManager:
         ``_submit_background`` degrades to inline execution — the pre-#16454
         synchronous behavior, slow but correct.
         """
+        if self.memory_v3_active:
+            return
         if not self._providers:
             return
         snapshot = list(messages or [])
@@ -920,6 +1034,7 @@ class MemoryManager:
         parent_session_id: str = "",
         reset: bool = False,
         rewound: bool = False,
+        memory_provenance: Any = None,
         **kwargs,
     ) -> None:
         """Notify all providers that the agent's session_id has rotated.
@@ -937,6 +1052,8 @@ class MemoryManager:
         transcript was truncated; providers caching per-turn document
         state should invalidate.
         """
+        if self.memory_v3_active:
+            return
         if not new_session_id:
             return
         # Only forward ``rewound`` when it's actually set. Passing it
@@ -961,12 +1078,19 @@ class MemoryManager:
                     provider.name, e,
                 )
 
-    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+    def on_pre_compress(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        memory_provenance: Any = None,
+    ) -> str:
         """Notify all providers before context compression.
 
         Returns combined text from providers to include in the compression
         summary prompt. Empty string if no provider contributes.
         """
+        if self.memory_v3_active:
+            return ""
         parts = []
         for provider in self._providers:
             try:
@@ -1012,11 +1136,16 @@ class MemoryManager:
         target: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
+        *,
+        memory_provenance: Any = None,
+        tool_call_id: str = "",
     ) -> None:
         """Notify external providers when the built-in memory tool writes.
 
         Skips the builtin provider itself (it's the source of the write).
         """
+        if self.memory_v3_active:
+            return
         for provider in self._providers:
             if provider.name == "builtin":
                 continue
@@ -1066,6 +1195,8 @@ class MemoryManager:
         tool_args: Dict[str, Any],
         *,
         build_metadata: Optional[Callable[[], Dict[str, Any]]] = None,
+        memory_provenance: Any = None,
+        tool_call_id: str = "",
     ) -> None:
         """Mirror a built-in memory tool call to external providers.
 
@@ -1083,6 +1214,8 @@ class MemoryManager:
         session/task/tool-call provenance the manager does not) invoked once per
         mirrored op.
         """
+        if self.memory_v3_active:
+            return
         if not self._memory_tool_result_succeeded(tool_result):
             return
 
@@ -1117,9 +1250,18 @@ class MemoryManager:
             except Exception as e:
                 logger.debug("notify_memory_tool_write failed for op %s: %s", action, e)
 
-    def on_delegation(self, task: str, result: str, *,
-                      child_session_id: str = "", **kwargs) -> None:
+    def on_delegation(
+        self,
+        task: str,
+        result: str,
+        *,
+        child_session_id: str = "",
+        memory_provenance: Any = None,
+        **kwargs,
+    ) -> None:
         """Notify all providers that a subagent completed."""
+        if self.memory_v3_active:
+            return
         for provider in self._providers:
             try:
                 provider.on_delegation(
@@ -1145,10 +1287,16 @@ class MemoryManager:
             try:
                 provider.shutdown()
             except Exception as e:
-                logger.warning(
-                    "Memory provider '%s' shutdown failed: %s",
-                    provider.name, e,
-                )
+                if self.memory_v3_active:
+                    logger.warning(
+                        "Memory V3 provider '%s' shutdown failed with a contained error",
+                        provider.name,
+                    )
+                else:
+                    logger.warning(
+                        "Memory provider '%s' shutdown failed: %s",
+                        provider.name, e,
+                    )
 
     @property
     def shutdown_drain_state(self) -> Dict[str, Any]:
@@ -1225,7 +1373,35 @@ class MemoryManager:
             try:
                 provider.initialize(session_id=session_id, **kwargs)
             except Exception as e:
-                logger.warning(
-                    "Memory provider '%s' initialize failed: %s",
-                    provider.name, e,
-                )
+                if self.memory_v3_active:
+                    logger.warning(
+                        "Memory V3 provider '%s' initialization failed with a contained error",
+                        provider.name,
+                    )
+                else:
+                    logger.warning(
+                        "Memory provider '%s' initialize failed: %s",
+                        provider.name, e,
+                    )
+
+    def authorize_builtin_memory_tool(
+        self,
+        tool_args: Dict[str, Any],
+        *,
+        memory_provenance: Any = None,
+        tool_call_id: str = "",
+    ) -> Optional[str]:
+        """Return a denial JSON before a built-in memory write can commit.
+
+        Legacy mode returns ``None`` and preserves the upstream memory tool.
+        Memory V3 read containment denies every add/replace/remove/batch before
+        ``tools.memory_tool`` can touch disk; a post-write mirror hook is too
+        late to enforce the release contract.
+        """
+
+        del tool_args, memory_provenance, tool_call_id
+        if not self.memory_v3_active:
+            return None
+        from agent.memory_provenance import memory_denial_json
+
+        return memory_denial_json("governed_write_denied")

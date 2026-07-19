@@ -2426,6 +2426,65 @@ class TestExecuteToolCalls:
         assert metadata["tool_call_id"] == "mem-1"
         assert messages[-1]["tool_call_id"] == "mem-1"
 
+    def test_memory_v3_prewrite_denial_never_calls_builtin_store(self, agent):
+        from agent.memory_provenance import (
+            issue_authenticated_ingress,
+            memory_denial_json,
+            mint_turn_provenance,
+        )
+
+        tc = _mock_tool_call(
+            name="memory",
+            arguments=json.dumps(
+                {"action": "add", "target": "memory", "content": "private fact"}
+            ),
+            call_id="mem-denied-1",
+        )
+        mock_msg = _mock_assistant_msg(content="", tool_calls=[tc])
+        messages = []
+        seen = {}
+
+        class _StrictManager:
+            memory_v3_active = True
+
+            def authorize_builtin_memory_tool(
+                self,
+                tool_args,
+                *,
+                memory_provenance,
+                tool_call_id,
+            ):
+                seen.update(
+                    args=tool_args,
+                    provenance=memory_provenance,
+                    tool_call_id=tool_call_id,
+                )
+                return memory_denial_json("governed_write_denied")
+
+        ingress = issue_authenticated_ingress(
+            origin="telegram_private",
+            platform="telegram",
+            principal_id="owner",
+            subject_id="danny",
+        )
+        agent._current_memory_provenance = mint_turn_provenance(
+            ingress,
+            session_id="session-1",
+            turn_id="turn-1",
+            message_id="message-1",
+        )
+        agent._memory_manager = _StrictManager()
+        agent._memory_store = MagicMock()
+
+        with patch("tools.memory_tool.memory_tool") as builtin_memory:
+            agent._execute_tool_calls_sequential(mock_msg, messages, "task-1")
+
+        builtin_memory.assert_not_called()
+        assert seen["provenance"] is agent._current_memory_provenance
+        assert seen["tool_call_id"] == "mem-denied-1"
+        assert seen["args"]["action"] == "add"
+        assert json.loads(messages[-1]["content"])["error"]["code"] == "governed_write_denied"
+
     def test_keyboard_interrupt_emits_cancelled_post_tool_hook(self, agent, monkeypatch):
         tc = _mock_tool_call(name="web_search", arguments='{"q":"test"}', call_id="c1")
         mock_msg = _mock_assistant_msg(content="", tool_calls=[tc])

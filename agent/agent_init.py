@@ -1427,11 +1427,27 @@ def init_agent(
     agent._memory_nudge_interval = 10
     agent._turns_since_memory = 0
     agent._iters_since_skill = 0
+    mem_config = {}
+    _memory_v3_runtime = None
     if not skip_memory:
         try:
             mem_config = _agent_cfg.get("memory", {})
-            agent._memory_enabled = mem_config.get("memory_enabled", False)
-            agent._user_profile_enabled = mem_config.get("user_profile_enabled", False)
+            if not isinstance(mem_config, dict):
+                mem_config = {}
+            from agent.memory_runtime import MemoryRuntimeController
+
+            _memory_v3_runtime = MemoryRuntimeController()
+            agent._memory_v3_runtime = _memory_v3_runtime
+            _memory_v3_active = _memory_v3_runtime.active
+            # Static MEMORY.md/USER.md prompt injection is not subject-scoped.
+            # In read containment it must stay out of shared gateway agents;
+            # the exact authenticated turn may use only explicit provider tools.
+            agent._memory_enabled = (
+                False if _memory_v3_active else mem_config.get("memory_enabled", False)
+            )
+            agent._user_profile_enabled = (
+                False if _memory_v3_active else mem_config.get("user_profile_enabled", False)
+            )
             agent._memory_nudge_interval = int(mem_config.get("nudge_interval", 10))
             if agent._memory_enabled or agent._user_profile_enabled:
                 from tools.memory_tool import MemoryStore
@@ -1450,14 +1466,48 @@ def init_agent(
     agent._memory_manager = None
     if not skip_memory:
         try:
+            _memory_v3_active = bool(
+                _memory_v3_runtime is not None and _memory_v3_runtime.active
+            )
+            if _memory_v3_active:
+                from agent.memory_manager import MemoryManager as _MemoryManager
+
+                # Keep this manager even if provider binding fails.  It is the
+                # pre-write gate for the built-in memory tool, so dropping it
+                # would turn a config error into a write-capability fallback.
+                agent._memory_manager = _MemoryManager(
+                    memory_runtime=_memory_v3_runtime
+                )
             _mem_provider_name = mem_config.get("provider", "") if mem_config else ""
+            if (
+                _memory_v3_runtime is not None
+                and _memory_v3_runtime.active
+                and _memory_v3_runtime.provider_name
+            ):
+                _mem_provider_name = _memory_v3_runtime.provider_name
 
             if _mem_provider_name and _mem_provider_name.strip():
                 from agent.memory_manager import MemoryManager as _MemoryManager
                 from plugins.memory import load_memory_provider as _load_mem
-                agent._memory_manager = _MemoryManager()
+                if agent._memory_manager is None:
+                    agent._memory_manager = _MemoryManager()
                 _mp = _load_mem(_mem_provider_name)
-                if _mp and _mp.is_available():
+                if _mp and agent._memory_manager.memory_v3_active:
+                    # Bind the provider to immutable read-only primitives before
+                    # even probing availability.  Availability probing is a
+                    # legacy transition for Honcho and could initialize/create.
+                    _configure_read_only = getattr(_mp, "configure_read_only", None)
+                    if callable(_configure_read_only):
+                        _configure_read_only(
+                            _memory_v3_runtime.provider_capability_ceiling,
+                            _memory_v3_runtime.provider_target,
+                        )
+                        agent._memory_manager.add_provider(_mp)
+                    else:
+                        _ra().logger.warning(
+                            "Memory V3 provider lacks a read-only binding seam; memory stays local-only"
+                        )
+                elif _mp and _mp.is_available():
                     agent._memory_manager.add_provider(_mp)
                 if agent._memory_manager.providers:
                     _init_kwargs = {
@@ -1505,13 +1555,43 @@ def init_agent(
                     except Exception:
                         pass
                     agent._memory_manager.initialize_all(**_init_kwargs)
-                    _ra().logger.info("Memory provider '%s' activated", _mem_provider_name)
+                    if agent._memory_manager.memory_v3_active:
+                        _runtime_failure = str(
+                            getattr(_memory_v3_runtime, "bootstrap_failure_code", "") or ""
+                        )
+                        if _runtime_failure:
+                            _ra().logger.warning(
+                                "Memory V3 is local-only (%s)", _runtime_failure
+                            )
+                        else:
+                            _ra().logger.info(
+                                "Memory provider '%s' bound to Memory V3 read containment",
+                                _mem_provider_name,
+                            )
+                    else:
+                        _ra().logger.info("Memory provider '%s' activated", _mem_provider_name)
                 else:
                     _ra().logger.debug("Memory provider '%s' not found or not available", _mem_provider_name)
-                    agent._memory_manager = None
+                    if not agent._memory_manager.memory_v3_active:
+                        agent._memory_manager = None
+            elif _memory_v3_active:
+                _ra().logger.warning(
+                    "Memory V3 has no validated provider target; memory stays local-only"
+                )
         except Exception as _mpe:
-            _ra().logger.warning("Memory provider plugin init failed: %s", _mpe)
-            agent._memory_manager = None
+            if _memory_v3_runtime is not None and _memory_v3_runtime.active:
+                _ra().logger.warning(
+                    "Memory V3 provider binding failed; memory stays local-only"
+                )
+                if agent._memory_manager is None:
+                    from agent.memory_manager import MemoryManager as _MemoryManager
+
+                    agent._memory_manager = _MemoryManager(
+                        memory_runtime=_memory_v3_runtime
+                    )
+            else:
+                _ra().logger.warning("Memory provider plugin init failed: %s", _mpe)
+                agent._memory_manager = None
 
     from agent.memory_manager import inject_memory_provider_tools as _inject_memory_provider_tools
     _inject_memory_provider_tools(agent)

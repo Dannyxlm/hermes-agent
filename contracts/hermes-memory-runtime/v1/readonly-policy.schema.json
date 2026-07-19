@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cloudseed.co/contracts/hermes-memory-runtime/v1/readonly-policy.schema.json",
+  "title": "Hermes Memory V3 Read-Only Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "deployment_mode",
+    "local_reply",
+    "existing_memory_read",
+    "memory_tools_visible",
+    "governed_write",
+    "conversational_capture",
+    "provider_create"
+  ],
+  "properties": {
+    "schema_version": {"const": "hermes-memory-readonly-policy/v1"},
+    "deployment_mode": {"const": "tools_only_read_containment"},
+    "local_reply": {"const": true},
+    "existing_memory_read": {"const": true},
+    "memory_tools_visible": {"const": true},
+    "governed_write": {"const": false},
+    "conversational_capture": {"const": false},
+    "provider_create": {"const": false}
+  }
+}

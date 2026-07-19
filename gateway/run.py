@@ -3031,6 +3031,81 @@ class SessionModelOverrideReadError(RuntimeError):
     code = "session_model_override_unavailable"
 
 
+def _issue_post_auth_memory_ingress(
+    source: SessionSource,
+    *,
+    internal: bool,
+    restored: bool = False,
+):
+    """Mint content-free memory ingress after gateway authorization.
+
+    Authorization to use Hermes is not automatically authorization to read a
+    private memory subject.  That second binding comes only from the strict,
+    owner-private ``HERMES_MEMORY_SUBJECT_BINDINGS_FILE``.  Missing/unsafe files
+    and unmatched principals remain local-only without affecting chat.
+    """
+
+    from agent.memory_provenance import (
+        UNIDENTIFIED_SUBJECT,
+        issue_authenticated_ingress,
+        issue_synthetic_ingress,
+        load_memory_subject_bindings,
+    )
+
+    platform = getattr(getattr(source, "platform", None), "value", "") or ""
+    chat_type = str(getattr(source, "chat_type", "") or "").lower()
+    profile = str(getattr(source, "profile", "") or "default")
+    principal_id = str(getattr(source, "user_id", "") or "").strip()
+
+    if platform == "telegram":
+        origin = "telegram_private" if chat_type in {"dm", "private"} else "telegram_group"
+    elif platform == "api_server":
+        origin = "photon_api"
+    elif platform in {"local", "tui"}:
+        origin = "tui"
+    elif platform in {"webhook", "homeassistant"}:
+        origin = "webhook"
+    else:
+        origin = "delegated"
+
+    if (
+        internal
+        or restored
+        or getattr(source, "is_bot", False) is True
+        or not principal_id
+        or platform in {"api_server", "webhook", "homeassistant"}
+        # U3's only remote subject-binding boundary is authenticated Telegram
+        # private/group ingress. Other gateway transports (including a LOCAL
+        # adapter that is not the real interactive CLI/TUI boundary) remain
+        # explicitly synthetic even if a permissive bindings file mentions
+        # them. This also makes every delegated origin deny by construction.
+        or origin not in {"telegram_private", "telegram_group"}
+    ):
+        return issue_synthetic_ingress(
+            origin=origin,
+            reason=("restored_or_replayed" if restored else "synthetic_or_unattributed_event"),
+            platform=platform or "gateway",
+            profile=profile,
+        )
+
+    subject_id = UNIDENTIFIED_SUBJECT
+    try:
+        bindings = load_memory_subject_bindings()
+        subject_id = bindings.resolve(platform, principal_id)
+    except Exception:
+        # Config failures are intentionally silent/content-free here. Runtime
+        # capability diagnostics own the operator-visible status; chat stays up.
+        subject_id = UNIDENTIFIED_SUBJECT
+
+    return issue_authenticated_ingress(
+        origin=origin,
+        platform=platform or "gateway",
+        principal_id=principal_id,
+        subject_id=subject_id,
+        profile=profile,
+    )
+
+
 class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
     """
     Main gateway controller.
@@ -12071,9 +12146,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         # Build session context
         context = build_session_context(source, self.config, session_entry)
-        
+
+        # Mint only after the outer handler's authorization gate. Restored,
+        # internal, bot, anonymous, and unmapped callers receive an explicit
+        # local-only ingress; failures never block the local reply.
+        _memory_ingress = None
+        try:
+            _memory_ingress = _issue_post_auth_memory_ingress(
+                source,
+                internal=bool(getattr(event, "internal", False)),
+                restored=bool(getattr(event, "_hermes_startup_restore_replay", False)),
+            )
+        except Exception:
+            _memory_ingress = None
+
         # Set session context variables for tools (task-local, concurrency-safe)
-        _session_env_tokens = self._set_session_env(context)
+        _session_env_tokens = self._set_session_env(
+            context,
+            memory_ingress=_memory_ingress,
+        )
         
         # Read privacy.redact_pii from config (re-read per message)
         _redact_pii = False
@@ -12872,6 +12963,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 moa_config=getattr(event, "_moa_config", None),
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
+                memory_ingress=_memory_ingress,
             )
 
             # Stop persistent typing indicator now that the agent is done.
@@ -16287,7 +16379,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         return delivered
 
-    def _set_session_env(self, context: SessionContext) -> list:
+    def _set_session_env(self, context: SessionContext, *, memory_ingress=None) -> list:
         """Set session context variables for the current async task.
 
         Uses ``contextvars`` instead of ``os.environ`` so that concurrent
@@ -16318,6 +16410,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             message_id=str(context.source.message_id) if context.source.message_id else "",
             profile=getattr(context.source, "profile", "") or "",
             async_delivery=_async_delivery,
+            memory_ingress=memory_ingress,
         )
 
     def _clear_session_env(self, tokens: list) -> None:
@@ -18412,6 +18505,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         session_key: str = None,
         run_generation: Optional[int] = None,
         event_message_id: Optional[str] = None,
+        memory_ingress=None,
     ) -> Dict[str, Any]:
         """Forward the message to a remote Hermes API server instead of
         running a local AIAgent.
@@ -18487,6 +18581,41 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "messages": api_messages,
             "stream": True,
         }
+        proxy_request_url = f"{proxy_url}/v1/chat/completions"
+
+        # Private-memory authority is distinct from the bearer proxy key.  If
+        # the separate proof configuration is absent/unsafe, forwarding still
+        # works but the remote turn remains local-only.  The canonical JSON
+        # serializer below guarantees the signed digest matches transmitted
+        # bytes rather than merely an equivalent Python object.
+        canonical_proxy_json_text = None
+        try:
+            from urllib.parse import urlsplit
+
+            from agent.memory_provenance import (
+                PROXY_PROOF_HEADER,
+                build_memory_proxy_proof,
+                canonical_proxy_json_bytes,
+                canonical_proxy_json_text,
+            )
+
+            canonical_body = canonical_proxy_json_bytes(body)
+            if memory_ingress is not None:
+                headers[PROXY_PROOF_HEADER] = build_memory_proxy_proof(
+                    canonical_body,
+                    method="POST",
+                    path=urlsplit(proxy_request_url).path,
+                    ingress=memory_ingress,
+                )
+        except Exception as exc:
+            code = getattr(exc, "code", "proxy_proof_unavailable")
+            logger.debug(
+                "Proxy memory proof unavailable (%s); forwarding local-only",
+                code,
+            )
+
+            # Import/serialization itself failing must not break chat.  The
+            # default aiohttp serializer remains available in that rare case.
 
         # Set up platform streaming if available -------------------------
         _stream_consumer = None
@@ -18576,9 +18705,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         try:
             _timeout = ClientTimeout(total=0, sock_read=1800)
-            async with _AioClientSession(timeout=_timeout) as session:
+            _session_kwargs = {"timeout": _timeout}
+            if canonical_proxy_json_text is not None:
+                _session_kwargs["json_serialize"] = canonical_proxy_json_text
+            async with _AioClientSession(**_session_kwargs) as session:
                 async with session.post(
-                    f"{proxy_url}/v1/chat/completions",
+                    proxy_request_url,
                     json=body,
                     headers=headers,
                 ) as resp:
@@ -18716,6 +18848,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         moa_config: Optional[dict] = None,
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
+        memory_ingress=None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -18734,6 +18867,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 channel_prompt=channel_prompt, moa_config=moa_config,
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
+                memory_ingress=memory_ingress,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -18745,6 +18879,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 channel_prompt=channel_prompt, moa_config=moa_config,
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
+                memory_ingress=memory_ingress,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -18866,6 +19001,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         moa_config: Optional[dict] = None,
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
+        memory_ingress=None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -18890,6 +19026,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 session_key=session_key,
                 run_generation=run_generation,
                 event_message_id=event_message_id,
+                memory_ingress=memory_ingress,
             )
 
         from run_agent import AIAgent
@@ -20878,7 +21015,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _conversation_kwargs["moa_config"] = moa_config
                 if _persist_user_timestamp_override is not None:
                     _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
-                result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
+                result = agent.run_conversation(
+                    _api_run_message,
+                    memory_ingress=memory_ingress,
+                    **_conversation_kwargs,
+                )
             finally:
                 unregister_gateway_notify(_approval_session_key)
                 # Cancel any pending clarify entries so blocked agent
