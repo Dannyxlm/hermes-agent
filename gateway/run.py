@@ -3008,6 +3008,73 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     _restart_drain_timeout: float = DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT
     _exit_code: Optional[int] = None
     _draining: bool = False
+    _memory_degraded_report_slots = threading.BoundedSemaphore(2)
+
+    def _store_memory_degraded_receipt(self, receipt: Dict[str, Any]) -> None:
+        """Keep a small process-local trail without putting chat on storage I/O."""
+        receipts = getattr(self, "_memory_degraded_receipts", None)
+        if receipts is None:
+            receipts = []
+            self._memory_degraded_receipts = receipts
+        receipts.append(receipt)
+        del receipts[:-32]
+
+    def _increment_memory_degraded_metric(self) -> None:
+        """Best-effort counter used by local status/debug surfaces."""
+        self._memory_degraded_count = int(
+            getattr(self, "_memory_degraded_count", 0) or 0
+        ) + 1
+
+    @staticmethod
+    def _publish_memory_degraded_receipt(receipt: Dict[str, Any]) -> None:
+        """Publish a typed journald event; callers isolate every failure."""
+        encoded = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        logger.warning("memory_degraded_receipt=%s", encoded)
+
+    def _record_memory_degraded_receipt(
+        self,
+        source: SessionSource,
+        reason_code: str,
+    ) -> Dict[str, Any]:
+        """Queue a fail-closed denial without making reporting a dependency."""
+        platform = getattr(getattr(source, "platform", None), "value", "") or ""
+        receipt = {
+            "schema_version": 1,
+            "type": "memory_degraded_deny",
+            "reason_code": str(reason_code or "unknown"),
+            "platform": platform,
+            "external_memory_disabled": True,
+            "recorded_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        slots = self._memory_degraded_report_slots
+        if not slots.acquire(blocking=False):
+            return receipt
+
+        def _report() -> None:
+            try:
+                for reporter in (
+                    lambda: self._store_memory_degraded_receipt(receipt),
+                    self._increment_memory_degraded_metric,
+                    lambda: self._publish_memory_degraded_receipt(receipt),
+                ):
+                    try:
+                        reporter()
+                    except Exception:
+                        # Serialization, counters, storage, and event
+                        # publication remain independently best-effort.
+                        pass
+            finally:
+                slots.release()
+
+        try:
+            threading.Thread(
+                target=_report,
+                daemon=True,
+                name="memory-degraded-reporter",
+            ).start()
+        except Exception:
+            slots.release()
+        return receipt
     _external_drain_active: bool = False
     _restart_requested: bool = False
     _restart_task_started: bool = False
@@ -11258,8 +11325,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pass
         return source
 
-    async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
+    async def _handle_message_with_agent(
+        self,
+        event,
+        source,
+        _quick_key: str,
+        run_generation: int,
+        *,
+        is_internal: Optional[bool] = None,
+    ):
         """Inner handler that runs under the _running_agents sentinel guard."""
+        if is_internal is None:
+            is_internal = bool(getattr(event, "internal", False))
         _msg_start_time = time.time()
         _platform_name = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
         _msg_preview = (event.text or "")[:80].replace("\n", " ")
@@ -11441,14 +11518,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # The external-memory origin is minted only here, after the authorization
         # gate above; wire payloads and restored SessionSource dictionaries never
         # carry it.
-        _memory_origin_receipt = _issue_post_auth_memory_origin(
-            source,
-            internal=is_internal,
-        )
-        _session_env_tokens = self._set_session_env(
-            context,
-            memory_origin_receipt=_memory_origin_receipt,
-        )
+        _memory_origin_receipt = None
+        _session_env_tokens = []
+        _external_memory_disabled = False
+        try:
+            _memory_origin_receipt = _issue_post_auth_memory_origin(
+                source,
+                internal=is_internal,
+            )
+        except Exception:
+            _external_memory_disabled = True
+            try:
+                self._record_memory_degraded_receipt(source, "origin_unavailable")
+            except Exception:
+                pass
+        try:
+            _session_env_tokens = self._set_session_env(
+                context,
+                memory_origin_receipt=_memory_origin_receipt,
+            )
+        except Exception:
+            _external_memory_disabled = True
+            try:
+                self._record_memory_degraded_receipt(
+                    source,
+                    "deny_binding_unavailable",
+                )
+            except Exception:
+                pass
         
         # Read privacy.redact_pii from config (re-read per message)
         _redact_pii = False
@@ -12188,6 +12285,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 moa_config=getattr(event, "_moa_config", None),
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
+                external_memory_disabled=_external_memory_disabled,
             )
 
             # Stop persistent typing indicator now that the agent is done.
@@ -12466,6 +12564,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # forgets what was just asked.  Persist the user turn so the
             # conversation is preserved. (#7100)
             agent_failed_early = bool(agent_result.get("failed"))
+            suppress_transcript_persistence = bool(
+                agent_result.get("suppress_transcript_persistence")
+            )
             hidden_reasoning_incomplete = _is_gateway_hidden_reasoning_incomplete_turn(
                 agent_result
             )
@@ -12485,7 +12586,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 ))
                 or ("400" in _err_str_for_classify and len(history) > 50)
             )
-            if is_context_overflow_failure:
+            if suppress_transcript_persistence:
+                pass
+            elif is_context_overflow_failure:
                 logger.info(
                     "Skipping transcript persistence for context-overflow "
                     "failure in session %s to prevent session growth loop.",
@@ -12554,7 +12657,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # If this is a fresh session (no history), write the full tool
             # definitions as the first entry so the transcript is self-describing
             # -- the same list of dicts sent as tools=[...] in the API request.
-            if is_context_overflow_failure:
+            if suppress_transcript_persistence or is_context_overflow_failure:
                 pass  # Skip all transcript writes — don't grow a broken session
             elif not history:
                 tool_defs = agent_result.get("tools", [])
@@ -12585,7 +12688,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Use the filtered history length (history_offset) that was actually
             # passed to the agent, not len(history) which includes session_meta
             # entries that were stripped before the agent saw them.
-            if is_context_overflow_failure:
+            if suppress_transcript_persistence or is_context_overflow_failure:
                 pass  # handled above — skip all transcript writes
             elif agent_failed_early or hidden_reasoning_incomplete:
                 # Transient failure (429/timeout/5xx): persist only the user
@@ -12714,9 +12817,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # above), matching this function's documented contract.  Refreshing
             # here makes the guard fire only on a DIFFERENT process's writes.
             # Fail-safe inside the helper.
-            await self._refresh_agent_cache_message_count(
-                session_key, session_entry.session_id
-            )
+            if not _external_memory_disabled:
+                await self._refresh_agent_cache_message_count(
+                    session_key, session_entry.session_id
+                )
 
             # Intentional silence is a delivery decision, not a transcript
             # mutation.  The agent's [SILENT]/NO_REPLY assistant turn above is
@@ -17065,6 +17169,56 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception:
                 pass
 
+    def _discard_cached_agent_if_matches(
+        self,
+        session_key: str,
+        expected_agent: Any,
+    ) -> bool:
+        """Drop only the degraded agent, never a concurrently replaced entry."""
+        if not session_key or expected_agent is None:
+            return False
+        cache = getattr(self, "_agent_cache", None)
+        if cache is None:
+            return False
+        lock = getattr(self, "_agent_cache_lock", None)
+
+        def _discard() -> bool:
+            cached = cache.get(session_key)
+            cached_agent = cached[0] if isinstance(cached, tuple) and cached else cached
+            if cached_agent is not expected_agent:
+                return False
+            cache.pop(session_key, None)
+            return True
+
+        if lock:
+            with lock:
+                return _discard()
+        return _discard()
+
+    def _schedule_degraded_agent_release(
+        self,
+        agent: Any,
+        session_key: str,
+    ) -> None:
+        """Release a one-turn/degraded agent without blocking reply cleanup."""
+        if agent is None or getattr(agent, "_degraded_release_scheduled", False):
+            return
+        try:
+            agent._degraded_release_scheduled = True
+            threading.Thread(
+                target=self._release_evicted_agent_soft,
+                args=(agent,),
+                daemon=True,
+                name=f"agent-degraded-release-{str(session_key)[:24]}",
+            ).start()
+        except Exception:
+            # Resource cleanup remains best-effort; never move it back onto the
+            # chat event loop when thread creation is unavailable.
+            try:
+                agent._degraded_release_scheduled = False
+            except Exception:
+                pass
+
     @staticmethod
     def _init_cached_agent_for_turn(agent: Any, interrupt_depth: int) -> None:
         """Reset per-turn state on a cached agent before a new turn starts.
@@ -17688,6 +17842,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         moa_config: Optional[dict] = None,
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
+        external_memory_disabled: bool = False,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -17706,6 +17861,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 channel_prompt=channel_prompt, moa_config=moa_config,
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
+                external_memory_disabled=external_memory_disabled,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -17717,6 +17873,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 channel_prompt=channel_prompt, moa_config=moa_config,
                 persist_user_message=persist_user_message,
                 persist_user_timestamp=persist_user_timestamp,
+                external_memory_disabled=external_memory_disabled,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -17838,6 +17995,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         moa_config: Optional[dict] = None,
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
+        external_memory_disabled: bool = False,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -17851,8 +18009,87 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         This is run in a thread pool to not block the event loop.
         Supports interruption via new messages.
         """
+        def _memory_degraded_callback(reason_code: str) -> None:
+            try:
+                self._record_memory_degraded_receipt(source, reason_code)
+            except Exception:
+                pass
+
+        _preissued_memory_turn_envelope = None
+        _preissued_memory_turn_id = None
+        if not external_memory_disabled:
+            try:
+                # Mint the exact turn capability before AIAgent construction,
+                # then hand the same sealed object to build_turn_context. This
+                # prevents provider init from racing ahead of provenance and
+                # avoids a check-then-mint TOCTOU gap.
+                import secrets
+
+                from agent.codex_responses_adapter import (
+                    _summarize_user_message_for_log,
+                )
+                from agent.message_sanitization import _sanitize_surrogates
+                from agent.memory_provenance import issue_turn_envelope
+
+                _preissued_content = (
+                    persist_user_message
+                    if persist_user_message is not None
+                    else message
+                )
+                if isinstance(_preissued_content, str):
+                    _preissued_content = _sanitize_surrogates(_preissued_content)
+                _preissued_content = _summarize_user_message_for_log(
+                    _preissued_content,
+                    sep="\n",
+                )
+                _preissued_memory_turn_id = (
+                    f"{session_id or 'session'}:gateway:"
+                    f"{secrets.token_hex(8)}"
+                )
+                _preissued_memory_turn_envelope = issue_turn_envelope(
+                    None,
+                    session_id=session_id or "",
+                    turn_id=_preissued_memory_turn_id,
+                    message_id=(
+                        str(event_message_id or "")
+                        or str(getattr(source, "message_id", "") or "")
+                        or f"gateway:{secrets.token_hex(8)}"
+                    ),
+                    user_content=_preissued_content,
+                )
+            except Exception:
+                external_memory_disabled = True
+                _preissued_memory_turn_envelope = None
+                _preissued_memory_turn_id = None
+                _memory_degraded_callback("turn_envelope_unavailable")
+
         # ---- Proxy mode: delegate to remote API server ----
-        if self._get_proxy_url():
+        _proxy_url = self._get_proxy_url()
+        if _proxy_url and external_memory_disabled:
+            # The current proxy protocol has no authenticated, fail-closed
+            # "disable external memory for this turn" contract. Do not send a
+            # provenance-degraded message to a remote runtime that may still
+            # initialize or query its provider, and do not silently run the
+            # wrong local agent in a deployment designed as a thin relay.
+            return {
+                "final_response": (
+                    "⚠️ I couldn't verify the memory safety boundary for this "
+                    "message, so I kept it on this gateway and did not send it "
+                    "to the remote agent. Please try again."
+                ),
+                "messages": [],
+                "api_calls": 0,
+                "tools": [],
+                "history_offset": len(history),
+                "session_id": session_id,
+                "local_only_degraded": True,
+                "failed": True,
+                "completed": False,
+                "error": "memory_provenance_unavailable",
+                "agent_persisted": False,
+                "suppress_transcript_persistence": True,
+            }
+        if _proxy_url:
             return await self._run_agent_via_proxy(
                 message=message,
                 context_prompt=context_prompt,
@@ -19001,8 +19238,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             agent = None
             reused_cached_agent = False
-            _cache_lock = getattr(self, "_agent_cache_lock", None)
-            _cache = getattr(self, "_agent_cache", None)
+            # A provenance/setup failure uses a one-turn, no-memory agent. Do
+            # not touch the healthy cached agent: it may own a live provider
+            # session and provider tool schemas from an earlier valid turn.
+            _use_agent_cache = not external_memory_disabled
+            _cache_lock = (
+                getattr(self, "_agent_cache_lock", None)
+                if _use_agent_cache
+                else None
+            )
+            _cache = getattr(self, "_agent_cache", None) if _use_agent_cache else None
 
             # Peek at the cached entry's snapshot session_id (if any) so we can
             # check, OUTSIDE the cache lock, whether THAT session_id is a DEAD
@@ -19229,6 +19474,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     chat_type=source.chat_type,
                     thread_id=source.thread_id,
                     gateway_session_key=session_key,
+                    skip_memory=external_memory_disabled,
                     session_db=getattr(self._session_db, "_db", self._session_db),
                     # Reload from disk — do not reuse the startup snapshot (#60955).
                     fallback_model=self._refresh_fallback_model(),
@@ -19245,6 +19491,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                         self._enforce_agent_cache_cap()
                 logger.debug("Created new agent for session %s (sig=%s)", session_key, _sig)
+
+            # ``build_turn_context`` owns the final envelope boundary. These
+            # process-local attributes let it skip that boundary for a turn
+            # already known to be degraded, or report/contain a new envelope
+            # failure before prompt construction and the first model call.
+            agent._external_memory_disabled = bool(external_memory_disabled)
+            agent._memory_degraded_callback = _memory_degraded_callback
+            agent._preissued_memory_turn_envelope = _preissued_memory_turn_envelope
+            agent._preissued_memory_turn_id = _preissued_memory_turn_id
+            agent._suppress_system_prompt_persistence = bool(
+                external_memory_disabled
+            )
 
             # Per-message state — callbacks and reasoning config change every
             # turn and must not be baked into the cached agent constructor.
@@ -20543,6 +20801,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # a bad model ID triggered fallback → eviction → recreation →
             # MCP reinit → same 400 → loop, burning 91% CPU for hours.
             _agent = agent_holder[0]
+            if getattr(_agent, "_evict_after_memory_degraded", False):
+                self._discard_cached_agent_if_matches(session_key, _agent)
             _result_for_fb = result_holder[0]
             _run_failed = _result_for_fb.get("failed") if _result_for_fb else False
             if _agent is not None and hasattr(_agent, 'model') and not _run_failed:
@@ -20565,7 +20825,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _cfg_model = normalize_model_for_provider(_cfg_model, _agent_provider)
                 except Exception:
                     pass
-                if _agent.model != _cfg_model and not self._is_intentional_model_switch(session_key, _agent.model):
+                if (
+                    not external_memory_disabled
+                    and _agent.model != _cfg_model
+                    and not self._is_intentional_model_switch(
+                        session_key,
+                        _agent.model,
+                    )
+                ):
                     # Fallback activated on a successful run — evict cached
                     # agent so the next message retries the primary model.
                     self._evict_cached_agent(session_key)
@@ -20846,7 +21113,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # follow-up.  Use the same (session_key, session_id) the
                 # recursive call runs under so the snapshot matches exactly
                 # what the follow-up's guard will consult.  Fail-safe in helper.
-                await self._refresh_agent_cache_message_count(session_key, session_id)
+                if not external_memory_disabled:
+                    await self._refresh_agent_cache_message_count(
+                        session_key,
+                        session_id,
+                    )
 
                 followup_result = await self._run_agent(
                     message=next_message,
@@ -20859,9 +21130,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _interrupt_depth=_interrupt_depth + 1,
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
+                    external_memory_disabled=external_memory_disabled,
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:
+            _degraded_agent = agent_holder[0]
+            _late_memory_degraded = bool(
+                getattr(_degraded_agent, "_evict_after_memory_degraded", False)
+            )
+            if _late_memory_degraded:
+                self._discard_cached_agent_if_matches(
+                    session_key,
+                    _degraded_agent,
+                )
+            if external_memory_disabled or _late_memory_degraded:
+                self._schedule_degraded_agent_release(
+                    _degraded_agent,
+                    session_key,
+                )
             # Stop progress sender, interrupt monitor, and notification task
             if progress_task:
                 progress_task.cancel()

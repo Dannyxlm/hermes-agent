@@ -118,6 +118,50 @@ class TurnContext:
     memory_turn_envelope: Any = None
 
 
+def _disable_external_memory_for_turn(agent, reason_code: str) -> None:
+    """Contain a late provenance failure before prompt/model/provider work."""
+    manager = getattr(agent, "_memory_manager", None)
+    tool_names = set()
+    if manager is not None:
+        try:
+            tool_names = set(manager.get_all_tool_names() or ())
+        except Exception:
+            tool_names = set()
+
+    # Provider hooks, prefetch, tool dispatch, and final sync all consult this
+    # attribute. Clear it before any of those boundaries can run.
+    agent._memory_manager = None
+    if tool_names:
+        tools = getattr(agent, "tools", None)
+        if isinstance(tools, list):
+            agent.tools = [
+                tool
+                for tool in tools
+                if not (
+                    isinstance(tool, dict)
+                    and isinstance(tool.get("function"), dict)
+                    and tool["function"].get("name") in tool_names
+                )
+            ]
+        valid_tool_names = getattr(agent, "valid_tool_names", None)
+        if isinstance(valid_tool_names, set):
+            valid_tool_names.difference_update(tool_names)
+
+    # A cached prompt may contain provider context or tool instructions. Force
+    # a provider-free rebuild for this turn, then tell the gateway to discard
+    # this exact cached agent so the next healthy turn rebuilds normally.
+    agent._cached_system_prompt = None
+    agent._external_memory_disabled = True
+    agent._suppress_system_prompt_persistence = True
+    agent._evict_after_memory_degraded = True
+    callback = getattr(agent, "_memory_degraded_callback", None)
+    if callable(callback):
+        try:
+            callback(reason_code)
+        except Exception:
+            pass
+
+
 def build_turn_context(
     agent,
     user_message: Any,
@@ -219,7 +263,10 @@ def build_turn_context(
     # Generate unique task_id if not provided to isolate VMs between tasks.
     effective_task_id = task_id or str(uuid.uuid4())
     agent._current_task_id = effective_task_id
-    turn_id = f"{agent.session_id or 'session'}:{effective_task_id}:{uuid.uuid4().hex[:8]}"
+    turn_id = getattr(agent, "_preissued_memory_turn_id", None) or (
+        f"{agent.session_id or 'session'}:{effective_task_id}:"
+        f"{uuid.uuid4().hex[:8]}"
+    )
     agent._current_turn_id = turn_id
     agent._current_api_request_id = ""
     # Tripwire: warn (with both turn ids) when this turn starts before the
@@ -342,34 +389,53 @@ def build_turn_context(
     # Preserve the original user message (no nudge injection).
     original_user_message = persist_user_message if persist_user_message is not None else user_message
 
-    # Snapshot authenticated origin before any model call. The envelope binds
-    # to the clean/persisted user value rather than API-local notes or skill
-    # scaffolding, and is never reconstructed from message/history dictionaries.
-    from agent.memory_provenance import issue_turn_envelope
-    try:
-        from gateway.session_context import get_session_env
+    # Snapshot authenticated origin before any model call. A turn already
+    # known to be degraded skips the factory entirely. A new envelope failure
+    # disables every external-memory boundary while preserving local chat.
+    memory_turn_envelope = None
+    if not getattr(agent, "_external_memory_disabled", False):
+        try:
+            memory_turn_envelope = getattr(
+                agent,
+                "_preissued_memory_turn_envelope",
+                None,
+            )
+            if memory_turn_envelope is None:
+                from agent.memory_provenance import issue_turn_envelope
+                try:
+                    from gateway.session_context import get_session_env
 
-        memory_message_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "")
-    except Exception:
-        memory_message_id = ""
-    if not memory_message_id:
-        memory_message_id = f"{turn_id}:user"
-    try:
-        memory_user_content = summarize_user_message_for_log(
-            original_user_message,
-            sep="\n",
-        )
-    except TypeError:
-        # Lightweight tests and third-party embeddings may expose the historic
-        # one-argument callable; plain-string behavior is equivalent.
-        memory_user_content = summarize_user_message_for_log(original_user_message)
-    memory_turn_envelope = issue_turn_envelope(
-        None,
-        session_id=agent.session_id or "",
-        turn_id=turn_id,
-        message_id=memory_message_id,
-        user_content=memory_user_content,
-    )
+                    memory_message_id = get_session_env(
+                        "HERMES_SESSION_MESSAGE_ID",
+                        "",
+                    )
+                except Exception:
+                    memory_message_id = ""
+                if not memory_message_id:
+                    memory_message_id = f"{turn_id}:user"
+                try:
+                    memory_user_content = summarize_user_message_for_log(
+                        original_user_message,
+                        sep="\n",
+                    )
+                except TypeError:
+                    # Lightweight tests and third-party embeddings may expose
+                    # the historic one-argument callable.
+                    memory_user_content = summarize_user_message_for_log(
+                        original_user_message
+                    )
+                memory_turn_envelope = issue_turn_envelope(
+                    None,
+                    session_id=agent.session_id or "",
+                    turn_id=turn_id,
+                    message_id=memory_message_id,
+                    user_content=memory_user_content,
+                )
+        except Exception:
+            _disable_external_memory_for_turn(
+                agent,
+                "turn_envelope_unavailable",
+            )
     agent._current_turn_envelope = memory_turn_envelope
 
     # Track memory nudge trigger (turn-based, checked here).
@@ -404,8 +470,17 @@ def build_turn_context(
         )
 
     # ── System prompt (cached per session for prefix caching) ──
+    if getattr(agent, "_external_memory_disabled", False):
+        agent._suppress_system_prompt_persistence = True
     if agent._cached_system_prompt is None:
-        restore_or_build_system_prompt(agent, system_message, conversation_history)
+        if getattr(agent, "_external_memory_disabled", False):
+            # A persisted prompt may contain provider instructions or scoped
+            # identifiers from an earlier healthy turn. Build directly while
+            # _memory_manager is absent; never restore that stored prompt into
+            # a degraded request.
+            agent._cached_system_prompt = agent._build_system_prompt(system_message)
+        else:
+            restore_or_build_system_prompt(agent, system_message, conversation_history)
 
     active_system_prompt = agent._cached_system_prompt
 
@@ -416,8 +491,22 @@ def build_turn_context(
     persist_lock = getattr(agent, "_session_persist_lock", None)
 
     def _ensure_and_persist() -> None:
-        agent._ensure_db_session()
-        agent._persist_session(messages, conversation_history)
+        if not getattr(agent, "_external_memory_disabled", False):
+            agent._ensure_db_session()
+            agent._persist_session(messages, conversation_history)
+            return
+
+        # Keep the fresh provider-free prompt ephemeral. The gateway creates a
+        # bare session row before the agent; leaving its system_prompt NULL lets
+        # the next healthy turn build and persist the complete prompt instead
+        # of restoring this intentionally reduced one forever.
+        degraded_prompt = agent._cached_system_prompt
+        agent._cached_system_prompt = None
+        try:
+            agent._ensure_db_session()
+            agent._persist_session(messages, conversation_history)
+        finally:
+            agent._cached_system_prompt = degraded_prompt
 
     # Crash-resilience: persist the inbound user turn as soon as the session row exists.
     try:

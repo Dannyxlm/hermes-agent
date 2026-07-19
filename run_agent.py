@@ -611,7 +611,15 @@ class AIAgent:
                 source=source,
                 model=self.model,
                 model_config=self._session_init_model_config,
-                system_prompt=self._cached_system_prompt,
+                system_prompt=(
+                    None
+                    if getattr(
+                        self,
+                        "_suppress_system_prompt_persistence",
+                        False,
+                    )
+                    else self._cached_system_prompt
+                ),
                 user_id=None,
                 parent_session_id=self._parent_session_id,
                 cwd=_launch_cwd_for_session(source),
