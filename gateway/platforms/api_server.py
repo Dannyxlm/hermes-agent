@@ -90,6 +90,12 @@ from gateway.platforms.base import (
     validate_media_delivery_path,
 )
 from agent.redact import redact_sensitive_text
+from agent.memory_provenance import (
+    PROXY_PROOF_HEADER,
+    MemoryProvenanceError,
+    issue_synthetic_ingress,
+    verify_memory_proxy_proof,
+)
 from gateway.readiness import collect_runtime_readiness
 
 logger = logging.getLogger(__name__)
@@ -702,6 +708,31 @@ def _openai_error(message: str, err_type: str = "invalid_request_error", param: 
 _api_agent_request_reservation: ContextVar[Optional[dict[str, bool]]] = ContextVar(
     "api_agent_request_reservation", default=None
 )
+_MEMORY_INGRESS_REQUEST_KEY = "hermes.memory_ingress"
+
+
+def _synthetic_api_memory_ingress(*, reason: str):
+    """Return a content-free API ingress that never grants private memory."""
+
+    try:
+        return issue_synthetic_ingress(
+            origin="photon_api",
+            platform="api_server",
+            reason=reason,
+            caller_class="api_bearer",
+        )
+    except Exception:
+        # Provenance failure must not turn an otherwise valid API request into
+        # an availability incident.  The turn constructor independently mints
+        # a synthetic local-only fallback when this value is absent.
+        return None
+
+
+def _request_memory_ingress(request):
+    try:
+        return request.get(_MEMORY_INGRESS_REQUEST_KEY)
+    except Exception:
+        return None
 
 
 def _admit_api_agent_request(handler):
@@ -726,6 +757,42 @@ def _admit_api_agent_request(handler):
         token = _api_agent_request_reservation.set(reservation)
         self._pending_agent_requests += 1
         try:
+            # Bearer authentication only authenticates the API caller; it does
+            # not identify a private-memory subject.  A separate, short-lived
+            # signed proof from a trusted gateway may carry that binding.  The
+            # proof is checked only after API auth and is bound to the exact raw
+            # request body/path.  Invalid or missing proof fails local-only and
+            # never blocks ordinary chat.
+            memory_ingress = _synthetic_api_memory_ingress(reason="api_bearer_only")
+            proof = request.headers.get(PROXY_PROOF_HEADER)
+            if proof:
+                try:
+                    raw_body = await request.read()
+                    memory_ingress = await asyncio.to_thread(
+                        verify_memory_proxy_proof,
+                        proof,
+                        raw_body,
+                        method=request.method,
+                        path=request.path,
+                    )
+                except web.HTTPRequestEntityTooLarge:
+                    # Preserve the body-limit middleware's normal 413 path;
+                    # proof handling must not downgrade oversized requests.
+                    raise
+                except Exception as exc:
+                    code = (
+                        exc.code
+                        if isinstance(exc, MemoryProvenanceError)
+                        else "proxy_proof_verification_failed"
+                    )
+                    logger.warning(
+                        "[api_server] memory proxy proof rejected (%s); continuing local-only",
+                        code,
+                    )
+                    memory_ingress = _synthetic_api_memory_ingress(
+                        reason="proxy_proof_rejected"
+                    )
+            request[_MEMORY_INGRESS_REQUEST_KEY] = memory_ingress
             return await handler(self, request, *args, **kwargs)
         finally:
             if reservation["active"]:
@@ -2547,6 +2614,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_session_chat(self, request: "web.Request") -> "web.Response":
         """POST /api/sessions/{session_id}/chat — one synchronous agent turn."""
+        memory_ingress = _request_memory_ingress(request)
         gateway_session_key, key_err = self._parse_session_key_header(request)
         if key_err is not None:
             return key_err
@@ -2570,6 +2638,7 @@ class APIServerAdapter(BasePlatformAdapter):
             ephemeral_system_prompt=system_prompt,
             session_id=session_id,
             gateway_session_key=gateway_session_key,
+            memory_ingress=memory_ingress,
         )
         effective_session_id = result.get("session_id") if isinstance(result, dict) else session_id
         final_response = _resolve_media_to_data_urls(result.get("final_response", "") if isinstance(result, dict) else "")
@@ -2589,6 +2658,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_session_chat_stream(self, request: "web.Request") -> "web.StreamResponse":
         """POST /api/sessions/{session_id}/chat/stream — SSE wrapper over _run_agent."""
+        memory_ingress = _request_memory_ingress(request)
         gateway_session_key, key_err = self._parse_session_key_header(request)
         if key_err is not None:
             return key_err
@@ -2659,6 +2729,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     stream_delta_callback=_delta,
                     tool_progress_callback=_tool_progress,
                     gateway_session_key=gateway_session_key,
+                    memory_ingress=memory_ingress,
                 )
                 final_response = _resolve_media_to_data_urls(result.get("final_response", "") if isinstance(result, dict) else "")
                 effective_session_id = result.get("session_id", session_id) if isinstance(result, dict) else session_id
@@ -2728,6 +2799,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_chat_completions(self, request: "web.Request") -> "web.Response":
         """POST /v1/chat/completions — OpenAI Chat Completions format."""
+        memory_ingress = _request_memory_ingress(request)
         # Bound total in-flight agent runs (configurable; #7483).
         limited = self._concurrency_limited_response()
         if limited is not None:
@@ -2943,6 +3015,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 agent_ref=agent_ref,
                 gateway_session_key=gateway_session_key,
                 route=route,
+                memory_ingress=memory_ingress,
             ))
             # Ensure SSE drain loops can terminate without relying on polling
             # agent_task.done(), which can race with queue timeout checks.
@@ -2963,10 +3036,11 @@ class APIServerAdapter(BasePlatformAdapter):
                 session_id=session_id,
                 gateway_session_key=gateway_session_key,
                 route=route,
+                memory_ingress=memory_ingress,
             )
 
         idempotency_key = request.headers.get("Idempotency-Key")
-        if idempotency_key:
+        if idempotency_key and not request.headers.get(PROXY_PROOF_HEADER):
             fp = _make_request_fingerprint(body, keys=["model", "messages", "tools", "tool_choice", "stream"])
             try:
                 result, usage = await _idem_cache.get_or_set(idempotency_key, fp, _compute_completion)
@@ -3861,6 +3935,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_responses(self, request: "web.Request") -> "web.Response":
         """POST /v1/responses — OpenAI Responses API format."""
+        memory_ingress = _request_memory_ingress(request)
         # Bound total in-flight agent runs (configurable; #7483).
         limited = self._concurrency_limited_response()
         if limited is not None:
@@ -4027,6 +4102,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 agent_ref=agent_ref,
                 gateway_session_key=gateway_session_key,
                 route=route,
+                memory_ingress=memory_ingress,
             ))
             # Ensure SSE drain loops can terminate without relying on polling
             # agent_task.done(), which can race with queue timeout checks.
@@ -4061,10 +4137,11 @@ class APIServerAdapter(BasePlatformAdapter):
                 session_id=session_id,
                 gateway_session_key=gateway_session_key,
                 route=route,
+                memory_ingress=memory_ingress,
             )
 
         idempotency_key = request.headers.get("Idempotency-Key")
-        if idempotency_key:
+        if idempotency_key and not request.headers.get(PROXY_PROOF_HEADER):
             fp = _make_request_fingerprint(
                 body,
                 keys=["input", "instructions", "previous_response_id", "conversation", "model", "tools"],
@@ -4671,6 +4748,7 @@ class APIServerAdapter(BasePlatformAdapter):
         chat_id: str = "",
         session_key: str = "",
         session_id: str = "",
+        memory_ingress=None,
     ) -> list:
         """Bind session contextvars for an API-server agent run.
 
@@ -4695,6 +4773,7 @@ class APIServerAdapter(BasePlatformAdapter):
             session_key=session_key,
             session_id=session_id,
             async_delivery=False,
+            memory_ingress=memory_ingress,
         )
 
     async def _run_agent(
@@ -4710,6 +4789,7 @@ class APIServerAdapter(BasePlatformAdapter):
         agent_ref: Optional[list] = None,
         gateway_session_key: Optional[str] = None,
         route: Optional[Dict[str, Any]] = None,
+        memory_ingress=None,
     ) -> tuple:
         """
         Create an agent and run a conversation in a thread executor.
@@ -4740,6 +4820,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     chat_id=session_id or "",
                     session_key=gateway_session_key or session_id or "",
                     session_id=session_id or "",
+                    memory_ingress=memory_ingress,
                 )
                 try:
                     agent = self._create_agent(
@@ -4759,6 +4840,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         user_message=user_message,
                         conversation_history=conversation_history,
                         task_id=effective_task_id,
+                        memory_ingress=memory_ingress,
                     )
                     usage = {
                         "input_tokens": getattr(agent, "session_prompt_tokens", 0) or 0,
@@ -4853,6 +4935,7 @@ class APIServerAdapter(BasePlatformAdapter):
     @_admit_api_agent_request
     async def _handle_runs(self, request: "web.Request") -> "web.Response":
         """POST /v1/runs — start an agent run, return run_id immediately."""
+        memory_ingress = _request_memory_ingress(request)
         # Long-term memory scope header (see chat_completions for details).
         gateway_session_key, key_err = self._parse_session_key_header(request)
         if key_err is not None:
@@ -5052,12 +5135,15 @@ class APIServerAdapter(BasePlatformAdapter):
                             approval_token = set_current_session_key(approval_session_key)
                             session_tokens = self._bind_api_server_session(
                                 session_key=approval_session_key,
+                                session_id=session_id,
+                                memory_ingress=memory_ingress,
                             )
                             register_gateway_notify(approval_session_key, _approval_notify)
                             r = agent.run_conversation(
                                 user_message=user_message,
                                 conversation_history=conversation_history,
                                 task_id=effective_task_id,
+                                memory_ingress=memory_ingress,
                             )
                         finally:
                             try:

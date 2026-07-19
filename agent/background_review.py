@@ -618,6 +618,7 @@ def _run_review_in_thread(
     agent: Any,
     messages_snapshot: List[Dict],
     prompt: str,
+    memory_provenance: Any = None,
 ) -> None:
     """Worker function executed in the background-review daemon thread.
 
@@ -848,6 +849,17 @@ def _run_review_in_thread(
                     _digest_history(messages_snapshot) if _routed
                     else messages_snapshot
                 )
+                from agent.memory_provenance import issue_synthetic_ingress
+
+                parent_provenance_id = str(
+                    getattr(memory_provenance, "provenance_id", "") or "unbound"
+                )
+                review_ingress = issue_synthetic_ingress(
+                    origin="background",
+                    reason="background_review",
+                    platform=getattr(agent, "platform", "") or "background",
+                    caller_class=f"background:{parent_provenance_id}",
+                )
                 review_agent.run_conversation(
                     user_message=(
                         prompt
@@ -856,6 +868,7 @@ def _run_review_in_thread(
                         "at runtime — do not attempt them."
                     ),
                     conversation_history=_review_history,
+                    memory_ingress=review_ingress,
                 )
             finally:
                 clear_thread_tool_whitelist()
@@ -958,6 +971,7 @@ def spawn_background_review_thread(
     messages_snapshot: List[Dict],
     review_memory: bool = False,
     review_skills: bool = False,
+    memory_provenance: Any = None,
 ):
     """Build the review thread target and prompt for a background review.
 
@@ -976,7 +990,12 @@ def spawn_background_review_thread(
         prompt = getattr(agent, "_SKILL_REVIEW_PROMPT", _SKILL_REVIEW_PROMPT)
 
     def _target() -> None:
-        _run_review_in_thread(agent, messages_snapshot, prompt)
+        _run_review_in_thread(
+            agent,
+            messages_snapshot,
+            prompt,
+            memory_provenance=memory_provenance,
+        )
 
     return _target, prompt
 

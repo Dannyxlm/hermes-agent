@@ -899,7 +899,20 @@ def compress_context(
     # Notify external memory provider before compression discards context
     if agent._memory_manager:
         try:
-            agent._memory_manager.on_pre_compress(messages)
+            from agent.memory_provenance import memory_boundary_kwargs
+
+            _pre_compress = agent._memory_manager.on_pre_compress
+            if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                _boundary_kwargs = memory_boundary_kwargs(
+                    _pre_compress,
+                    memory_provenance=getattr(
+                        agent, "_current_memory_provenance", None
+                    ),
+                )
+                if _boundary_kwargs is not None:
+                    _pre_compress(messages, **_boundary_kwargs)
+            else:
+                _pre_compress(messages)
         except Exception:
             pass
 
@@ -1232,12 +1245,26 @@ def compress_context(
         # the transcript was compacted so it doesn't double-count dropped turns).
         try:
             if _is_boundary and agent._memory_manager:
-                agent._memory_manager.on_session_switch(
-                    agent.session_id or "",
-                    parent_session_id=_boundary_parent,
-                    reset=False,
-                    reason="compression",
-                )
+                from agent.memory_provenance import memory_boundary_kwargs
+
+                _session_switch = agent._memory_manager.on_session_switch
+                _switch_kwargs = {
+                    "parent_session_id": _boundary_parent,
+                    "reset": False,
+                    "reason": "compression",
+                }
+                if getattr(agent._memory_manager, "memory_v3_active", False) is True:
+                    _boundary_kwargs = memory_boundary_kwargs(
+                        _session_switch,
+                        memory_provenance=getattr(
+                            agent, "_current_memory_provenance", None
+                        ),
+                    )
+                    if _boundary_kwargs is not None:
+                        _switch_kwargs.update(_boundary_kwargs)
+                        _session_switch(agent.session_id or "", **_switch_kwargs)
+                else:
+                    _session_switch(agent.session_id or "", **_switch_kwargs)
         except Exception as _me_err:
             logger.debug("memory manager on_session_switch (compression): %s", _me_err)
 

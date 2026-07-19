@@ -1660,6 +1660,7 @@ class AIAgent:
             messages_snapshot,
             review_memory=review_memory,
             review_skills=review_skills,
+            memory_provenance=getattr(self, "_current_memory_provenance", None),
         )
         # Carry the active profile into the review thread so MEMORY.md / skill
         # review writes land in the right profile (#54937).
@@ -3458,7 +3459,23 @@ class AIAgent:
         """
         if self._memory_manager:
             try:
-                self._memory_manager.on_session_end(messages or [])
+                from agent.memory_provenance import memory_boundary_kwargs
+
+                _session_end = self._memory_manager.on_session_end
+                if getattr(self._memory_manager, "memory_v3_active", False) is True:
+                    _boundary_kwargs = memory_boundary_kwargs(
+                        _session_end,
+                        memory_provenance=getattr(self, "_current_memory_provenance", None),
+                    )
+                    if _boundary_kwargs is not None:
+                        _session_end(
+                            messages or [],
+                            **_boundary_kwargs,
+                        )
+                else:
+                    _session_end(
+                        messages or [],
+                    )
             except Exception as e:
                 logger.warning("Memory provider on_session_end failed during shutdown: %s", e, exc_info=True)
             try:
@@ -3482,7 +3499,23 @@ class AIAgent:
         session_id — they just flush pending extraction now."""
         if self._memory_manager:
             try:
-                self._memory_manager.on_session_end(messages or [])
+                from agent.memory_provenance import memory_boundary_kwargs
+
+                _session_end = self._memory_manager.on_session_end
+                if getattr(self._memory_manager, "memory_v3_active", False) is True:
+                    _boundary_kwargs = memory_boundary_kwargs(
+                        _session_end,
+                        memory_provenance=getattr(self, "_current_memory_provenance", None),
+                    )
+                    if _boundary_kwargs is not None:
+                        _session_end(
+                            messages or [],
+                            **_boundary_kwargs,
+                        )
+                else:
+                    _session_end(
+                        messages or [],
+                    )
             except Exception:
                 pass
         # Notify context engine of session end too — same lifecycle moment as
@@ -3507,57 +3540,57 @@ class AIAgent:
         final_response: Any,
         interrupted: bool,
         messages: list | None = None,
+        memory_provenance: Any = None,
     ) -> None:
-        """Mirror a completed turn into external memory providers.
+        """Mirror a completed turn through the configured manager boundary.
 
-        Called at the end of ``run_conversation`` with the cleaned user
-        message (``original_user_message``) and the finalised assistant
-        response.  The external memory backend gets both ``sync_all`` (to
-        persist the exchange) and ``queue_prefetch_all`` (to start
-        warming context for the next turn) in one shot.
-
-        Uses ``original_user_message`` rather than ``user_message``
-        because the latter may carry injected skill content that bloats
-        or breaks provider queries.
-
-        Interrupted turns are skipped entirely (#15218).  A partial
-        assistant output, an aborted tool chain, or a mid-stream reset
-        is not durable conversational truth — mirroring it into an
-        external memory backend pollutes future recall with state the
-        user never saw completed.  The prefetch is gated on the same
-        flag: the user's next message is almost certainly a retry of
-        the same intent, and a prefetch keyed on the interrupted turn
-        would fire against stale context.
-
-        Normal completed turns still sync as before.  The whole body is
-        wrapped in ``try/except Exception`` because external memory
-        providers are strictly best-effort — a misconfigured or offline
-        backend must not block the user from seeing their response.
+        Legacy managers retain the upstream sync/prefetch behavior.  A strict
+        Memory V3 manager opts into the provenance boundary by explicitly
+        naming ``memory_provenance``; invalid/missing provenance then fails
+        closed before any conversational text crosses that boundary.  The
+        strict manager itself owns the configured read-containment no-op.
         """
         if interrupted:
             return
         if not (self._memory_manager and final_response and original_user_message):
             return
-        # Multimodal turns carry content as a list of typed parts; providers
-        # expect plain strings, so flatten to text first (newline-joined for
-        # memory, vs the default space-join used for log/trajectory previews).
         user_text = _summarize_user_message_for_log(original_user_message, sep="\n")
         response_text = _summarize_user_message_for_log(final_response, sep="\n")
         if not (user_text and response_text):
             return
         try:
+            from agent.memory_provenance import memory_boundary_kwargs
+
+            if memory_provenance is None:
+                memory_provenance = getattr(
+                    self, "_current_memory_provenance", None
+                )
+
+            sync_all = self._memory_manager.sync_all
             sync_kwargs = {"session_id": self.session_id or ""}
             if messages is not None:
                 sync_kwargs["messages"] = messages
-            self._memory_manager.sync_all(
-                user_text,
-                response_text,
-                **sync_kwargs,
-            )
-            self._memory_manager.queue_prefetch_all(
-                user_text,
-                session_id=self.session_id or "",
-            )
+            if getattr(self._memory_manager, "memory_v3_active", False) is True:
+                boundary_kwargs = memory_boundary_kwargs(
+                    sync_all,
+                    memory_provenance=memory_provenance,
+                )
+                if boundary_kwargs is None:
+                    return
+                sync_kwargs.update(boundary_kwargs)
+            sync_all(user_text, response_text, **sync_kwargs)
+
+            queue_prefetch = self._memory_manager.queue_prefetch_all
+            prefetch_kwargs = {"session_id": self.session_id or ""}
+            if getattr(self._memory_manager, "memory_v3_active", False) is True:
+                boundary_kwargs = memory_boundary_kwargs(
+                    queue_prefetch,
+                    memory_provenance=memory_provenance,
+                )
+                if boundary_kwargs is None:
+                    return
+                prefetch_kwargs.update(boundary_kwargs)
+            queue_prefetch(user_text, **prefetch_kwargs)
         except Exception:
             pass
 
@@ -6202,6 +6235,7 @@ class AIAgent:
             return execute_tool_calls_segmented(
                 self, assistant_message, messages, effective_task_id, api_call_count,
                 segments=segments,
+                memory_provenance=getattr(self, "_current_memory_provenance", None),
             )
         finally:
             self._executing_tools = False
@@ -6228,15 +6262,23 @@ class AIAgent:
         #     gateway session the async result would route back to.
         # The schema-level `background` param is intentionally ignored here.
         _is_subagent = getattr(self, "_delegate_depth", 0) > 0
-        return _delegate_task(
-            goal=function_args.get("goal"),
-            context=function_args.get("context"),
-            tasks=_strip_model_hidden_task_fields(function_args.get("tasks")),
-            max_iterations=function_args.get("max_iterations"),
-            role=function_args.get("role"),
-            background=(not _is_subagent),
-            parent_agent=self,
+        from agent.memory_provenance import issue_synthetic_ingress, memory_ingress_scope
+
+        delegated_ingress = issue_synthetic_ingress(
+            origin="delegated",
+            reason="delegated_child",
+            platform=getattr(self, "platform", "") or "delegated",
         )
+        with memory_ingress_scope(delegated_ingress):
+            return _delegate_task(
+                goal=function_args.get("goal"),
+                context=function_args.get("context"),
+                tasks=_strip_model_hidden_task_fields(function_args.get("tasks")),
+                max_iterations=function_args.get("max_iterations"),
+                role=function_args.get("role"),
+                background=(not _is_subagent),
+                parent_agent=self,
+            )
 
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,
                      tool_call_id: Optional[str] = None, messages: list = None,
@@ -6285,12 +6327,26 @@ class AIAgent:
     def _execute_tool_calls_concurrent(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
         """Forwarder — see ``agent.tool_executor.execute_tool_calls_concurrent``."""
         from agent.tool_executor import execute_tool_calls_concurrent
-        return execute_tool_calls_concurrent(self, assistant_message, messages, effective_task_id, api_call_count)
+        return execute_tool_calls_concurrent(
+            self,
+            assistant_message,
+            messages,
+            effective_task_id,
+            api_call_count,
+            memory_provenance=getattr(self, "_current_memory_provenance", None),
+        )
 
     def _execute_tool_calls_sequential(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
         """Forwarder — see ``agent.tool_executor.execute_tool_calls_sequential``."""
         from agent.tool_executor import execute_tool_calls_sequential
-        return execute_tool_calls_sequential(self, assistant_message, messages, effective_task_id, api_call_count)
+        return execute_tool_calls_sequential(
+            self,
+            assistant_message,
+            messages,
+            effective_task_id,
+            api_call_count,
+            memory_provenance=getattr(self, "_current_memory_provenance", None),
+        )
 
     def _handle_max_iterations(self, messages: list, api_call_count: int) -> str:
         """Forwarder — see ``agent.chat_completion_helpers.handle_max_iterations``."""
@@ -6336,6 +6392,7 @@ class AIAgent:
         persist_user_message: Optional[Any] = None,
         persist_user_timestamp: Optional[float] = None,
         moa_config: Optional[dict[str, Any]] = None,
+        memory_ingress: Any = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         from agent.aux_accounting import (
@@ -6366,7 +6423,40 @@ class AIAgent:
         # replaces the value with the live runtime after fallback restoration.
         # Keep the scope local instead of storing ContextVar tokens on the agent,
         # which may be observed from another thread.
-        with scoped_runtime_main({}):
+        from agent.memory_provenance import (
+            issue_synthetic_ingress,
+            memory_ingress_scope,
+        )
+
+        # Every top-level caller must propagate its post-auth ingress
+        # explicitly.  Missing propagation overwrites any inherited ContextVar
+        # with a synthetic denial so nested/background agents cannot consume a
+        # parent turn's capability by accident.
+        if memory_ingress is None:
+            _runtime = str(getattr(self, "platform", "") or "background").lower()
+            if _runtime == "cron":
+                _origin = "cron"
+            elif _runtime in {"desktop", "desktop_websocket", "websocket"}:
+                _origin = "desktop_websocket"
+            elif _runtime in {"api", "api_server", "photon", "photon_api"}:
+                _origin = "photon_api"
+            elif _runtime == "cli":
+                _origin = "cli"
+            elif _runtime in {"tui", "local"}:
+                _origin = "tui"
+            elif _runtime in {"webhook", "homeassistant"}:
+                _origin = "webhook"
+            elif _runtime in {"delegate", "delegated", "subagent"}:
+                _origin = "delegated"
+            else:
+                _origin = "background"
+            memory_ingress = issue_synthetic_ingress(
+                origin=_origin,
+                reason="missing_explicit_ingress",
+                platform=_runtime,
+            )
+        ingress_scope = memory_ingress_scope(memory_ingress)
+        with scoped_runtime_main({}), ingress_scope:
             try:
                 return run_conversation(
                     self,
@@ -6408,7 +6498,15 @@ class AIAgent:
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.codex_runtime.run_codex_app_server_turn``."""
         from agent.codex_runtime import run_codex_app_server_turn
-        return run_codex_app_server_turn(self, user_message=user_message, original_user_message=original_user_message, messages=messages, effective_task_id=effective_task_id, should_review_memory=should_review_memory)
+        return run_codex_app_server_turn(
+            self,
+            user_message=user_message,
+            original_user_message=original_user_message,
+            messages=messages,
+            effective_task_id=effective_task_id,
+            should_review_memory=should_review_memory,
+            memory_provenance=getattr(self, "_current_memory_provenance", None),
+        )
 
 def main(
     query: str = None,

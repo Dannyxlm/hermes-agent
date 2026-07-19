@@ -7163,20 +7163,46 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             try:
                 _mm = getattr(self.agent, "_memory_manager", None)
                 if _mm is not None:
+                    from agent.memory_provenance import memory_boundary_kwargs
+
                     if _boundary_snapshot:
-                        _mm.commit_session_boundary_async(
-                            _boundary_snapshot,
-                            new_session_id=self.session_id,
-                            parent_session_id=old_session_id or "",
-                            reason="new_session",
-                        )
+                        _commit_boundary = _mm.commit_session_boundary_async
+                        _commit_kwargs = {
+                            "new_session_id": self.session_id,
+                            "parent_session_id": old_session_id or "",
+                            "reason": "new_session",
+                        }
+                        if getattr(_mm, "memory_v3_active", False) is True:
+                            _boundary_kwargs = memory_boundary_kwargs(
+                                _commit_boundary,
+                                memory_provenance=getattr(
+                                    self.agent, "_current_memory_provenance", None
+                                ),
+                            )
+                            if _boundary_kwargs is not None:
+                                _commit_kwargs.update(_boundary_kwargs)
+                                _commit_boundary(_boundary_snapshot, **_commit_kwargs)
+                        else:
+                            _commit_boundary(_boundary_snapshot, **_commit_kwargs)
                     else:
-                        _mm.on_session_switch(
-                            self.session_id,
-                            parent_session_id=old_session_id or "",
-                            reset=True,
-                            reason="new_session",
-                        )
+                        _session_switch = _mm.on_session_switch
+                        _switch_kwargs = {
+                            "parent_session_id": old_session_id or "",
+                            "reset": True,
+                            "reason": "new_session",
+                        }
+                        if getattr(_mm, "memory_v3_active", False) is True:
+                            _boundary_kwargs = memory_boundary_kwargs(
+                                _session_switch,
+                                memory_provenance=getattr(
+                                    self.agent, "_current_memory_provenance", None
+                                ),
+                            )
+                            if _boundary_kwargs is not None:
+                                _switch_kwargs.update(_boundary_kwargs)
+                                _session_switch(self.session_id, **_switch_kwargs)
+                        else:
+                            _session_switch(self.session_id, **_switch_kwargs)
             except Exception:
                 pass
             self._notify_session_boundary("on_session_reset")
@@ -11893,6 +11919,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
                 self._pending_one_turn_model_restore = None
                 try:
+                    from agent.memory_provenance import local_interactive_memory_ingress
+
+                    _local_memory_ingress = local_interactive_memory_ingress(
+                        origin=("tui" if getattr(self, "_app", None) is not None else "cli"),
+                        profile=getattr(self.agent, "agent_identity", "default") or "default",
+                    )
                     result = self.agent.run_conversation(
                         user_message=agent_message,
                         conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
@@ -11900,6 +11932,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         task_id=self.session_id,
                         persist_user_message=_persist_clean_user_message,
                         moa_config=_moa_cfg,
+                        memory_ingress=_local_memory_ingress,
                     )
                     if getattr(self, "_pending_moa_disable_after_turn", False):
                         _restore = getattr(self, "_pending_moa_restore_model", None) or {}
