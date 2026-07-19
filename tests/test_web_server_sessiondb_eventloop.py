@@ -15,7 +15,6 @@ TARGET_HANDLERS = {
     "delete_session_endpoint",
     "export_session_endpoint",
     "prune_sessions_endpoint",
-    "get_usage_analytics",
     "get_models_analytics",
 }
 
@@ -94,3 +93,39 @@ def test_bulk_delete_sessiondb_work_runs_off_event_loop(monkeypatch):
     assert result == {"ok": True, "deleted": 2}
     assert db_threads
     assert all(thread_id != loop_thread for thread_id in db_threads)
+
+
+def test_usage_analytics_compute_runs_on_dedicated_worker(monkeypatch, tmp_path):
+    loop_thread = threading.get_ident()
+    compute_threads: list[int] = []
+    payload = {
+        "daily": [],
+        "by_model": [],
+        "totals": {},
+        "period_days": 7,
+        "skills": {},
+        "tools": [],
+    }
+
+    monkeypatch.setattr(
+        web_server,
+        "_usage_analytics_db_path",
+        lambda _profile: tmp_path / "worker.db",
+    )
+    monkeypatch.setattr(
+        web_server,
+        "_read_persisted_usage_analytics",
+        lambda *_args: None,
+    )
+
+    def _compute(_db_path, _days, _db_identity, _bucket):
+        compute_threads.append(threading.get_ident())
+        return payload
+
+    monkeypatch.setattr(web_server, "_compute_usage_analytics_cached", _compute)
+
+    result = asyncio.run(web_server.get_usage_analytics(days=7))
+
+    assert result == payload
+    assert compute_threads
+    assert all(thread_id != loop_thread for thread_id in compute_threads)

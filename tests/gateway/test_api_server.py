@@ -28,6 +28,7 @@ from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.api_server import (
     APIServerAdapter,
     ResponseStore,
+    SessionModelOverrideUnavailableError,
     _IdempotencyCache,
     _derive_chat_session_id,
     _redact_api_error_text,
@@ -353,7 +354,7 @@ class TestAdapterInit:
         )
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {"enabled": True, "effort": "xhigh"}),
+            staticmethod(lambda _model=None: {"enabled": True, "effort": "xhigh"}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("hermes_cli.tools_config._get_platform_tools", lambda *_: set())
@@ -386,7 +387,7 @@ class TestAdapterInit:
         monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {"agent": {"max_turns": 200}})
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {}),
+            staticmethod(lambda _model=None: {}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("gateway.run._current_max_iterations", lambda: 200)
@@ -426,7 +427,7 @@ class TestAdapterInit:
         monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {})
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {}),
+            staticmethod(lambda _model=None: {}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("gateway.run._current_max_iterations", lambda: 90)
@@ -464,7 +465,7 @@ class TestAdapterInit:
         monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {})
         monkeypatch.setattr(
             "gateway.run.GatewayRunner._load_reasoning_config",
-            staticmethod(lambda: {}),
+            staticmethod(lambda _model=None: {}),
         )
         monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
         monkeypatch.setattr("gateway.run._current_max_iterations", lambda: 90)
@@ -4141,6 +4142,36 @@ class TestModelRoutesHandlers:
 
 
 class TestModelRoutesAgentCreation:
+    def test_route_resolves_reasoning_for_effective_model(self, monkeypatch):
+        captured = {}
+        resolved_models = []
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        _patch_create_agent_runtime(monkeypatch, captured, FakeAgent)
+        monkeypatch.setattr(
+            "gateway.run.GatewayRunner._load_reasoning_config",
+            staticmethod(
+                lambda model="": resolved_models.append(model)
+                or {"enabled": True, "effort": "xhigh"}
+            ),
+        )
+        adapter = _make_routing_adapter(
+            {"ava-fast": {"model": "gpt-5.6-luna", "provider": "openai-codex"}}
+        )
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        monkeypatch.setattr(adapter, "_session_model_override_for", lambda *_: None)
+
+        adapter._create_agent(
+            session_id="voice-1", route=adapter._resolve_route("ava-fast")
+        )
+
+        assert captured["model"] == "gpt-5.6-luna"
+        assert captured["reasoning_config"] == {"enabled": True, "effort": "xhigh"}
+        assert resolved_models == ["gpt-5.6-luna"]
+
     def test_route_overrides_model_and_credentials(self, monkeypatch):
         captured = {}
 
@@ -4217,6 +4248,7 @@ class TestModelRoutesAgentCreation:
     def test_session_model_override_beats_route(self, monkeypatch):
         """A user-issued /model on the session must win over static route config."""
         captured = {}
+        resolved_models = []
 
         class FakeAgent:
             def __init__(self, **kwargs):
@@ -4228,15 +4260,88 @@ class TestModelRoutesAgentCreation:
         monkeypatch.setattr(
             adapter,
             "_session_model_override_for",
-            lambda key: {"model": "session/override-model"},
+            lambda key: {
+                "model": "session/override-model",
+                "provider": "session-provider",
+                "api_key": "sk-session",
+                "base_url": "https://session.example/v1",
+                "api_mode": "responses",
+                "command": "/usr/local/bin/session-provider",
+                "args": ["--session-transport"],
+                "max_tokens": 8192,
+                "credential_pool": "session-pool",
+            },
+        )
+        monkeypatch.setattr(
+            "gateway.run.GatewayRunner._load_reasoning_config",
+            staticmethod(
+                lambda model="": resolved_models.append(model)
+                or {"enabled": True, "effort": "medium"}
+            ),
         )
 
         adapter._create_agent(session_id="s1", route=adapter._resolve_route("alias"))
 
-        # The route must NOT be applied — the session override path (global
-        # runtime here, since the gateway applies /model separately) wins.
-        assert captured["model"] == "global/model"
-        assert captured["api_key"] == "sk-global"
+        assert captured["model"] == "session/override-model"
+        assert captured["provider"] == "session-provider"
+        assert captured["api_key"] == "sk-session"
+        assert captured["base_url"] == "https://session.example/v1"
+        assert captured["api_mode"] == "responses"
+        assert captured["command"] == "/usr/local/bin/session-provider"
+        assert captured["args"] == ["--session-transport"]
+        assert captured["max_tokens"] == 8192
+        assert captured["credential_pool"] == "session-pool"
+        assert captured["reasoning_config"] == {
+            "enabled": True,
+            "effort": "medium",
+        }
+        assert resolved_models == ["session/override-model"]
+
+    def test_session_provider_resolution_failure_never_reuses_global_credentials(
+        self, monkeypatch
+    ):
+        captured = {}
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        _patch_create_agent_runtime(monkeypatch, captured, FakeAgent)
+        global_pool = object()
+        monkeypatch.setattr(
+            "gateway.run._resolve_runtime_agent_kwargs",
+            lambda: {
+                "provider": "global-provider",
+                "api_key": "sk-global-must-not-cross",
+                "base_url": "https://global-secret-endpoint.example/v1",
+                "api_mode": "chat_completions",
+                "credential_pool": global_pool,
+            },
+        )
+        monkeypatch.setattr(
+            "gateway.run._resolve_runtime_agent_kwargs_for_provider",
+            lambda _provider: (_ for _ in ()).throw(RuntimeError("no credentials")),
+        )
+        adapter = _make_routing_adapter({})
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        monkeypatch.setattr(
+            adapter,
+            "_session_model_override_for",
+            lambda _key: {
+                "model": "override/model",
+                "provider": "override-provider",
+            },
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match="session model override provider is unavailable",
+        ) as raised:
+            adapter._create_agent(session_id="s-provider-failure")
+
+        assert captured == {}
+        assert "sk-global-must-not-cross" not in str(raised.value)
+        assert "global-secret-endpoint" not in str(raised.value)
 
     def test_session_override_lookup_reads_gateway_runner(self, monkeypatch):
         """_session_model_override_for consults GatewayRunner._session_model_overrides."""
@@ -4249,6 +4354,48 @@ class TestModelRoutesAgentCreation:
         assert adapter._session_model_override_for("chan-1") == {"model": "user/model"}
         assert adapter._session_model_override_for("chan-2") is None
         assert adapter._session_model_override_for(None) is None
+
+    def test_session_override_lookup_rehydrates_persisted_override(self, monkeypatch):
+        adapter = _make_routing_adapter({})
+        calls = []
+
+        class FakeRunner:
+            _session_model_overrides = {}
+
+            def _rehydrate_session_model_override(self, session_key):
+                calls.append(session_key)
+                self._session_model_overrides[session_key] = {
+                    "model": "persisted/model",
+                    "provider": "persisted-provider",
+                }
+
+        runner = FakeRunner()
+        monkeypatch.setattr("gateway.run._gateway_runner_ref", lambda: runner)
+
+        assert adapter._session_model_override_for("persisted-key") == {
+            "model": "persisted/model",
+            "provider": "persisted-provider",
+        }
+        assert calls == ["persisted-key"]
+
+    def test_session_override_lookup_fails_closed_on_persistence_error(self, monkeypatch):
+        adapter = _make_routing_adapter({})
+
+        class FakeRunner:
+            _session_model_overrides = {}
+
+            def _rehydrate_session_model_override(self, _session_key):
+                raise OSError("private-session-store-path")
+
+        monkeypatch.setattr("gateway.run._gateway_runner_ref", lambda: FakeRunner())
+
+        with pytest.raises(
+            SessionModelOverrideUnavailableError,
+            match="persisted session model override is unavailable",
+        ) as raised:
+            adapter._session_model_override_for("persisted-key")
+
+        assert "private-session-store-path" not in str(raised.value)
 
 
 # ---------------------------------------------------------------------------

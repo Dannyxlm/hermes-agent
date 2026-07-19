@@ -316,7 +316,7 @@ def test_setup_summary_shows_camofox_when_browser_feature_is_camofox(tmp_path, m
     assert "Browser Automation (Camofox)" in output
 
 
-def test_setup_summary_does_not_mark_incomplete_browserbase_as_available(tmp_path, monkeypatch, capsys):
+def test_setup_summary_browserbase_hint_marks_project_id_optional(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _clear_provider_env(monkeypatch)
     monkeypatch.setenv("BROWSERBASE_API_KEY", "bb-key")
@@ -343,7 +343,8 @@ def test_setup_summary_does_not_mark_incomplete_browserbase_as_available(tmp_pat
 
     assert "Browser Automation (Browserbase)" not in output
     assert "Browser Automation" in output
-    assert "BROWSERBASE_API_KEY/BROWSERBASE_PROJECT_ID" in output
+    assert "BROWSERBASE_API_KEY (project is inferred" in output
+    assert "BROWSERBASE_PROJECT_ID is optional" in output
 
 
 def test_setup_summary_local_browser_unavailable_without_chromium(

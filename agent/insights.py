@@ -115,8 +115,7 @@ class InsightsEngine:
 
         # Gather raw data
         sessions = self._get_sessions(cutoff, source)
-        tool_usage = self._get_tool_usage(cutoff, source)
-        skill_usage = self._get_skill_usage(cutoff, source)
+        tool_usage, skill_usage = self._get_tool_and_skill_usage(cutoff, source)
         message_stats = self._get_message_stats(cutoff, source)
 
         if not sessions:
@@ -164,6 +163,19 @@ class InsightsEngine:
             "top_sessions": top_sessions,
         }
 
+    def generate_usage_activity(
+        self,
+        days: int = 30,
+        source: str = None,
+    ) -> Dict[str, Any]:
+        """Generate only the tool and skill activity used by Usage views."""
+        cutoff = time.time() - (days * 86400)
+        tool_usage, skill_usage = self._get_tool_and_skill_usage(cutoff, source)
+        return {
+            "tools": self._compute_tool_breakdown(tool_usage),
+            "skills": self._compute_skill_breakdown(skill_usage),
+        }
+
     # =========================================================================
     # Data gathering (SQL queries)
     # =========================================================================
@@ -187,6 +199,10 @@ class InsightsEngine:
         " WHERE started_at >= ?"
         " ORDER BY started_at DESC"
     )
+    _TOOL_USAGE_INDEX = "idx_messages_tool_usage"
+    _ASSISTANT_TOOL_CALLS_INDEX = "idx_messages_assistant_tool_calls"
+    _SESSIONS_USAGE_INDEX = "idx_sessions_started"
+    _USAGE_INDEX_FALLBACK = "idx_messages_session"
 
     def _get_sessions(self, cutoff: float, source: str = None) -> List[Dict]:
         """Fetch sessions within the time window."""
@@ -196,121 +212,78 @@ class InsightsEngine:
             cursor = self._conn.execute(self._GET_SESSIONS_ALL, (cutoff,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def _get_tool_usage(self, cutoff: float, source: str = None) -> List[Dict]:
-        """Get tool call counts from messages.
+    def _usage_indexes_available(self, preferred: str) -> bool:
+        """Return whether both required indexes for a usage query exist."""
+        rows = self._conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'index' AND name IN (?, ?)",
+            (preferred, self._SESSIONS_USAGE_INDEX),
+        ).fetchall()
+        return {row["name"] for row in rows} == {
+            preferred,
+            self._SESSIONS_USAGE_INDEX,
+        }
 
-        Uses two sources:
-        1. tool_name column on 'tool' role messages (set by gateway)
-        2. tool_calls JSON on 'assistant' role messages (covers CLI where
-           tool_name is not populated on tool responses)
-        """
+    def _get_tool_and_skill_usage(
+        self,
+        cutoff: float,
+        source: str = None,
+    ) -> tuple[List[Dict], List[Dict]]:
+        """Derive tool and skill activity from one assistant-message scan."""
         tool_counts = Counter()
+        skill_counts: Dict[str, Dict[str, Any]] = {}
+        source_clause = " AND s.source = ?" if source else ""
+        params = (cutoff, source) if source else (cutoff,)
 
-        # Source 1: explicit tool_name on tool response messages
-        if source:
+        if self._usage_indexes_available(self._TOOL_USAGE_INDEX):
             cursor = self._conn.execute(
-                """SELECT m.tool_name, COUNT(*) as count
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ? AND s.source = ?
+                f"""SELECT m.tool_name, COUNT(*) as count
+                   FROM sessions s INDEXED BY {self._SESSIONS_USAGE_INDEX}
+                   CROSS JOIN messages m INDEXED BY {self._TOOL_USAGE_INDEX}
+                     ON m.session_id = s.id
+                   WHERE s.started_at >= ?{source_clause}
                      AND m.role = 'tool' AND m.tool_name IS NOT NULL
                    GROUP BY m.tool_name
                    ORDER BY count DESC""",
-                (cutoff, source),
+                params,
             )
         else:
             cursor = self._conn.execute(
-                """SELECT m.tool_name, COUNT(*) as count
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ?
+                f"""SELECT m.tool_name, COUNT(*) as count
+                   FROM sessions s INDEXED BY {self._SESSIONS_USAGE_INDEX}
+                   CROSS JOIN messages m INDEXED BY {self._USAGE_INDEX_FALLBACK}
+                     ON m.session_id = s.id
+                   WHERE s.started_at >= ?{source_clause}
                      AND m.role = 'tool' AND m.tool_name IS NOT NULL
                    GROUP BY m.tool_name
                    ORDER BY count DESC""",
-                (cutoff,),
+                params,
             )
         for row in cursor.fetchall():
             tool_counts[row["tool_name"]] += row["count"]
 
-        # Source 2: extract from tool_calls JSON on assistant messages
-        # (covers CLI sessions where tool_name is NULL on tool responses)
-        if source:
-            cursor2 = self._conn.execute(
-                """SELECT m.tool_calls
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ? AND s.source = ?
-                     AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
-                (cutoff, source),
-            )
-        else:
-            cursor2 = self._conn.execute(
-                """SELECT m.tool_calls
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ?
-                     AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
-                (cutoff,),
-            )
-
-        tool_calls_counts = Counter()
-        for row in cursor2.fetchall():
-            try:
-                calls = row["tool_calls"]
-                if isinstance(calls, str):
-                    calls = json.loads(calls)
-                if isinstance(calls, list):
-                    for call in calls:
-                        func = call.get("function", {}) if isinstance(call, dict) else {}
-                        name = func.get("name")
-                        if name:
-                            tool_calls_counts[name] += 1
-            except (json.JSONDecodeError, TypeError, AttributeError):
-                continue
-
-        # Merge: prefer tool_name source, supplement with tool_calls source
-        # for tools not already counted
-        if not tool_counts and tool_calls_counts:
-            # No tool_name data at all — use tool_calls exclusively
-            tool_counts = tool_calls_counts
-        elif tool_counts and tool_calls_counts:
-            # Both sources have data — use whichever has the higher count per tool
-            # (they may overlap, so take the max to avoid double-counting)
-            all_tools = set(tool_counts) | set(tool_calls_counts)
-            merged = Counter()
-            for tool in all_tools:
-                merged[tool] = max(tool_counts.get(tool, 0), tool_calls_counts.get(tool, 0))
-            tool_counts = merged
-
-        # Convert to the expected format
-        return [
-            {"tool_name": name, "count": count}
-            for name, count in tool_counts.most_common()
-        ]
-
-    def _get_skill_usage(self, cutoff: float, source: str = None) -> List[Dict]:
-        """Extract per-skill usage from assistant tool calls."""
-        skill_counts: Dict[str, Dict[str, Any]] = {}
-
-        if source:
+        if self._usage_indexes_available(self._ASSISTANT_TOOL_CALLS_INDEX):
             cursor = self._conn.execute(
-                """SELECT m.tool_calls, m.timestamp
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ? AND s.source = ?
+                f"""SELECT m.tool_calls, m.timestamp
+                   FROM sessions s INDEXED BY {self._SESSIONS_USAGE_INDEX}
+                   CROSS JOIN messages m INDEXED BY {self._ASSISTANT_TOOL_CALLS_INDEX}
+                     ON m.session_id = s.id
+                   WHERE s.started_at >= ?{source_clause}
                      AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
-                (cutoff, source),
+                params,
             )
         else:
             cursor = self._conn.execute(
-                """SELECT m.tool_calls, m.timestamp
-                   FROM messages m
-                   JOIN sessions s ON s.id = m.session_id
-                   WHERE s.started_at >= ?
+                f"""SELECT m.tool_calls, m.timestamp
+                   FROM sessions s INDEXED BY {self._SESSIONS_USAGE_INDEX}
+                   CROSS JOIN messages m INDEXED BY {self._USAGE_INDEX_FALLBACK}
+                     ON m.session_id = s.id
+                   WHERE s.started_at >= ?{source_clause}
                      AND m.role = 'assistant' AND m.tool_calls IS NOT NULL""",
-                (cutoff,),
+                params,
             )
 
+        assistant_tool_counts = Counter()
         for row in cursor.fetchall():
             try:
                 calls = row["tool_calls"]
@@ -326,7 +299,12 @@ class InsightsEngine:
                 if not isinstance(call, dict):
                     continue
                 func = call.get("function", {})
+                if not isinstance(func, dict):
+                    continue
+
                 tool_name = func.get("name")
+                if tool_name:
+                    assistant_tool_counts[tool_name] += 1
                 if tool_name not in {"skill_view", "skill_manage"}:
                     continue
 
@@ -342,7 +320,6 @@ class InsightsEngine:
                 skill_name = args.get("name")
                 if not isinstance(skill_name, str) or not skill_name.strip():
                     continue
-
                 entry = skill_counts.setdefault(
                     skill_name,
                     {
@@ -356,13 +333,35 @@ class InsightsEngine:
                     entry["view_count"] += 1
                 else:
                     entry["manage_count"] += 1
-
                 if timestamp is not None and (
-                    entry["last_used_at"] is None or timestamp > entry["last_used_at"]
+                    entry["last_used_at"] is None
+                    or timestamp > entry["last_used_at"]
                 ):
                     entry["last_used_at"] = timestamp
 
-        return list(skill_counts.values())
+        if not tool_counts and assistant_tool_counts:
+            tool_counts = assistant_tool_counts
+        elif tool_counts and assistant_tool_counts:
+            tool_counts = Counter({
+                tool: max(tool_counts.get(tool, 0), assistant_tool_counts.get(tool, 0))
+                for tool in set(tool_counts) | set(assistant_tool_counts)
+            })
+
+        tools = [
+            {"tool_name": name, "count": count}
+            for name, count in tool_counts.most_common()
+        ]
+        return tools, list(skill_counts.values())
+
+    def _get_tool_usage(self, cutoff: float, source: str = None) -> List[Dict]:
+        """Get tool activity while preserving the historical helper API."""
+        tools, _skills = self._get_tool_and_skill_usage(cutoff, source)
+        return tools
+
+    def _get_skill_usage(self, cutoff: float, source: str = None) -> List[Dict]:
+        """Get skill activity while preserving the historical helper API."""
+        _tools, skills = self._get_tool_and_skill_usage(cutoff, source)
+        return skills
 
     def _get_message_stats(self, cutoff: float, source: str = None) -> Dict:
         """Get aggregate message statistics."""

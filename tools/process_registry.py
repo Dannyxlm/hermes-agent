@@ -41,7 +41,14 @@ import time
 import uuid
 
 _IS_WINDOWS = platform.system() == "Windows"
-from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env
+from tools.environments.local import (
+    _find_shell,
+    _prepend_shell_init,
+    _read_terminal_shell_init_config,
+    _resolve_safe_cwd,
+    _resolve_shell_init_files,
+    _sanitize_subprocess_env,
+)
 from hermes_cli._subprocess_compat import windows_hide_flags
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -137,6 +144,53 @@ class ProcessSession:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
     _pty: Any = field(default=None, repr=False)  # ptyprocess handle (when use_pty=True)
+
+
+def _background_shell_args(command: str, *, interactive: bool) -> list[str]:
+    """Return the shell argv used for local background processes.
+
+    PTY-backed processes get an interactive login shell because they have a
+    real pseudo-terminal. Pipe-backed processes deliberately avoid ``-i``:
+    interactive bash without a controlling TTY emits startup noise into the
+    process output before the requested command starts.
+    """
+    user_shell = _find_shell()
+    script = f"set +m; {command}"
+
+    if interactive:
+        return [user_shell, "-lic", script]
+
+    # Preserve PATH/tool-manager setup without making the shell interactive.
+    # A login zsh does not read .zshrc, so source it through the same guarded,
+    # stderr-silent prelude used by LocalEnvironment's login snapshot.
+    shell_name = os.path.basename(user_shell).lower()
+    if shell_name in {"bash", "bash.exe"}:
+        init_files = _resolve_shell_init_files()
+        if init_files:
+            script = _prepend_shell_init(script, init_files)
+    elif shell_name in {"zsh", "zsh.exe"} and not _IS_WINDOWS:
+        explicit_init_files, auto_source = _read_terminal_shell_init_config()
+        if explicit_init_files:
+            init_files = _resolve_shell_init_files()
+            if init_files:
+                script = _prepend_shell_init(script, init_files)
+        elif auto_source:
+            # zsh reads .zshenv before executing this -c script. Resolve
+            # ZDOTDIR inside zsh so a .zshenv-defined location controls which
+            # .zshrc is sourced; parent-process environment is intentionally
+            # not treated as the final answer.
+            script = (
+                "set +e\n"
+                '_hermes_zdotdir="${ZDOTDIR:-${HOME:-}}"\n'
+                'if [ -n "$_hermes_zdotdir" ] '
+                '&& [ -r "$_hermes_zdotdir/.zshrc" ]; then\n'
+                '  . "$_hermes_zdotdir/.zshrc" 2>/dev/null || true\n'
+                "fi\n"
+                "unset _hermes_zdotdir\n"
+                + script
+            )
+
+    return [user_shell, "-lc", script]
 
 
 class ProcessRegistry:
@@ -721,11 +775,10 @@ class ProcessRegistry:
                     from winpty import PtyProcess as _PtyProcessCls
                 else:
                     from ptyprocess import PtyProcess as _PtyProcessCls
-                user_shell = _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
                 pty_proc = _PtyProcessCls.spawn(
-                    [user_shell, "-lic", f"set +m; {command}"],
+                    _background_shell_args(command, interactive=True),
                     cwd=session.cwd,
                     env=pty_env,
                     dimensions=(30, 120),
@@ -758,9 +811,8 @@ class ProcessRegistry:
                 logger.warning("PTY spawn failed (%s), falling back to pipe mode", e)
 
         # Standard Popen path (non-PTY or PTY fallback)
-        # Use the user's login shell for consistency with LocalEnvironment --
-        # ensures rc files are sourced and user tools are available.
-        user_shell = _find_shell()
+        # Use a login shell for consistency with LocalEnvironment, but do not
+        # make a pipe-backed process interactive: there is no controlling TTY.
         # Force unbuffered output for Python scripts so progress is visible
         # during background execution (libraries like tqdm/datasets buffer when
         # stdout is a pipe, hiding output from process(action="poll")).
@@ -769,7 +821,7 @@ class ProcessRegistry:
         _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
 
         proc = subprocess.Popen(
-            [user_shell, "-lic", f"set +m; {command}"],
+            _background_shell_args(command, interactive=False),
             text=True,
             cwd=session.cwd,
             env=bg_env,

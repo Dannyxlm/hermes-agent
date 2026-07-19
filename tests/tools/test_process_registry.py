@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -251,6 +252,218 @@ def test_reader_loop_streams_incremental_chunks_from_read1(registry, monkeypatch
     assert session.exited is True
     assert session.exit_code == 0
     assert moved == ["proc_reader_live"]
+
+
+def test_background_shell_args_uses_non_interactive_login_shell_for_pipe(monkeypatch):
+    import tools.process_registry as process_module
+
+    monkeypatch.setattr(process_module, "_find_shell", lambda: "/bin/bash")
+    monkeypatch.setattr(process_module, "_resolve_shell_init_files", lambda: [])
+
+    assert process_module._background_shell_args("echo ok", interactive=False) == [
+        "/bin/bash",
+        "-lc",
+        "set +m; echo ok",
+    ]
+    assert process_module._background_shell_args("echo ok", interactive=True) == [
+        "/bin/bash",
+        "-lic",
+        "set +m; echo ok",
+    ]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("zsh") is None,
+    reason="requires a POSIX zsh",
+)
+def test_non_pty_zsh_restores_zshrc_environment_without_interactive_noise(
+    tmp_path, monkeypatch
+):
+    import tools.process_registry as process_module
+
+    zsh = shutil.which("zsh")
+    zsh_home = tmp_path / "home"
+    zsh_home.mkdir()
+    (zsh_home / ".zshrc").write_text(
+        "export HERMES_BACKGROUND_ZSHRC=loaded\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(zsh_home))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    monkeypatch.setattr(process_module, "_find_shell", lambda: zsh)
+
+    argv = process_module._background_shell_args(
+        "printf '%s' \"$HERMES_BACKGROUND_ZSHRC\"",
+        interactive=False,
+    )
+    result = subprocess.run(
+        argv,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(zsh_home)},
+    )
+
+    assert argv[1] == "-lc"
+    assert result.returncode == 0
+    assert result.stdout == "loaded"
+    assert "job control" not in result.stderr.lower()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("zsh") is None,
+    reason="requires a POSIX zsh",
+)
+def test_non_pty_zsh_uses_zdotdir_set_by_zshenv(tmp_path, monkeypatch):
+    import tools.process_registry as process_module
+
+    zsh = shutil.which("zsh")
+    zsh_home = tmp_path / "home"
+    zdotdir = zsh_home / "dynamic-zdotdir"
+    zsh_home.mkdir()
+    zdotdir.mkdir()
+    (zsh_home / ".zshenv").write_text(
+        'export ZDOTDIR="$HOME/dynamic-zdotdir"\n',
+        encoding="utf-8",
+    )
+    (zdotdir / ".zshrc").write_text(
+        "export HERMES_DYNAMIC_ZDOTDIR=loaded-after-zshenv\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(zsh_home))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    monkeypatch.setattr(process_module, "_find_shell", lambda: zsh)
+    monkeypatch.setattr(
+        process_module,
+        "_read_terminal_shell_init_config",
+        lambda: ([], True),
+    )
+    monkeypatch.setattr(process_module, "_resolve_shell_init_files", lambda: [])
+
+    result = subprocess.run(
+        process_module._background_shell_args(
+            "printf '%s' \"$HERMES_DYNAMIC_ZDOTDIR\"",
+            interactive=False,
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(zsh_home)},
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "loaded-after-zshenv"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("zsh") is None,
+    reason="requires a POSIX zsh",
+)
+def test_non_pty_zsh_honors_auto_source_opt_out(tmp_path, monkeypatch):
+    import tools.process_registry as process_module
+
+    zsh = shutil.which("zsh")
+    zsh_home = tmp_path / "home"
+    zsh_home.mkdir()
+    (zsh_home / ".zshrc").write_text(
+        "export HERMES_ZSH_AUTO_SOURCE=should-not-load\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(zsh_home))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    monkeypatch.setattr(process_module, "_find_shell", lambda: zsh)
+    monkeypatch.setattr(
+        process_module,
+        "_read_terminal_shell_init_config",
+        lambda: ([], False),
+    )
+    monkeypatch.setattr(process_module, "_resolve_shell_init_files", lambda: [])
+
+    result = subprocess.run(
+        process_module._background_shell_args(
+            "printf '%s' \"${HERMES_ZSH_AUTO_SOURCE-unset}\"",
+            interactive=False,
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(zsh_home)},
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "unset"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("zsh") is None,
+    reason="requires a POSIX zsh",
+)
+def test_non_pty_zsh_explicit_init_files_replace_automatic_zshrc(
+    tmp_path, monkeypatch
+):
+    import tools.process_registry as process_module
+
+    zsh = shutil.which("zsh")
+    zsh_home = tmp_path / "home"
+    zsh_home.mkdir()
+    explicit = tmp_path / "explicit-init.zsh"
+    explicit.write_text(
+        "export HERMES_ZSH_INIT_SOURCE=explicit\n",
+        encoding="utf-8",
+    )
+    (zsh_home / ".zshrc").write_text(
+        "export HERMES_ZSH_INIT_SOURCE=automatic\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(zsh_home))
+    monkeypatch.delenv("ZDOTDIR", raising=False)
+    monkeypatch.setattr(process_module, "_find_shell", lambda: zsh)
+    monkeypatch.setattr(
+        process_module,
+        "_read_terminal_shell_init_config",
+        lambda: ([str(explicit)], False),
+    )
+    monkeypatch.setattr(
+        process_module,
+        "_resolve_shell_init_files",
+        lambda: [str(explicit)],
+    )
+
+    result = subprocess.run(
+        process_module._background_shell_args(
+            "printf '%s' \"$HERMES_ZSH_INIT_SOURCE\"",
+            interactive=False,
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HOME": str(zsh_home)},
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "explicit"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell banner regression")
+def test_spawn_local_non_pty_does_not_emit_interactive_bash_banner(
+    registry, tmp_path, monkeypatch
+):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash not available")
+    monkeypatch.setenv("SHELL", bash)
+
+    session = registry.spawn_local("echo clean-background", cwd=str(tmp_path))
+    try:
+        result = registry.wait(session.id, timeout=5)
+    finally:
+        registry.kill_process(session.id)
+
+    assert result["status"] == "exited", result
+    assert result["exit_code"] == 0
+    assert "clean-background" in result["output"]
+    assert "no job control" not in result["output"]
+    assert "cannot set terminal process group" not in result["output"]
 
 
 # =========================================================================

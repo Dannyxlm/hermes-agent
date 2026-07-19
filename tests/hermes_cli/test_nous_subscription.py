@@ -126,12 +126,9 @@ def test_get_nous_subscription_features_marks_browser_use_as_managed_when_gatewa
 
 
 def test_get_nous_subscription_features_uses_direct_browserbase_when_no_managed_gateway(monkeypatch):
-    """When direct Browserbase keys are set and no managed gateway is available,
+    """When a direct Browserbase key is set and no managed gateway is available,
     the unconfigured fallback should pick Browserbase as a direct provider."""
-    env = {
-        "BROWSERBASE_API_KEY": "bb-key",
-        "BROWSERBASE_PROJECT_ID": "bb-project",
-    }
+    env = {"BROWSERBASE_API_KEY": "bb-key"}
 
     monkeypatch.setattr(ns, "get_env_value", lambda name: env.get(name, ""))
     monkeypatch.setattr(
@@ -185,10 +182,7 @@ def test_get_nous_subscription_features_prefers_camofox_over_managed_browser_use
 
 
 def test_get_nous_subscription_features_requires_agent_browser_for_browserbase(monkeypatch):
-    env = {
-        "BROWSERBASE_API_KEY": "bb-key",
-        "BROWSERBASE_PROJECT_ID": "bb-project",
-    }
+    env = {"BROWSERBASE_API_KEY": "bb-key"}
 
     monkeypatch.setattr(ns, "get_env_value", lambda name: env.get(name, ""))
     monkeypatch.setattr(
@@ -349,7 +343,7 @@ def test_default_local_browser_unavailable_without_chromium(monkeypatch):
 def test_cloud_browserbase_available_without_local_chromium(monkeypatch):
     """Cloud providers host their own Chromium, so the new local gate must not
     regress them: agent-browser binary present + Browserbase creds is enough."""
-    env = {"BROWSERBASE_API_KEY": "bb-key", "BROWSERBASE_PROJECT_ID": "bb-project"}
+    env = {"BROWSERBASE_API_KEY": "bb-key"}
     monkeypatch.setattr(ns, "get_env_value", lambda name: env.get(name, ""))
     monkeypatch.setattr(
         ns, "get_nous_portal_account_info", lambda: _account(logged_in=False)
@@ -370,6 +364,18 @@ def test_cloud_browserbase_available_without_local_chromium(monkeypatch):
     assert features.browser.available is True
     assert features.browser.active is True
     assert features.browser.current_provider == "Browserbase"
+
+
+def test_gateway_direct_credentials_accept_browserbase_key_only(monkeypatch):
+    monkeypatch.setattr(
+        ns,
+        "get_env_value",
+        lambda name: "bb-key" if name == "BROWSERBASE_API_KEY" else "",
+    )
+    monkeypatch.setattr(ns, "fal_key_is_configured", lambda: False)
+    monkeypatch.setattr(ns, "resolve_openai_audio_api_key", lambda: "")
+
+    assert ns._get_gateway_direct_credentials()["browser"] is True
 
 
 def test_get_gateway_eligible_tools_pool_excludes_video(monkeypatch):

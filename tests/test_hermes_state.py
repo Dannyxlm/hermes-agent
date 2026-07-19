@@ -3387,6 +3387,65 @@ class TestSchemaInit:
         columns = {row[1] for row in cursor.fetchall()}
         assert "title" in columns
 
+    def test_usage_tool_calls_index_does_not_duplicate_json_payload(self, db):
+        columns = [
+            row["name"]
+            for row in db._conn.execute(
+                "PRAGMA index_info(idx_messages_assistant_tool_calls)"
+            ).fetchall()
+        ]
+        assert columns == ["session_id", "timestamp"]
+        sql = db._conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'index' AND name = 'idx_messages_assistant_tool_calls'"
+        ).fetchone()["sql"]
+        assert "WHERE role = 'assistant' AND tool_calls IS NOT NULL" in sql
+
+    def test_unused_sessions_usage_covering_index_is_removed(self, tmp_path):
+        db_path = tmp_path / "legacy-sessions-usage-index.db"
+        initial = SessionDB(db_path=db_path)
+        initial._conn.execute(
+            "CREATE INDEX idx_sessions_usage_covering "
+            "ON sessions(id, started_at, source)"
+        )
+        initial.close()
+
+        reopened = SessionDB(db_path=db_path)
+        try:
+            assert reopened._conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'index' AND name = 'idx_sessions_usage_covering'"
+            ).fetchone() is None
+        finally:
+            reopened.close()
+
+    def test_legacy_payload_covering_usage_index_is_reconciled(self, tmp_path):
+        db_path = tmp_path / "legacy-usage-index.db"
+        initial = SessionDB(db_path=db_path)
+        initial.close()
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            DROP INDEX idx_messages_assistant_tool_calls;
+            CREATE INDEX idx_messages_assistant_tool_calls
+                ON messages(session_id, timestamp, tool_calls)
+                WHERE role = 'assistant' AND tool_calls IS NOT NULL;
+            """
+        )
+        conn.close()
+
+        reopened = SessionDB(db_path=db_path)
+        try:
+            columns = [
+                row["name"]
+                for row in reopened._conn.execute(
+                    "PRAGMA index_info(idx_messages_assistant_tool_calls)"
+                ).fetchall()
+            ]
+            assert columns == ["session_id", "timestamp"]
+        finally:
+            reopened.close()
+
     def test_topic_mode_schema_is_not_auto_migrated_on_open(self, tmp_path):
         """Opening an old DB should not add topic-mode columns until /topic opts in.
 
@@ -4723,6 +4782,43 @@ class TestStateMeta:
         assert db.get_meta("key") == "v2"
 
 
+class TestRecentActiveListableSessions:
+    def test_counts_roots_and_compression_tips_without_delegate_rows(self, db):
+        now = time.time()
+
+        db.create_session("active-root", "cli")
+        db.append_message("active-root", role="user", content="hello", timestamp=now)
+
+        db.create_session("ended-root", "cli")
+        db.append_message("ended-root", role="user", content="done", timestamp=now)
+        db.end_session("ended-root", end_reason="done")
+
+        db.create_session("delegate", "cli", parent_session_id="active-root")
+        db._conn.execute(
+            "UPDATE sessions SET model_config = ? WHERE id = ?",
+            ('{"_delegate_from":"active-root"}', "delegate"),
+        )
+        db.append_message("delegate", role="user", content="hidden", timestamp=now)
+
+        db.create_session("compression-root", "cli")
+        db._conn.execute(
+            "UPDATE sessions SET ended_at = ?, end_reason = 'compression' WHERE id = ?",
+            (now - 5, "compression-root"),
+        )
+        db.create_session(
+            "compression-tip", "cli", parent_session_id="compression-root"
+        )
+        db.append_message(
+            "compression-tip", role="assistant", content="live tip", timestamp=now
+        )
+        db._conn.commit()
+
+        assert db.count_recent_active_listable_sessions(
+            cutoff=now - 60,
+            limit=50,
+        ) == 2
+
+
 class TestVacuum:
     def test_vacuum_runs_without_error(self, db):
         """VACUUM must succeed on a fresh DB (no rows to reclaim)."""
@@ -4789,35 +4885,33 @@ class TestOptimizeFts:
         # Search still works after repeated optimization.
         assert len(db.search_messages("repeat")) == 1
 
-    def test_write_path_optimizes_fts_on_cadence(self, db, monkeypatch):
-        """Writes periodically merge FTS segments so they never accumulate
-        into the tens-of-thousands that lengthen the write-lock hold and
-        starve competing writers ("database is locked")."""
-        db._OPTIMIZE_EVERY_N_WRITES = 5
-        calls = {"n": 0}
-        real_optimize = db.optimize_fts
+    def test_write_path_incrementally_merges_fts_on_cadence(self, db, monkeypatch):
+        """Live maintenance must yield instead of running full optimize."""
+        db._MERGE_EVERY_N_WRITES = 5
+        calls = []
+        real_merge = db.merge_fts
 
-        def _counting_optimize():
-            calls["n"] += 1
-            return real_optimize()
+        def _counting_merge(max_pages=64):
+            calls.append(max_pages)
+            return real_merge(max_pages=max_pages)
 
-        monkeypatch.setattr(db, "optimize_fts", _counting_optimize)
+        monkeypatch.setattr(db, "merge_fts", _counting_merge)
         # create_session is write #1; appends are #2.. -> #5 and #10 trigger.
         db.create_session(session_id="s1", source="cli")
         for i in range(9):
             db.append_message(session_id="s1", role="user", content=f"needle {i}")
-        assert calls["n"] == 2
-        # The auto-merge is layout-only: search is unaffected.
+        assert calls == [64, 64]
+        # The incremental merge is layout-only: search is unaffected.
         assert len(db.search_messages("needle")) == 9
 
-    def test_write_path_optimize_failure_never_breaks_write(self, db, monkeypatch):
-        """A failing periodic optimize must not fail the surrounding write."""
-        db._OPTIMIZE_EVERY_N_WRITES = 2
+    def test_write_path_merge_failure_never_breaks_write(self, db, monkeypatch):
+        """A failing periodic merge must not fail the surrounding write."""
+        db._MERGE_EVERY_N_WRITES = 2
 
-        def _boom():
-            raise sqlite3.OperationalError("simulated optimize failure")
+        def _boom(max_pages=64):
+            raise sqlite3.OperationalError("simulated merge failure")
 
-        monkeypatch.setattr(db, "optimize_fts", _boom)
+        monkeypatch.setattr(db, "merge_fts", _boom)
         db.create_session(session_id="s1", source="cli")  # write #1
         # write #2 trips the cadence; the swallowed failure must not propagate.
         db.append_message(session_id="s1", role="user", content="still persists")
@@ -6307,4 +6401,3 @@ class TestLoneSurrogatePersistence:
         db.create_session("s1", source="cli")
         assert db.set_session_title("s1", "title \ud835 bad") is True
         assert db.get_session("s1")["title"] == "title \ufffd bad"
-
