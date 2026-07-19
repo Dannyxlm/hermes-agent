@@ -41,7 +41,13 @@ import time
 import uuid
 
 _IS_WINDOWS = platform.system() == "Windows"
-from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env
+from tools.environments.local import (
+    _find_shell,
+    _prepend_shell_init,
+    _resolve_safe_cwd,
+    _resolve_shell_init_files,
+    _sanitize_subprocess_env,
+)
 from hermes_cli._subprocess_compat import windows_hide_flags
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -137,6 +143,34 @@ class ProcessSession:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
     _pty: Any = field(default=None, repr=False)  # ptyprocess handle (when use_pty=True)
+
+
+def _background_shell_args(command: str, *, interactive: bool) -> list[str]:
+    """Return the shell argv used for local background processes.
+
+    PTY-backed processes get an interactive login shell because they have a
+    real pseudo-terminal. Pipe-backed background processes deliberately avoid
+    ``-i``: interactive bash without a controlling TTY prints startup banners
+    like ``bash: no job control in this shell`` and Ubuntu's sudo hint into the
+    user's Desktop/Telegram process output before the actual command starts.
+    """
+    user_shell = _find_shell()
+    script = f"set +m; {command}"
+
+    if interactive:
+        return [user_shell, "-lic", script]
+
+    # Keep the important part of interactive startup for bash users (PATHs from
+    # nvm/asdf/pyenv/etc.) without making the shell interactive. Do not force
+    # bash-specific init files through zsh/fish/etc.; _find_shell already picks
+    # a compatible shell and those shells handle their own login startup.
+    shell_name = os.path.basename(user_shell).lower()
+    if shell_name in {"bash", "bash.exe"}:
+        init_files = _resolve_shell_init_files()
+        if init_files:
+            script = _prepend_shell_init(script, init_files)
+
+    return [user_shell, "-lc", script]
 
 
 class ProcessRegistry:
@@ -721,11 +755,10 @@ class ProcessRegistry:
                     from winpty import PtyProcess as _PtyProcessCls
                 else:
                     from ptyprocess import PtyProcess as _PtyProcessCls
-                user_shell = _find_shell()
                 pty_env = _sanitize_subprocess_env(os.environ, env_vars)
                 pty_env["PYTHONUNBUFFERED"] = "1"
                 pty_proc = _PtyProcessCls.spawn(
-                    [user_shell, "-lic", f"set +m; {command}"],
+                    _background_shell_args(command, interactive=True),
                     cwd=session.cwd,
                     env=pty_env,
                     dimensions=(30, 120),
@@ -758,9 +791,9 @@ class ProcessRegistry:
                 logger.warning("PTY spawn failed (%s), falling back to pipe mode", e)
 
         # Standard Popen path (non-PTY or PTY fallback)
-        # Use the user's login shell for consistency with LocalEnvironment --
-        # ensures rc files are sourced and user tools are available.
-        user_shell = _find_shell()
+        # Use a login shell for consistency with LocalEnvironment, but do not
+        # make non-PTY background commands interactive: bash -i without a TTY
+        # prints job-control/sudo startup banners into Desktop/gateway output.
         # Force unbuffered output for Python scripts so progress is visible
         # during background execution (libraries like tqdm/datasets buffer when
         # stdout is a pipe, hiding output from process(action="poll")).
@@ -769,7 +802,7 @@ class ProcessRegistry:
         _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
 
         proc = subprocess.Popen(
-            [user_shell, "-lic", f"set +m; {command}"],
+            _background_shell_args(command, interactive=False),
             text=True,
             cwd=session.cwd,
             env=bg_env,

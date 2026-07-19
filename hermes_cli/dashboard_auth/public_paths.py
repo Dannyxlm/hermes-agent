@@ -31,6 +31,10 @@ the SPA should bootstrap it after login instead.
 from __future__ import annotations
 
 PUBLIC_API_PATHS: frozenset[str] = frozenset({
+    # Constant-time process liveness used by reverse proxies and Desktop
+    # reconnect recovery. Unlike /api/status it performs no database,
+    # filesystem, provider, or process-topology work.
+    "/api/healthz",
     # Liveness probe target. Returns version, gateway state, active
     # session count, and the dashboard auth-gate shape. No bodies, no
     # session content, no secrets. Documented as the portal's wildcard

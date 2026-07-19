@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -251,6 +252,50 @@ def test_reader_loop_streams_incremental_chunks_from_read1(registry, monkeypatch
     assert session.exited is True
     assert session.exit_code == 0
     assert moved == ["proc_reader_live"]
+
+
+def test_background_shell_args_uses_non_interactive_login_shell_for_pipe(monkeypatch):
+    """Pipe-backed background processes must not use bash -i without a TTY."""
+    import tools.process_registry as pr
+
+    monkeypatch.setattr(pr, "_find_shell", lambda: "/bin/bash")
+    monkeypatch.setattr(pr, "_resolve_shell_init_files", lambda: [])
+
+    assert pr._background_shell_args("echo ok", interactive=False) == [
+        "/bin/bash",
+        "-lc",
+        "set +m; echo ok",
+    ]
+    assert pr._background_shell_args("echo ok", interactive=True) == [
+        "/bin/bash",
+        "-lic",
+        "set +m; echo ok",
+    ]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell banner regression")
+def test_spawn_local_non_pty_does_not_emit_interactive_bash_banner(
+    registry, tmp_path, monkeypatch
+):
+    """Regression: Desktop live-output tabs showed bash job-control noise first."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash not available")
+    monkeypatch.setenv("SHELL", bash)
+
+    session = registry.spawn_local("echo clean-background", cwd=str(tmp_path))
+    try:
+        result = registry.wait(session.id, timeout=5)
+    finally:
+        registry.kill_process(session.id)
+
+    assert result["status"] == "exited", result
+    assert result["exit_code"] == 0
+    assert "clean-background" in result["output"]
+    assert "no job control" not in result["output"]
+    assert "cannot set terminal process group" not in result["output"]
+    assert "sudo_root" not in result["output"]
+    assert "To run a command as administrator" not in result["output"]
 
 
 # =========================================================================

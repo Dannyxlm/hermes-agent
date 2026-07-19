@@ -57,13 +57,37 @@ def test_sessiondb_handlers_open_connections_inside_executor_helpers():
             for arg in node.args[:1]
             if isinstance(arg, ast.Name)
         }
+
+        # Ava's usage endpoint uses a dedicated bounded ThreadPoolExecutor
+        # instead of asyncio's shared default executor. Follow one helper hop
+        # from the handler into any ``executor.submit(worker, ...)`` call so
+        # this regression test accepts both valid off-loop designs while still
+        # requiring the SessionDB open itself to live inside the worker.
+        called_helpers = {
+            _call_name(node)
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call)
+        }
+        for called_name in called_helpers:
+            submitter = helpers.get(called_name or "")
+            if submitter is None:
+                continue
+            offloaded.update(
+                arg.id
+                for node in ast.walk(submitter)
+                if isinstance(node, ast.Call)
+                and _call_name(node) == "submit"
+                for arg in node.args[:1]
+                if isinstance(arg, ast.Name)
+            )
+
         db_open_owners = {
             helper_name
             for helper_name, helper in helpers.items()
             if helper_name in offloaded
             and any(
                 isinstance(node, ast.Call)
-                and _call_name(node) == "_open_session_db_for_profile"
+                and _call_name(node) in {"_open_session_db_for_profile", "SessionDB"}
                 for node in ast.walk(helper)
             )
         }
