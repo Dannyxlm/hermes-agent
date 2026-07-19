@@ -234,6 +234,7 @@ class TestHandleOnlyInitialization:
                 create_remote_session=False,
             )
             assert local.metadata["_remote_session_ready"] is False
+            assert peer_calls == []
             assert session_calls == []
             assert context_calls == []
 
