@@ -23,7 +23,10 @@ PR #25182.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +151,7 @@ class TestBundledPluginsRegister:
 class TestIsAvailable:
     """Each plugin's ``is_available()`` reflects env-var presence accurately."""
 
-    def test_browserbase_requires_both_api_key_and_project_id(
+    def test_browserbase_requires_api_key_only(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _ensure_plugins_loaded()
@@ -158,11 +161,11 @@ class TestIsAvailable:
         assert p is not None
         assert p.is_available() is False
 
-        # API key alone is insufficient.
+        # API key alone is sufficient; Browserbase infers the project.
         monkeypatch.setenv("BROWSERBASE_API_KEY", "key")
-        assert p.is_available() is False
+        assert p.is_available() is True
 
-        # Both env vars set → available.
+        # Legacy explicit project id remains supported.
         monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "proj")
         assert p.is_available() is True
 
@@ -198,6 +201,88 @@ class TestIsAvailable:
         assert p.is_available() is False
         monkeypatch.setenv("FIRECRAWL_API_KEY", "key")
         assert p.is_available() is True
+
+
+class TestBrowserbaseProjectInference:
+    def test_create_and_close_omit_project_when_api_key_infers_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+
+        calls = []
+
+        class _Response:
+            ok = True
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"id": "bb-session", "connectUrl": "wss://browser.test"}
+
+        def _post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response()
+
+        monkeypatch.setenv("BROWSERBASE_API_KEY", "key")
+        monkeypatch.delenv("BROWSERBASE_PROJECT_ID", raising=False)
+        monkeypatch.setenv("BROWSERBASE_KEEP_ALIVE", "false")
+        monkeypatch.setenv("BROWSERBASE_PROXIES", "false")
+        monkeypatch.setattr(
+            "plugins.browser.browserbase.provider.requests.post", _post
+        )
+
+        provider = BrowserbaseBrowserProvider()
+        session = provider.create_session("task")
+        assert session["bb_session_id"] == "bb-session"
+        assert provider.close_session("bb-session") is True
+        assert calls[0][1]["json"] == {}
+        assert calls[1][1]["json"] == {"status": "REQUEST_RELEASE"}
+
+    def test_explicit_project_id_is_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from plugins.browser.browserbase.provider import BrowserbaseBrowserProvider
+
+        calls = []
+
+        class _Response:
+            ok = True
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"id": "bb-session", "connectUrl": "wss://browser.test"}
+
+        def _post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response()
+
+        monkeypatch.setenv("BROWSERBASE_API_KEY", "key")
+        monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "explicit-project")
+        monkeypatch.setenv("BROWSERBASE_KEEP_ALIVE", "false")
+        monkeypatch.setenv("BROWSERBASE_PROXIES", "false")
+        monkeypatch.setattr("plugins.browser.browserbase.provider.requests.post", _post)
+
+        provider = BrowserbaseBrowserProvider()
+        provider.create_session("task")
+        assert provider.close_session("bb-session") is True
+        assert calls[0][1]["json"] == {"projectId": "explicit-project"}
+        assert calls[1][1]["json"] == {
+            "projectId": "explicit-project",
+            "status": "REQUEST_RELEASE",
+        }
+
+    def test_plugin_metadata_describes_key_only_project_inference(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[3]
+            / "plugins"
+            / "browser"
+            / "browserbase"
+            / "plugin.yaml"
+        )
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        description = manifest["description"]
+        assert "Requires BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID" not in description
+        assert "BROWSERBASE_API_KEY" in description
+        assert "project" in description.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +348,6 @@ class TestRegistryResolution:
         # Both available — browser-use should win.
         monkeypatch.setenv("BROWSER_USE_API_KEY", "k1")
         monkeypatch.setenv("BROWSERBASE_API_KEY", "k2")
-        monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "p")
 
         provider = _resolve(None)
         assert provider is not None
@@ -277,7 +361,6 @@ class TestRegistryResolution:
         from agent.browser_registry import _resolve
 
         monkeypatch.setenv("BROWSERBASE_API_KEY", "k")
-        monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "p")
 
         provider = _resolve(None)
         assert provider is not None
