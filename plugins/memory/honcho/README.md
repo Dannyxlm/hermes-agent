@@ -34,6 +34,60 @@ echo "HONCHO_API_KEY=***" >> ~/.hermes/.env
 
 ## Architecture Overview
 
+### Memory V3 read-only containment seam
+
+The provider exposes `HonchoMemoryProvider.configure_read_only(...)` for the
+Memory V3 runtime. Generic core verifies the signed, expiry-bounded capability
+snapshot first, then passes only immutable primitive read flags/limits, exact
+pre-existing workspace/peer/session identifiers, and exact endpoint
+coordinates. The plugin selects its lazy transport; dependency-injected
+factories exist only for hermetic tests. Signature verification and origin
+authority do not belong in this plugin.
+
+The containment adapter defaults to deny. Binding and normal lifecycle hooks
+perform no SDK construction or network calls. It exposes only bounded profile,
+search, and context reads. All five upstream tool names remain visible in their
+stable order; `honcho_reasoning` and `honcho_conclude` route to typed denial
+before transport construction. Existing-resource misses return typed
+`not_provisioned` and never fall back to creation. Conversation capture,
+message synchronization, startup migration, built-in-memory mirroring, card or
+conclusion mutation, deletes, and paid reasoning remain disabled. Provider text
+is returned in a `tainted_provider_data` envelope and is not an instruction or
+authorization channel.
+
+The concrete `honcho-ai==2.2.0` transport remains under this plugin. It creates
+a dedicated SDK client with retries set to zero, then uses only the audited
+V3 workspace/peer/session list routes, session search, and GET
+card/session-context routes. Responses use the SDK's underlying 2.2.0 httpx
+client in streaming mode: declared length is checked first and cumulative
+identity-encoded bytes are capped at 256 KiB before strict JSON decoding.
+Chunked bodies remain bounded, while compressed bodies are rejected before
+iteration so decompression cannot bypass the application byte ceiling.
+Error bodies are never materialized. SDK construction does not make a provider call.
+The high-level `peer()`, `session()`, `search()`, card, and context convenience
+helpers are forbidden here because 2.2.0 calls `_ensure_workspace()` first;
+that method performs the workspace get-or-create POST. An SDK version or route
+surface mismatch keeps the provider unavailable instead of falling back.
+
+The immutable binding includes the exact normalized provider base URL,
+environment, and Honcho config host as well as workspace, peer, and session
+IDs. Before importing or constructing the SDK, the default factory resolves
+that exact host's ambient config and compares every coordinate. Missing or
+mismatched coordinates deny the read with zero egress. Userinfo, query strings,
+fragments, unsafe URL schemes, and ambiguous paths are rejected; default ports,
+host casing, trailing slashes, and a trailing SDK-owned `/vN` segment normalize
+to one comparable URL. The canonical bound base URL is always passed explicitly
+to the SDK, so environment variables cannot substitute a different endpoint.
+
+The context route was separately audited for hidden paid reasoning. On the
+exact query emitted here (`summary=false`, exact `peer_target`, exact session,
+no `search_query`), the official V3 handler reads already-materialized session,
+representation, and peer-card rows. Its inline embedding/provider path is
+conditional on `search_query`, which this transport never sends; conclusion
+generation remains in the asynchronous message-ingestion pipeline. A future
+context capability that needs semantic query expansion must use a different,
+explicitly approved contract rather than widening this one.
+
 ### Two-Layer Context Injection
 
 Context is injected into the **user message** at API-call time (not the system prompt) to preserve prompt caching. Only a static mode header goes in the system prompt. The injected block is wrapped in `<memory-context>` fences with a system note clarifying it's background data, not new user input.
