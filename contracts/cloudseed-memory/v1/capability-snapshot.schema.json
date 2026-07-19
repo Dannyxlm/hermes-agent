@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:capability-snapshot",
+  "title": "MemoryCapabilitySnapshotV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "snapshot_id", "issuer", "audience", "destination", "deployment_mode", "security_epoch", "minimum_protocol_version", "minimum_policy_version", "capability_version", "runtime_manifest_digest", "config_digest", "protocol_bundle_digest", "policy_digest", "issued_at", "expires_at", "capabilities"],
+  "properties": {
+    "schema_version": {"const": "memory-capability-snapshot/v1"},
+    "snapshot_id": {"type": "string", "minLength": 1, "maxLength": 120},
+    "issuer": {"type": "string", "minLength": 1, "maxLength": 120},
+    "audience": {"type": "string", "minLength": 1, "maxLength": 120},
+    "destination": {"type": "string", "minLength": 1, "maxLength": 160},
+    "deployment_mode": {"enum": ["local_only", "tools_only_read_containment"]},
+    "security_epoch": {"type": "integer", "minimum": 1},
+    "minimum_protocol_version": {"type": "integer", "minimum": 1},
+    "minimum_policy_version": {"type": "integer", "minimum": 1},
+    "capability_version": {"type": "integer", "minimum": 1},
+    "runtime_manifest_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "config_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "protocol_bundle_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local_reply", "existing_memory_read", "memory_tools_visible", "governed_write", "conversational_capture", "provider_create"],
+      "properties": {
+        "local_reply": {"const": true},
+        "existing_memory_read": {"type": "boolean"},
+        "memory_tools_visible": {"type": "boolean"},
+        "governed_write": {"const": false},
+        "conversational_capture": {"const": false},
+        "provider_create": {"const": false}
+      }
+    }
+  }
+}
