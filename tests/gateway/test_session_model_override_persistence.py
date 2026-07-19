@@ -165,6 +165,8 @@ def test_runner_rehydrates_override_after_restart(store_factory):
             "api_mode": "responses",
             "base_url": "https://api.openai.example/v1",
             "provider": "openai",
+            "command": None,
+            "args": [],
         },
     ):
         runner._rehydrate_session_model_override(session_key)
@@ -176,6 +178,54 @@ def test_runner_rehydrates_override_after_restart(store_factory):
     # Credentials come from live resolution, never from disk.
     assert override["api_key"] == "sk-fresh-from-keychain"
     assert override["api_mode"] == "responses"
+    assert override["command"] is None
+    assert override["args"] == []
+
+
+def test_persisted_subprocess_override_rehydrates_complete_transport(store_factory):
+    store = store_factory()
+    entry = store.get_or_create_session(_make_source())
+    session_key = entry.session_key
+    store.set_model_override(
+        session_key,
+        {
+            "model": "claude-sonnet-4.6",
+            "provider": "copilot-acp",
+            "api_key": "copilot-acp",
+            "base_url": "acp://copilot",
+        },
+    )
+    runner = _make_runner(store_factory())
+    with (
+        patch(
+            "gateway.run._resolve_runtime_agent_kwargs_for_provider",
+            return_value={
+                "provider": "copilot-acp",
+                "api_key": "copilot-acp",
+                "base_url": "acp://copilot",
+                "api_mode": "chat_completions",
+                "command": "/usr/local/bin/copilot",
+                "args": ["--acp", "--stdio"],
+                "credential_pool": None,
+            },
+        ),
+        patch("gateway.run._resolve_runtime_agent_kwargs") as global_runtime,
+        patch("gateway.run._resolve_gateway_model", return_value="global/model"),
+    ):
+        model, runtime = runner._resolve_session_agent_runtime(session_key=session_key)
+
+    assert model == "claude-sonnet-4.6"
+    assert runtime == {
+        "provider": "copilot-acp",
+        "api_key": "copilot-acp",
+        "base_url": "acp://copilot",
+        "api_mode": "chat_completions",
+        "command": "/usr/local/bin/copilot",
+        "args": ["--acp", "--stdio"],
+        "max_tokens": None,
+        "credential_pool": None,
+    }
+    global_runtime.assert_not_called()
 
 
 def test_runner_rehydrate_keeps_live_override(store_factory):
@@ -204,8 +254,10 @@ def test_runner_rehydrate_noop_without_persisted_override(store_factory):
     assert runner._session_model_overrides == {}
 
 
-def test_runner_rehydrate_survives_credential_resolution_failure(store_factory):
-    """Missing credentials degrade to a credential-less override, not a crash."""
+def test_runner_rehydrate_fails_closed_on_credential_resolution_failure(store_factory):
+    """A persisted provider must never become a credential-less override."""
+    from gateway.run import SessionModelOverrideReadError
+
     store = store_factory()
     entry = store.get_or_create_session(_make_source())
     session_key = entry.session_key
@@ -214,13 +266,100 @@ def test_runner_rehydrate_survives_credential_resolution_failure(store_factory):
     runner = _make_runner(store)
     with patch(
         "gateway.run._resolve_runtime_agent_kwargs_for_provider",
-        side_effect=RuntimeError("no credentials"),
+        side_effect=RuntimeError("private-provider-resolution-detail"),
     ):
-        runner._rehydrate_session_model_override(session_key)
+        with pytest.raises(
+            SessionModelOverrideReadError,
+            match="persisted session model override provider is unavailable",
+        ) as raised:
+            runner._rehydrate_session_model_override(session_key)
 
-    override = runner._session_model_overrides[session_key]
-    assert override["model"] == "gpt-5o"
-    assert override.get("api_key") is None
+    assert "private-provider-resolution-detail" not in str(raised.value)
+    assert runner._session_model_overrides == {}
+
+
+def test_persisted_provider_failure_never_falls_through_global_transport(store_factory):
+    from gateway.run import SessionModelOverrideReadError
+
+    store = store_factory()
+    entry = store.get_or_create_session(_make_source())
+    session_key = entry.session_key
+    store.set_model_override(session_key, OVERRIDE)
+    runner = _make_runner(store)
+
+    global_runtime = {
+        "provider": "global-provider",
+        "api_key": "sk-global-must-not-cross",
+        "base_url": "https://global-secret-endpoint.example/v1",
+        "command": "global-secret-command",
+        "args": ["--global-secret-arg"],
+    }
+    with (
+        patch("gateway.run._resolve_gateway_model", return_value="global/model"),
+        patch(
+            "gateway.run._resolve_runtime_agent_kwargs_for_provider",
+            side_effect=RuntimeError("private-provider-resolution-detail"),
+        ),
+        patch(
+            "gateway.run._resolve_runtime_agent_kwargs",
+            return_value=global_runtime,
+        ) as resolve_global,
+    ):
+        with pytest.raises(
+            SessionModelOverrideReadError,
+            match="persisted session model override provider is unavailable",
+        ) as raised:
+            runner._resolve_session_agent_runtime(session_key=session_key)
+
+    resolve_global.assert_not_called()
+    assert runner._session_model_overrides == {}
+    error_text = str(raised.value)
+    for secret in (
+        "sk-global-must-not-cross",
+        "global-secret-command",
+        "--global-secret-arg",
+        "private-provider-resolution-detail",
+    ):
+        assert secret not in error_text
+
+
+def test_runner_rehydrate_fails_closed_on_store_read_error():
+    from gateway.run import SessionModelOverrideReadError
+
+    class BrokenStore:
+        @staticmethod
+        def get_model_override(_session_key):
+            raise OSError("private-session-store-path")
+
+    runner = _make_runner(BrokenStore())
+
+    with pytest.raises(
+        SessionModelOverrideReadError,
+        match="persisted session model override is unavailable",
+    ) as raised:
+        runner._rehydrate_session_model_override("session-key")
+
+    assert "private-session-store-path" not in str(raised.value)
+    assert runner._session_model_overrides == {}
+
+
+def test_session_runtime_does_not_fallback_global_when_override_store_fails():
+    from gateway.run import SessionModelOverrideReadError
+
+    class BrokenStore:
+        @staticmethod
+        def get_model_override(_session_key):
+            raise OSError("private-session-store-path")
+
+    runner = _make_runner(BrokenStore())
+    with (
+        patch("gateway.run._resolve_gateway_model", return_value="global/model"),
+        patch("gateway.run._resolve_runtime_agent_kwargs") as global_runtime,
+    ):
+        with pytest.raises(SessionModelOverrideReadError):
+            runner._resolve_session_agent_runtime(session_key="session-key")
+
+    global_runtime.assert_not_called()
 
 
 def test_sanitize_model_override():

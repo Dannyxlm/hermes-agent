@@ -267,6 +267,18 @@ class TestWebServerEndpoints:
         assert "active_sessions" in data
         assert data["can_update_hermes"] is True
 
+    def test_healthz_is_dependency_free_liveness(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(
+            web_server,
+            "_count_status_active_sessions",
+            lambda: (_ for _ in ()).throw(AssertionError("rich status must not run")),
+        )
+        resp = self.client.get("/api/healthz")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
     def test_status_active_session_count_uses_read_only_db(self, monkeypatch, tmp_path):
         import hermes_cli.web_server as web_server
         import hermes_state
@@ -283,14 +295,10 @@ class TestWebServerEndpoints:
             def __init__(self, *args, **kwargs):
                 captured["read_only"] = kwargs.get("read_only")
 
-            def list_sessions_rich(self, limit, compact_rows=False):
+            def count_recent_active_listable_sessions(self, *, cutoff, limit):
+                captured["cutoff"] = cutoff
                 captured["limit"] = limit
-                captured["compact_rows"] = compact_rows
-                return [
-                    {"ended_at": None, "last_active": 95},
-                    {"ended_at": 99, "last_active": 99},
-                    {"ended_at": None, "last_active": -300},
-                ]
+                return 1
 
             def close(self):
                 captured["closed"] = True
@@ -300,7 +308,7 @@ class TestWebServerEndpoints:
 
         assert web_server._count_status_active_sessions() == 1
         assert captured == {
-            "read_only": True, "limit": 50, "compact_rows": True, "closed": True
+            "read_only": True, "cutoff": -200, "limit": 50, "closed": True
         }
 
     def test_status_active_session_count_fresh_install_returns_zero(self, monkeypatch, tmp_path):

@@ -1417,13 +1417,8 @@ def _count_status_active_sessions() -> int:
 
     db = SessionDB(read_only=True)
     try:
-        sessions = db.list_sessions_rich(limit=50, compact_rows=True)
-        now = time.time()
-        return sum(
-            1 for s in sessions
-            if s.get("ended_at") is None
-            and (now - s.get("last_active", s.get("started_at", 0))) < 300
-        )
+        cutoff = time.time() - 300
+        return db.count_recent_active_listable_sessions(cutoff=cutoff, limit=50)
     finally:
         db.close()
 
@@ -2751,6 +2746,12 @@ def _collect_profile_gateway_topology() -> Dict[str, Any]:
         mode = "none"
 
     return {"profiles": profile_names, "gateway_mode": mode, "gateways": gateways}
+
+
+@app.get("/api/healthz")
+async def get_healthz():
+    """Constant-time process liveness for proxies and Desktop recovery."""
+    return {"ok": True}
 
 
 @app.get("/api/status")
@@ -15646,10 +15647,167 @@ def _aux_task_summary(aux_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
-def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
-    from agent.insights import InsightsEngine
+_USAGE_ANALYTICS_CACHE_SECONDS = 300
+_USAGE_ANALYTICS_PERSISTED_MAX_AGE_SECONDS = 3600
+_USAGE_ANALYTICS_PERSISTED_MAX_BYTES = 5 * 1024 * 1024
+_USAGE_ANALYTICS_PERSISTED_VERSION = 1
+_USAGE_ANALYTICS_MAX_DAYS = 365
+_USAGE_ANALYTICS_MAX_PENDING = 4
+_USAGE_ANALYTICS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="hermes-usage",
+)
+_USAGE_ANALYTICS_PENDING: Dict[
+    Tuple[str, int, Optional[Tuple[int, int]]], concurrent.futures.Future
+] = {}
+_USAGE_ANALYTICS_PENDING_LOCK = threading.Lock()
 
-    db = _open_session_db_for_profile(profile)
+
+def _usage_analytics_db_path(profile: Optional[str]) -> Path:
+    if not profile:
+        from hermes_state import DEFAULT_DB_PATH
+        return Path(DEFAULT_DB_PATH)
+    _name, home = _cron_profile_home(profile)
+    return Path(home) / "state.db"
+
+
+def _usage_analytics_persisted_path(db_path: str, days: int) -> Path:
+    """Return a profile/query-isolated path without exposing the DB path."""
+    key = hashlib.sha256(f"{Path(db_path).resolve()}\0{days}".encode()).hexdigest()
+    return get_hermes_home() / "cache" / "usage-analytics" / f"{key}.json"
+
+
+def _usage_analytics_db_identity(db_path: str) -> Optional[Tuple[int, int]]:
+    try:
+        info = Path(db_path).stat()
+    except OSError:
+        return None
+    return int(info.st_dev), int(info.st_ino)
+
+
+def _read_persisted_usage_analytics(
+    db_path: str,
+    days: int,
+) -> Optional[Dict[str, Any]]:
+    """Read a bounded, recent aggregate for stale-while-revalidate startup."""
+    path = _usage_analytics_persisted_path(db_path, days)
+    identity = _usage_analytics_db_identity(db_path)
+    if identity is None:
+        return None
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_size <= 0 or info.st_size > _USAGE_ANALYTICS_PERSISTED_MAX_BYTES:
+            return None
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(cached, dict):
+        return None
+    if cached.get("version") != _USAGE_ANALYTICS_PERSISTED_VERSION:
+        return None
+    if cached.get("days") != days:
+        return None
+    if cached.get("db_identity") != list(identity):
+        return None
+    written_at = cached.get("written_at")
+    if not isinstance(written_at, (int, float)):
+        return None
+    age = time.time() - float(written_at)
+    if age < 0 or age > _USAGE_ANALYTICS_PERSISTED_MAX_AGE_SECONDS:
+        return None
+    payload = cached.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    if _usage_analytics_db_identity(db_path) != identity:
+        return None
+    required = {"daily", "by_model", "totals", "period_days", "skills", "tools"}
+    return payload if required <= payload.keys() else None
+
+
+def _write_persisted_usage_analytics(
+    db_path: str,
+    days: int,
+    payload: Dict[str, Any],
+    *,
+    expected_db_identity: Optional[Tuple[int, int]] = None,
+) -> None:
+    """Atomically persist aggregate-only Usage data with private permissions."""
+    current_identity = _usage_analytics_db_identity(db_path)
+    identity = expected_db_identity or current_identity
+    if identity is None or current_identity != identity:
+        return
+    path = _usage_analytics_persisted_path(db_path, days)
+    tmp_path: Optional[str] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not stat.S_ISDIR(path.parent.lstat().st_mode):
+            return
+        os.chmod(path.parent, 0o700)
+        cached = {
+            "version": _USAGE_ANALYTICS_PERSISTED_VERSION,
+            "days": days,
+            "db_identity": list(identity),
+            "written_at": time.time(),
+            "payload": payload,
+        }
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(path.parent),
+            prefix=f".{path.stem}_",
+            suffix=".tmp",
+        )
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            handle = os.fdopen(fd, "w", encoding="utf-8")
+            fd = -1
+            with handle:
+                json.dump(cached, handle, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            # Replace the cache pathname itself rather than following a
+            # hostile final symlink to an arbitrary target.
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if fd >= 0:
+                os.close(fd)
+    except (OSError, TypeError, ValueError) as exc:
+        _log.debug("Unable to persist Usage analytics cache: %s", exc)
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+@functools.lru_cache(maxsize=16)
+def _compute_usage_analytics_cached(
+    db_path: str,
+    days: int,
+    db_identity: Optional[Tuple[int, int]],
+    cache_bucket: int,
+) -> Dict[str, Any]:
+    """Compute Usage data off-loop and briefly cache immutable output."""
+    del cache_bucket
+
+    from agent.insights import InsightsEngine
+    from hermes_state import SessionDB
+
+    database_path = Path(db_path)
+    observed_db_identity = _usage_analytics_db_identity(db_path)
+    if observed_db_identity != db_identity:
+        raise RuntimeError("Usage analytics database changed before refresh")
+    db = SessionDB(
+        db_path=database_path,
+        read_only=database_path.exists(),
+    )
+    initial_db_identity = _usage_analytics_db_identity(db_path)
+    if db_identity is not None and initial_db_identity != db_identity:
+        db.close()
+        raise RuntimeError("Usage analytics database changed while opening")
     try:
         cutoff = time.time() - (days * 86400)
         cur = db._conn.execute("""
@@ -15699,8 +15857,8 @@ def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
             FROM sessions WHERE started_at > ?
         """, (cutoff,))
         totals = dict(cur3.fetchone())
-        insights_report = InsightsEngine(db).generate(days=days)
-        skills = insights_report.get("skills", {
+        activity = InsightsEngine(db).generate_usage_activity(days=days)
+        skills = activity.get("skills", {
             "summary": {
                 "total_skill_loads": 0,
                 "total_skill_edits": 0,
@@ -15710,7 +15868,7 @@ def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
             "top_skills": [],
         })
 
-        return {
+        payload = {
             "daily": daily,
             "by_model": by_model,
             # Aux-task summary across models (vision, compression, ...). Lets
@@ -15721,15 +15879,73 @@ def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
             "skills": skills,
             # Per-tool-name call counts (already computed by InsightsEngine);
             # the desktop Capabilities page aggregates these per toolset.
-            "tools": insights_report.get("tools", []),
+            "tools": activity.get("tools", []),
         }
+        final_db_identity = _usage_analytics_db_identity(db_path)
+        if final_db_identity != initial_db_identity:
+            raise RuntimeError("Usage analytics database changed during refresh")
+        _write_persisted_usage_analytics(
+            db_path,
+            days,
+            payload,
+            expected_db_identity=initial_db_identity,
+        )
+        return payload
     finally:
         db.close()
 
 
+def _submit_usage_analytics(
+    db_path: str,
+    days: int,
+    cache_bucket: int,
+) -> concurrent.futures.Future:
+    """Single-flight and bound heavyweight Usage computations."""
+    db_identity = _usage_analytics_db_identity(db_path)
+    key = (db_path, days, db_identity)
+
+    with _USAGE_ANALYTICS_PENDING_LOCK:
+        existing = _USAGE_ANALYTICS_PENDING.get(key)
+        if existing is not None:
+            return existing
+        if len(_USAGE_ANALYTICS_PENDING) >= _USAGE_ANALYTICS_MAX_PENDING:
+            raise HTTPException(
+                status_code=503,
+                detail="Usage analytics is busy; retry shortly.",
+            )
+        future = _USAGE_ANALYTICS_EXECUTOR.submit(
+            _compute_usage_analytics_cached,
+            db_path,
+            days,
+            db_identity,
+            cache_bucket,
+        )
+        _USAGE_ANALYTICS_PENDING[key] = future
+
+    def _remove_completed(done: concurrent.futures.Future) -> None:
+        with _USAGE_ANALYTICS_PENDING_LOCK:
+            if _USAGE_ANALYTICS_PENDING.get(key) is done:
+                _USAGE_ANALYTICS_PENDING.pop(key, None)
+
+    future.add_done_callback(_remove_completed)
+    return future
+
+
 @app.get("/api/analytics/usage")
 async def get_usage_analytics(days: int = 30, profile: Optional[str] = None):
-    return await asyncio.to_thread(_get_usage_analytics, days, profile)
+    safe_days = min(_USAGE_ANALYTICS_MAX_DAYS, max(1, int(days)))
+    db_path = _usage_analytics_db_path(profile).resolve()
+    cache_bucket = int(time.monotonic() // _USAGE_ANALYTICS_CACHE_SECONDS)
+    persisted = _read_persisted_usage_analytics(str(db_path), safe_days)
+    try:
+        future = _submit_usage_analytics(str(db_path), safe_days, cache_bucket)
+    except (HTTPException, RuntimeError):
+        if persisted is not None:
+            return persisted
+        raise
+    if persisted is not None:
+        return persisted
+    return await asyncio.wrap_future(future)
 
 
 def _get_models_analytics(days: int = 30, profile: Optional[str] = None):
@@ -16132,6 +16348,36 @@ def _ws_client_is_allowed(ws: "WebSocket") -> bool:
     return client_host in _LOOPBACK_HOSTS
 
 
+def _ws_origin_matches_dashboard_public_url(origin: str) -> bool:
+    """Return whether an HTTP(S) origin is the configured public dashboard.
+
+    Ava's reverse proxy deliberately sends a loopback Host header to the
+    loopback-bound dashboard while browsers retain the public HTTPS Origin.
+    Accept only the exact validated ``dashboard.public_url`` authority; no
+    wildcard or suffix matching is permitted.
+    """
+    try:
+        parsed_origin = urllib.parse.urlparse(origin)
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.netloc:
+        return False
+
+    from hermes_cli.dashboard_auth.prefix import resolve_public_url
+
+    public_url = resolve_public_url()
+    if not public_url:
+        return False
+    try:
+        parsed_public = urllib.parse.urlparse(public_url)
+    except ValueError:
+        return False
+    return (
+        parsed_origin.scheme.lower() == parsed_public.scheme.lower()
+        and parsed_origin.netloc.lower() == parsed_public.netloc.lower()
+    )
+
+
 def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     """Return a Host/Origin rejection reason, or None when allowed.
 
@@ -16162,6 +16408,8 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
         return f"origin_mismatch origin={origin} bound={bound_host}"
 
     if not _is_accepted_host(parsed.netloc, bound_host):
+        if _ws_origin_matches_dashboard_public_url(origin):
+            return None
         return f"origin_mismatch origin={origin} bound={bound_host}"
     return None
 

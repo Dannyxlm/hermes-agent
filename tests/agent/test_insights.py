@@ -800,3 +800,170 @@ class TestEdgeCases:
         # Depending on timing, might catch the session if created <1s ago
         # Just verify it doesn't crash
         assert "empty" in report
+
+
+class TestUsageActivityFastPath:
+    def test_returns_tools_and_skills_without_full_insights_report(self, db):
+        db.create_session("usage", source="cli")
+        db.append_message(
+            "usage",
+            role="assistant",
+            content="",
+            tool_calls=[
+                {
+                    "id": "skill",
+                    "type": "function",
+                    "function": {
+                        "name": "skill_view",
+                        "arguments": '{"name":"debugging"}',
+                    },
+                },
+                {
+                    "id": "terminal",
+                    "type": "function",
+                    "function": {"name": "terminal", "arguments": "{}"},
+                },
+            ],
+        )
+
+        activity = InsightsEngine(db).generate_usage_activity(days=30)
+
+        assert {row["tool"] for row in activity["tools"]} == {
+            "skill_view",
+            "terminal",
+        }
+        assert activity["skills"]["summary"]["distinct_skills_used"] == 1
+        assert activity["skills"]["top_skills"][0]["skill"] == "debugging"
+
+    def test_partial_indexes_exist_and_legacy_fallback_preserves_results(self, db):
+        db.create_session("legacy", source="cli")
+        db.append_message(
+            "legacy",
+            role="assistant",
+            content="",
+            tool_calls=[{
+                "id": "terminal",
+                "type": "function",
+                "function": {"name": "terminal", "arguments": "{}"},
+            }],
+        )
+        engine = InsightsEngine(db)
+        assert engine._usage_indexes_available(engine._TOOL_USAGE_INDEX)
+        assert engine._usage_indexes_available(engine._ASSISTANT_TOOL_CALLS_INDEX)
+        assistant_columns = [
+            row["name"]
+            for row in db._conn.execute(
+                "PRAGMA index_info(idx_messages_assistant_tool_calls)"
+            ).fetchall()
+        ]
+        assert assistant_columns == ["session_id", "timestamp"]
+
+        expected = engine.generate_usage_activity(days=30)
+        db._conn.executescript(
+            """
+            DROP INDEX idx_messages_tool_usage;
+            DROP INDEX idx_messages_assistant_tool_calls;
+            """
+        )
+
+        assert engine.generate_usage_activity(days=30) == expected
+
+    def test_usage_queries_start_from_recent_sessions_then_probe_messages(self, db):
+        db.create_session("recent-plan", source="cli")
+        db.append_message(
+            "recent-plan",
+            role="assistant",
+            content="",
+            tool_calls=[{
+                "id": "terminal",
+                "type": "function",
+                "function": {"name": "terminal", "arguments": "{}"},
+            }],
+        )
+        traced = []
+        db._conn.set_trace_callback(traced.append)
+        try:
+            InsightsEngine(db).generate_usage_activity(days=30)
+        finally:
+            db._conn.set_trace_callback(None)
+
+        usage_selects = [
+            sql for sql in traced
+            if "idx_messages_" in sql
+            and "sqlite_master" not in sql
+            and sql.lstrip().upper().startswith("SELECT")
+        ]
+        assert len(usage_selects) == 2
+        for sql in usage_selects:
+            details = [
+                row["detail"]
+                for row in db._conn.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+            ]
+            session_step = next(
+                index for index, detail in enumerate(details)
+                if "SEARCH s USING INDEX idx_sessions_started" in detail
+            )
+            message_step = next(
+                index for index, detail in enumerate(details)
+                if "SEARCH m USING" in detail
+                and "idx_messages_" in detail
+                and "session_id=?" in detail
+            )
+            assert session_step < message_step, details
+            if "idx_messages_assistant_tool_calls" in sql:
+                assert not any(
+                    "COVERING" in detail and "idx_messages_assistant_tool_calls" in detail
+                    for detail in details
+                ), details
+
+    def test_old_message_history_does_not_drive_usage_scan(self, db):
+        now = time.time()
+        old_started_at = now - (400 * 86400)
+        old_sessions = [
+            (f"old-{index}", "cli", old_started_at)
+            for index in range(4000)
+        ]
+        db._conn.executemany(
+            "INSERT INTO sessions(id, source, started_at) VALUES (?, ?, ?)",
+            old_sessions,
+        )
+        db._conn.executemany(
+            """INSERT INTO messages(session_id, role, tool_calls, timestamp)
+               VALUES (?, 'assistant', ?, ?)""",
+            [
+                (
+                    session_id,
+                    '[{"function":{"name":"old_tool","arguments":"{}"}}]',
+                    old_started_at,
+                )
+                for session_id, _source, _started_at in old_sessions
+            ],
+        )
+        db.create_session("recent-bounded", source="cli")
+        db.append_message(
+            "recent-bounded",
+            role="assistant",
+            content="",
+            tool_calls=[{
+                "id": "recent",
+                "type": "function",
+                "function": {"name": "recent_tool", "arguments": "{}"},
+            }],
+        )
+
+        progress_callbacks = 0
+
+        def _count_progress():
+            nonlocal progress_callbacks
+            progress_callbacks += 1
+            return 0
+
+        db._conn.set_progress_handler(_count_progress, 100)
+        try:
+            activity = InsightsEngine(db).generate_usage_activity(days=30)
+        finally:
+            db._conn.set_progress_handler(None, 0)
+
+        assert [row["tool"] for row in activity["tools"]] == ["recent_tool"]
+        assert activity["tools"][0]["count"] == 1
+        assert progress_callbacks < 100

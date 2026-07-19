@@ -127,6 +127,18 @@ MAX_NORMALIZED_TEXT_LENGTH = 65_536  # 64 KB cap for normalized content parts
 MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array
 
 
+class SessionProviderResolutionError(RuntimeError):
+    """A session-scoped provider override could not be resolved safely."""
+
+    code = "session_provider_unavailable"
+
+
+class SessionModelOverrideUnavailableError(RuntimeError):
+    """Persisted session routing state could not be read safely."""
+
+    code = "session_model_override_unavailable"
+
+
 def _coerce_port(value: Any, default: int = DEFAULT_PORT) -> int:
     """Parse a listen port without letting malformed env/config values crash startup."""
     try:
@@ -1736,13 +1748,23 @@ class APIServerAdapter(BasePlatformAdapter):
             return None
         try:
             from gateway.run import _gateway_runner_ref
+
             runner = _gateway_runner_ref()
             if runner is None:
                 return None
+            rehydrate = getattr(runner, "_rehydrate_session_model_override", None)
+            if callable(rehydrate):
+                rehydrate(session_key)
             override = runner._session_model_overrides.get(session_key)
             return dict(override) if isinstance(override, dict) else None
         except Exception:
-            return None
+            # A successful lookup with no persisted row is represented by
+            # ``None`` above. Import, store, or rehydration failures must not
+            # masquerade as absence and silently route the session through
+            # global credentials.
+            raise SessionModelOverrideUnavailableError(
+                "persisted session model override is unavailable"
+            ) from None
 
     def _create_agent(
         self,
@@ -1786,7 +1808,6 @@ class APIServerAdapter(BasePlatformAdapter):
         from hermes_cli.tools_config import _get_platform_tools
 
         runtime_kwargs = _resolve_runtime_agent_kwargs()
-        reasoning_config = GatewayRunner._load_reasoning_config()
         model = _resolve_gateway_model()
 
         # When the primary provider's auth fails (expired token / 429 quota
@@ -1809,7 +1830,65 @@ class APIServerAdapter(BasePlatformAdapter):
         session_override = self._session_model_override_for(
             gateway_session_key or session_id
         )
-        if route and not session_override:
+        if session_override:
+            # The API adapter creates the agent itself, so merely suppressing
+            # a static route is not enough: apply the complete gateway
+            # session override here just as GatewayRunner does for native
+            # platform turns.  In particular, reasoning must be resolved from
+            # this effective model rather than the global/default model.
+            override_provider = session_override.get("provider")
+            if override_provider:
+                # Never carry credentials or endpoints from the global
+                # provider across a session-scoped provider boundary. A
+                # credential-less persisted override must re-resolve its own
+                # provider or fail locally before constructing AIAgent.
+                for key in (
+                    "provider",
+                    "api_key",
+                    "base_url",
+                    "api_mode",
+                    "command",
+                    "args",
+                    "credential_pool",
+                ):
+                    runtime_kwargs.pop(key, None)
+                if not session_override.get("api_key"):
+                    try:
+                        from gateway.run import _resolve_runtime_agent_kwargs_for_provider
+
+                        provider_kwargs = _resolve_runtime_agent_kwargs_for_provider(
+                            override_provider
+                        )
+                    except Exception:
+                        raise SessionProviderResolutionError(
+                            "session model override provider is unavailable"
+                        ) from None
+                    provider_kwargs.pop("model", None)
+                    runtime_kwargs.update(provider_kwargs)
+
+            override_model = session_override.get("model")
+            if override_model:
+                model = override_model
+            for key in (
+                "provider",
+                "api_key",
+                "base_url",
+                "api_mode",
+                "command",
+                "args",
+                "max_tokens",
+                "credential_pool",
+            ):
+                value = session_override.get(key)
+                if value is not None:
+                    runtime_kwargs[key] = list(value) if key == "args" else value
+
+            logger.debug(
+                "api_server session model override applied: model=%s provider=%s",
+                model,
+                runtime_kwargs.get("provider"),
+            )
+        elif route:
             if route.get("provider"):
                 # Resolve real credentials for the routed provider (mirrors
                 # the channel_overrides path in gateway/run.py) so a route
@@ -1840,11 +1919,10 @@ class APIServerAdapter(BasePlatformAdapter):
                 model,
                 runtime_kwargs.get("provider"),
             )
-        elif route and session_override:
-            logger.debug(
-                "api_server model route skipped: session /model override wins for %s",
-                gateway_session_key or session_id,
-            )
+        # Resolve reasoning only after fallback and request routing select the
+        # effective model, so per-model overrides cannot inherit the default
+        # model's effort accidentally.
+        reasoning_config = GatewayRunner._load_reasoning_config(model)
 
         user_config = _load_gateway_config()
         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))

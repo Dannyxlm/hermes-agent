@@ -439,7 +439,8 @@ def _print_setup_summary(config: dict, hermes_home):
         if browser_provider == "Browserbase":
             missing_browser_hint = (
                 "npm install -g agent-browser and set "
-                "BROWSERBASE_API_KEY/BROWSERBASE_PROJECT_ID"
+                "BROWSERBASE_API_KEY (project is inferred; "
+                "BROWSERBASE_PROJECT_ID is optional)"
             )
         elif browser_provider == "Browser Use":
             missing_browser_hint = (

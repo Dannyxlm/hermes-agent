@@ -416,7 +416,10 @@ def get_nous_subscription_features(
     direct_openai_tts = bool(resolve_openai_audio_api_key())
     direct_elevenlabs = bool(get_env_value("ELEVENLABS_API_KEY"))
     direct_camofox = bool(get_env_value("CAMOFOX_URL"))
-    direct_browserbase = bool(get_env_value("BROWSERBASE_API_KEY") and get_env_value("BROWSERBASE_PROJECT_ID"))
+    # Browserbase's current API infers the project from the API key. Keep an
+    # explicit BROWSERBASE_PROJECT_ID as an optional runtime override, but do
+    # not misreport key-only installations as unavailable.
+    direct_browserbase = bool(get_env_value("BROWSERBASE_API_KEY"))
     direct_browser_use = bool(get_env_value("BROWSER_USE_API_KEY"))
     direct_modal = has_direct_modal_credentials()
 
@@ -891,7 +894,7 @@ def _get_gateway_direct_credentials() -> Dict[str, bool]:
         ),
         "browser": bool(
             get_env_value("BROWSER_USE_API_KEY")
-            or (get_env_value("BROWSERBASE_API_KEY") and get_env_value("BROWSERBASE_PROJECT_ID"))
+            or get_env_value("BROWSERBASE_API_KEY")
         ),
     }
 

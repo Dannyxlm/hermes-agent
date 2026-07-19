@@ -3025,6 +3025,12 @@ def _reconnect_backoff(attempt: int) -> int:
     return min(30 * (2 ** (attempt - 1)), _RECONNECT_BACKOFF_CAP)
 
 
+class SessionModelOverrideReadError(RuntimeError):
+    """Persisted session routing state could not be restored safely."""
+
+    code = "session_model_override_unavailable"
+
+
 class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, GatewaySlashCommandsMixin):
     """
     Main gateway controller.
@@ -4107,6 +4113,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "api_key": override.get("api_key"),
                 "base_url": override.get("base_url"),
                 "api_mode": override.get("api_mode"),
+                "command": override.get("command"),
+                "args": list(override.get("args") or []),
                 "max_tokens": override.get("max_tokens"),
                 "credential_pool": override.get("credential_pool"),
             }
@@ -17373,11 +17381,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return
         try:
             persisted = store.get_model_override(session_key)
-        except Exception:
-            logger.debug(
-                "Failed to read persisted session model override", exc_info=True
+        except Exception as exc:
+            # Absence is represented by a successful ``None`` return below.
+            # A storage/read failure is materially different: silently
+            # treating it as absence would route this session through the
+            # global provider after restart. Keep both the outward error and
+            # log content free of store paths or persisted values.
+            logger.warning(
+                "Failed to read persisted session model override (%s)",
+                type(exc).__name__,
             )
-            return
+            raise SessionModelOverrideReadError(
+                "persisted session model override is unavailable"
+            ) from None
         if not persisted:
             return
         override: Dict[str, Any] = {
@@ -17387,23 +17403,28 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         }
         provider = persisted.get("provider")
         if provider:
-            # Re-resolve credentials for the persisted provider. On failure
-            # (e.g. credentials were removed since the switch) keep the
-            # credential-less override — _resolve_session_agent_runtime falls
-            # back to env-based resolution and applies model/provider on top.
+            # Re-resolve credentials for the exact persisted provider. A
+            # failure must not cache a credential-less override: the normal
+            # runtime path would then resolve the global provider and overlay
+            # only the persisted non-secret fields, mixing provider/base_url
+            # with a different provider's api_key or command transport.
             try:
                 runtime = _resolve_runtime_agent_kwargs_for_provider(provider)
                 override["api_key"] = runtime.get("api_key")
                 override["api_mode"] = runtime.get("api_mode")
+                override["command"] = runtime.get("command")
+                override["args"] = list(runtime.get("args") or [])
                 override["credential_pool"] = runtime.get("credential_pool")
                 if not override.get("base_url"):
                     override["base_url"] = runtime.get("base_url")
-            except Exception:
-                logger.debug(
-                    "Credential re-resolution failed for persisted override "
-                    "(provider=%s); using credential-less override",
-                    provider, exc_info=True,
+            except Exception as exc:
+                logger.warning(
+                    "Failed to restore persisted session model provider (%s)",
+                    type(exc).__name__,
                 )
+                raise SessionModelOverrideReadError(
+                    "persisted session model override provider is unavailable"
+                ) from None
         self._session_model_overrides[session_key] = override
         logger.info(
             "Rehydrated persisted /model override for session=%s: model=%s provider=%s",
@@ -17425,10 +17446,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not override:
             return model, runtime_kwargs
         model = override.get("model", model)
-        for key in ("provider", "api_key", "base_url", "api_mode", "credential_pool"):
+        if override.get("provider"):
+            # A session-scoped provider boundary must not retain transport or
+            # credentials from the global/channel provider. Persisted overrides
+            # rehydrate these fields from the exact provider above; live partial
+            # overrides fail credential-less instead of mixing providers.
+            for key in (
+                "provider",
+                "api_key",
+                "base_url",
+                "api_mode",
+                "command",
+                "args",
+                "credential_pool",
+            ):
+                runtime_kwargs.pop(key, None)
+        for key in (
+            "provider",
+            "api_key",
+            "base_url",
+            "api_mode",
+            "command",
+            "args",
+            "credential_pool",
+        ):
             val = override.get(key)
             if val is not None:
-                runtime_kwargs[key] = val
+                runtime_kwargs[key] = list(val) if key == "args" else val
         if (
             runtime_kwargs.get("api_key")
             and runtime_kwargs.get("credential_pool") is None
