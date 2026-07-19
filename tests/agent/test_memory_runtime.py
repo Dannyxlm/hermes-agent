@@ -290,6 +290,36 @@ def test_valid_snapshot_is_cached_for_multiple_turn_reads_without_replay(tmp_pat
     assert replay.code == "snapshot_replay"
 
 
+def test_runtime_hot_loads_a_new_signed_manifest_generation(tmp_path: Path) -> None:
+    env, runtime = _fixture(tmp_path)
+    controller = MemoryRuntimeController(env, now=NOW)
+    assert controller.authorize_explicit_read(
+        memory_provenance=_provenance(), tool_call_id="tool-before", now=NOW
+    ).allowed
+
+    rotated = _runtime_manifest(
+        policy_digest=runtime["policy"]["digest"],
+        config_digest=runtime["config"]["digest"],
+    )
+    rotated["manifest_id"] = "runtime-hermes-memory-v3-rotated"
+    rotated["generated_at"] = _timestamp(NOW + timedelta(minutes=1))
+    rotated["expires_at"] = _timestamp(NOW + timedelta(minutes=10))
+    runtime_path = Path(env[RUNTIME_MANIFEST_ENV])
+    snapshot_path = Path(env[SNAPSHOT_ENV])
+    digest_path = runtime_path.with_suffix(".sha256")
+    _write(runtime_path, rotated)
+    _write(snapshot_path, _envelope(_snapshot(rotated, issued_at=NOW + timedelta(minutes=1))))
+    _write(digest_path, f"{canonical_json_digest(rotated)}\n".encode())
+
+    refreshed = controller.authorize_explicit_read(
+        memory_provenance=_provenance(authenticated_at=NOW + timedelta(minutes=1)),
+        tool_call_id="tool-after",
+        now=NOW + timedelta(minutes=1),
+    )
+    assert refreshed.allowed is True
+    assert refreshed.code == "memory_read_allowed"
+
+
 def test_snapshot_expiry_subject_origin_and_missing_tool_id_deny_before_read(tmp_path: Path) -> None:
     env, _runtime = _fixture(tmp_path)
     controller = MemoryRuntimeController(env, now=NOW)
