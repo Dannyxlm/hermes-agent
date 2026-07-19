@@ -400,7 +400,13 @@ class MemoryRuntimeController:
         self._verifier: MemoryCapabilityVerifier | None = None
         self._snapshot_path: Path | None = None
         self._subject_bindings_path: Path | None = None
+        self._runtime_manifest_path: Path | None = None
+        self._runtime_manifest_digest_path: Path | None = None
+        self._runtime_manifest_digest = ""
+        self._runtime_public_key = b""
+        self._replay_guard: DurableSnapshotReplayGuard | None = None
         self._runtime_expires_at: datetime | None = None
+        self._generation_lock = threading.Lock()
         self._cache_lock = threading.Lock()
         self._cached_snapshot_digest = ""
         self._cached_decision: MemoryCapabilityDecision | None = None
@@ -443,8 +449,10 @@ class MemoryRuntimeController:
             bindings = load_memory_subject_bindings(env[SUBJECT_BINDINGS_ENV])
             config = _load_config(config_raw, bindings_digest=bindings.content_digest)
             policy = _load_policy(policy_raw)
-            expected_manifest_digest = _safe_digest(
-                env[RUNTIME_MANIFEST_DIGEST_ENV], code="memory_manifest_digest_invalid"
+            digest_path = _manifest_path.with_suffix(".sha256")
+            expected_manifest_digest = self._read_manifest_digest(
+                digest_path,
+                fallback=env[RUNTIME_MANIFEST_DIGEST_ENV],
             )
             try:
                 manifest = strict_json_loads(
@@ -464,6 +472,7 @@ class MemoryRuntimeController:
                     "memory_manifest_invalid", "memory runtime manifest is invalid"
                 ) from exc
 
+            replay_guard = DurableSnapshotReplayGuard(env[REPLAY_STATE_ENV])
             verifier = MemoryCapabilityVerifier.from_frozen_runtime_manifest(
                 manifest_raw,
                 expected_manifest_digest=expected_manifest_digest,
@@ -471,7 +480,7 @@ class MemoryRuntimeController:
                 observed_config_digest=config.observed_digest,
                 public_key=public_key,
                 now=current,
-                replay_guard=DurableSnapshotReplayGuard(env[REPLAY_STATE_ENV]),
+                replay_guard=replay_guard,
             )
             self._config = config
             self._policy = policy
@@ -480,6 +489,11 @@ class MemoryRuntimeController:
             self._subject_bindings_path = _absolute_path(
                 env[SUBJECT_BINDINGS_ENV], code="unsafe_subject_bindings_file"
             )
+            self._runtime_manifest_path = _manifest_path
+            self._runtime_manifest_digest_path = digest_path
+            self._runtime_manifest_digest = expected_manifest_digest
+            self._runtime_public_key = public_key
+            self._replay_guard = replay_guard
             self._runtime_expires_at = runtime_expires_at
         except Exception as exc:
             code = getattr(exc, "code", "memory_runtime_bootstrap_failed")
@@ -517,10 +531,96 @@ class MemoryRuntimeController:
         grant.update(self._config.provider_limits)
         return dict(grant)
 
+    @staticmethod
+    def _read_manifest_digest(path: Path, *, fallback: str) -> str:
+        if not path.exists():
+            return _safe_digest(fallback, code="memory_manifest_digest_invalid")
+        _path, raw = _read_regular_file(
+            str(path),
+            code="memory_manifest_digest_invalid",
+            maximum_bytes=128,
+        )
+        try:
+            value = raw.decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise MemoryRuntimeError(
+                "memory_manifest_digest_invalid", "runtime manifest digest is invalid"
+            ) from exc
+        return _safe_digest(value, code="memory_manifest_digest_invalid")
+
+    def _refresh_runtime_generation(self, current: datetime) -> str | None:
+        """Hot-bind an atomically published manifest generation when it changes."""
+
+        path = self._runtime_manifest_path
+        digest_path = self._runtime_manifest_digest_path
+        policy = self._policy
+        config = self._config
+        replay_guard = self._replay_guard
+        if (
+            path is None
+            or digest_path is None
+            or policy is None
+            or config is None
+            or replay_guard is None
+            or not self._runtime_public_key
+            or not digest_path.exists()
+        ):
+            return None
+        try:
+            expected = self._read_manifest_digest(
+                digest_path,
+                fallback=self._runtime_manifest_digest,
+            )
+        except Exception as exc:
+            return getattr(exc, "code", "memory_manifest_digest_invalid")
+        if expected == self._runtime_manifest_digest:
+            return None
+
+        with self._generation_lock:
+            if expected == self._runtime_manifest_digest:
+                return None
+            try:
+                _path, raw = _read_regular_file(
+                    str(path),
+                    code="memory_manifest_unavailable",
+                    maximum_bytes=_MAX_MANIFEST_BYTES,
+                )
+                manifest = strict_json_loads(
+                    raw,
+                    context="Hermes Memory V3 runtime manifest",
+                    maximum_bytes=_MAX_MANIFEST_BYTES,
+                )
+                runtime_expires_at = _parse_time(
+                    manifest.get("expires_at"), code="memory_manifest_time_invalid"
+                )
+                verifier = MemoryCapabilityVerifier.from_frozen_runtime_manifest(
+                    raw,
+                    expected_manifest_digest=expected,
+                    observed_policy_digest=policy.observed_digest,
+                    observed_config_digest=config.observed_digest,
+                    public_key=self._runtime_public_key,
+                    now=current,
+                    replay_guard=replay_guard,
+                )
+            except Exception as exc:
+                return getattr(exc, "code", "memory_runtime_generation_invalid")
+
+            self._verifier = verifier
+            self._runtime_manifest_digest = expected
+            self._runtime_expires_at = runtime_expires_at
+            with self._cache_lock:
+                self._cached_snapshot_digest = ""
+                self._cached_decision = None
+                self._cached_valid_until = None
+        return None
+
     def _snapshot_decision(self, *, now: datetime | None = None) -> MemoryCapabilityDecision:
         current = _safe_now(now)
         if self._bootstrap_failure:
             return _local_denial(self._bootstrap_failure)
+        refresh_failure = self._refresh_runtime_generation(current)
+        if refresh_failure is not None:
+            return _local_denial(refresh_failure)
         if self._verifier is None or self._snapshot_path is None or self._runtime_expires_at is None:
             return _local_denial("memory_runtime_unavailable")
 
