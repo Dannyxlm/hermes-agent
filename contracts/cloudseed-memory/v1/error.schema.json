@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:error",
+  "title": "MemoryProtocolErrorV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "error_id", "code", "failure_class", "local_reply_allowed", "retryable", "created_at"],
+  "properties": {
+    "schema_version": {"const": "memory-protocol-error/v1"},
+    "error_id": {"type": "string", "format": "uuid"},
+    "code": {"type": "string", "minLength": 1, "maxLength": 100},
+    "failure_class": {"enum": ["validation", "availability", "authorization", "compatibility", "provider", "indeterminate"]},
+    "local_reply_allowed": {"const": true},
+    "retryable": {"type": "boolean"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

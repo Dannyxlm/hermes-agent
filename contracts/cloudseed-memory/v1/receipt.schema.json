@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:receipt",
+  "title": "MemoryReceiptV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "receipt_id", "operation_id", "outcome", "source_revision", "policy_digest", "content_digest", "created_at"],
+  "properties": {
+    "schema_version": {"const": "memory-receipt/v1"},
+    "receipt_id": {"type": "string", "format": "uuid"},
+    "operation_id": {"type": "string", "format": "uuid"},
+    "outcome": {"enum": ["completed", "denied", "degraded", "unknown_outcome", "superseded"]},
+    "source_revision": {"type": "string", "minLength": 1, "maxLength": 240},
+    "policy_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

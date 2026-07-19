@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cloudseed:memory-protocol:v1:provenance",
+  "title": "MemoryTurnProvenanceV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provenance_id", "caller_id", "subject_id", "origin", "authenticated_at", "deployment_mode"],
+  "properties": {
+    "schema_version": {"const": "memory-provenance/v1"},
+    "provenance_id": {"type": "string", "format": "uuid"},
+    "caller_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "subject_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "origin": {"enum": ["telegram_private", "telegram_group", "photon_api", "desktop_websocket", "cli", "tui", "cron", "background", "webhook", "delegated"]},
+    "authenticated_at": {"type": "string", "format": "date-time"},
+    "deployment_mode": {"enum": ["local_only", "tools_only_read_containment"]}
+  }
+}
