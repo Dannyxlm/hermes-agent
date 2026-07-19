@@ -1316,6 +1316,8 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                             task_id=effective_task_id,
                             tool_call_id=getattr(tool_call, "id", None),
                         ),
+                        turn_envelope=getattr(agent, "_current_turn_envelope", None),
+                        tool_call_id=str(getattr(tool_call, "id", "") or ""),
                     )
                 return result
             function_result, function_args = _run_agent_tool_execution_middleware(
@@ -1452,7 +1454,14 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             _mem_result = None
             try:
                 def _execute(next_args: dict) -> Any:
-                    return agent._memory_manager.handle_tool_call(function_name, next_args)
+                    return agent._memory_manager.handle_tool_call(
+                        function_name,
+                        next_args,
+                        turn_envelope=getattr(agent, "_current_turn_envelope", None),
+                        tool_call_id=str(getattr(tool_call, "id", "") or ""),
+                        session_id=getattr(agent, "session_id", "") or "",
+                        profile=getattr(agent, "agent_identity", "") or "default",
+                    )
                 function_result, function_args = _run_agent_tool_execution_middleware(
                     agent,
                     function_name=function_name,

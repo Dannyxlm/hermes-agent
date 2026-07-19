@@ -625,6 +625,18 @@ class MemoryManager:
             return True
         return "messages" in signature.parameters
 
+    @staticmethod
+    def _provider_sync_accepts_turn_envelope(provider: MemoryProvider) -> bool:
+        """Return whether sync_turn opts into sealed turn provenance."""
+        try:
+            signature = inspect.signature(provider.sync_turn)
+        except (TypeError, ValueError):
+            return True
+        params = list(signature.parameters.values())
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+            return True
+        return "turn_envelope" in signature.parameters
+
     def sync_all(
         self,
         user_content: str,
@@ -632,6 +644,7 @@ class MemoryManager:
         *,
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
+        turn_envelope: Any = None,
     ) -> None:
         """Sync a completed turn to all providers.
 
@@ -662,19 +675,19 @@ class MemoryManager:
         def _run() -> None:
             for provider in providers:
                 try:
+                    sync_kwargs: Dict[str, Any] = {"session_id": session_id}
                     if messages is not None and self._provider_sync_accepts_messages(provider):
-                        provider.sync_turn(
-                            user_content,
-                            assistant_content,
-                            session_id=session_id,
-                            messages=messages,
-                        )
-                    else:
-                        provider.sync_turn(
-                            user_content,
-                            assistant_content,
-                            session_id=session_id,
-                        )
+                        sync_kwargs["messages"] = messages
+                    if (
+                        turn_envelope is not None
+                        and self._provider_sync_accepts_turn_envelope(provider)
+                    ):
+                        sync_kwargs["turn_envelope"] = turn_envelope
+                    provider.sync_turn(
+                        user_content,
+                        assistant_content,
+                        **sync_kwargs,
+                    )
                 except Exception as e:
                     logger.warning(
                         "Memory provider '%s' sync_turn failed: %s",
@@ -827,6 +840,23 @@ class MemoryManager:
         provider = self._tool_to_provider.get(tool_name)
         if provider is None:
             return tool_error(f"No memory provider handles tool '{tool_name}'")
+        # A caller can never supply its own capability. Replace any incoming
+        # value only with a receipt minted from the sealed runtime turn.
+        kwargs.pop("tool_receipt", None)
+        try:
+            from agent.memory_provenance import issue_memory_tool_receipt
+
+            tool_receipt = issue_memory_tool_receipt(
+                kwargs.get("turn_envelope"),
+                tool_name=tool_name,
+                tool_call_id=str(kwargs.get("tool_call_id") or ""),
+            )
+            if tool_receipt is not None:
+                kwargs["tool_receipt"] = tool_receipt
+        except Exception:
+            # Invalid/missing provenance remains a no-receipt call. Providers
+            # decide which read-only operations are still available.
+            pass
         try:
             return provider.handle_tool_call(tool_name, args, **kwargs)
         except Exception as e:
@@ -1012,6 +1042,7 @@ class MemoryManager:
         target: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
+        write_receipt: Any = None,
     ) -> None:
         """Notify external providers when the built-in memory tool writes.
 
@@ -1022,12 +1053,31 @@ class MemoryManager:
                 continue
             try:
                 metadata_mode = self._provider_memory_write_metadata_mode(provider)
-                if metadata_mode == "keyword":
-                    provider.on_memory_write(
-                        action, target, content, metadata=dict(metadata or {})
+                try:
+                    signature = inspect.signature(provider.on_memory_write)
+                    params = list(signature.parameters.values())
+                    accepts_receipt = (
+                        any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+                        or "write_receipt" in signature.parameters
                     )
+                except (TypeError, ValueError):
+                    accepts_receipt = True
+                if metadata_mode == "keyword":
+                    kwargs: Dict[str, Any] = {"metadata": dict(metadata or {})}
+                    if accepts_receipt:
+                        kwargs["write_receipt"] = write_receipt
+                    provider.on_memory_write(action, target, content, **kwargs)
                 elif metadata_mode == "positional":
-                    provider.on_memory_write(action, target, content, dict(metadata or {}))
+                    if accepts_receipt:
+                        provider.on_memory_write(
+                            action,
+                            target,
+                            content,
+                            dict(metadata or {}),
+                            write_receipt,
+                        )
+                    else:
+                        provider.on_memory_write(action, target, content, dict(metadata or {}))
                 else:
                     provider.on_memory_write(action, target, content)
             except Exception as e:
@@ -1066,6 +1116,8 @@ class MemoryManager:
         tool_args: Dict[str, Any],
         *,
         build_metadata: Optional[Callable[[], Dict[str, Any]]] = None,
+        turn_envelope: Any = None,
+        tool_call_id: str = "",
     ) -> None:
         """Mirror a built-in memory tool call to external providers.
 
@@ -1108,11 +1160,23 @@ class MemoryManager:
                 old_text = op.get("old_text")
                 if old_text:
                     metadata["old_text"] = str(old_text)
+                content = str(op.get("content") or "")
+                from agent.memory_provenance import issue_memory_write_receipt
+
+                write_receipt = issue_memory_write_receipt(
+                    turn_envelope,
+                    tool_call_id=tool_call_id,
+                    action=action,
+                    target=target,
+                    content=content,
+                    committed=True,
+                )
                 self.on_memory_write(
                     action,
                     target,
-                    str(op.get("content") or ""),
+                    content,
                     metadata=metadata,
+                    write_receipt=write_receipt,
                 )
             except Exception as e:
                 logger.debug("notify_memory_tool_write failed for op %s: %s", action, e)

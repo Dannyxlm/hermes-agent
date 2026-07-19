@@ -809,6 +809,7 @@ def run_codex_app_server_turn(
                 final_response=turn.final_text,
                 interrupted=False,
                 messages=messages,
+                turn_envelope=getattr(agent, "_current_turn_envelope", None),
             )
         except Exception:
             logger.debug("external memory sync raised", exc_info=True)

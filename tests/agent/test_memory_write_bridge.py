@@ -13,6 +13,11 @@ import pytest
 
 from agent.memory_manager import MemoryManager
 from agent.memory_provider import MemoryProvider
+from agent.memory_provenance import (
+    MemoryWriteReceipt,
+    issue_authenticated_origin,
+    issue_turn_envelope,
+)
 
 
 class _RecordingProvider(MemoryProvider):
@@ -143,3 +148,52 @@ def test_build_metadata_callback_is_merged_per_op():
             "metadata": {"session_id": "s1", "tool_name": "memory"},
         }
     ]
+
+
+def test_committed_write_forwards_typed_receipt_only_to_opted_in_provider():
+    class _ReceiptProvider(_RecordingProvider):
+        def on_memory_write(
+            self,
+            action,
+            target,
+            content,
+            metadata=None,
+            write_receipt=None,
+        ):
+            self.calls.append({
+                "action": action,
+                "target": target,
+                "content": content,
+                "metadata": dict(metadata or {}),
+                "write_receipt": write_receipt,
+            })
+
+    origin = issue_authenticated_origin(
+        runtime_class="gateway",
+        origin_class="authenticated_human_gateway",
+        platform="telegram",
+        profile="default",
+        principal_id="owner-1",
+        adapter_receipt_id="auth-1",
+        source_observation_id="observation-1",
+    )
+    envelope = issue_turn_envelope(
+        origin,
+        session_id="s1",
+        turn_id="t1",
+        message_id="m1",
+        user_content="remember this",
+    )
+    mgr = MemoryManager()
+    provider = _ReceiptProvider()
+    mgr.add_provider(provider)
+
+    mgr.notify_memory_tool_write(
+        json.dumps({"success": True}),
+        {"action": "add", "target": "user", "content": "stable fact"},
+        turn_envelope=envelope,
+        tool_call_id="tool-call-1",
+    )
+
+    assert len(provider.calls) == 1
+    assert isinstance(provider.calls[0]["write_receipt"], MemoryWriteReceipt)

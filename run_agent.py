@@ -3452,6 +3452,7 @@ class AIAgent:
         final_response: Any,
         interrupted: bool,
         messages: list | None = None,
+        turn_envelope: Any = None,
     ) -> None:
         """Mirror a completed turn into external memory providers.
 
@@ -3494,6 +3495,10 @@ class AIAgent:
             sync_kwargs = {"session_id": self.session_id or ""}
             if messages is not None:
                 sync_kwargs["messages"] = messages
+            if turn_envelope is None:
+                turn_envelope = getattr(self, "_current_turn_envelope", None)
+            if turn_envelope is not None:
+                sync_kwargs["turn_envelope"] = turn_envelope
             self._memory_manager.sync_all(
                 user_text,
                 response_text,

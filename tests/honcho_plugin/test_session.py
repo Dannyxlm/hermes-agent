@@ -193,6 +193,172 @@ class TestManagerCacheOps:
         assert s1_info["message_count"] == 1
 
 
+class TestHandleOnlyInitialization:
+    def test_local_handles_do_not_create_or_hydrate_remote_session_then_upgrade_once(self):
+        peer_calls = []
+        session_calls = []
+        context_calls = []
+
+        class RemoteSession:
+            def add_peers(self, peers):
+                self.peers = peers
+
+            def get_peer_configuration(self, peer):
+                return SimpleNamespace(observe_me=True, observe_others=False)
+
+            def context(self, **kwargs):
+                context_calls.append(kwargs)
+                raise AssertionError("handle-only or no-hydration upgrade called context")
+
+        remote = RemoteSession()
+
+        class FakeHoncho:
+            def peer(self, peer_id):
+                peer_calls.append(peer_id)
+                return SimpleNamespace(id=peer_id)
+
+            def session(self, session_id):
+                session_calls.append(session_id)
+                return remote
+
+        manager = HonchoSessionManager()
+        fake = FakeHoncho()
+        with patch.object(
+            HonchoSessionManager,
+            "honcho",
+            new_callable=lambda: property(lambda self: fake),
+        ):
+            local = manager.get_or_create(
+                "telegram:123",
+                hydrate_history=False,
+                create_remote_session=False,
+            )
+            assert local.metadata["_remote_session_ready"] is False
+            assert session_calls == []
+            assert context_calls == []
+
+            upgraded = manager.ensure_remote_session(
+                "telegram:123",
+                hydrate_history=False,
+            )
+            assert upgraded is local
+            assert upgraded.metadata["_remote_session_ready"] is True
+            assert session_calls == ["telegram-123"]
+            assert context_calls == []
+
+            manager.ensure_remote_session("telegram:123", hydrate_history=False)
+            assert session_calls == ["telegram-123"]
+        assert len(peer_calls) == 2
+
+
+class TestStrictToolsQueries:
+    @staticmethod
+    def _manager_with_session():
+        manager = HonchoSessionManager()
+        session = HonchoSession(
+            key="telegram:123",
+            user_peer_id="danny",
+            assistant_peer_id="ava",
+            honcho_session_id="telegram-123",
+            metadata={"_remote_session_ready": False},
+        )
+        manager._cache[session.key] = session
+        return manager, session
+
+    def test_human_search_calls_workspace_once_and_filters_assistant_authorship(self):
+        manager, session = self._manager_with_session()
+        fake_honcho = MagicMock()
+        fake_honcho.search.return_value = [
+            SimpleNamespace(
+                id="u1",
+                session_id="s",
+                peer_id="danny",
+                content="human",
+                metadata={
+                    "human_authored": True,
+                    "eligible": True,
+                    "policy_revision": "policy-v1",
+                    "writer_release": "writer-v1",
+                },
+            ),
+            SimpleNamespace(
+                id="legacy",
+                session_id="s",
+                peer_id="danny",
+                content="untagged legacy",
+                metadata={},
+            ),
+            SimpleNamespace(
+                id="a1", session_id="s", peer_id="ava", content="assistant", metadata={}
+            ),
+        ]
+        with patch.object(
+            HonchoSessionManager,
+            "honcho",
+            new_callable=lambda: property(lambda self: fake_honcho),
+        ):
+            result = manager.strict_human_search(
+                session.key,
+                "fact",
+                limit=8,
+                policy_revision="policy-v1",
+                writer_release="writer-v1",
+            )
+
+        assert result == [{"id": "u1", "session_id": "s", "content": "human"}]
+        fake_honcho.search.assert_called_once_with(
+            query="fact",
+            filters={
+                "AND": [
+                    {"peer_id": "danny"},
+                    {"metadata": {
+                        "human_authored": True,
+                        "eligible": True,
+                        "policy_revision": "policy-v1",
+                        "writer_release": "writer-v1",
+                    }},
+                ]
+            },
+            limit=8,
+        )
+
+    def test_peer_context_calls_peer_once_and_never_session_context(self):
+        manager, session = self._manager_with_session()
+        observer = MagicMock()
+        observer.context.return_value = SimpleNamespace(
+            representation="bounded representation",
+            peer_card=["Name: Danny"],
+        )
+        remote_session = MagicMock()
+        manager._sessions_cache[session.honcho_session_id] = remote_session
+        manager._resolve_observer_target = MagicMock(return_value=("ava", "danny"))
+        manager._get_or_create_peer = MagicMock(return_value=observer)
+
+        result = manager.strict_peer_context(
+            session.key,
+            "user",
+            search_query="current projects",
+            search_top_k=5,
+            search_max_distance=0.35,
+            include_most_frequent=False,
+            max_conclusions=8,
+        )
+
+        assert result == {
+            "representation": "bounded representation",
+            "card": ["Name: Danny"],
+        }
+        observer.context.assert_called_once_with(
+            target="danny",
+            search_query="current projects",
+            search_top_k=5,
+            search_max_distance=0.35,
+            include_most_frequent=False,
+            max_conclusions=8,
+        )
+        remote_session.context.assert_not_called()
+
+
 class TestPeerLookupHelpers:
     def _make_cached_manager(self):
         mgr = HonchoSessionManager()

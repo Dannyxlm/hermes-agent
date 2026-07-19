@@ -15,6 +15,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agent.context_compressor import ContextCompressor
+from agent.memory_provenance import (
+    bind_memory_origin,
+    clear_memory_origin,
+    issue_authenticated_origin,
+    validate_turn_envelope,
+)
 from agent.turn_context import TurnContext, build_turn_context
 from hermes_state import SessionDB
 
@@ -208,6 +214,83 @@ def test_persist_user_message_becomes_original():
     assert ctx.original_user_message == "clean"
     # but the appended user turn carries the full (sanitized) message.
     assert ctx.messages[-1]["content"] == "api-prefixed"
+
+
+def test_turn_context_snapshots_authenticated_origin_against_clean_user_message():
+    agent = _FakeAgent()
+    receipt = issue_authenticated_origin(
+        runtime_class="gateway",
+        origin_class="authenticated_human_gateway",
+        platform="telegram",
+        profile="default",
+        principal_id="owner-1",
+        adapter_receipt_id="auth-1",
+        source_observation_id="observation-1",
+    )
+    token = bind_memory_origin(receipt)
+    try:
+        ctx = _build(
+            agent,
+            user_message="[API NOTE]\nclean message",
+            persist_user_message="clean message",
+        )
+    finally:
+        clear_memory_origin(token)
+
+    assert ctx.memory_turn_envelope is agent._current_turn_envelope
+    assert validate_turn_envelope(
+        ctx.memory_turn_envelope,
+        user_content="clean message",
+        session_id=agent.session_id,
+        turn_id=ctx.turn_id,
+        consume=False,
+    )
+    assert not validate_turn_envelope(
+        ctx.memory_turn_envelope,
+        user_content="[API NOTE]\nclean message",
+        session_id=agent.session_id,
+        turn_id=ctx.turn_id,
+        consume=False,
+    )
+
+
+def test_turn_envelope_uses_same_flattened_multimodal_text_as_final_sync():
+    agent = _FakeAgent()
+    payload = [
+        {"type": "text", "text": "describe this"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,fixture"}},
+    ]
+    receipt = issue_authenticated_origin(
+        runtime_class="gateway",
+        origin_class="authenticated_human_gateway",
+        platform="telegram",
+        profile="default",
+        principal_id="owner-1",
+        adapter_receipt_id="auth-1",
+        source_observation_id="observation-1",
+    )
+
+    def summarize(value, sep=" "):
+        if isinstance(value, list):
+            return sep.join(
+                part["text"] for part in value
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            )
+        return value
+
+    token = bind_memory_origin(receipt)
+    try:
+        ctx = _build(agent, user_message=payload, summarize_user_message_for_log=summarize)
+    finally:
+        clear_memory_origin(token)
+
+    assert validate_turn_envelope(
+        ctx.memory_turn_envelope,
+        user_content="describe this",
+        session_id=agent.session_id,
+        turn_id=ctx.turn_id,
+        consume=False,
+    )
 
 
 def test_pending_cli_message_carries_durable_marker_to_new_turn_dict():

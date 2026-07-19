@@ -42,6 +42,7 @@ def finalize_turn(
     original_user_message,
     _should_review_memory,
     _turn_exit_reason,
+    memory_turn_envelope=None,
     _pending_verification_response=None,
 ):
     """Run the post-loop finalization and return the turn ``result`` dict.
@@ -504,6 +505,7 @@ def finalize_turn(
         final_response=final_response,
         interrupted=interrupted,
         messages=messages,
+        turn_envelope=memory_turn_envelope,
     )
 
     # Background memory/skill review — runs AFTER the response is delivered

@@ -18,6 +18,7 @@ import os
 import logging
 import hashlib
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -187,6 +188,25 @@ def _parse_string_map(host_obj: dict, root_obj: dict, key: str) -> dict[str, str
         alias_value = str(raw_value).strip() if raw_value is not None else ""
         if alias_key and alias_value:
             result[alias_key] = alias_value
+    return result
+
+
+def _parse_string_list(
+    host_obj: dict,
+    root_obj: dict,
+    key: str,
+    *,
+    default: list[str] | None = None,
+) -> list[str]:
+    """Parse a unique non-empty string list with host-level whole-list override."""
+    source = host_obj[key] if key in host_obj else root_obj.get(key, default or [])
+    if not isinstance(source, list):
+        return list(default or [])
+    result: list[str] = []
+    for raw_value in source:
+        value = str(raw_value).strip() if raw_value is not None else ""
+        if value and value not in result:
+            result.append(value)
     return result
 
 
@@ -460,6 +480,99 @@ class HonchoClientConfig:
     # block exists or enabled was set explicitly), vs auto-enabled from a
     # stray HONCHO_API_KEY env var.
     explicitly_configured: bool = False
+    # H2 effective-config / provenance gate. Legacy context/hybrid configs keep
+    # their prior behavior; tools-only activation must pass every check below.
+    config_valid: bool = True
+    config_error: str = ""
+    config_revision: str = ""
+    canonical_host_present: bool = False
+    effective_host_count: int = 0
+    provider_state: str = "legacy"
+    provider_state_explicit: bool = False
+    capability_state: str = "unsupported_api"
+    capability_receipt_sha256: str = ""
+    capability_receipt_path: str = ""
+    capability_config_revision: str = ""
+    trusted_principal_ids: list[str] = field(default_factory=list)
+    eligible_profiles: list[str] = field(default_factory=lambda: ["default"])
+    allow_local_cli_writes: bool = False
+    policy_revision: str = ""
+    writer_release: str = ""
+    tool_deadline_seconds: float = 2.0
+    reasoning_deadline_seconds: float = 8.0
+    reasoning_estimated_cost_usd: float = 0.0
+    reasoning_receipt_path: str = ""
+    reasoning_reservation_path: str = ""
+    reasoning_reservation_key_path: str = ""
+    reasoning_reservation_key_sha256: str = ""
+
+    def tools_activation_errors(self) -> list[str]:
+        """Return deterministic fail-closed reasons for H2 tools-only activation."""
+        if self.recall_mode != "tools":
+            return []
+        errors: list[str] = []
+        if not self.provider_state_explicit:
+            errors.append("missing_explicit_provider_state")
+        if not self.config_valid:
+            errors.append("invalid_config")
+        if not self.canonical_host_present:
+            errors.append("missing_canonical_host")
+        if self.effective_host_count != 1:
+            errors.append("ambiguous_host_config")
+        if not self.enabled:
+            errors.append("provider_not_enabled")
+        if self.provider_state != "tools_only":
+            errors.append("wrong_provider_state")
+        if self.init_on_session_start:
+            errors.append("eager_init_forbidden")
+        if self.save_messages:
+            errors.append("automatic_observation_not_contained")
+        if self.peer_name != "danny" or not self.pin_peer_name:
+            errors.append("canonical_peer_not_pinned")
+        if (
+            not self.user_observe_me
+            or self.user_observe_others
+            or self.ai_observe_me
+            or self.ai_observe_others
+        ):
+            errors.append("observation_policy_mismatch")
+        if self.dialectic_depth != 1 or self.dialectic_dynamic:
+            errors.append("reasoning_depth_mismatch")
+        if self.reasoning_heuristic or self.query_rewrite:
+            errors.append("hidden_reasoning_path_enabled")
+        if self.capability_state != "supported":
+            errors.append("unsupported_capability_state")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.capability_receipt_sha256 or ""):
+            errors.append("missing_capability_receipt")
+        if not self.capability_receipt_path or not Path(self.capability_receipt_path).is_absolute():
+            errors.append("invalid_capability_receipt_path")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.capability_config_revision or ""):
+            errors.append("missing_capability_config_revision")
+        if self.eligible_profiles != ["default"]:
+            errors.append("write_eligible_profiles_not_default_only")
+        if not self.trusted_principal_ids:
+            errors.append("missing_trusted_principal")
+        if self.allow_local_cli_writes:
+            errors.append("local_cli_writes_not_disabled")
+        if self.policy_revision != "memory-source-policy/v1":
+            errors.append("policy_revision_mismatch")
+        if self.writer_release != "hermes-memory-boundary/v1":
+            errors.append("writer_release_mismatch")
+        if not self.reasoning_receipt_path or not Path(self.reasoning_receipt_path).is_absolute():
+            errors.append("invalid_reasoning_receipt_path")
+        if not self.reasoning_reservation_path or not Path(self.reasoning_reservation_path).is_absolute():
+            errors.append("invalid_reasoning_reservation_path")
+        if not self.reasoning_reservation_key_path or not Path(self.reasoning_reservation_key_path).is_absolute():
+            errors.append("invalid_reasoning_reservation_key_path")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.reasoning_reservation_key_sha256 or ""):
+            errors.append("invalid_reasoning_reservation_key_sha256")
+        if self.reasoning_reservation_path == self.reasoning_receipt_path:
+            errors.append("reasoning_reservation_and_receipt_paths_overlap")
+        if not 0 <= self.reasoning_estimated_cost_usd <= 1000:
+            errors.append("invalid_reasoning_estimated_cost")
+        if not 0.1 <= self.reasoning_deadline_seconds <= 30:
+            errors.append("invalid_reasoning_deadline")
+        return errors
 
     @classmethod
     def from_env(
@@ -501,10 +614,63 @@ class HonchoClientConfig:
             return cls.from_env(host=resolved_host)
 
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to read %s: %s, falling back to env", path, e)
-            return cls.from_env(host=resolved_host)
+            config_bytes = path.read_bytes()
+            raw = json.loads(config_bytes)
+            if not isinstance(raw, dict):
+                raise ValueError("config root must be an object")
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            logger.warning("Failed to validate %s; Honcho remains disabled", path)
+            return cls(
+                host=resolved_host,
+                enabled=False,
+                config_valid=False,
+                config_error="invalid_config",
+                config_revision=(
+                    hashlib.sha256(config_bytes).hexdigest()
+                    if "config_bytes" in locals()
+                    else ""
+                ),
+            )
+
+        config_revision = hashlib.sha256(config_bytes).hexdigest()
+        hosts = raw.get("hosts", {})
+        if hosts is None:
+            hosts = {}
+        if not isinstance(hosts, dict):
+            return cls(
+                host=resolved_host,
+                enabled=False,
+                config_valid=False,
+                config_error="invalid_hosts",
+                config_revision=config_revision,
+            )
+        canonical_host_present = resolved_host in hosts
+        legacy_host = ""
+        if resolved_host.startswith(f"{HOST}_"):
+            legacy_host = f"{HOST}.{resolved_host[len(HOST) + 1:]}"
+        effective_host_count = int(canonical_host_present) + int(
+            bool(legacy_host and legacy_host in hosts)
+        )
+        if canonical_host_present and not isinstance(hosts.get(resolved_host), dict):
+            return cls(
+                host=resolved_host,
+                enabled=False,
+                config_valid=False,
+                config_error="invalid_host_block",
+                config_revision=config_revision,
+                canonical_host_present=True,
+                effective_host_count=effective_host_count,
+            )
+        if legacy_host and legacy_host in hosts and not isinstance(hosts.get(legacy_host), dict):
+            return cls(
+                host=resolved_host,
+                enabled=False,
+                config_valid=False,
+                config_error="invalid_legacy_host_block",
+                config_revision=config_revision,
+                canonical_host_present=canonical_host_present,
+                effective_host_count=effective_host_count,
+            )
 
         host_block = _host_block(raw, resolved_host)
         # A hosts.hermes block or explicit enabled flag means the user
@@ -732,6 +898,73 @@ class HonchoClientConfig:
             sessions=raw.get("sessions", {}),
             raw=raw,
             explicitly_configured=_explicitly_configured,
+            config_valid=True,
+            config_error="",
+            config_revision=config_revision,
+            canonical_host_present=canonical_host_present,
+            effective_host_count=effective_host_count,
+            provider_state=_parse_optional_string(
+                host_block, raw, "providerState", "legacy"
+            ),
+            provider_state_explicit=(
+                "providerState" in host_block or "providerState" in raw
+            ),
+            capability_state=_parse_optional_string(
+                host_block, raw, "capabilityState", "unsupported_api"
+            ),
+            capability_receipt_sha256=_parse_optional_string(
+                host_block, raw, "capabilityReceiptSha256", ""
+            ),
+            capability_receipt_path=_parse_optional_string(
+                host_block, raw, "capabilityReceiptPath", ""
+            ),
+            capability_config_revision=_parse_optional_string(
+                host_block, raw, "capabilityConfigRevision", ""
+            ),
+            trusted_principal_ids=_parse_string_list(
+                host_block, raw, "trustedPrincipalIds"
+            ),
+            eligible_profiles=_parse_string_list(
+                host_block, raw, "eligibleProfiles", default=["default"]
+            ),
+            allow_local_cli_writes=_resolve_bool(
+                host_block.get("allowLocalCliWrites"),
+                raw.get("allowLocalCliWrites"),
+                default=False,
+            ),
+            policy_revision=_parse_optional_string(
+                host_block, raw, "policyRevision", ""
+            ),
+            writer_release=_parse_optional_string(
+                host_block, raw, "writerRelease", ""
+            ),
+            tool_deadline_seconds=_parse_float_config(
+                host_block.get("toolDeadlineSeconds"),
+                raw.get("toolDeadlineSeconds"),
+                2.0,
+            ),
+            reasoning_deadline_seconds=_parse_float_config(
+                host_block.get("reasoningDeadlineSeconds"),
+                raw.get("reasoningDeadlineSeconds"),
+                8.0,
+            ),
+            reasoning_estimated_cost_usd=_parse_float_config(
+                host_block.get("reasoningEstimatedCostUsd"),
+                raw.get("reasoningEstimatedCostUsd"),
+                0.0,
+            ),
+            reasoning_receipt_path=_parse_optional_string(
+                host_block, raw, "reasoningReceiptPath", ""
+            ),
+            reasoning_reservation_path=_parse_optional_string(
+                host_block, raw, "reasoningReservationPath", ""
+            ),
+            reasoning_reservation_key_path=_parse_optional_string(
+                host_block, raw, "reasoningReservationKeyPath", ""
+            ),
+            reasoning_reservation_key_sha256=_parse_optional_string(
+                host_block, raw, "reasoningReservationKeySha256", ""
+            ),
         )
 
     @staticmethod
