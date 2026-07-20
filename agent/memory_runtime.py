@@ -68,11 +68,13 @@ _SENSITIVE_TARGET_KEY_RE = re.compile(
     r"(?:api_?key|token|secret|password|credential|private_?key)", re.IGNORECASE
 )
 
-# Private memory is never available to a group, webhook, cron, background,
-# restored, or delegated origin, even if a deployment file accidentally names
-# one.  API/Desktop origins still need authenticated, sealed provenance.
+# Private memory is available only to authenticated owner channels. Exact
+# configured Danny+Ava-only Telegram room/topics are minted as the distinct
+# ``telegram_personal_group`` origin; ordinary groups, webhooks, crons,
+# background/restored/delegated work remain denied. API/Desktop origins still
+# need authenticated, sealed provenance.
 _PRIVATE_READ_ORIGINS = frozenset(
-    {"telegram_private", "cli", "tui", "photon_api", "desktop_websocket"}
+    {"telegram_private", "telegram_personal_group", "cli", "tui", "photon_api", "desktop_websocket"}
 )
 
 _MAX_CONFIG_BYTES = 64 * 1024

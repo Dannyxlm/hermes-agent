@@ -3031,6 +3031,34 @@ class SessionModelOverrideReadError(RuntimeError):
     code = "session_model_override_unavailable"
 
 
+_MEMORY_PERSONAL_TELEGRAM_TARGETS_ENV = "HERMES_MEMORY_PERSONAL_TELEGRAM_TARGETS"
+_MEMORY_PERSONAL_TELEGRAM_TARGET_RE = re.compile(r"^-[0-9]{1,24}:[0-9]{1,24}$")
+
+
+def _is_configured_personal_memory_telegram_target(source: SessionSource) -> bool:
+    """Match one exact group chat/topic configured by the trusted operator.
+
+    Sender-to-subject binding is checked separately before private authority is
+    usable. Requiring both a negative group chat ID and a numeric topic ID keeps
+    this exception narrower than Telegram group/user allowlists.
+    """
+
+    chat_id = str(getattr(source, "chat_id", "") or "").strip()
+    thread_id = str(getattr(source, "thread_id", "") or "").strip()
+    candidate = f"{chat_id}:{thread_id}"
+    if _MEMORY_PERSONAL_TELEGRAM_TARGET_RE.fullmatch(candidate) is None:
+        return False
+    raw = os.environ.get(_MEMORY_PERSONAL_TELEGRAM_TARGETS_ENV, "")
+    if not raw or len(raw) > 4096:
+        return False
+    configured = {
+        item.strip()
+        for item in raw.split(",")
+        if _MEMORY_PERSONAL_TELEGRAM_TARGET_RE.fullmatch(item.strip())
+    }
+    return candidate in configured
+
+
 def _issue_post_auth_memory_ingress(
     source: SessionSource,
     *,
@@ -3058,7 +3086,12 @@ def _issue_post_auth_memory_ingress(
     principal_id = str(getattr(source, "user_id", "") or "").strip()
 
     if platform == "telegram":
-        origin = "telegram_private" if chat_type in {"dm", "private"} else "telegram_group"
+        if chat_type in {"dm", "private"}:
+            origin = "telegram_private"
+        elif _is_configured_personal_memory_telegram_target(source):
+            origin = "telegram_personal_group"
+        else:
+            origin = "telegram_group"
     elif platform == "api_server":
         origin = "photon_api"
     elif platform in {"local", "tui"}:
@@ -3074,12 +3107,11 @@ def _issue_post_auth_memory_ingress(
         or getattr(source, "is_bot", False) is True
         or not principal_id
         or platform in {"api_server", "webhook", "homeassistant"}
-        # U3's only remote subject-binding boundary is authenticated Telegram
-        # private/group ingress. Other gateway transports (including a LOCAL
-        # adapter that is not the real interactive CLI/TUI boundary) remain
-        # explicitly synthetic even if a permissive bindings file mentions
-        # them. This also makes every delegated origin deny by construction.
-        or origin not in {"telegram_private", "telegram_group"}
+        # U3's remote subject-binding boundary is authenticated Telegram owner
+        # ingress. Ordinary groups stay distinguishable and are denied by the
+        # runtime; exact operator-configured personal room/topics are minted as
+        # ``telegram_personal_group``.
+        or origin not in {"telegram_private", "telegram_personal_group", "telegram_group"}
     ):
         return issue_synthetic_ingress(
             origin=origin,
