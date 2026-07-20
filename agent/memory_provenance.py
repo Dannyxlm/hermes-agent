@@ -54,6 +54,7 @@ MAX_PROXY_CLOCK_SKEW_SECONDS = 5
 _ORIGINS = frozenset(
     {
         "telegram_private",
+        "telegram_personal_group",
         "telegram_group",
         "photon_api",
         "desktop_websocket",
