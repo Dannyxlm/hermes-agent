@@ -179,6 +179,7 @@ def _fixture(tmp_path: Path) -> tuple[dict[str, str], dict]:
         "subject_id": "danny",
         "allowed_origins": [
             "telegram_private",
+            "telegram_personal_group",
             "cli",
             "tui",
             "photon_api",
@@ -329,6 +330,11 @@ def test_snapshot_expiry_subject_origin_and_missing_tool_id_deny_before_read(tmp
         tool_call_id="tool-subject",
         now=NOW,
     )
+    personal_group = controller.authorize_explicit_read(
+        memory_provenance=_provenance(origin="telegram_personal_group"),
+        tool_call_id="tool-personal-group",
+        now=NOW,
+    )
     group = controller.authorize_explicit_read(
         memory_provenance=_provenance(origin="telegram_group"),
         tool_call_id="tool-group",
@@ -338,6 +344,7 @@ def test_snapshot_expiry_subject_origin_and_missing_tool_id_deny_before_read(tmp
         memory_provenance=_provenance(), tool_call_id="", now=NOW
     )
     assert wrong_subject.code == "memory_subject_denied"
+    assert personal_group.allowed is True
     assert group.code == "memory_origin_denied"
     assert missing_id.code == "memory_provenance_denied"
 

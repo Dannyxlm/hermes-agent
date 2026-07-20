@@ -18,10 +18,13 @@ def _source(
     chat_type: str = "dm",
     platform: Platform = Platform.TELEGRAM,
     is_bot: bool = False,
+    chat_id: str = "chat-1",
+    thread_id: str | None = None,
 ):
     return SessionSource(
         platform=platform,
-        chat_id="chat-1",
+        chat_id=chat_id,
+        thread_id=thread_id,
         chat_type=chat_type,
         user_id=user_id,
         message_id="message-1",
@@ -70,6 +73,7 @@ def _turn(ingress):
 
 
 def test_telegram_private_and_group_owner_bind_danny_after_auth(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_MEMORY_PERSONAL_TELEGRAM_TARGETS", raising=False)
     monkeypatch.setenv("HERMES_MEMORY_SUBJECT_BINDINGS_FILE", str(_bindings_file(tmp_path)))
     private = _turn(
         _issue_post_auth_memory_ingress(_source(chat_type="dm"), internal=False)
@@ -87,6 +91,53 @@ def test_telegram_private_and_group_owner_bind_danny_after_auth(monkeypatch, tmp
         "danny",
         True,
     )
+
+
+def test_exact_personal_group_topic_gets_distinct_private_origin(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_MEMORY_SUBJECT_BINDINGS_FILE", str(_bindings_file(tmp_path)))
+    monkeypatch.setenv(
+        "HERMES_MEMORY_PERSONAL_TELEGRAM_TARGETS",
+        "-1003963755551:6453,-100999:88",
+    )
+    personal = _turn(
+        _issue_post_auth_memory_ingress(
+            _source(
+                chat_type="group",
+                chat_id="-1003963755551",
+                thread_id="6453",
+            ),
+            internal=False,
+        )
+    )
+    wrong_topic = _turn(
+        _issue_post_auth_memory_ingress(
+            _source(
+                chat_type="group",
+                chat_id="-1003963755551",
+                thread_id="6454",
+            ),
+            internal=False,
+        )
+    )
+    other_participant = _turn(
+        _issue_post_auth_memory_ingress(
+            _source(
+                chat_type="group",
+                chat_id="-1003963755551",
+                thread_id="6453",
+                user_id="other",
+            ),
+            internal=False,
+        )
+    )
+    assert (personal.origin, personal.subject_id, personal.authorizes_private_memory) == (
+        "telegram_personal_group",
+        "danny",
+        True,
+    )
+    assert wrong_topic.origin == "telegram_group"
+    assert other_participant.origin == "telegram_personal_group"
+    assert not other_participant.authorizes_private_memory
 
 
 def test_other_participant_internal_restored_bot_and_anonymous_are_denied(monkeypatch, tmp_path):

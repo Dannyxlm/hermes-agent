@@ -22,11 +22,12 @@
     "allowed_origins": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 5,
+      "maxItems": 6,
       "uniqueItems": true,
       "items": {
         "enum": [
           "telegram_private",
+          "telegram_personal_group",
           "cli",
           "tui",
           "photon_api",
