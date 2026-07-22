@@ -36,6 +36,9 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset({
     # host-local detail so readiness checks cannot spend their budget inside
     # cold plugin imports.
     "/api/health",
+    # Constant-time process liveness for proxies and Desktop reconnects. It
+    # performs no database, filesystem, provider, or topology work.
+    "/api/healthz",
     # Liveness probe target. Returns version, gateway state, active
     # session count, and the dashboard auth-gate shape. No bodies, no
     # session content, no secrets. Documented as the portal's wildcard

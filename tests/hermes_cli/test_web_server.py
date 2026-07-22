@@ -258,6 +258,17 @@ class TestWebServerEndpoints:
         self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
 
 
+    def test_healthz_is_dependency_free_liveness(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(
+            web_server,
+            "_count_status_active_sessions",
+            lambda: (_ for _ in ()).throw(AssertionError("rich status must not run")),
+        )
+        resp = self.client.get("/api/healthz")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
 
 
 
@@ -3516,4 +3527,3 @@ class TestDashboardComponentHealth:
         assert self.ws.DASHBOARD_HEALTH.selftest_status == "failing"
         assert self.ws.DASHBOARD_HEALTH.selftest_http_status == 500
         assert self.ws.DASHBOARD_HEALTH.snapshot()["status"] == "degraded"
-
