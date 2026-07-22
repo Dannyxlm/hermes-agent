@@ -1447,6 +1447,25 @@ class TestMemoryToolToolsetGate:
         assert tools == []
         assert names == set()
 
+    def test_empty_toolsets_blocks_injection_when_builtin_tool_is_present(self):
+        """A built-in memory schema must not bypass the external-tool gate."""
+        mgr = self._mgr_with_tools("fact_store")
+        agent = SimpleNamespace(
+            _memory_manager=mgr,
+            enabled_toolsets=[],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "memory", "parameters": {}},
+                }
+            ],
+            valid_tool_names={"memory"},
+        )
+
+        assert inject_memory_provider_tools(agent) == 0
+        assert [tool["function"]["name"] for tool in agent.tools] == ["memory"]
+        assert agent.valid_tool_names == {"memory"}
+
     def test_toolsets_without_memory_blocks_injection(self):
         """Toolsets that don't include memory must suppress injection."""
         mgr = self._mgr_with_tools("fact_store")
