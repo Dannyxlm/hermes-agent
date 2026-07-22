@@ -82,9 +82,10 @@ class TestResolveSessionPlatform:
 
 
 class TestResolveSessionSource:
-    def test_explicit_source_param_wins(self, clean_env):
+    @pytest.mark.parametrize("source", ("desktop", "telegram", "photon", "api_server"))
+    def test_explicit_native_source_param_wins(self, clean_env, source):
         _srv = _reload_resolver()
-        assert _srv._resolve_session_source("telegram") == "telegram"
+        assert _srv._resolve_session_source(source) == source
 
     def test_explicit_empty_source_falls_back_to_env(self, clean_env):
         clean_env.setenv("HERMES_DESKTOP", "1")
@@ -132,10 +133,11 @@ class TestResolveAgentPlatform:
 
 
 class TestSessionSourceFallback:
-    def test_session_source_uses_existing_session_value(self, clean_env):
+    @pytest.mark.parametrize("source", ("desktop", "telegram", "photon", "api_server"))
+    def test_session_source_uses_existing_native_value(self, clean_env, source):
         clean_env.setenv("HERMES_DESKTOP", "1")
         _srv = _reload_resolver()
-        assert _srv._session_source({"source": "telegram"}) == "telegram"
+        assert _srv._session_source({"source": source}) == source
 
     def test_session_source_defaults_to_desktop_under_desktop_backend(self, clean_env):
         clean_env.setenv("HERMES_DESKTOP", "1")

@@ -24,6 +24,7 @@ def _agent(tool_names, *, enabled=None, disabled=None):
     a.valid_tool_names = set(tool_names)
     a.enabled_toolsets = enabled
     a.disabled_toolsets = disabled
+    a._memory_provider_tool_names = set()
     return a
 
 
@@ -114,7 +115,8 @@ def test_refresh_preserves_memory_provider_and_context_engine_tools(monkeypatch)
     agent._memory_manager = types.SimpleNamespace(
         get_all_tool_schemas=lambda: [
             {"name": "memory_search", "description": "", "parameters": {}}
-        ]
+        ],
+        has_tool=lambda name: name == "memory_search",
     )
     agent.context_compressor = types.SimpleNamespace(
         get_tool_schemas=lambda: [
@@ -136,8 +138,32 @@ def test_refresh_preserves_memory_provider_and_context_engine_tools(monkeypatch)
     # The new MCP tool landed AND the injected families survived.
     assert "mcp_new_server_tool" in agent.valid_tool_names
     assert "memory_search" in agent.valid_tool_names   # not clobbered
+    assert agent._memory_provider_tool_names == {"memory_search"}
     assert "lcm_grep" in agent.valid_tool_names         # not clobbered
     assert added == {"mcp_new_server_tool"}
+
+
+def test_refresh_keeps_registry_ownership_on_memory_name_collision(monkeypatch):
+    agent = _agent(["read_file"])
+    agent._memory_manager = types.SimpleNamespace(
+        get_all_tool_schemas=lambda: [
+            {"name": "shared_search", "description": "memory", "parameters": {}}
+        ],
+        has_tool=lambda name: name == "shared_search",
+    )
+
+    import model_tools
+
+    monkeypatch.setattr(
+        model_tools,
+        "get_tool_definitions",
+        lambda **kw: [_tool("read_file"), _tool("shared_search")],
+    )
+
+    mcp_tool.refresh_agent_mcp_tools(agent)
+
+    assert agent.valid_tool_names == {"read_file", "shared_search"}
+    assert agent._memory_provider_tool_names == set()
 
 
 def test_refresh_respects_context_engine_toolset_gate(monkeypatch):

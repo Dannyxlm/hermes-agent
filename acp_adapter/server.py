@@ -844,6 +844,7 @@ class HermesACPAgent(acp.Agent):
             state.agent.valid_tool_names = {
                 tool["function"]["name"] for tool in state.agent.tools or []
             }
+            state.agent._memory_provider_tool_names = set()
             inject_memory_provider_tools(state.agent)
             invalidate = getattr(state.agent, "_invalidate_system_prompt", None)
             if callable(invalidate):
