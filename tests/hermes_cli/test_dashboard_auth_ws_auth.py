@@ -494,6 +494,59 @@ class TestWsHostOriginGuardOrigins:
         ws = self._ws(origin="http://evil.test", host="127.0.0.1:8080")
         assert web_server._ws_host_origin_is_allowed(ws) is False
 
+    def test_declared_public_origin_allowed_on_loopback_bind(
+        self, loopback_app, monkeypatch
+    ):
+        """A reverse-proxied Desktop origin is an explicit operator choice."""
+        monkeypatch.setenv(
+            "HERMES_DASHBOARD_PUBLIC_URL",
+            "https://dashboard.example.test/hermes",
+        )
+        ws = self._ws(
+            origin="https://dashboard.example.test",
+            host="127.0.0.1:8080",
+        )
+        assert web_server._ws_host_origin_is_allowed(ws) is True
+
+    def test_declared_public_origin_requires_matching_scheme(
+        self, loopback_app, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "HERMES_DASHBOARD_PUBLIC_URL",
+            "https://dashboard.example.test",
+        )
+        ws = self._ws(
+            origin="http://dashboard.example.test",
+            host="127.0.0.1:8080",
+        )
+        assert web_server._ws_host_origin_is_allowed(ws) is False
+
+    def test_declared_public_origin_requires_matching_authority(
+        self, loopback_app, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "HERMES_DASHBOARD_PUBLIC_URL",
+            "https://dashboard.example.test",
+        )
+        ws = self._ws(
+            origin="https://evil.example.test",
+            host="127.0.0.1:8080",
+        )
+        assert web_server._ws_host_origin_is_allowed(ws) is False
+
+    def test_declared_public_origin_does_not_bypass_host_guard(
+        self, loopback_app, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "HERMES_DASHBOARD_PUBLIC_URL",
+            "https://dashboard.example.test",
+        )
+        ws = self._ws(
+            origin="https://dashboard.example.test",
+            host="evil.example.test",
+        )
+        assert web_server._ws_host_origin_is_allowed(ws) is False
+
     def test_explicit_non_loopback_file_origin_allowed(self, insecure_explicit_host_app):
         """Packaged Hermes Desktop also uses file:// when connecting to a
         Tailscale/LAN dashboard bind.

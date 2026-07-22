@@ -268,6 +268,18 @@ class TestWebServerEndpoints:
         assert "active_sessions" in data
         assert data["can_update_hermes"] is True
 
+    def test_healthz_is_dependency_free_liveness(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(
+            web_server,
+            "_count_status_active_sessions",
+            lambda: (_ for _ in ()).throw(AssertionError("rich status must not run")),
+        )
+        resp = self.client.get("/api/healthz")
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
     def test_status_active_session_count_uses_read_only_db(self, monkeypatch, tmp_path):
         import hermes_cli.web_server as web_server
         import hermes_state
