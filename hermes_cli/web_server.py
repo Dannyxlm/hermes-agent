@@ -3071,6 +3071,12 @@ async def get_health():
     }
 
 
+@app.get("/api/healthz")
+async def get_healthz():
+    """Constant-time process liveness for proxies and Desktop recovery."""
+    return {"ok": True}
+
+
 @app.get("/api/status")
 async def get_status(profile: Optional[str] = None):
     status_scope = None
@@ -17335,6 +17341,38 @@ def _ws_client_is_allowed(ws: "WebSocket") -> bool:
     return client_host in _LOOPBACK_HOSTS
 
 
+def _ws_origin_matches_dashboard_public_url(origin: str) -> bool:
+    """Return whether an HTTP Origin matches the declared public dashboard.
+
+    A reverse-proxied dashboard can bind Hermes to loopback while browsers and
+    Hermes Desktop legitimately connect from its public HTTPS authority. The
+    normal Host check remains in force; this only gives the Origin check the
+    same explicit operator-declared authority used by dashboard redirects.
+    """
+    try:
+        parsed_origin = urllib.parse.urlparse(origin)
+    except ValueError:
+        return False
+    if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.netloc:
+        return False
+
+    try:
+        from hermes_cli.dashboard_auth.prefix import resolve_public_url
+
+        public_url = resolve_public_url()
+        parsed_public = urllib.parse.urlparse(public_url)
+    except Exception:  # noqa: BLE001 - malformed optional config must fail closed
+        _log.debug("failed to resolve dashboard public_url for WS Origin", exc_info=True)
+        return False
+    if parsed_public.scheme not in {"http", "https"} or not parsed_public.netloc:
+        return False
+
+    return (
+        parsed_origin.scheme.lower() == parsed_public.scheme.lower()
+        and parsed_origin.netloc.lower() == parsed_public.netloc.lower()
+    )
+
+
 def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     """Return a Host/Origin rejection reason, or None when allowed.
 
@@ -17365,6 +17403,8 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
         return f"origin_mismatch origin={origin} bound={bound_host}"
 
     if not _is_accepted_host(parsed.netloc, bound_host):
+        if _ws_origin_matches_dashboard_public_url(origin):
+            return None
         return f"origin_mismatch origin={origin} bound={bound_host}"
     return None
 

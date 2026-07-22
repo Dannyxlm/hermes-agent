@@ -77,8 +77,28 @@ def test_gated_status_is_public(gated_app):
     assert "gateway_state" in body
 
 
+def test_healthz_is_public_under_legacy_loopback_gate():
+    """The local release verifier probes healthz without a session token."""
+    prev_host = getattr(web_server.app.state, "bound_host", None)
+    prev_port = getattr(web_server.app.state, "bound_port", None)
+    prev_required = getattr(web_server.app.state, "auth_required", None)
+    web_server.app.state.bound_host = "127.0.0.1"
+    web_server.app.state.bound_port = 9119
+    web_server.app.state.auth_required = False
+    try:
+        client = TestClient(web_server.app, base_url="http://127.0.0.1:9119")
+        response = client.get("/api/healthz")
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+    finally:
+        web_server.app.state.bound_host = prev_host
+        web_server.app.state.bound_port = prev_port
+        web_server.app.state.auth_required = prev_required
+
+
 @pytest.mark.parametrize("path", [
     "/api/health",
+    "/api/healthz",
     "/api/config/defaults",
     "/api/config/schema",
     "/api/model/info",
