@@ -119,11 +119,15 @@ def inject_memory_provider_tools(agent: Any) -> int:
         for tool in tools
         if isinstance(tool, dict)
     }
+    previous_provider_names = set(
+        getattr(agent, "_memory_provider_tool_names", set()) or set()
+    )
     if not memory_provider_tools_enabled(
         getattr(agent, "enabled_toolsets", None),
         getattr(agent, "disabled_toolsets", None),
         memory_tool_present="memory" in existing_tool_names,
     ):
+        agent._memory_provider_tool_names = set()
         return 0
 
     get_schemas = getattr(memory_manager, "get_all_tool_schemas", None)
@@ -136,6 +140,7 @@ def inject_memory_provider_tools(agent: Any) -> int:
         agent.valid_tool_names = valid_tool_names
 
     added = 0
+    provider_tool_names = set()
     for raw_schema in get_schemas():
         schema = normalize_tool_schema(raw_schema)
         if schema is None:
@@ -147,13 +152,34 @@ def inject_memory_provider_tools(agent: Any) -> int:
             continue
         tool_name = schema["name"]
         if tool_name in existing_tool_names:
+            if tool_name in previous_provider_names:
+                provider_tool_names.add(tool_name)
             continue
         tools.append({"type": "function", "function": schema})
         valid_tool_names.add(tool_name)
         existing_tool_names.add(tool_name)
+        provider_tool_names.add(tool_name)
         added += 1
 
+    agent._memory_provider_tool_names = provider_tool_names
     return added
+
+
+def memory_provider_owns_tool(agent: Any, tool_name: str) -> bool:
+    """Return whether this agent advertised ``tool_name`` from its provider."""
+    memory_manager = getattr(agent, "_memory_manager", None)
+    if not memory_manager:
+        return False
+    provider_tool_names = getattr(agent, "_memory_provider_tool_names", None)
+    if provider_tool_names is None:
+        # Backward compatibility for lightweight embedders/test doubles that
+        # predate agent-level routing ownership. Real AIAgent instances always
+        # initialize the set before provider schema injection.
+        return memory_manager.has_tool(tool_name)
+    return bool(
+        tool_name in provider_tool_names
+        and memory_manager.has_tool(tool_name)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +453,26 @@ class MemoryManager:
 
         self._providers.append(provider)
 
+        self._rebuild_tool_routes()
+        tool_count = sum(
+            routed_provider is provider
+            for routed_provider in self._tool_to_provider.values()
+        )
+        logger.info(
+            "Memory provider '%s' registered (%d tools)",
+            provider.name,
+            tool_count,
+        )
+
+    def _rebuild_tool_routes(self) -> None:
+        """Re-index the tools currently exposed by registered providers.
+
+        Providers may discover capabilities during ``initialize()``. Rebuilding
+        after registration and again after initialization keeps dispatch in
+        sync with the schemas the provider actually exposes, while preserving
+        the registration-order "first provider wins" rule.
+        """
+
         # Core tool names are reserved — a memory provider must never register
         # a tool that shadows a built-in (e.g. ``clarify``, ``delegate_task``).
         # Built-ins always win, so such a tool is dropped at agent init and
@@ -438,36 +484,45 @@ class MemoryManager:
 
         _core_tool_names = set(_HERMES_CORE_TOOLS)
 
-        # Index tool names → provider for routing
-        for raw_schema in provider.get_tool_schemas():
-            schema = normalize_tool_schema(raw_schema)
-            if schema is None:
-                continue
-            tool_name = schema["name"]
-            if tool_name in _core_tool_names:
+        routes: Dict[str, MemoryProvider] = {}
+        for provider in self._providers:
+            try:
+                raw_schemas = provider.get_tool_schemas()
+            except Exception as e:
                 logger.warning(
-                    "Memory provider '%s' tool '%s' shadows a reserved core "
-                    "tool name; registration ignored. Core tools always win — "
-                    "rename the provider's tool to something unique.",
-                    provider.name, tool_name,
-                )
-                continue
-            if tool_name and tool_name not in self._tool_to_provider:
-                self._tool_to_provider[tool_name] = provider
-            elif tool_name in self._tool_to_provider:
-                logger.warning(
-                    "Memory tool name conflict: '%s' already registered by %s, "
-                    "ignoring from %s",
-                    tool_name,
-                    self._tool_to_provider[tool_name].name,
+                    "Memory provider '%s' get_tool_schemas() failed while "
+                    "rebuilding routes: %s",
                     provider.name,
+                    e,
                 )
+                continue
 
-        logger.info(
-            "Memory provider '%s' registered (%d tools)",
-            provider.name,
-            len(provider.get_tool_schemas()),
-        )
+            for raw_schema in raw_schemas:
+                schema = normalize_tool_schema(raw_schema)
+                if schema is None:
+                    continue
+                tool_name = schema["name"]
+                if tool_name in _core_tool_names:
+                    logger.warning(
+                        "Memory provider '%s' tool '%s' shadows a reserved core "
+                        "tool name; registration ignored. Core tools always win — "
+                        "rename the provider's tool to something unique.",
+                        provider.name,
+                        tool_name,
+                    )
+                    continue
+                if tool_name not in routes:
+                    routes[tool_name] = provider
+                else:
+                    logger.warning(
+                        "Memory tool name conflict: '%s' already registered by %s, "
+                        "ignoring from %s",
+                        tool_name,
+                        routes[tool_name].name,
+                        provider.name,
+                    )
+
+        self._tool_to_provider = routes
 
     @property
     def providers(self) -> List[MemoryProvider]:
@@ -808,7 +863,7 @@ class MemoryManager:
                     name = schema["name"]
                     if name in _core_tool_names:
                         continue
-                    if name not in seen:
+                    if self._tool_to_provider.get(name) is provider and name not in seen:
                         schemas.append(schema)
                         seen.add(name)
             except Exception as e:
@@ -1239,3 +1294,4 @@ class MemoryManager:
                     "Memory provider '%s' initialize failed: %s",
                     provider.name, e,
                 )
+        self._rebuild_tool_routes()

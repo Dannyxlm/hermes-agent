@@ -83,12 +83,29 @@ def test_aiagent_forwards_user_id_alt_to_memory_provider():
             platform="feishu",
             user_id="open-id",
             user_id_alt="union-id",
+            user_name="Owner",
+            chat_id="chat-1",
+            chat_name="Private chat",
+            chat_type="private",
+            thread_id="thread-1",
+            gateway_session_key="agent:main:feishu:dm:open-id",
         )
 
     assert agent._memory_manager is not None
+    assert agent._memory_store is None
     assert provider.init_session_id == "sess-alt"
     assert provider.init_kwargs["user_id"] == "open-id"
     assert provider.init_kwargs["user_id_alt"] == "union-id"
+    assert provider.init_kwargs["user_name"] == "Owner"
+    assert provider.init_kwargs["chat_id"] == "chat-1"
+    assert provider.init_kwargs["chat_name"] == "Private chat"
+    assert provider.init_kwargs["chat_type"] == "private"
+    assert provider.init_kwargs["thread_id"] == "thread-1"
+    assert provider.init_kwargs["gateway_session_key"] == (
+        "agent:main:feishu:dm:open-id"
+    )
+    assert provider.init_kwargs["agent_identity"] == "default"
+    assert provider.init_kwargs["agent_workspace"] == "hermes"
     assert provider.init_kwargs["platform"] == "feishu"
     assert "warning_callback" not in provider.init_kwargs
     assert "status_callback" not in provider.init_kwargs

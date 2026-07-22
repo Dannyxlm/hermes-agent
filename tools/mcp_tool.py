@@ -6401,9 +6401,13 @@ def refresh_agent_mcp_tools(
     # ``valid_tool_names`` / ``_context_engine_tool_names`` are never touched
     # until the single atomic publish below, so a concurrent reader
     # (``build_api_kwargs``) can't see a partial rebuild or a cross-attribute
-    # half-swap. ``staged_engine_names`` are the context-engine routing names
-    # this rebuild actually appended (matching agent_init's dedup-aware add).
-    staged_engine_names = _reinject_post_build_tools(agent, new_defs, new_names)
+    # half-swap. The staged routing-name sets contain only schemas this rebuild
+    # actually appended, so a registry/MCP collision keeps registry ownership.
+    staged_memory_names, staged_engine_names = _reinject_post_build_tools(
+        agent,
+        new_defs,
+        new_names,
+    )
 
     # Single atomic read-diff-publish so the returned ``added`` is consistent
     # with what was actually published, even under concurrent callers, and a
@@ -6424,12 +6428,30 @@ def refresh_agent_mcp_tools(
         }
         if new_names == current:
             # No change → leave the live snapshot untouched (no churn), but
-            # record the generation so an in-flight older caller can't clobber.
+            # refresh routing ownership: equal schema names can still have
+            # changed owners when a registry tool collides with an injected
+            # provider/context-engine tool.
+            memory_names = getattr(agent, "_memory_provider_tool_names", None)
+            if isinstance(memory_names, set):
+                memory_names.clear()
+                memory_names.update(staged_memory_names)
+            else:
+                agent._memory_provider_tool_names = set(staged_memory_names)
+            engine_names = getattr(agent, "_context_engine_tool_names", None)
+            if isinstance(engine_names, set):
+                engine_names.clear()
+                engine_names.update(staged_engine_names)
             agent._tool_snapshot_generation = max(published_gen, snapshot_generation)
             return set()
         agent.tools = new_defs
         agent.valid_tool_names = new_names
-        # Publish context-engine routing names atomically with the snapshot.
+        # Publish provider/context-engine routing names atomically with the snapshot.
+        memory_names = getattr(agent, "_memory_provider_tool_names", None)
+        if isinstance(memory_names, set):
+            memory_names.clear()
+            memory_names.update(staged_memory_names)
+        else:
+            agent._memory_provider_tool_names = set(staged_memory_names)
         engine_names = getattr(agent, "_context_engine_tool_names", None)
         if isinstance(engine_names, set):
             engine_names.clear()
@@ -6438,7 +6460,11 @@ def refresh_agent_mcp_tools(
         return new_names - current
 
 
-def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
+def _reinject_post_build_tools(
+    agent,
+    tools_list: list,
+    name_set: set,
+) -> tuple[set, set]:
     """Append memory-provider and context-engine tools onto staged locals.
 
     Mirrors the post-``get_tool_definitions`` injection in ``agent_init`` so a
@@ -6447,11 +6473,10 @@ def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
     / ``name_set`` (never the live agent attributes) so the rebuild stays atomic.
     Idempotent (skips names already present) and fail-soft.
 
-    Returns the set of context-engine routing names actually appended by THIS
-    rebuild — matching ``agent_init``'s dedup behavior (a name already provided
-    by a registry/plugin tool is NOT claimed for context-engine routing). The
-    caller publishes this into ``agent._context_engine_tool_names`` atomically
-    with the snapshot.
+    Returns the memory-provider and context-engine routing names actually
+    appended by THIS rebuild. A name already provided by a registry/plugin tool
+    is not claimed by either injected family. The caller publishes both sets
+    atomically with the snapshot.
     """
     def _add(schema: dict) -> bool:
         name = schema.get("name", "")
@@ -6462,6 +6487,7 @@ def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
         return True
 
     # Memory-provider tools (mem0/honcho/byterover/supermemory/…).
+    staged_memory_names: set = set()
     try:
         memory_manager = getattr(agent, "_memory_manager", None)
         get_mem_schemas = getattr(memory_manager, "get_all_tool_schemas", None) if memory_manager else None
@@ -6475,7 +6501,9 @@ def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
             ):
                 for schema in get_mem_schemas():
                     if isinstance(schema, dict):
-                        _add(schema)
+                        name = schema.get("name", "")
+                        if _add(schema) and name:
+                            staged_memory_names.add(name)
     except Exception:
         logger.debug("Memory-provider tool re-injection skipped", exc_info=True)
 
@@ -6504,7 +6532,7 @@ def _reinject_post_build_tools(agent, tools_list: list, name_set: set) -> set:
     except Exception:
         logger.debug("Context-engine tool re-injection skipped", exc_info=True)
 
-    return staged_engine_names
+    return staged_memory_names, staged_engine_names
 
 
 def shutdown_mcp_servers():
