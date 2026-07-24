@@ -134,6 +134,29 @@ def test_nous_dashboard_device_flow_ignores_legacy_scope_override(monkeypatch):
         ws._oauth_sessions.pop(result["session_id"], None)
 
 
+def test_claude_code_status_reports_configured_credential_path(monkeypatch, tmp_path):
+    from agent import anthropic_adapter
+    from hermes_cli import web_server as ws
+
+    cred_file = tmp_path / "managed-claude" / ".credentials.json"
+    monkeypatch.setattr(
+        anthropic_adapter,
+        "read_claude_code_credentials",
+        lambda: {
+            "accessToken": "configured-token",
+            "refreshToken": "configured-refresh",
+            "expiresAt": 123456,
+            "credentialsPath": str(cred_file),
+        },
+    )
+
+    status = ws._claude_code_only_status()
+
+    assert status["logged_in"] is True
+    assert status["source"] == "claude_code_cli"
+    assert status["source_label"] == str(cred_file)
+
+
 def test_oauth_provider_status_uses_profile_query(tmp_path, monkeypatch):
     from hermes_cli import web_server as ws
     from hermes_constants import get_hermes_home

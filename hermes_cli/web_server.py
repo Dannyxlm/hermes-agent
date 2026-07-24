@@ -10050,7 +10050,7 @@ def _claude_code_only_status() -> Dict[str, Any]:
         return {
             "logged_in": True,
             "source": "claude_code_cli",
-            "source_label": "~/.claude/.credentials.json",
+            "source_label": creds.get("credentialsPath") or "~/.claude/.credentials.json",
             "token_preview": _truncate_token(creds.get("accessToken")),
             "expires_at": creds.get("expiresAt"),
             "has_refresh_token": bool(creds.get("refreshToken")),

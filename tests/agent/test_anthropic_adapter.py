@@ -618,6 +618,47 @@ class TestWriteClaudeCodeCredentials:
         assert data["claudeAiOauth"]["refreshToken"] == "ref"
         assert data["claudeAiOauth"]["expiresAt"] == 12345
 
+    @pytest.mark.parametrize(
+        "config_env",
+        ["CLAUDE_CONFIG_DIR", "HERMES_CLAUDE_CODE_CONFIG_DIR"],
+    )
+    def test_reads_and_writes_explicit_claude_config_dir(
+        self, tmp_path, monkeypatch, config_env
+    ):
+        service_home = tmp_path / "service-home"
+        claude_config_dir = tmp_path / "hermes-home" / ".claude"
+        cred_file = claude_config_dir / ".credentials.json"
+        cred_file.parent.mkdir(parents=True)
+        cred_file.write_text(json.dumps({
+            "preserve": "me",
+            "claudeAiOauth": {
+                "accessToken": "configured-token",
+                "refreshToken": "configured-refresh",
+                "expiresAt": int(time.time() * 1000) + 3600_000,
+            },
+        }))
+        monkeypatch.setattr("agent.anthropic_adapter.Path.home", lambda: service_home)
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        monkeypatch.delenv("HERMES_CLAUDE_CODE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv(config_env, str(claude_config_dir))
+        monkeypatch.setattr(
+            "agent.anthropic_adapter._read_claude_code_credentials_from_keychain",
+            lambda: None,
+        )
+
+        creds = read_claude_code_credentials()
+        assert creds is not None
+        assert creds["accessToken"] == "configured-token"
+        assert creds["credentialsPath"] == str(cred_file)
+
+        _write_claude_code_credentials("updated-token", "updated-refresh", 99999)
+
+        written = json.loads(cred_file.read_text())
+        assert written["preserve"] == "me"
+        assert written["claudeAiOauth"]["accessToken"] == "updated-token"
+        assert written["claudeAiOauth"]["refreshToken"] == "updated-refresh"
+        assert not (service_home / ".claude" / ".credentials.json").exists()
+
     def test_preserves_existing_fields(self, tmp_path, monkeypatch):
         monkeypatch.setattr("agent.anthropic_adapter.Path.home", lambda: tmp_path)
         cred_dir = tmp_path / ".claude"

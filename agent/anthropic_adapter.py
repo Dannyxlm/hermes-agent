@@ -997,12 +997,23 @@ def _read_claude_code_credentials_from_keychain() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _claude_code_credentials_file_path() -> Path:
+    """Return Claude Code's credential file, honoring explicit config overrides."""
+    config_dir = (
+        os.getenv("HERMES_CLAUDE_CODE_CONFIG_DIR", "").strip()
+        or os.getenv("CLAUDE_CONFIG_DIR", "").strip()
+    )
+    if config_dir:
+        return Path(config_dir).expanduser() / ".credentials.json"
+    return Path.home() / ".claude" / ".credentials.json"
+
+
 def _read_claude_code_credentials_from_file() -> Optional[Dict[str, Any]]:
-    """Read Claude Code OAuth credentials from ~/.claude/.credentials.json.
+    """Read Claude Code OAuth credentials from its configured credential file.
 
     Returns dict with {accessToken, refreshToken?, expiresAt?, source} or None.
     """
-    cred_path = Path.home() / ".claude" / ".credentials.json"
+    cred_path = _claude_code_credentials_file_path()
     if not cred_path.exists():
         return None
     try:
@@ -1022,6 +1033,7 @@ def _read_claude_code_credentials_from_file() -> Optional[Dict[str, Any]]:
         "refreshToken": oauth_data.get("refreshToken", ""),
         "expiresAt": oauth_data.get("expiresAt", 0),
         "source": "claude_code_credentials_file",
+        "credentialsPath": str(cred_path),
     }
 
 
@@ -1211,7 +1223,7 @@ def _write_claude_code_credentials(
     as valid.  Claude Code >=2.1.81 gates on the presence of ``"user:inference"``
     in the stored scopes before it will use the token.
     """
-    cred_path = Path.home() / ".claude" / ".credentials.json"
+    cred_path = _claude_code_credentials_file_path()
     try:
         # Read existing file to preserve other fields
         existing = {}
