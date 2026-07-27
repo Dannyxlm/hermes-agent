@@ -1779,6 +1779,30 @@ export interface Translations {
     availableTitleBackend: string
     availableBodyBackend: string
     availableBodyNoChangelog: string
+    managedTitle: string
+    managedSubtitle: string
+    managedReady: string
+    managedStale: string
+    managedMissing: string
+    managedInvalid: string
+    managedUnreadable: string
+    managedRunningRelease: string
+    managedUpstream: string
+    managedCommitsBehind: (count: number) => string
+    managedCandidate: string
+    managedCandidateStatuses: Record<'blocked' | 'building' | 'not_built' | 'passed' | 'ready', string>
+    managedLocalPatches: string
+    managedSourceRefs: string
+    managedReachable: string
+    managedNotReachable: string
+    managedUnknown: string
+    managedBlockers: string
+    managedNextAction: string
+    managedRefreshRequested: string
+    managedCheckNow: string
+    managedBuildCandidate: string
+    managedRequestingCandidate: string
+    managedRequestOnlyNotice: string
     updateNow: string
     maybeLater: string
     moreChanges: (count: number) => string
@@ -1805,6 +1829,7 @@ export interface Translations {
       notAvailable: string
       failed: string
       noReturn: string
+      candidateRequested: string
     }
   }
 

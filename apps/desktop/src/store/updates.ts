@@ -287,19 +287,54 @@ function isRemoteMode(): boolean {
 
 function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
   const behind = res.behind ?? 0
+  const managed = res.managed_source
+
+  const managedSource = managed
+    ? {
+        availability: managed.availability,
+        stale: managed.stale,
+        statusError: managed.status_error,
+        runningRelease: managed.running_release,
+        runningUpstreamBase: managed.running_upstream_base,
+        trackedUpstream: managed.tracked_upstream,
+        upstreamHead: managed.upstream_head,
+        commitsBehind: managed.commits_behind,
+        localPatchCount: managed.local_patch_count,
+        lastFetchedAt: managed.last_fetched_at,
+        generatedAt: managed.generated_at,
+        ageSeconds: managed.age_seconds,
+        candidateStatus: managed.candidate_status,
+        blockers: managed.blockers,
+        nextAction: managed.next_action,
+        sourceWorktreeClean: managed.source_worktree_clean,
+        sourceRefsRemotelyReachable: managed.source_refs_remotely_reachable,
+        canBuildCandidate: managed.can_build_candidate,
+        candidateRequestAvailable: managed.candidate_request_available,
+        refreshRequestAvailable: managed.refresh_request_available,
+        refreshRequest: managed.refresh_request
+      }
+    : undefined
 
   return {
-    supported: res.can_apply,
+    // A managed immutable runtime cannot apply an update in place, but it does
+    // support the dedicated source-monitor/update-train surface.
+    supported: Boolean(managed) || res.can_apply,
     message: res.message ?? undefined,
     updateAvailable: res.update_available,
     behind: behind > 0 ? behind : 0,
-    targetSha: res.update_available ? `backend:${res.current_version}` : undefined,
+    targetSha:
+      managed?.availability === 'ready' && managed.upstream_head
+        ? managed.upstream_head
+        : res.update_available
+          ? `backend:${res.current_version}`
+          : undefined,
     commits: res.commits,
-    fetchedAt: Date.now()
+    fetchedAt: Date.now(),
+    managedSource
   }
 }
 
-export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null> {
+export async function checkBackendUpdates(requestRefresh = false): Promise<DesktopUpdateStatus | null> {
   if (!isRemoteMode() || $backendUpdateChecking.get()) {
     return $backendUpdateStatus.get()
   }
@@ -307,7 +342,7 @@ export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null>
   $backendUpdateChecking.set(true)
 
   try {
-    const status = mapBackendCheck(await checkHermesUpdate(true))
+    const status = mapBackendCheck(await checkHermesUpdate(requestRefresh))
     $backendUpdateStatus.set(status)
     maybeNotifyUpdateAvailable(status)
 
@@ -538,8 +573,29 @@ export async function applyBackendUpdate(): Promise<DesktopUpdateApplyResult> {
   try {
     const started = await updateHermes()
 
+    if (started.request_only) {
+      if (!started.ok) {
+        const message = started.message || translateNow('updates.applyStatus.notAvailable')
+        $backendUpdateApply.set({
+          ...IDLE,
+          applying: false,
+          stage: 'error',
+          error: started.error ?? 'candidate-request-failed',
+          message
+        })
+
+        return { ok: false, error: started.error ?? 'candidate-request-failed', message }
+      }
+
+      const message = started.message || translateNow('updates.applyStatus.candidateRequested')
+      $backendUpdateApply.set({ ...IDLE, message })
+      await checkBackendUpdates(false)
+
+      return { ok: true, message }
+    }
+
     if (!started.ok) {
-      const message = (started as { message?: string }).message || translateNow('updates.applyStatus.notAvailable')
+      const message = started.message || translateNow('updates.applyStatus.notAvailable')
       const command = (started as { update_command?: string }).update_command || 'hermes update'
       $backendUpdateApply.set({ ...IDLE, applying: false, stage: 'manual', message, command })
 

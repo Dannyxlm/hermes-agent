@@ -2140,6 +2140,37 @@ export const en: Translations = {
     availableTitleBackend: 'Backend update available',
     availableBodyBackend: 'A newer version of the connected Hermes backend is ready to install.',
     availableBodyNoChangelog: 'A newer version is ready. Release notes aren’t available for this install type.',
+    managedTitle: 'Immutable update train',
+    managedSubtitle: 'Hermes monitors upstream source outside the read-only production release.',
+    managedReady: 'Source monitor status is current.',
+    managedStale: 'Source monitor status is stale.',
+    managedMissing: 'Source monitor status is unavailable.',
+    managedInvalid: 'Source monitor status is invalid.',
+    managedUnreadable: 'Source monitor status could not be read.',
+    managedRunningRelease: 'Running release',
+    managedUpstream: 'Upstream',
+    managedCommitsBehind: count => `${count} upstream commit${count === 1 ? '' : 's'} behind`,
+    managedCandidate: 'Candidate',
+    managedCandidateStatuses: {
+      blocked: 'Blocked',
+      building: 'Building',
+      not_built: 'Not built',
+      passed: 'Passed',
+      ready: 'Ready'
+    },
+    managedLocalPatches: 'Local patches',
+    managedSourceRefs: 'Source refs',
+    managedReachable: 'Reachable',
+    managedNotReachable: 'Not reachable',
+    managedUnknown: 'Unknown',
+    managedBlockers: 'Blockers',
+    managedNextAction: 'Next action',
+    managedRefreshRequested: 'A read-only source refresh was requested.',
+    managedCheckNow: 'Check now',
+    managedBuildCandidate: 'Build candidate',
+    managedRequestingCandidate: 'Requesting…',
+    managedRequestOnlyNotice:
+      'These buttons only request external source checks or candidate builds. Production is not changed or restarted.',
     updateNow: 'Update now',
     maybeLater: 'Maybe later',
     moreChanges: count => `+ ${count} more change${count === 1 ? '' : 's'} included.`,
@@ -2166,7 +2197,8 @@ export const en: Translations = {
       restarting: 'Backend restarting to load the update…',
       notAvailable: 'Update not available for this backend.',
       failed: 'Backend update failed.',
-      noReturn: 'Backend didn’t come back online. The update may not have completed — check the backend host.'
+      noReturn: 'Backend didn’t come back online. The update may not have completed — check the backend host.',
+      candidateRequested: 'Immutable candidate build requested. Production was not changed.'
     }
   },
 
