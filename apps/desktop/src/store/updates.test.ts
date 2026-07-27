@@ -247,6 +247,79 @@ describe('checkBackendUpdates', () => {
     expect(result?.message).toBe('Docker images are immutable.')
   })
 
+  it('maps managed immutable source status without hiding it as unsupported', async () => {
+    setRemote(true)
+    checkHermesUpdateSpy.mockResolvedValue({
+      install_method: 'managed-runtime',
+      current_version: '0.19.0',
+      behind: 4,
+      update_available: true,
+      can_apply: false,
+      update_command: 'managed by immutable update train',
+      message: '4 upstream commits are waiting for an immutable candidate.',
+      managed_source: {
+        schema_version: 'hermes-update-status.v1',
+        availability: 'ready',
+        stale: false,
+        status_error: null,
+        running_release: 'ava-converge-p1-f22a217b8dab',
+        running_upstream_base: 'a'.repeat(40),
+        tracked_upstream: 'NousResearch/main',
+        upstream_head: 'b'.repeat(40),
+        commits_behind: 4,
+        local_patch_count: 2,
+        last_fetched_at: '2026-07-27T18:00:00+00:00',
+        generated_at: '2026-07-27T18:00:00+00:00',
+        candidate_status: 'not_built',
+        blockers: [],
+        next_action: 'Build an immutable candidate.',
+        source_worktree_clean: true,
+        source_refs_remotely_reachable: true,
+        can_build_candidate: true,
+        candidate_request_available: true,
+        refresh_request_available: true,
+        refresh_request: null
+      }
+    })
+
+    const result = await checkBackendUpdates()
+
+    expect(checkHermesUpdateSpy).toHaveBeenCalledWith(false)
+    expect(result?.supported).toBe(true)
+    expect(result?.behind).toBe(4)
+    expect(result?.targetSha).toBe('b'.repeat(40))
+    expect(result?.managedSource?.candidateStatus).toBe('not_built')
+    expect(result?.managedSource?.canBuildCandidate).toBe(true)
+  })
+
+  it('requests a managed refresh only for explicit Check now', async () => {
+    setRemote(true)
+    checkHermesUpdateSpy.mockResolvedValue({
+      install_method: 'managed-runtime',
+      current_version: '0.19.0',
+      behind: null,
+      update_available: false,
+      can_apply: false,
+      update_command: 'managed by immutable update train',
+      message: 'Update status is unavailable.',
+      managed_source: {
+        schema_version: 'hermes-update-status.v1',
+        availability: 'missing',
+        stale: false,
+        status_error: 'status_missing',
+        can_build_candidate: false,
+        candidate_request_available: true,
+        refresh_request_available: true,
+        refresh_request: { requested: true, error: null }
+      }
+    })
+
+    await checkBackendUpdates(true)
+
+    expect(checkHermesUpdateSpy).toHaveBeenCalledWith(true)
+    expect($backendUpdateStatus.get()?.managedSource?.refreshRequest?.requested).toBe(true)
+  })
+
   it('is a no-op in local mode (backend check only runs when remote)', async () => {
     setRemote(false)
     await checkBackendUpdates()
@@ -387,6 +460,59 @@ describe('applyBackendUpdate recovery', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('treats a managed candidate build as a request only and never polls for a restart', async () => {
+    setConnection({
+      baseUrl: 'http://box:9119',
+      isFullscreen: false,
+      mode: 'remote',
+      nativeOverlayWidth: 0,
+      token: 't',
+      wsUrl: 'ws://box:9119',
+      logs: [],
+      windowButtonPosition: null
+    })
+    updateHermesSpy.mockResolvedValue({
+      ok: true,
+      name: 'hermes-update-candidate-request',
+      pid: null,
+      request_only: true,
+      message: 'Immutable candidate build requested for bbbbbbb.'
+    })
+    checkHermesUpdateSpy.mockResolvedValue({
+      install_method: 'managed-runtime',
+      current_version: '0.19.0',
+      behind: 4,
+      update_available: true,
+      can_apply: false,
+      update_command: 'managed by immutable update train',
+      message: 'Candidate request accepted.',
+      managed_source: {
+        schema_version: 'hermes-update-status.v1',
+        availability: 'ready',
+        stale: false,
+        status_error: null,
+        upstream_head: 'b'.repeat(40),
+        commits_behind: 4,
+        candidate_status: 'not_built',
+        blockers: [],
+        source_worktree_clean: true,
+        source_refs_remotely_reachable: true,
+        can_build_candidate: true,
+        candidate_request_available: true,
+        refresh_request_available: true,
+        refresh_request: null
+      }
+    })
+
+    const result = await applyBackendUpdate()
+
+    expect(result.ok).toBe(true)
+    expect(getActionStatusSpy).not.toHaveBeenCalled()
+    expect(checkHermesUpdateSpy).toHaveBeenCalledWith(false)
+    expect($backendUpdateApply.get().applying).toBe(false)
+    expect($backendUpdateApply.get().message).toMatch(/requested/i)
   })
 
   it('waits for the backend to return after the restart drops the connection, then clears the overlay', async () => {

@@ -7,6 +7,9 @@ contract and the CLI-config parity (servers/keys written via the API are
 visible to the CLI data layer), not specific catalog values.
 """
 
+from datetime import datetime, timedelta, timezone
+import json
+
 import pytest
 
 
@@ -1132,6 +1135,261 @@ class TestUpdateCheckEndpoint:
         assert body["update_available"] is False
         assert body["behind"] is None
         assert "managed outside this dashboard" in body["message"]
+
+    @staticmethod
+    def _managed_status(*, generated_at=None, **overrides):
+        generated_at = generated_at or datetime.now(timezone.utc).isoformat()
+        status = {
+            "schema_version": "hermes-update-status.v1",
+            "running_release": "ava-converge-p1-f22a217b8dab",
+            "running_upstream_base": "a" * 40,
+            "tracked_upstream": "NousResearch/main",
+            "upstream_head": "b" * 40,
+            "commits_behind": 4,
+            "local_patch_count": 2,
+            "last_fetched_at": generated_at,
+            "generated_at": generated_at,
+            "candidate_status": "not_built",
+            "blockers": [],
+            "next_action": "Build an immutable candidate.",
+            "source_worktree_clean": True,
+            "source_refs_remotely_reachable": True,
+        }
+        status.update(overrides)
+        return status
+
+    def _managed_paths(self, monkeypatch, tmp_path):
+        import hermes_cli.web_server as ws
+
+        status = tmp_path / "hermes-update-status.json"
+        requests = tmp_path / "update-requests"
+        requests.mkdir()
+        refresh = requests / "refresh.json"
+        candidate = requests / "candidate.json"
+        monkeypatch.setattr(ws, "_MANAGED_UPDATE_STATUS_PATH", status)
+        monkeypatch.setattr(ws, "_MANAGED_UPDATE_REFRESH_REQUEST_PATH", refresh)
+        monkeypatch.setattr(ws, "_MANAGED_UPDATE_CANDIDATE_REQUEST_PATH", candidate)
+        monkeypatch.setattr(
+            ws, "_dashboard_local_update_managed_externally", lambda: True
+        )
+        monkeypatch.setenv("HERMES_MANAGED_UPDATE_TRAIN_ENABLED", "1")
+        return status, refresh, candidate
+
+    def test_managed_runtime_maps_valid_source_status(self, monkeypatch, tmp_path):
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        status_path.chmod(0o600)
+
+        body = self.client.get("/api/hermes/update/check").json()
+
+        assert body["install_method"] == "managed-runtime"
+        assert body["behind"] == 4
+        assert body["update_available"] is True
+        assert body["can_apply"] is False
+        source = body["managed_source"]
+        assert source["availability"] == "ready"
+        assert source["stale"] is False
+        assert source["running_release"] == "ava-converge-p1-f22a217b8dab"
+        assert source["running_upstream_base"] == "a" * 40
+        assert source["upstream_head"] == "b" * 40
+        assert source["candidate_status"] == "not_built"
+        assert source["can_build_candidate"] is True
+        assert source["blockers"] == []
+
+    @pytest.mark.parametrize(
+        ("file_value", "expected"),
+        [
+            (None, "missing"),
+            ("{not-json", "invalid"),
+            (json.dumps({"schema_version": "wrong"}), "invalid"),
+        ],
+    )
+    def test_managed_runtime_status_failures_are_explicit_and_soft(
+        self, monkeypatch, tmp_path, file_value, expected
+    ):
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        if file_value is not None:
+            status_path.write_text(file_value, encoding="utf-8")
+            status_path.chmod(0o600)
+
+        response = self.client.get("/api/hermes/update/check")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["behind"] is None
+        assert body["update_available"] is False
+        assert body["managed_source"]["availability"] == expected
+        assert body["managed_source"]["status_error"]
+
+    def test_managed_runtime_rejects_symlink_and_unsafe_permissions(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        real = tmp_path / "real.json"
+        real.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        real.chmod(0o600)
+        status_path.symlink_to(real)
+
+        body = self.client.get("/api/hermes/update/check").json()
+        assert body["managed_source"]["availability"] == "unreadable"
+
+        status_path.unlink()
+        status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        status_path.chmod(0o666)
+        body = self.client.get("/api/hermes/update/check").json()
+        assert body["managed_source"]["availability"] == "unreadable"
+
+    def test_managed_runtime_staleness_boundary_is_bounded_and_configurable(
+        self, monkeypatch, tmp_path
+    ):
+        import hermes_cli.web_server as ws
+
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        monkeypatch.setenv("HERMES_MANAGED_UPDATE_MAX_AGE_SECONDS", "10800")
+        now = datetime(2026, 7, 27, 18, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(ws, "_managed_update_now", lambda: now)
+
+        at_boundary = now - timedelta(seconds=10800)
+        status_path.write_text(
+            json.dumps(self._managed_status(generated_at=at_boundary.isoformat())),
+            encoding="utf-8",
+        )
+        status_path.chmod(0o600)
+        assert (
+            self.client.get("/api/hermes/update/check").json()["managed_source"][
+                "stale"
+            ]
+            is False
+        )
+
+        just_stale = at_boundary - timedelta(microseconds=1)
+        status_path.write_text(
+            json.dumps(self._managed_status(generated_at=just_stale.isoformat())),
+            encoding="utf-8",
+        )
+        assert (
+            self.client.get("/api/hermes/update/check").json()["managed_source"][
+                "availability"
+            ]
+            == "stale"
+        )
+
+        monkeypatch.setenv("HERMES_MANAGED_UPDATE_MAX_AGE_SECONDS", "999999999")
+        status_path.write_text(
+            json.dumps(
+                self._managed_status(
+                    generated_at=(now - timedelta(hours=25)).isoformat()
+                )
+            ),
+            encoding="utf-8",
+        )
+        # The configurable threshold is clamped, so an absurd value cannot
+        # hide a monitor that has stopped for a full day.
+        assert (
+            self.client.get("/api/hermes/update/check").json()["managed_source"][
+                "availability"
+            ]
+            == "stale"
+        )
+
+    def test_managed_check_now_writes_only_atomic_refresh_marker(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, refresh_path, candidate_path = self._managed_paths(
+            monkeypatch, tmp_path
+        )
+        status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        status_path.chmod(0o600)
+
+        body = self.client.get("/api/hermes/update/check?force=true").json()
+
+        assert body["managed_source"]["refresh_request"]["requested"] is True
+        marker = json.loads(refresh_path.read_text(encoding="utf-8"))
+        assert marker["schema_version"] == "hermes-update-refresh-request.v1"
+        assert set(marker) == {"schema_version", "requested_at"}
+        assert not candidate_path.exists()
+
+    def test_managed_check_now_rejects_symlink_marker(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, refresh_path, _ = self._managed_paths(monkeypatch, tmp_path)
+        status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        status_path.chmod(0o600)
+        victim = tmp_path / "victim.json"
+        victim.write_text('{"preserved": true}', encoding="utf-8")
+        refresh_path.symlink_to(victim)
+
+        body = self.client.get("/api/hermes/update/check?force=true").json()
+
+        assert body["managed_source"]["refresh_request"]["requested"] is False
+        assert json.loads(victim.read_text(encoding="utf-8")) == {"preserved": True}
+
+    def test_managed_build_candidate_is_revision_bound_request_only(
+        self, monkeypatch, tmp_path
+    ):
+        import hermes_cli.web_server as ws
+
+        status_path, _, candidate_path = self._managed_paths(monkeypatch, tmp_path)
+        status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        status_path.chmod(0o600)
+        monkeypatch.setattr(
+            ws,
+            "_spawn_hermes_action",
+            lambda *_a, **_k: pytest.fail("managed build must not run hermes update"),
+        )
+
+        body = self.client.post("/api/hermes/update").json()
+
+        assert body["ok"] is True
+        assert body["request_only"] is True
+        assert body["pid"] is None
+        marker = json.loads(candidate_path.read_text(encoding="utf-8"))
+        assert marker["schema_version"] == "hermes-update-candidate-request.v1"
+        assert marker["upstream_head"] == "b" * 40
+        assert marker["tracked_upstream"] == "NousResearch/main"
+
+    def test_managed_candidate_lane_requires_explicit_deployment_opt_in(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, _, candidate_path = self._managed_paths(monkeypatch, tmp_path)
+        monkeypatch.delenv("HERMES_MANAGED_UPDATE_TRAIN_ENABLED")
+        status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
+        status_path.chmod(0o600)
+
+        check = self.client.get("/api/hermes/update/check").json()
+        assert check["managed_source"]["candidate_request_available"] is False
+        assert check["managed_source"]["can_build_candidate"] is False
+
+        build = self.client.post("/api/hermes/update").json()
+        assert build["ok"] is False
+        assert build["error"] == "candidate_request_unavailable"
+        assert not candidate_path.exists()
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"blockers": ["source refs are not published"]},
+            {"source_worktree_clean": False},
+            {"source_refs_remotely_reachable": False},
+            {"candidate_status": "building"},
+            {"commits_behind": 0},
+        ],
+    )
+    def test_managed_build_candidate_is_gated(
+        self, monkeypatch, tmp_path, overrides
+    ):
+        status_path, _, candidate_path = self._managed_paths(monkeypatch, tmp_path)
+        status_path.write_text(
+            json.dumps(self._managed_status(**overrides)), encoding="utf-8"
+        )
+        status_path.chmod(0o600)
+
+        body = self.client.post("/api/hermes/update").json()
+
+        assert body["ok"] is False
+        assert body["request_only"] is True
+        assert body["error"] == "candidate_request_not_eligible"
+        assert not candidate_path.exists()
 
     def test_check_failure_is_soft(self, monkeypatch):
         import hermes_cli.web_server as ws

@@ -20,7 +20,7 @@ import concurrent.futures
 import functools
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import inspect
@@ -4177,23 +4177,464 @@ async def gateway_drain(request: Request):
     }
 
 
+_MANAGED_UPDATE_STATUS_PATH = Path(
+    "/home/ubuntu/.local/state/cloudseed/hermes-update-status.json"
+)
+_MANAGED_UPDATE_REFRESH_REQUEST_PATH = Path(
+    "/home/ubuntu/.local/state/cloudseed/update-requests/refresh.json"
+)
+_MANAGED_UPDATE_CANDIDATE_REQUEST_PATH = Path(
+    "/home/ubuntu/.local/state/cloudseed/update-requests/candidate.json"
+)
+_MANAGED_UPDATE_SCHEMA = "hermes-update-status.v1"
+_MANAGED_UPDATE_MAX_BYTES = 64 * 1024
+_MANAGED_UPDATE_DEFAULT_MAX_AGE_SECONDS = 3 * 60 * 60
+_MANAGED_UPDATE_MIN_MAX_AGE_SECONDS = 60 * 60
+_MANAGED_UPDATE_MAX_MAX_AGE_SECONDS = 24 * 60 * 60
+_MANAGED_UPDATE_MAX_FUTURE_SKEW_SECONDS = 5 * 60
+_MANAGED_UPDATE_CANDIDATE_STATUSES = {
+    "not_built",
+    "building",
+    "passed",
+    "blocked",
+    "ready",
+}
+_MANAGED_UPDATE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_MANAGED_UPDATE_TRACKED_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _managed_update_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _managed_update_max_age_seconds() -> int:
+    """Return a bounded source-monitor stale threshold.
+
+    The external monitor runs hourly with up to ten minutes of jitter. Three
+    hours tolerates a missed tick without hiding a monitor that has stopped.
+    This environment knob is an internal deployment seam, not user config.
+    """
+    raw = os.environ.get("HERMES_MANAGED_UPDATE_MAX_AGE_SECONDS", "").strip()
+    try:
+        configured = int(raw) if raw else _MANAGED_UPDATE_DEFAULT_MAX_AGE_SECONDS
+    except (TypeError, ValueError):
+        configured = _MANAGED_UPDATE_DEFAULT_MAX_AGE_SECONDS
+    return max(
+        _MANAGED_UPDATE_MIN_MAX_AGE_SECONDS,
+        min(_MANAGED_UPDATE_MAX_MAX_AGE_SECONDS, configured),
+    )
+
+
+def _managed_update_train_enabled() -> bool:
+    """Require an explicit deployment opt-in for candidate requests."""
+    return os.environ.get("HERMES_MANAGED_UPDATE_TRAIN_ENABLED", "").strip() == "1"
+
+
+def _managed_source_base(
+    availability: str,
+    *,
+    status_error: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": _MANAGED_UPDATE_SCHEMA,
+        "availability": availability,
+        "stale": availability == "stale",
+        "status_error": status_error,
+        "can_build_candidate": False,
+        "candidate_request_available": (
+            _managed_update_train_enabled()
+            and _managed_marker_destination_available(
+                _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH
+            )
+        ),
+        "refresh_request_available": _managed_marker_destination_available(
+            _MANAGED_UPDATE_REFRESH_REQUEST_PATH
+        ),
+        "refresh_request": None,
+    }
+
+
+def _managed_safe_string(
+    value: Any, *, maximum: int, allow_empty: bool = False
+) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if (not text and not allow_empty) or len(text) > maximum:
+        return None
+    if any(ord(ch) < 32 and ch not in "\t" for ch in text):
+        return None
+    return text
+
+
+def _managed_timestamp(value: Any) -> Optional[datetime]:
+    text = _managed_safe_string(value, maximum=64)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _managed_read_bounded_json(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Read one exact status file without following links or leaking content."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd: Optional[int] = None
+    try:
+        parent = path.parent
+        if (
+            not path.is_absolute()
+            or parent.resolve(strict=True) != parent.absolute()
+        ):
+            return None, "status_path_unsafe"
+        fd = os.open(str(path), flags)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "status_not_regular"
+        if st.st_size > _MANAGED_UPDATE_MAX_BYTES:
+            return None, "status_too_large"
+        if st.st_mode & 0o022:
+            return None, "status_permissions_unsafe"
+        if hasattr(os, "geteuid") and st.st_uid not in {0, os.geteuid()}:
+            return None, "status_owner_invalid"
+
+        chunks: List[bytes] = []
+        total = 0
+        while total <= _MANAGED_UPDATE_MAX_BYTES:
+            chunk = os.read(fd, min(8192, _MANAGED_UPDATE_MAX_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > _MANAGED_UPDATE_MAX_BYTES:
+            return None, "status_too_large"
+        try:
+            decoded = b"".join(chunks).decode("utf-8")
+            payload = json.loads(decoded)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None, "status_json_invalid"
+        if not isinstance(payload, dict):
+            return None, "status_schema_invalid"
+        return payload, ""
+    except FileNotFoundError:
+        return None, "status_missing"
+    except (OSError, RuntimeError):
+        return None, "status_unreadable"
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _managed_nonnegative_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0 or value > 1_000_000:
+        return None
+    return value
+
+
+def _read_managed_update_source() -> Dict[str, Any]:
+    raw, read_error = _managed_read_bounded_json(_MANAGED_UPDATE_STATUS_PATH)
+    if raw is None:
+        availability = "missing" if read_error == "status_missing" else (
+            "invalid" if read_error in {"status_json_invalid", "status_schema_invalid"} else "unreadable"
+        )
+        return _managed_source_base(availability, status_error=read_error)
+
+    running_release = _managed_safe_string(
+        raw.get("running_release"), maximum=160
+    )
+    running_upstream_base = _managed_safe_string(
+        raw.get("running_upstream_base"), maximum=40
+    )
+    tracked_upstream = _managed_safe_string(
+        raw.get("tracked_upstream"), maximum=160
+    )
+    upstream_head = _managed_safe_string(raw.get("upstream_head"), maximum=40)
+    commits_behind = _managed_nonnegative_int(raw.get("commits_behind"))
+    local_patch_count = _managed_nonnegative_int(raw.get("local_patch_count"))
+    last_fetched_at = _managed_safe_string(
+        raw.get("last_fetched_at"), maximum=64
+    )
+    generated_at = _managed_safe_string(
+        raw.get("generated_at"), maximum=64
+    )
+    generated_timestamp = _managed_timestamp(generated_at or last_fetched_at)
+    last_fetched_timestamp = _managed_timestamp(last_fetched_at)
+    candidate_status = _managed_safe_string(
+        raw.get("candidate_status"), maximum=32
+    )
+    next_action = _managed_safe_string(
+        raw.get("next_action"), maximum=500, allow_empty=True
+    )
+    blockers_raw = raw.get("blockers")
+    blockers: Optional[List[str]] = None
+    if isinstance(blockers_raw, list) and len(blockers_raw) <= 20:
+        parsed_blockers = [
+            _managed_safe_string(item, maximum=300) for item in blockers_raw
+        ]
+        if all(item is not None for item in parsed_blockers):
+            blockers = [item for item in parsed_blockers if item is not None]
+
+    valid = (
+        raw.get("schema_version") == _MANAGED_UPDATE_SCHEMA
+        and running_release is not None
+        and running_upstream_base is not None
+        and _MANAGED_UPDATE_SHA_RE.fullmatch(running_upstream_base) is not None
+        and tracked_upstream is not None
+        and _MANAGED_UPDATE_TRACKED_RE.fullmatch(tracked_upstream) is not None
+        and upstream_head is not None
+        and _MANAGED_UPDATE_SHA_RE.fullmatch(upstream_head) is not None
+        and commits_behind is not None
+        and local_patch_count is not None
+        and last_fetched_at is not None
+        and last_fetched_timestamp is not None
+        and generated_timestamp is not None
+        and candidate_status in _MANAGED_UPDATE_CANDIDATE_STATUSES
+        and blockers is not None
+        and next_action is not None
+        and isinstance(raw.get("source_worktree_clean"), bool)
+        and isinstance(raw.get("source_refs_remotely_reachable"), bool)
+    )
+    if not valid:
+        return _managed_source_base(
+            "invalid", status_error="status_schema_invalid"
+        )
+
+    now = _managed_update_now()
+    if (
+        generated_timestamp > now + timedelta(seconds=_MANAGED_UPDATE_MAX_FUTURE_SKEW_SECONDS)
+        or last_fetched_timestamp > now + timedelta(seconds=_MANAGED_UPDATE_MAX_FUTURE_SKEW_SECONDS)
+    ):
+        return _managed_source_base(
+            "invalid", status_error="status_timestamp_invalid"
+        )
+    age_seconds = max(0.0, (now - generated_timestamp).total_seconds())
+    stale = age_seconds > _managed_update_max_age_seconds()
+
+    source = _managed_source_base(
+        "stale" if stale else "ready",
+        status_error="status_stale" if stale else None,
+    )
+    source.update(
+        {
+            "running_release": running_release,
+            "running_upstream_base": running_upstream_base,
+            "tracked_upstream": tracked_upstream,
+            "upstream_head": upstream_head,
+            "commits_behind": commits_behind,
+            "local_patch_count": local_patch_count,
+            "last_fetched_at": last_fetched_at,
+            "generated_at": generated_at or last_fetched_at,
+            "age_seconds": int(age_seconds),
+            "candidate_status": candidate_status,
+            "blockers": blockers,
+            "next_action": next_action,
+            "source_worktree_clean": raw["source_worktree_clean"],
+            "source_refs_remotely_reachable": raw[
+                "source_refs_remotely_reachable"
+            ],
+        }
+    )
+    source["can_build_candidate"] = bool(
+        not stale
+        and source["candidate_request_available"]
+        and commits_behind > 0
+        and candidate_status == "not_built"
+        and not blockers
+        and raw["source_worktree_clean"]
+        and raw["source_refs_remotely_reachable"]
+    )
+    return source
+
+
+def _managed_marker_destination_available(path: Path) -> bool:
+    try:
+        if not path.is_absolute():
+            return False
+        parent = path.parent
+        if parent.resolve(strict=True) != parent.absolute():
+            return False
+        parent_st = parent.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(parent_st.st_mode) or not os.access(parent, os.W_OK):
+            return False
+        try:
+            target_st = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        return stat.S_ISREG(target_st.st_mode)
+    except (OSError, RuntimeError):
+        return False
+
+
+def _write_managed_update_marker(path: Path, payload: Dict[str, Any]) -> bool:
+    """Atomically replace one exact content-free broker marker."""
+    if not _managed_marker_destination_available(path):
+        return False
+
+    parent_fd: Optional[int] = None
+    temp_name: Optional[str] = None
+    try:
+        parent_fd = os.open(
+            str(path.parent),
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        temp_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
+        temp_fd = os.open(
+            temp_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_fd,
+        )
+        try:
+            encoded = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            view = memoryview(encoded)
+            while view:
+                written = os.write(temp_fd, view)
+                view = view[written:]
+            os.fsync(temp_fd)
+        finally:
+            os.close(temp_fd)
+        os.replace(
+            temp_name,
+            path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        os.fsync(parent_fd)
+        return True
+    except (OSError, RuntimeError, TypeError, ValueError):
+        _log.exception("Managed update request marker write failed")
+        return False
+    finally:
+        if parent_fd is not None:
+            if temp_name is not None:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                except OSError:
+                    pass
+            os.close(parent_fd)
+
+
+def _request_managed_source_refresh() -> Dict[str, Any]:
+    requested = _write_managed_update_marker(
+        _MANAGED_UPDATE_REFRESH_REQUEST_PATH,
+        {
+            "schema_version": "hermes-update-refresh-request.v1",
+            "requested_at": _managed_update_now().isoformat(),
+        },
+    )
+    return {
+        "requested": requested,
+        "error": None if requested else "refresh_request_unavailable",
+    }
+
+
+def _managed_update_check_payload(*, request_refresh: bool) -> Dict[str, Any]:
+    source = _read_managed_update_source()
+    if request_refresh:
+        source["refresh_request"] = _request_managed_source_refresh()
+
+    behind = source.get("commits_behind")
+    availability = source["availability"]
+    if availability == "ready":
+        if behind:
+            message = (
+                f"{behind} upstream commit{'s' if behind != 1 else ''} "
+                "are waiting in the immutable update train."
+            )
+        else:
+            message = "The immutable Hermes release matches the tracked upstream."
+    elif availability == "stale":
+        message = "Immutable update status is stale. Check now to request a refresh."
+    elif availability == "missing":
+        message = (
+            "Hermes is managed outside this dashboard; immutable update status "
+            "is unavailable because no source-monitor receipt exists."
+        )
+    elif availability == "invalid":
+        message = "Immutable update status is invalid. Check the external source monitor."
+    else:
+        message = "Immutable update status is unreadable. Check the external source monitor."
+
+    return {
+        "install_method": "managed-runtime",
+        "current_version": __version__,
+        "behind": behind,
+        "update_available": bool(behind and behind > 0),
+        "can_apply": False,
+        "update_command": "managed by immutable update train",
+        "message": message,
+        "managed_source": source,
+    }
+
+
 @app.post("/api/hermes/update")
 async def update_hermes():
-    """Kick off ``hermes update`` in the background."""
+    """Apply a local update, or request an immutable candidate when managed."""
     if _dashboard_local_update_managed_externally():
-        message = (
-            "Hermes updates are managed outside this dashboard in "
-            "containerized environments. The built-in local updater is "
-            "disabled here."
+        source = _read_managed_update_source()
+        if not source.get("can_build_candidate"):
+            error = (
+                "candidate_request_unavailable"
+                if not source.get("candidate_request_available")
+                else "candidate_request_not_eligible"
+            )
+            return {
+                "ok": False,
+                "pid": None,
+                "name": "hermes-update-candidate-request",
+                "error": error,
+                "message": (
+                    "An immutable candidate cannot be requested from the "
+                    "current source-monitor state."
+                ),
+                "request_only": True,
+                "managed_source": source,
+            }
+
+        upstream_head = source["upstream_head"]
+        requested = _write_managed_update_marker(
+            _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH,
+            {
+                "schema_version": "hermes-update-candidate-request.v1",
+                "requested_at": _managed_update_now().isoformat(),
+                "tracked_upstream": source["tracked_upstream"],
+                "upstream_head": upstream_head,
+            },
         )
-        _record_completed_action("hermes-update", message, exit_code=1)
+        if not requested:
+            return {
+                "ok": False,
+                "pid": None,
+                "name": "hermes-update-candidate-request",
+                "error": "candidate_request_unavailable",
+                "message": "The immutable Update Train request lane is unavailable.",
+                "request_only": True,
+                "managed_source": source,
+            }
+        message = (
+            f"Immutable candidate build requested for {upstream_head[:12]}. "
+            "Production was not changed or restarted."
+        )
         return {
-            "ok": False,
+            "ok": True,
             "pid": None,
-            "name": "hermes-update",
-            "error": "dashboard_update_managed_externally",
+            "name": "hermes-update-candidate-request",
             "message": message,
-            "update_command": "managed outside dashboard",
+            "request_only": True,
+            "requested_revision": upstream_head,
         }
 
     install_method = detect_install_method(PROJECT_ROOT)
@@ -4314,18 +4755,7 @@ async def check_hermes_update(force: bool = False):
                  changed". Additive: existing consumers ignore it.
     """
     if _dashboard_local_update_managed_externally():
-        return {
-            "install_method": "managed-runtime",
-            "current_version": __version__,
-            "behind": None,
-            "update_available": False,
-            "can_apply": False,
-            "update_command": "managed outside dashboard",
-            "message": (
-                "Hermes updates are managed outside this dashboard in "
-                "containerized environments."
-            ),
-        }
+        return _managed_update_check_payload(request_refresh=force)
 
     install_method = detect_install_method(PROJECT_ROOT)
     update_command = recommended_update_command_for_method(install_method)
