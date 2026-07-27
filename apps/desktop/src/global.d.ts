@@ -350,6 +350,37 @@ export interface DesktopUpdateCommit {
   at: number
 }
 
+export type DesktopManagedSourceAvailability = 'invalid' | 'missing' | 'ready' | 'stale' | 'unreadable'
+
+export interface DesktopManagedUpdateRefreshRequest {
+  requested: boolean
+  error: string | null
+}
+
+export interface DesktopManagedSourceUpdate {
+  availability: DesktopManagedSourceAvailability
+  stale: boolean
+  statusError: string | null
+  runningRelease?: string
+  runningUpstreamBase?: string
+  trackedUpstream?: string
+  upstreamHead?: string
+  commitsBehind?: number
+  localPatchCount?: number
+  lastFetchedAt?: string
+  generatedAt?: string
+  ageSeconds?: number
+  candidateStatus?: 'blocked' | 'building' | 'not_built' | 'passed' | 'ready'
+  blockers?: string[]
+  nextAction?: string
+  sourceWorktreeClean?: boolean
+  sourceRefsRemotelyReachable?: boolean
+  canBuildCandidate: boolean
+  candidateRequestAvailable: boolean
+  refreshRequestAvailable: boolean
+  refreshRequest: DesktopManagedUpdateRefreshRequest | null
+}
+
 export interface DesktopUpdateStatus {
   supported: boolean
   updateAvailable?: boolean
@@ -364,6 +395,7 @@ export interface DesktopUpdateStatus {
   commits?: DesktopUpdateCommit[]
   dirty?: boolean
   fetchedAt?: number
+  managedSource?: DesktopManagedSourceUpdate
 }
 
 export type DesktopUpdateDirtyStrategy = 'abort' | 'stash' | 'force'
