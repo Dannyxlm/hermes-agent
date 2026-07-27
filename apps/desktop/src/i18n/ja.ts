@@ -1914,6 +1914,36 @@ export const ja = defineLocale({
     availableBodyBackend: '接続中の Hermes バックエンドの新しいバージョンをインストールできます。',
     availableBodyNoChangelog:
       '新しいバージョンを利用できます。このインストール形式ではリリースノートは表示できません。',
+    managedTitle: 'イミュータブル更新トレイン',
+    managedSubtitle: 'Hermes は読み取り専用の本番リリース外で上流ソースを監視します。',
+    managedReady: 'ソースモニターの状態は最新です。',
+    managedStale: 'ソースモニターの状態が古くなっています。',
+    managedMissing: 'ソースモニターの状態を利用できません。',
+    managedInvalid: 'ソースモニターの状態が無効です。',
+    managedUnreadable: 'ソースモニターの状態を読み取れませんでした。',
+    managedRunningRelease: '実行中のリリース',
+    managedUpstream: '上流',
+    managedCommitsBehind: count => `上流より ${count} コミット遅れ`,
+    managedCandidate: '候補',
+    managedCandidateStatuses: {
+      blocked: 'ブロック中',
+      building: 'ビルド中',
+      not_built: '未ビルド',
+      passed: '合格',
+      ready: '準備完了'
+    },
+    managedLocalPatches: 'ローカルパッチ',
+    managedSourceRefs: 'ソース参照',
+    managedReachable: '到達可能',
+    managedNotReachable: '到達不可',
+    managedUnknown: '不明',
+    managedBlockers: 'ブロッカー',
+    managedNextAction: '次の操作',
+    managedRefreshRequested: '読み取り専用のソース更新を依頼しました。',
+    managedCheckNow: '今すぐ確認',
+    managedBuildCandidate: '候補をビルド',
+    managedRequestingCandidate: '依頼中…',
+    managedRequestOnlyNotice: 'これらのボタンは外部処理を依頼するだけです。本番環境の変更や再起動は行いません。',
     updateNow: '今すぐ更新',
     maybeLater: '後で',
     moreChanges: count => `さらに ${count} 件の変更が含まれています。`,
@@ -1941,7 +1971,8 @@ export const ja = defineLocale({
       notAvailable: 'このバックエンドでは更新を利用できません。',
       failed: 'バックエンドの更新に失敗しました。',
       noReturn:
-        'バックエンドがオンラインに戻りませんでした。更新が完了していない可能性があります。バックエンドホストを確認してください。'
+        'バックエンドがオンラインに戻りませんでした。更新が完了していない可能性があります。バックエンドホストを確認してください。',
+      candidateRequested: 'イミュータブル候補のビルドを依頼しました。本番環境は変更されていません。'
     }
   },
 

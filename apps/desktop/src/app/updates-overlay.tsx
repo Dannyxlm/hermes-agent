@@ -98,6 +98,10 @@ export function UpdatesOverlay() {
     void install()
   }
 
+  const handleCheckNow = () => {
+    void (isBackend ? checkBackendUpdates(true) : checkUpdates())
+  }
+
   return (
     <Dialog onOpenChange={handleClose} open={open}>
       {/* This dialog has no inputs, so Radix's default autofocus would land on
@@ -122,11 +126,14 @@ export function UpdatesOverlay() {
         {phase === 'idle' && (
           <IdleView
             behind={behind}
+            building={isBackend && backendApply.applying}
+            buildMessage={isBackend ? backendApply.message : undefined}
             checking={checking}
             commits={status?.commits ?? []}
+            onCheckNow={handleCheckNow}
             onInstall={handleInstall}
             onLater={() => handleClose(false)}
-            onRetryCheck={() => void check()}
+            onRetryCheck={handleCheckNow}
             status={status}
             target={target}
             updateAvailable={updateAvailable}
@@ -141,6 +148,9 @@ function IdleView({
   behind,
   checking,
   commits,
+  building,
+  buildMessage,
+  onCheckNow,
   onInstall,
   onLater,
   onRetryCheck,
@@ -151,6 +161,9 @@ function IdleView({
   behind: number
   checking: boolean
   commits: readonly DesktopUpdateCommit[]
+  building: boolean
+  buildMessage?: string
+  onCheckNow: () => void
   onInstall: () => void
   onLater: () => void
   onRetryCheck: () => void
@@ -180,6 +193,19 @@ function IdleView({
         }
         icon={<ErrorIcon />}
         title={u.checkFailedTitle}
+      />
+    )
+  }
+
+  if (target === 'backend' && status.managedSource) {
+    return (
+      <ManagedSourceUpdateView
+        building={building}
+        buildMessage={buildMessage}
+        checking={checking}
+        onBuildCandidate={onInstall}
+        onCheckNow={onCheckNow}
+        status={status}
       />
     )
   }
@@ -264,6 +290,141 @@ function IdleView({
       </div>
 
       {remaining > 0 && <p className="text-center text-xs text-muted-foreground">{u.moreChanges(remaining)}</p>}
+    </div>
+  )
+}
+
+export function ManagedSourceUpdateView({
+  building,
+  buildMessage,
+  checking,
+  onBuildCandidate,
+  onCheckNow,
+  status
+}: {
+  building: boolean
+  buildMessage?: string
+  checking: boolean
+  onBuildCandidate: () => void
+  onCheckNow: () => void
+  status: DesktopUpdateStatus
+}) {
+  const { t } = useI18n()
+  const u = t.updates
+  const source = status.managedSource
+
+  if (!source) {
+    return null
+  }
+
+  const availabilityCopy = {
+    invalid: u.managedInvalid,
+    missing: u.managedMissing,
+    ready: source.stale ? u.managedStale : u.managedReady,
+    stale: u.managedStale,
+    unreadable: u.managedUnreadable
+  }[source.availability]
+
+  const candidate = source.candidateStatus
+    ? u.managedCandidateStatuses[source.candidateStatus]
+    : u.managedUnknown
+
+  const behind = source.commitsBehind ?? status.behind ?? 0
+  const localPatches = source.localPatchCount
+  const canCheck = source.refreshRequestAvailable && !checking
+  const canBuild = source.canBuildCandidate && source.candidateRequestAvailable && !building
+
+  return (
+    <div className="grid gap-5 px-6 pb-6 pt-7 pr-8">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <BrandMark className="size-14" />
+        <DialogTitle className="text-center text-xl">{u.managedTitle}</DialogTitle>
+        <DialogDescription className="max-w-prose text-center text-sm leading-5">
+          {u.managedSubtitle}
+        </DialogDescription>
+      </div>
+
+      <div className="rounded-md border border-border/70 bg-muted/25 px-4 py-3">
+        <div className="flex items-start gap-2">
+          {source.stale || source.availability !== 'ready' ? (
+            <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+          ) : (
+            <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+          )}
+          <div className="min-w-0">
+            <p className="text-sm font-medium">{availabilityCopy}</p>
+            {source.runningRelease ? (
+              <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                {u.managedRunningRelease}: {source.runningRelease}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.managedUpstream}</dt>
+          <dd className="mt-1 font-semibold">{u.managedCommitsBehind(behind)}</dd>
+        </div>
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.managedCandidate}</dt>
+          <dd className="mt-1 font-semibold">{candidate}</dd>
+        </div>
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.managedLocalPatches}</dt>
+          <dd className="mt-1 font-semibold">{localPatches ?? u.managedUnknown}</dd>
+        </div>
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.managedSourceRefs}</dt>
+          <dd className="mt-1 font-semibold">
+            {source.sourceRefsRemotelyReachable === true
+              ? u.managedReachable
+              : source.sourceRefsRemotelyReachable === false
+                ? u.managedNotReachable
+                : u.managedUnknown}
+          </dd>
+        </div>
+      </dl>
+
+      {source.blockers?.length ? (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {u.managedBlockers}
+          </p>
+          <ul className="mt-2 grid gap-1.5 text-xs">
+            {source.blockers.map(blocker => (
+              <li className="flex items-start gap-2" key={blocker}>
+                <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                <span>{blocker}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {source.nextAction ? (
+        <p className="rounded-md bg-muted/35 px-3 py-2 text-xs leading-5">
+          <span className="font-semibold">{u.managedNextAction}: </span>
+          {source.nextAction}
+        </p>
+      ) : null}
+
+      {source.refreshRequest?.requested ? (
+        <p className="text-center text-xs text-muted-foreground">{u.managedRefreshRequested}</p>
+      ) : null}
+      {buildMessage ? <p className="text-center text-xs text-muted-foreground">{buildMessage}</p> : null}
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button disabled={!canCheck} onClick={onCheckNow} variant="secondary">
+          {checking ? u.checking : u.managedCheckNow}
+        </Button>
+        <Button disabled={!canBuild} onClick={onBuildCandidate}>
+          {building ? u.managedRequestingCandidate : u.managedBuildCandidate}
+        </Button>
+      </div>
+
+      <p className="text-center text-[11px] leading-4 text-muted-foreground">{u.managedRequestOnlyNotice}</p>
     </div>
   )
 }

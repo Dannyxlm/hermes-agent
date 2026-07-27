@@ -932,7 +932,11 @@ export interface StatusResponse {
 export interface ActionResponse {
   name: string
   ok: boolean
-  pid: number
+  pid: number | null
+  error?: string
+  message?: string
+  request_only?: boolean
+  requested_revision?: string
 }
 
 export interface ActionStatusResponse {
@@ -950,6 +954,38 @@ export interface BackendUpdateCommit {
   at: number
 }
 
+export type BackendManagedSourceAvailability = 'invalid' | 'missing' | 'ready' | 'stale' | 'unreadable'
+
+export interface BackendManagedUpdateRefreshRequest {
+  requested: boolean
+  error: string | null
+}
+
+export interface BackendManagedSourceUpdate {
+  schema_version: 'hermes-update-status.v1'
+  availability: BackendManagedSourceAvailability
+  stale: boolean
+  status_error: string | null
+  running_release?: string
+  running_upstream_base?: string
+  tracked_upstream?: string
+  upstream_head?: string
+  commits_behind?: number
+  local_patch_count?: number
+  last_fetched_at?: string
+  generated_at?: string
+  age_seconds?: number
+  candidate_status?: 'blocked' | 'building' | 'not_built' | 'passed' | 'ready'
+  blockers?: string[]
+  next_action?: string
+  source_worktree_clean?: boolean
+  source_refs_remotely_reachable?: boolean
+  can_build_candidate: boolean
+  candidate_request_available: boolean
+  refresh_request_available: boolean
+  refresh_request: BackendManagedUpdateRefreshRequest | null
+}
+
 /** Shape of `GET /api/hermes/update/check` — the backend's own update state.
  *  Used by the desktop's remote update overlay so the backend version (not the
  *  Electron client clone) drives "what's changed + Install" in remote mode. */
@@ -962,6 +998,7 @@ export interface BackendUpdateCheckResponse {
   update_command: string | null
   message: string | null
   commits?: BackendUpdateCommit[]
+  managed_source?: BackendManagedSourceUpdate
 }
 
 export interface AuxiliaryTaskAssignment {

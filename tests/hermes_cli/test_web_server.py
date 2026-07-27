@@ -2333,7 +2333,9 @@ class TestWebServerEndpoints:
         assert status_data["pid"] is None
         assert any("docker pull nousresearch/hermes-agent:latest" in line for line in status_data["lines"])
 
-    def test_update_hermes_returns_managed_runtime_guidance_without_spawning(self, monkeypatch):
+    def test_update_hermes_returns_managed_runtime_guidance_without_spawning(
+        self, monkeypatch, tmp_path
+    ):
         import hermes_cli.web_server as web_server
 
         spawned = False
@@ -2350,6 +2352,17 @@ class TestWebServerEndpoints:
             raise AssertionError("managed runtime update guard should not detect install method")
 
         monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: True)
+        monkeypatch.setattr(
+            web_server, "_MANAGED_UPDATE_STATUS_PATH", tmp_path / "missing-status.json"
+        )
+        request_dir = tmp_path / "update-requests"
+        request_dir.mkdir()
+        monkeypatch.setenv("HERMES_MANAGED_UPDATE_TRAIN_ENABLED", "1")
+        monkeypatch.setattr(
+            web_server,
+            "_MANAGED_UPDATE_CANDIDATE_REQUEST_PATH",
+            request_dir / "candidate.json",
+        )
         monkeypatch.setattr(web_server, "detect_install_method", fail_detect)
         monkeypatch.setattr(web_server, "_spawn_hermes_action", fail_spawn)
         web_server._ACTION_PROCS.pop("hermes-update", None)
@@ -2360,20 +2373,13 @@ class TestWebServerEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is False
-        assert data["name"] == "hermes-update"
+        assert data["name"] == "hermes-update-candidate-request"
         assert data["pid"] is None
-        assert data["error"] == "dashboard_update_managed_externally"
-        assert "managed outside this dashboard" in data["message"]
+        assert data["error"] == "candidate_request_not_eligible"
+        assert data["request_only"] is True
+        assert data["managed_source"]["availability"] == "missing"
         assert spawned is False
         assert detected is False
-
-        status = self.client.get("/api/actions/hermes-update/status")
-        assert status.status_code == 200
-        status_data = status.json()
-        assert status_data["running"] is False
-        assert status_data["exit_code"] == 1
-        assert status_data["pid"] is None
-        assert any("managed outside this dashboard" in line for line in status_data["lines"])
 
     def test_update_hermes_spawns_on_non_docker_install(self, monkeypatch):
         import hermes_cli.web_server as web_server
