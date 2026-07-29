@@ -223,6 +223,66 @@ _DEFAULT_MENTION_PATTERNS = [
 # ---------------------------------------------------------------------------
 # Module-level helpers — also used by check_fn / standalone send
 
+class PhotonSidecarError(RuntimeError):
+    """Structured failure returned by the supervised Photon sidecar."""
+
+    def __init__(
+        self,
+        *,
+        path: str,
+        status_code: int,
+        error: str,
+        error_class: str = "sidecar_error",
+        retryable: bool = False,
+    ) -> None:
+        self.path = path
+        self.status_code = status_code
+        self.error = error
+        self.error_class = error_class
+        self.retryable = retryable
+        super().__init__(
+            f"Photon sidecar {path} returned {status_code} "
+            f"({error_class}, retryable={retryable}): {error}"
+        )
+
+
+def _sidecar_error_from_response(
+    path: str,
+    status_code: int,
+    text: str,
+    data: Optional[Dict[str, Any]] = None,
+) -> PhotonSidecarError:
+    if data is None:
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = {}
+        data = parsed if isinstance(parsed, dict) else {}
+
+    error = str(data.get("error") or text[:200] or "sidecar error")
+    error_class = str(data.get("error_class") or "sidecar_error")
+    retryable = bool(data.get("retryable"))
+    if error_class == "target_not_allowed":
+        # Structured code path: replace whatever the sidecar echoed with the
+        # canonical user-facing explanation — never raw upstream error text.
+        error = _TARGET_NOT_ALLOWED_MESSAGE
+        retryable = False
+    return PhotonSidecarError(
+        path=path,
+        status_code=status_code,
+        error=error,
+        error_class=error_class,
+        retryable=retryable,
+    )
+
+# User-facing explanation for the Spectrum "Target not allowed for this
+# project" AuthenticationError. Shared/free-tier lines can only reply to
+# conversations the target initiated; they cannot open new outbound threads.
+_TARGET_NOT_ALLOWED_MESSAGE = (
+    "shared/free-tier Photon lines cannot initiate outbound sends to new "
+    "targets — upgrade to a dedicated line or use another delivery channel"
+)
+
 def _coerce_port(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -637,14 +697,16 @@ class PhotonAdapter(BasePlatformAdapter):
                 except Exception:
                     pass
         if self._inbound_task is not None:
-            self._inbound_task.cancel()
-            try:
-                await self._inbound_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+            task = self._inbound_task
             self._inbound_task = None
+            task.cancel()
+            if task is not asyncio.current_task():
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
         # Cancel any pending U+FFFC placeholder tasks.
         for chat_key, (_, fffc_task) in list(self._pending_fffc.items()):
             if fffc_task and not fffc_task.done():
@@ -658,6 +720,47 @@ class PhotonAdapter(BasePlatformAdapter):
                 pass
             self._http_client = None
         self._mark_disconnected()
+
+    def _dispatch_fatal_notification(self) -> None:
+        """Notify the gateway of a fatal error from a detached task.
+
+        ``_monitor_sidecar_health`` and ``_supervise_sidecar`` run as
+        ``self._sidecar_health_task`` / ``self._sidecar_supervisor_task`` and
+        used to call ``await self._notify_fatal_error()`` directly, on their
+        own call stack. That routes straight into
+        ``GatewayRunner._handle_adapter_fatal_error_impl``, which tears the
+        adapter down via ``_safe_adapter_disconnect`` -> ``disconnect()``.
+        ``disconnect()`` cancels ``self._sidecar_health_task`` and awaits it
+        to make sure it's really gone -- but when the *health task itself* is
+        what's driving this whole notification (the common case: the health
+        poll is what detected the fatal condition), that task IS the one
+        awaiting several frames up the stack, so ``disconnect()`` cancels and
+        awaits its own caller. ``disconnect()``'s
+        ``task is not asyncio.current_task()`` guard doesn't catch this,
+        because the wrapper task ``_await_adapter_cleanup_with_timeout``
+        creates around ``disconnect()`` (via ``asyncio.ensure_future``) is
+        the current task there, not the health/supervisor task further up
+        the plain-await chain. The self-cancellation throws an unhandled
+        ``CancelledError`` through the health/supervisor task with nothing
+        to catch it -- ``CancelledError`` stopped subclassing ``Exception``
+        in Python 3.8, so the ``except Exception`` around the notify call
+        never saw it -- and the task dies silently mid-handoff: no log line,
+        no retry, the platform stranded with no automated way back.
+
+        Dispatching the notification onto a brand-new task instead -- the
+        same pattern ``DiscordAdapter._handle_bot_task_done`` already uses --
+        means ``disconnect()`` can cancel the health/supervisor task freely
+        without that cancellation ever reaching back into the code that's
+        still running the handoff, so the handoff always reaches the
+        reconnect queue.
+        """
+        asyncio.create_task(self._notify_fatal_error_logged())
+
+    async def _notify_fatal_error_logged(self) -> None:
+        try:
+            await self._notify_fatal_error()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("[photon] fatal-error notification failed: %s", exc)
 
     # -- Inbound stream consumer ------------------------------------------
 
@@ -738,10 +841,7 @@ class PhotonAdapter(BasePlatformAdapter):
                 message,
                 retryable=True,
             )
-            try:
-                await self._notify_fatal_error()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("[photon] fatal-error notification failed: %s", exc)
+            self._dispatch_fatal_notification()
             break
 
     async def _on_inbound_line(self, line: str) -> None:
@@ -875,19 +975,6 @@ class PhotonAdapter(BasePlatformAdapter):
             )
 
         ctype = content.get("type")
-        if ctype == "text":
-            raw_text = content.get("text") or ""
-            # iMessage emits U+FFFC OBJECT REPLACEMENT CHARACTER as a transient
-            # placeholder for some media bubbles (notably voice notes). Photon
-            # can then deliver the real attachment/voice event immediately
-            # afterwards with a different message id. If we dispatch the
-            # placeholder as a standalone text turn, the subsequent media event
-            # arrives while that turn is active and the gateway sends a bogus
-            # "Interrupting current task" busy ack. Drop placeholder-only text
-            # at the platform boundary; the real media event carries the bytes.
-            if raw_text.strip() == "\ufffc":
-                logger.debug("[photon] ignoring iMessage object-placeholder text event")
-                return
         if ctype == "reaction":
             # Route only tapbacks on messages WE sent — those are implicitly
             # addressed to the bot (feishu precedent: synthetic text event).
@@ -1088,9 +1175,20 @@ class PhotonAdapter(BasePlatformAdapter):
                 )
         except httpx.RequestError:
             return  # nothing listening — the normal case
-        pids = self._find_listener_pids(self._sidecar_port)
-        stale = [pid for pid in pids if self._pid_is_sidecar(pid)]
-        foreign = [pid for pid in pids if pid not in stale]
+        # Off the event loop: _find_listener_pids shells out to `lsof`
+        # (timeout=5s) and _pid_is_sidecar runs a `ps` per candidate pid
+        # (timeout=5s each), so this inspection can hold the loop for
+        # 5 + 5·N seconds. _reap_stale_sidecar is awaited from
+        # _start_sidecar, which runs on every reconnect — exactly when a
+        # crashed gateway left an orphan behind — so the stall lands on a
+        # live gateway that is still serving every other platform. One hop
+        # covers the whole inspection instead of N+1 round trips.
+        def _inspect():
+            found = self._find_listener_pids(self._sidecar_port)
+            mine = [pid for pid in found if self._pid_is_sidecar(pid)]
+            return mine, [pid for pid in found if pid not in mine]
+
+        stale, foreign = await asyncio.to_thread(_inspect)
         if not stale:
             raise RuntimeError(
                 f"port {self._sidecar_port} is in use by another process "
@@ -1161,7 +1259,14 @@ class PhotonAdapter(BasePlatformAdapter):
         from hermes_cli._subprocess_compat import windows_hide_flags
 
         try:
-            patch = subprocess.run(  # noqa: S603
+            # Off the event loop, for the same reason the dep reinstall above
+            # hops to a thread: this spawns node and *waits* for it (up to 10s).
+            # Run inline it holds the shared gateway loop for that whole window,
+            # so every other platform's traffic stalls — and _start_sidecar runs
+            # on every reconnect (connect(is_reconnect=True)), not just startup,
+            # so the stall recurs on a live gateway.
+            patch = await asyncio.to_thread(
+                subprocess.run,  # noqa: S603
                 [
                     self._node_bin,
                     str(_SIDECAR_DIR / "patch-spectrum-mixed-attachments.mjs"),
@@ -1263,10 +1368,7 @@ class PhotonAdapter(BasePlatformAdapter):
                 f"Photon sidecar exited unexpectedly (code {exit_code})",
                 retryable=True,
             )
-            try:
-                await self._notify_fatal_error()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("[photon] fatal-error notification failed: %s", exc)
+            self._dispatch_fatal_notification()
 
     async def _stop_sidecar(self) -> None:
         proc = self._sidecar_proc
@@ -1314,7 +1416,31 @@ class PhotonAdapter(BasePlatformAdapter):
             # standalone senders don't chase a dead port/token.
             _delete_runtime_record()
             if self._sidecar_supervisor_task is not None:
-                self._sidecar_supervisor_task.cancel()
+                # _stop_sidecar() is called both from external cleanup
+                # (Gateway shutdown, explicit disconnect) AND, indirectly,
+                # from WITHIN the supervisor task's own crash-handling
+                # chain: _supervise_sidecar() detects the sidecar exit,
+                # calls _set_fatal_error() + self._notify_fatal_error(),
+                # which the Gateway's fatal-error handler answers by
+                # calling adapter.disconnect() -> this same _stop_sidecar().
+                # In that second case, self._sidecar_supervisor_task IS the
+                # currently-running task. Cancelling it raises
+                # CancelledError into its own call stack (at the next
+                # await point in _notify_fatal_error() or here), which
+                # aborts the fatal-error handler before the Gateway ever
+                # reaches the "queue for background reconnection" step --
+                # Photon then stays permanently dead until a manual
+                # restart, since asyncio.CancelledError inherits from
+                # BaseException (not Exception) and isn't caught by the
+                # handler's `except Exception` guards (issue #73159).
+                # A task cannot legally cancel itself anyway (the
+                # cancellation would only take effect at its own next
+                # await, which is exactly the corruption described above),
+                # so skip it here and let the task finish exiting on its
+                # own instead.
+                current_task = asyncio.current_task()
+                if self._sidecar_supervisor_task is not current_task:
+                    self._sidecar_supervisor_task.cancel()
                 self._sidecar_supervisor_task = None
 
     # -- Outbound ----------------------------------------------------------
@@ -1635,7 +1761,24 @@ class PhotonAdapter(BasePlatformAdapter):
         if not error:
             return False
         lowered = error.lower()
+        if "retryable=false" in lowered or "auth_or_config" in lowered:
+            return False
         return any(pat in lowered for pat in _PHOTON_RETRYABLE_PATTERNS)
+
+    @staticmethod
+    def _is_permanent_sidecar_failure(result: SendResult) -> bool:
+        """True when the sidecar classified the failure as permanent.
+
+        ``auth_or_config`` and ``target_not_allowed`` cannot be fixed by
+        retrying or by the plain-text fallback resend — attempting either
+        just double-sends a doomed request (issue #50971).
+        """
+        raw = result.raw_response
+        return (
+            isinstance(raw, dict)
+            and raw.get("retryable") is False
+            and raw.get("error_class") in ("auth_or_config", "target_not_allowed")
+        )
 
     async def _send_with_retry(
         self,
@@ -1662,6 +1805,14 @@ class PhotonAdapter(BasePlatformAdapter):
         if result.success:
             return result
 
+        if self._is_permanent_sidecar_failure(result):
+            # Permanent failure classes: retrying cannot succeed and the
+            # unconditional plain-text fallback below would double-send the
+            # same doomed request. Return the structured failure as-is
+            # (with the user-facing explanation already attached for
+            # target_not_allowed in _sidecar_send).
+            return result
+
         error_str = result.error or ""
         is_network = result.retryable or self._is_retryable_error(error_str)
         if not is_network and self._is_timeout_error(error_str):
@@ -1684,6 +1835,10 @@ class PhotonAdapter(BasePlatformAdapter):
                 if result.success:
                     return result
                 error_str = result.error or ""
+                if self._is_permanent_sidecar_failure(result):
+                    # A retry surfaced a permanent class — don't fall through
+                    # to the plain-text resend either.
+                    return result
                 if not (result.retryable or self._is_retryable_error(error_str)):
                     break
             else:
@@ -1721,6 +1876,16 @@ class PhotonAdapter(BasePlatformAdapter):
             body["format"] = "markdown"
         try:
             data = await self._sidecar_call("/send", body)
+        except PhotonSidecarError as e:
+            return SendResult(
+                success=False,
+                error=str(e),
+                raw_response={
+                    "error_class": e.error_class,
+                    "retryable": e.retryable,
+                },
+                retryable=e.retryable,
+            )
         except Exception as e:
             return SendResult(success=False, error=str(e))
         self._record_sent_message(data.get("messageId"))
@@ -1770,6 +1935,16 @@ class PhotonAdapter(BasePlatformAdapter):
             body["caption"] = caption
         try:
             data = await self._sidecar_call("/send-attachment", body)
+        except PhotonSidecarError as e:
+            return SendResult(
+                success=False,
+                error=str(e),
+                raw_response={
+                    "error_class": e.error_class,
+                    "retryable": e.retryable,
+                },
+                retryable=e.retryable,
+            )
         except Exception as e:
             return SendResult(success=False, error=str(e))
         self._record_sent_message(data.get("messageId"))
@@ -1789,14 +1964,10 @@ class PhotonAdapter(BasePlatformAdapter):
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.post(url, json=body, headers=headers)
         if resp.status_code != 200:
-            raise RuntimeError(
-                f"Photon sidecar {path} returned {resp.status_code}: {resp.text[:200]}"
-            )
+            raise _sidecar_error_from_response(path, resp.status_code, resp.text)
         data = resp.json() or {}
         if not data.get("ok"):
-            raise RuntimeError(
-                f"Photon sidecar {path} reported error: {data.get('error')}"
-            )
+            raise _sidecar_error_from_response(path, resp.status_code, resp.text, data)
         return data
 
 
@@ -1898,6 +2069,32 @@ def _cache_inbound_attachment(
 # is not co-resident.  Reuses a live sidecar already listening on the
 # configured port (cron processes cannot spawn the sidecar themselves).
 
+def _standalone_error(resp: Any) -> Dict[str, Any]:
+    """Build the structured error dict for a failed standalone sidecar call.
+
+    Mirrors ``_sidecar_error_from_response``: parse the sidecar body
+    independently, carry the error class + retryability, and swap in the
+    canonical user-facing message for ``target_not_allowed`` (never the raw
+    upstream text).
+    """
+    try:
+        data = resp.json() or {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    error_class = str(data.get("error_class") or "sidecar_error")
+    retryable = bool(data.get("retryable"))
+    if error_class == "target_not_allowed":
+        error = _TARGET_NOT_ALLOWED_MESSAGE
+        retryable = False
+    elif resp.status_code != 200:
+        error = f"sidecar returned {resp.status_code}: {resp.text[:200]}"
+    else:
+        error = str(data.get("error") or "sidecar reported failure")
+    return {"error": error, "error_class": error_class, "retryable": retryable}
+
+
 async def _standalone_send(
     pconfig: PlatformConfig,
     chat_id: str,
@@ -1958,10 +2155,10 @@ async def _standalone_send(
                     f"{base}/send", json=send_body, headers=headers,
                 )
                 if resp.status_code != 200:
-                    return {"error": f"sidecar returned {resp.status_code}: {resp.text[:200]}"}
+                    return _standalone_error(resp)
                 data = resp.json() or {}
                 if not data.get("ok"):
-                    return {"error": data.get("error") or "sidecar reported failure"}
+                    return _standalone_error(resp)
                 last_message_id = data.get("messageId")
 
             # 2. Each attachment as a separate /send-attachment call.
@@ -1986,10 +2183,10 @@ async def _standalone_send(
                     f"{base}/send-attachment", json=att_body, headers=headers,
                 )
                 if resp.status_code != 200:
-                    return {"error": f"sidecar returned {resp.status_code}: {resp.text[:200]}"}
+                    return _standalone_error(resp)
                 data = resp.json() or {}
                 if not data.get("ok"):
-                    return {"error": data.get("error") or "sidecar reported failure"}
+                    return _standalone_error(resp)
                 last_message_id = data.get("messageId") or last_message_id
 
         return {"success": True, "message_id": last_message_id}
