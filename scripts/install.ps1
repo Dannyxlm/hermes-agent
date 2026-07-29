@@ -142,8 +142,12 @@ foreach ($tmpVar in @('TEMP', 'TMP')) {
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:NousResearch/hermes-agent.git"
-$RepoUrlHttps = "https://github.com/NousResearch/hermes-agent.git"
+$InstallRepository = if ($env:HERMES_INSTALL_REPOSITORY) { $env:HERMES_INSTALL_REPOSITORY.Trim() } else { "NousResearch/hermes-agent" }
+if ($InstallRepository -notmatch '^[0-9A-Za-z][0-9A-Za-z_.-]*/[0-9A-Za-z][0-9A-Za-z_.-]*$') {
+    throw "Invalid HERMES_INSTALL_REPOSITORY: expected owner/repo"
+}
+$RepoUrlSsh = "git@github.com:$InstallRepository.git"
+$RepoUrlHttps = "https://github.com/$InstallRepository.git"
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
