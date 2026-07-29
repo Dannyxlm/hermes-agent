@@ -49,7 +49,7 @@ jobs:
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           python .github/scripts/apply_desktop_publication_provenance.py
-          git rm \
+          git rm -f \
             .github/patches/desktop-publication-provenance.patch \
             .github/scripts/apply_desktop_publication_provenance.py \
             .github/workflows/apply-desktop-publication-provenance.yml
