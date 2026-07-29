@@ -46,7 +46,17 @@ jobs:
               path.write_text(text.replace(old, new, 1), encoding="utf-8")'''
           if text.count(old) != 1:
               raise SystemExit('transformer guard block changed unexpectedly')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          text = text.replace(old, new, 1)
+
+          weak_segment = '[0-9A-Za-z_.-]+'
+          strict_segment = '[0-9A-Za-z][0-9A-Za-z_.-]*'
+          segment_count = text.count(weak_segment)
+          if segment_count < 4:
+              raise SystemExit(
+                  f'expected at least four owner/repo regex segments, found {segment_count}'
+              )
+          text = text.replace(weak_segment, strict_segment)
+          path.write_text(text, encoding='utf-8')
           PY
           python .github/scripts/apply_desktop_publication_provenance.py
           git rm -f \
