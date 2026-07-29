@@ -7,13 +7,18 @@ on:
     paths:
       - ".github/patches/desktop-publication-provenance.patch"
       - ".github/workflows/apply-desktop-publication-provenance.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/patches/desktop-publication-provenance.patch"
+      - ".github/workflows/apply-desktop-publication-provenance.yml"
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: ${{ !contains(github.event.head_commit.message, 'apply desktop publication provenance') }}
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, 'apply desktop publication provenance') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
