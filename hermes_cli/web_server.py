@@ -4413,7 +4413,11 @@ def _read_managed_update_source() -> Dict[str, Any]:
         return _managed_source_base(
             "invalid", status_error="status_timestamp_invalid"
         )
-    age_seconds = max(0.0, (now - generated_timestamp).total_seconds())
+    # A freshly rewritten receipt must not make old upstream data look fresh.
+    # Treat the older of collection time and receipt-generation time as the
+    # source freshness boundary before authorizing a candidate request.
+    freshness_timestamp = min(generated_timestamp, last_fetched_timestamp)
+    age_seconds = max(0.0, (now - freshness_timestamp).total_seconds())
     stale = age_seconds > _managed_update_max_age_seconds()
 
     source = _managed_source_base(
@@ -4471,8 +4475,10 @@ def _managed_marker_destination_available(path: Path) -> bool:
         return False
 
 
-def _write_managed_update_marker(path: Path, payload: Dict[str, Any]) -> bool:
-    """Atomically replace one exact content-free broker marker."""
+def _write_managed_update_marker(
+    path: Path, payload: Dict[str, Any], *, replace_existing: bool = True
+) -> bool:
+    """Atomically publish one exact content-free broker marker."""
     if not _managed_marker_destination_available(path):
         return False
 
@@ -4506,12 +4512,25 @@ def _write_managed_update_marker(path: Path, payload: Dict[str, Any]) -> bool:
             os.fsync(temp_fd)
         finally:
             os.close(temp_fd)
-        os.replace(
-            temp_name,
-            path.name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-        )
+        if replace_existing:
+            os.replace(
+                temp_name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+        else:
+            # Publish exactly once. Linking the fully fsynced temporary file is
+            # atomic and fails closed when another request already won the race.
+            os.link(
+                temp_name,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            os.unlink(temp_name, dir_fd=parent_fd)
+            temp_name = None
         os.fsync(parent_fd)
         return True
     except (OSError, RuntimeError, TypeError, ValueError):
@@ -4539,6 +4558,17 @@ def _request_managed_source_refresh() -> Dict[str, Any]:
         "requested": requested,
         "error": None if requested else "refresh_request_unavailable",
     }
+
+
+def _managed_candidate_request_matches(
+    payload: Optional[Dict[str, Any]], source: Dict[str, Any]
+) -> bool:
+    return bool(
+        payload
+        and payload.get("schema_version") == "hermes-update-candidate-request.v1"
+        and payload.get("tracked_upstream") == source.get("tracked_upstream")
+        and payload.get("upstream_head") == source.get("upstream_head")
+    )
 
 
 def _managed_update_check_payload(*, request_refresh: bool) -> Dict[str, Any]:
@@ -4605,6 +4635,32 @@ async def update_hermes():
             }
 
         upstream_head = source["upstream_head"]
+        pending_request, pending_error = _managed_read_bounded_json(
+            _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH
+        )
+        if _managed_candidate_request_matches(pending_request, source):
+            return {
+                "ok": True,
+                "pid": None,
+                "name": "hermes-update-candidate-request",
+                "message": (
+                    f"Immutable candidate build for {upstream_head[:12]} is already "
+                    "pending. Production was not changed or restarted."
+                ),
+                "request_only": True,
+                "requested_revision": upstream_head,
+            }
+        if pending_error != "status_missing":
+            return {
+                "ok": False,
+                "pid": None,
+                "name": "hermes-update-candidate-request",
+                "error": "candidate_request_pending",
+                "message": "Another immutable candidate request is already pending.",
+                "request_only": True,
+                "managed_source": source,
+            }
+
         requested = _write_managed_update_marker(
             _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH,
             {
@@ -4613,8 +4669,26 @@ async def update_hermes():
                 "tracked_upstream": source["tracked_upstream"],
                 "upstream_head": upstream_head,
             },
+            replace_existing=False,
         )
         if not requested:
+            # Another request may have won the no-clobber publish race. Treat an
+            # exact matching marker as the same successful idempotent request.
+            pending_request, _ = _managed_read_bounded_json(
+                _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH
+            )
+            if _managed_candidate_request_matches(pending_request, source):
+                return {
+                    "ok": True,
+                    "pid": None,
+                    "name": "hermes-update-candidate-request",
+                    "message": (
+                        f"Immutable candidate build for {upstream_head[:12]} is "
+                        "already pending. Production was not changed or restarted."
+                    ),
+                    "request_only": True,
+                    "requested_revision": upstream_head,
+                }
             return {
                 "ok": False,
                 "pid": None,

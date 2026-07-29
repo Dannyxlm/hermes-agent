@@ -1296,6 +1296,34 @@ class TestUpdateCheckEndpoint:
             == "stale"
         )
 
+    def test_managed_runtime_stale_fetch_cannot_request_candidate(
+        self, monkeypatch, tmp_path
+    ):
+        import hermes_cli.web_server as ws
+
+        status_path, _, candidate_path = self._managed_paths(monkeypatch, tmp_path)
+        now = datetime(2026, 7, 27, 18, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(ws, "_managed_update_now", lambda: now)
+        status_path.write_text(
+            json.dumps(
+                self._managed_status(
+                    generated_at=now.isoformat(),
+                    last_fetched_at=(now - timedelta(hours=4)).isoformat(),
+                )
+            ),
+            encoding="utf-8",
+        )
+        status_path.chmod(0o600)
+
+        check = self.client.get("/api/hermes/update/check").json()
+        assert check["managed_source"]["availability"] == "stale"
+        assert check["managed_source"]["can_build_candidate"] is False
+
+        build = self.client.post("/api/hermes/update").json()
+        assert build["ok"] is False
+        assert build["error"] == "candidate_request_not_eligible"
+        assert not candidate_path.exists()
+
     def test_managed_check_now_writes_only_atomic_refresh_marker(
         self, monkeypatch, tmp_path
     ):
@@ -1351,6 +1379,23 @@ class TestUpdateCheckEndpoint:
         assert marker["schema_version"] == "hermes-update-candidate-request.v1"
         assert marker["upstream_head"] == "b" * 40
         assert marker["tracked_upstream"] == "NousResearch/main"
+
+        first_marker = candidate_path.read_text(encoding="utf-8")
+        repeated = self.client.post("/api/hermes/update").json()
+        assert repeated["ok"] is True
+        assert repeated["request_only"] is True
+        assert repeated["requested_revision"] == "b" * 40
+        assert "already pending" in repeated["message"].lower()
+        assert candidate_path.read_text(encoding="utf-8") == first_marker
+
+        status_path.write_text(
+            json.dumps(self._managed_status(upstream_head="c" * 40)),
+            encoding="utf-8",
+        )
+        conflicting = self.client.post("/api/hermes/update").json()
+        assert conflicting["ok"] is False
+        assert conflicting["error"] == "candidate_request_pending"
+        assert candidate_path.read_text(encoding="utf-8") == first_marker
 
     def test_managed_candidate_lane_requires_explicit_deployment_opt_in(
         self, monkeypatch, tmp_path
