@@ -1117,10 +1117,13 @@ class TestUpdateCheckEndpoint:
         assert body["message"]
         assert body["behind"] is None
 
-    def test_managed_runtime_dashboard_is_not_applyable(self, monkeypatch):
+    def test_managed_runtime_dashboard_is_not_applyable(self, monkeypatch, tmp_path):
         import hermes_cli.web_server as ws
 
         monkeypatch.setattr(ws, "_dashboard_local_update_managed_externally", lambda: True)
+        monkeypatch.setattr(
+            ws, "_MANAGED_UPDATE_STATUS_PATH", tmp_path / "missing-status.json"
+        )
         monkeypatch.setattr(
             ws,
             "detect_install_method",
@@ -1134,7 +1137,8 @@ class TestUpdateCheckEndpoint:
         assert body["can_apply"] is False
         assert body["update_available"] is False
         assert body["behind"] is None
-        assert "managed outside this dashboard" in body["message"]
+        assert body["managed_source"]["availability"] == "missing"
+        assert "source-monitor" in body["message"].lower()
 
     @staticmethod
     def _managed_status(*, generated_at=None, **overrides):
