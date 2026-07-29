@@ -6,11 +6,13 @@ on:
       - fix/desktop-publication-provenance
     paths:
       - ".github/patches/desktop-publication-provenance.patch"
+      - ".github/scripts/apply_desktop_publication_provenance.py"
       - ".github/workflows/apply-desktop-publication-provenance.yml"
   pull_request:
     branches: [main]
     paths:
       - ".github/patches/desktop-publication-provenance.patch"
+      - ".github/scripts/apply_desktop_publication_provenance.py"
       - ".github/workflows/apply-desktop-publication-provenance.yml"
 
 permissions:
@@ -28,14 +30,22 @@ jobs:
           ref: fix/desktop-publication-provenance
           fetch-depth: 0
 
-      - name: Apply reviewed patch
+      - name: Apply exact reviewed provenance changes
         run: |
           set -euo pipefail
-          git apply --check .github/patches/desktop-publication-provenance.patch
-          git apply --index .github/patches/desktop-publication-provenance.patch
+          python .github/scripts/apply_desktop_publication_provenance.py
           git rm \
             .github/patches/desktop-publication-provenance.patch \
+            .github/scripts/apply_desktop_publication_provenance.py \
             .github/workflows/apply-desktop-publication-provenance.yml
+          git add \
+            apps/desktop/electron/bootstrap-runner.ts \
+            apps/desktop/electron/bootstrap-runner.test.ts \
+            apps/desktop/electron/main.ts \
+            apps/desktop/scripts/write-build-stamp.mjs \
+            apps/desktop/scripts/write-build-stamp.test.mjs \
+            scripts/install.sh \
+            scripts/install.ps1
           git diff --check --cached
 
       - name: Install Desktop dependencies
@@ -48,6 +58,7 @@ jobs:
             vitest run \
               scripts/write-build-stamp.test.mjs \
               electron/bootstrap-runner.test.ts
+          npm --workspace apps/desktop run typecheck
           bash -n scripts/install.sh
           python - <<'PY'
           from pathlib import Path
