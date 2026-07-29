@@ -42,6 +42,8 @@ test('CI provenance never stamps a synthetic pull-request merge branch or a rele
   assert.equal(branchFromCI({ HERMES_DESKTOP_UPDATE_BRANCH: 'main', GITHUB_REF_NAME: '123/merge' }), 'main')
   assert.equal(normalizeRepository('git@github.com:Dannyxlm/hermes-agent.git'), 'Dannyxlm/hermes-agent')
   assert.equal(normalizeRepository('https://github.com/Dannyxlm/hermes-agent.git'), 'Dannyxlm/hermes-agent')
+  assert.equal(normalizeRepository('../evil'), null)
+  assert.equal(normalizeRepository('.hidden/repo'), null)
 })
 
 test('fromLocalGit returns null when git rev-parse fails', () => {
