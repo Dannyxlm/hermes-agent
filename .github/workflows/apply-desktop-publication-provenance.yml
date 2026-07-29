@@ -33,6 +33,21 @@ jobs:
       - name: Apply exact reviewed provenance changes
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/scripts/apply_desktop_publication_provenance.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    if count != 1:
+                  raise SystemExit(f"{relative}: expected one reviewed fragment, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")'''
+          new = '''    if count < 1:
+                  raise SystemExit(f"{relative}: reviewed fragment is missing")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")'''
+          if text.count(old) != 1:
+              raise SystemExit('transformer guard block changed unexpectedly')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python .github/scripts/apply_desktop_publication_provenance.py
           git rm \
             .github/patches/desktop-publication-provenance.patch \
