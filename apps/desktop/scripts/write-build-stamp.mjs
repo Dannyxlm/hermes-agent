@@ -16,9 +16,9 @@
  *   }
  *
  * Source preference order:
- *   1. CI env vars ($GITHUB_SHA / $GITHUB_REF_NAME) -- avoid edge cases with
- *      shallow clones, detached HEADs, etc. in CI.
- *   2. Local `git rev-parse` against the parent repo (../..).
+ *   1. CI commit plus publication provenance. Pull-request builds use the real
+ *      head branch, never GitHub's synthetic `<number>/merge` ref.
+ *   2. Local `git rev-parse` plus the checked-out origin repository (../..).
  *   3. Fallback stamp for local/personal builds from non-git source trees
  *      (ZIP extract, interrupted clone with no HEAD, etc.).
  *
