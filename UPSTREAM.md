@@ -35,7 +35,9 @@ mechanism. It:
 6. force-updates one automation branch and opens or refreshes one review PR.
 
 The workflow never deploys, restarts Hermes, updates a production selector, or
-runs `hermes update` on the cloud box.
+runs `hermes update` on the cloud box. Its reviewed automation identities are
+registered in the repository contributor map, so generated sync commits remain
+attributable and pass the same checks as human-authored commits.
 
 Upstream sync PRs must be merged with a **merge commit**, not squash-merged. A
 merge commit preserves the upstream ancestry so the next `commits behind`
