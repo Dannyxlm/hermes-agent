@@ -45,11 +45,20 @@ def _module_registers_tools(module_path: Path) -> bool:
 
     Only inspects module-body statements so that helper modules which happen
     to call ``registry.register()`` inside a function are not picked up.
+
+    A cheap text prefilter avoids the ``ast.parse`` cost for files that do not
+    mention both ``registry`` and ``register`` — a necessary condition for a
+    top-level ``registry.register()`` call to exist.
     """
     try:
         source = module_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if "registry" not in source or "register" not in source:
+        return False
+    try:
         tree = ast.parse(source, filename=str(module_path))
-    except (OSError, SyntaxError):
+    except SyntaxError:
         return False
 
     return any(_is_registry_register_call(stmt) for stmt in tree.body)
@@ -379,18 +388,7 @@ class ToolRegistry:
         with self._lock:
             existing = self._tools.get(name)
             if existing and existing.toolset != toolset:
-                # Allow MCP-to-MCP overwrites (legitimate: server refresh,
-                # or two MCP servers with overlapping tool names).
-                both_mcp = (
-                    existing.toolset.startswith("mcp-")
-                    and toolset.startswith("mcp-")
-                )
-                if both_mcp:
-                    logger.debug(
-                        "Tool '%s': MCP toolset '%s' overwriting MCP toolset '%s'",
-                        name, toolset, existing.toolset,
-                    )
-                elif override:
+                if override:
                     _owner = self._plugin_owner_of(handler)
                     if _owner is not None and not self._plugin_override_policy.get(_owner, False):
                         logger.error(
@@ -414,8 +412,9 @@ class ToolRegistry:
                         name, toolset, existing.toolset,
                     )
                 else:
-                    # Reject shadowing — prevent plugins/MCP from overwriting
-                    # built-in tools or vice versa.
+                    # Reject every cross-toolset shadow, including MCP-to-MCP
+                    # collisions. Legitimate MCP reconnect/refresh re-registers
+                    # within the same canonical toolset and remains allowed.
                     logger.error(
                         "Tool registration REJECTED: '%s' (toolset '%s') would "
                         "shadow existing tool from toolset '%s'. Pass "
@@ -571,10 +570,43 @@ class ToolRegistry:
     # Dispatch
     # ------------------------------------------------------------------
 
-    def dispatch(self, name: str, args: dict, **kwargs) -> str:
+    @staticmethod
+    def _normalize_handler_result(name: str, result):
+        """Enforce the result shapes supported by the agent tool pipeline.
+
+        Normal tool results are strings.  The sole structured exception is the
+        multimodal envelope consumed by the agent executor.  Returning every
+        other value as a string error keeps logging, hooks, budgeting, and
+        persistence from receiving values they cannot safely slice or size.
+        """
+        if isinstance(result, str):
+            return result
+        if (
+            isinstance(result, dict)
+            and result.get("_multimodal") is True
+            and isinstance(result.get("content"), list)
+        ):
+            return result
+
+        result_type = type(result).__name__
+        logger.error(
+            "Tool %s handler returned unsupported result type: %s",
+            name,
+            result_type,
+        )
+        return json.dumps({
+            "error": f"Tool handler returned unsupported result type: {result_type}",
+            "error_type": "tool_result_contract",
+            "tool": name,
+            "result_type": result_type,
+        }, ensure_ascii=False)
+
+    def dispatch(self, name: str, args: dict, **kwargs) -> str | dict:
         """Execute a tool handler by name.
 
         * Async handlers are bridged automatically via ``_run_async()``.
+        * Handler results are normalized to a string or supported multimodal
+          envelope before leaving the registry.
         * All exceptions are caught and returned as ``{"error": "..."}``
           for consistent error format.
         """
@@ -584,8 +616,10 @@ class ToolRegistry:
         try:
             if entry.is_async:
                 from model_tools import _run_async
-                return _run_async(entry.handler(args, **kwargs))
-            return entry.handler(args, **kwargs)
+                result = _run_async(entry.handler(args, **kwargs))
+            else:
+                result = entry.handler(args, **kwargs)
+            return self._normalize_handler_result(name, result)
         except Exception as e:
             logger.exception("Tool %s dispatch error: %s", name, e)
             # Route through the sanitizer so framing tokens / CDATA / fences
