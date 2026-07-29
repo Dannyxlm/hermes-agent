@@ -9,15 +9,16 @@
  *     "schemaVersion": 1,
  *     "commit":        "<40-char SHA>",
  *     "branch":        "<branch name>",
+ *     "repository":    "<owner/repo>",
  *     "builtAt":       "<ISO 8601 UTC timestamp>",
  *     "dirty":         true|false,
  *     "source":        "ci" | "local" | "fallback"
  *   }
  *
  * Source preference order:
- *   1. CI env vars ($GITHUB_SHA / $GITHUB_REF_NAME) -- avoid edge cases with
- *      shallow clones, detached HEADs, etc. in CI.
- *   2. Local `git rev-parse` against the parent repo (../..).
+ *   1. CI commit plus publication provenance. Pull-request builds use the real
+ *      head branch, never GitHub's synthetic `<number>/merge` ref.
+ *   2. Local `git rev-parse` plus the checked-out origin repository (../..).
  *   3. Fallback stamp for local/personal builds from non-git source trees
  *      (ZIP extract, interrupted clone with no HEAD, etc.).
  *
@@ -37,6 +38,47 @@ const STAMP_SCHEMA_VERSION = 1
 /** All-zero placeholder used when no real commit can be resolved. */
 export const FALLBACK_COMMIT = "0000000000000000000000000000000000000000"
 export const FALLBACK_BRANCH = "main"
+export const FALLBACK_REPOSITORY = "NousResearch/hermes-agent"
+
+export function normalizeRepository(value) {
+  if (!value) return null
+  let text = String(value).trim()
+
+  if (text.startsWith("git@github.com:")) {
+    text = text.slice("git@github.com:".length)
+  } else if (text.startsWith("ssh://git@github.com/")) {
+    text = text.slice("ssh://git@github.com/".length)
+  } else {
+    try {
+      const parsed = new URL(text)
+      if (parsed.hostname.toLowerCase() !== "github.com") return null
+      text = parsed.pathname
+    } catch {
+      // owner/repo is already the canonical build-stamp form.
+    }
+  }
+
+  text = text.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "")
+  return /^[0-9A-Za-z][0-9A-Za-z_.-]*\/[0-9A-Za-z][0-9A-Za-z_.-]*$/.test(text) ? text : null
+}
+
+export function branchFromCI(env = process.env) {
+  const explicit = String(env.HERMES_DESKTOP_UPDATE_BRANCH || "").trim()
+  if (explicit) return explicit
+
+  const head = String(env.GITHUB_HEAD_REF || "").trim()
+  if (head) return head
+
+  const refName = String(env.GITHUB_REF_NAME || "").trim()
+  const refType = String(env.GITHUB_REF_TYPE || "").trim().toLowerCase()
+  const syntheticPullRequest = /^\d+\/merge$/.test(refName) || refName.startsWith("refs/pull/")
+
+  if (refName && !syntheticPullRequest && (refType === "branch" || !refType)) {
+    return refName
+  }
+
+  return FALLBACK_BRANCH
+}
 
 const DESKTOP_ROOT = resolve(import.meta.dirname, "..")
 const REPO_ROOT = resolve(DESKTOP_ROOT, "..", "..")
@@ -54,10 +96,13 @@ function tryExec(cmd, opts) {
 export function fromCI(env = process.env) {
   const sha = env.GITHUB_SHA
   if (!sha) return null
-  const branch = env.GITHUB_REF_NAME || env.GITHUB_HEAD_REF || null
+  const branch = branchFromCI(env)
+  const repository =
+    normalizeRepository(env.HERMES_DESKTOP_UPDATE_REPOSITORY || env.GITHUB_REPOSITORY) || FALLBACK_REPOSITORY
   return {
     commit: sha,
-    branch: branch,
+    branch,
+    repository,
     dirty: false, // CI builds from a checkout-of-ref by definition
     source: "ci"
   }
@@ -67,6 +112,7 @@ export function fromLocalGit(repoRoot = REPO_ROOT, execFn = tryExec) {
   const sha = execFn("git rev-parse HEAD", { cwd: repoRoot })
   if (!sha) return null
   const branch = execFn("git rev-parse --abbrev-ref HEAD", { cwd: repoRoot })
+  const repository = normalizeRepository(execFn("git remote get-url origin", { cwd: repoRoot })) || FALLBACK_REPOSITORY
   // `git status --porcelain -uno` is empty iff tracked files match HEAD.
   // We exclude untracked files (-uno) intentionally: a developer who's
   // checked out an installer scratch dir alongside the repo shouldn't
@@ -78,12 +124,13 @@ export function fromLocalGit(repoRoot = REPO_ROOT, execFn = tryExec) {
   return {
     commit: sha,
     branch: branch === "HEAD" ? null : branch, // detached HEAD -> null
+    repository,
     dirty: dirty,
     source: "local"
   }
 }
 
-export function fromFallback(branch = FALLBACK_BRANCH) {
+export function fromFallback(branch = FALLBACK_BRANCH, repository = FALLBACK_REPOSITORY) {
   // Non-git builds (ZIP download, bootstrap installer without a resolvable
   // HEAD) cannot determine a real commit.  Use a placeholder so local /
   // personal builds can still complete.  The desktop bootstrap treats the
@@ -92,6 +139,7 @@ export function fromFallback(branch = FALLBACK_BRANCH) {
   return {
     commit: FALLBACK_COMMIT,
     branch: branch || FALLBACK_BRANCH,
+    repository: normalizeRepository(repository) || FALLBACK_REPOSITORY,
     dirty: false,
     source: "fallback"
   }
@@ -105,9 +153,10 @@ export function resolveStamp({
   env = process.env,
   repoRoot = REPO_ROOT,
   execFn = tryExec,
-  fallbackBranch = FALLBACK_BRANCH
+  fallbackBranch = FALLBACK_BRANCH,
+  fallbackRepository = FALLBACK_REPOSITORY
 } = {}) {
-  return fromCI(env) || fromLocalGit(repoRoot, execFn) || fromFallback(fallbackBranch)
+  return fromCI(env) || fromLocalGit(repoRoot, execFn) || fromFallback(fallbackBranch, fallbackRepository)
 }
 
 export function isFallbackCommit(commit) {
@@ -153,6 +202,7 @@ function main() {
     schemaVersion: STAMP_SCHEMA_VERSION,
     commit: stamp.commit,
     branch: stamp.branch,
+    repository: stamp.repository,
     builtAt: new Date().toISOString(),
     dirty: stamp.dirty,
     source: stamp.source
@@ -164,6 +214,7 @@ function main() {
     "[write-build-stamp] wrote " +
       relative(REPO_ROOT, OUT_FILE) +
       " -> " +
+      stamp.repository + "@" +
       stamp.commit.slice(0, 12) +
       (stamp.branch ? " (" + stamp.branch + ")" : "") +
       (stamp.dirty ? " [DIRTY]" : "") +

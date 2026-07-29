@@ -12,7 +12,9 @@ import {
   hasExistingGitCheckout,
   installedAgentInstallScript,
   installRefForStamp,
+  installRepositoryForStamp,
   isPinnedCommit,
+  repositoryCacheKey,
   resolveInstallScript,
   resolveMarkerPinnedCommit,
   runBootstrap
@@ -20,6 +22,7 @@ import {
 
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
 const ZERO_COMMIT = '0000000000000000000000000000000000000000'
+const CLOUDSEED_REPOSITORY = 'Dannyxlm/hermes-agent'
 
 function mkTmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-test-'))
@@ -131,6 +134,16 @@ test('fallback install stamps use an unpinned branch ref', () => {
   )
 })
 
+test('install repository provenance is validated and namespaces non-official cache entries', () => {
+  assert.equal(installRepositoryForStamp({ repository: CLOUDSEED_REPOSITORY }), CLOUDSEED_REPOSITORY)
+  assert.equal(installRepositoryForStamp({ repository: '../evil' }), 'NousResearch/hermes-agent')
+  assert.equal(
+    repositoryCacheKey(CLOUDSEED_REPOSITORY, 'fallback-main'),
+    'Dannyxlm_hermes-agent-fallback-main'
+  )
+  assert.equal(repositoryCacheKey('NousResearch/hermes-agent', 'fallback-main'), 'fallback-main')
+})
+
 test('resolveMarkerPinnedCommit prefers real HEAD over fallback stamp zeros', () => {
   const realHead = 'c'.repeat(40)
   assert.equal(
@@ -160,14 +173,16 @@ test('resolveInstallScript downloads fallback stamps by branch instead of zero c
   try {
     const logs = []
     const refs = []
+    const repositories = []
 
     const result = await resolveInstallScript({
-      installStamp: { commit: ZERO_COMMIT, branch: 'main' },
+      installStamp: { commit: ZERO_COMMIT, branch: 'main', repository: CLOUDSEED_REPOSITORY },
       sourceRepoRoot: null,
       hermesHome: home,
       emit: ev => logs.push(ev),
-      _download: async (ref, destPath) => {
+      _download: async (ref, destPath, repository) => {
         refs.push(ref)
+        repositories.push(repository)
         fs.mkdirSync(path.dirname(destPath), { recursive: true })
         fs.writeFileSync(destPath, '#!/bin/sh\necho fallback branch\n')
 
@@ -176,9 +191,11 @@ test('resolveInstallScript downloads fallback stamps by branch instead of zero c
     })
 
     assert.deepEqual(refs, ['main'])
+    assert.deepEqual(repositories, [CLOUDSEED_REPOSITORY])
     assert.equal(result.source, 'download')
+    assert.equal(result.repository, CLOUDSEED_REPOSITORY)
     assert.equal(result.commit, null)
-    assert.equal(result.path, cachedScriptPath(home, 'fallback-main'))
+    assert.equal(result.path, cachedScriptPath(home, 'Dannyxlm_hermes-agent-fallback-main'))
     assert.ok(
       logs.some(ev => /fallback, unpinned/.test(ev.line || '')),
       'emits an unpinned fallback log line'
