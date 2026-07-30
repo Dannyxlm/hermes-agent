@@ -831,6 +831,59 @@ class TestUpdateCheckEndpoint:
         assert body["managed_source"]["availability"] == "missing"
         assert "source-monitor" in body["message"].lower()
 
+    def test_cloudseed_service_flag_blocks_every_in_place_update_path(
+        self, monkeypatch, tmp_path
+    ):
+        import hermes_cli.web_server as ws
+
+        monkeypatch.setenv("HERMES_HOME", "/home/ubuntu/.hermes")
+        monkeypatch.setenv("HERMES_DASHBOARD_UPDATE_MANAGED_EXTERNALLY", "1")
+        status_path = tmp_path / "hermes-update-status.json"
+        status_path.write_text(
+            json.dumps(self._managed_status(commits_behind=7)),
+            encoding="utf-8",
+        )
+        status_path.chmod(0o600)
+        monkeypatch.setattr(ws, "_MANAGED_UPDATE_STATUS_PATH", status_path)
+        monkeypatch.setattr(
+            ws,
+            "detect_install_method",
+            lambda *a, **k: pytest.fail(
+                "CloudSeed-managed dashboard must not probe install method"
+            ),
+        )
+        monkeypatch.setattr(
+            ws,
+            "_spawn_hermes_action",
+            lambda *_a, **_k: pytest.fail(
+                "CloudSeed-managed dashboard must not run hermes update"
+            ),
+        )
+
+        assert ws._dashboard_local_update_managed_externally() is True
+        assert self.client.get("/api/status").json()["can_update_hermes"] is False
+        check = self.client.get("/api/hermes/update/check").json()
+        assert check["install_method"] == "managed-runtime"
+        assert check["can_apply"] is False
+        assert check["behind"] == 7
+
+        update = self.client.post("/api/hermes/update").json()
+        assert update["ok"] is False
+        assert update["request_only"] is True
+        assert update["pid"] is None
+
+    @pytest.mark.parametrize("configured_value", ["", "typo"])
+    def test_external_update_owner_flag_is_fail_closed(
+        self, monkeypatch, configured_value
+    ):
+        import hermes_cli.web_server as ws
+
+        monkeypatch.setenv(
+            "HERMES_DASHBOARD_UPDATE_MANAGED_EXTERNALLY", configured_value
+        )
+
+        assert ws._dashboard_local_update_managed_externally() is True
+
     @staticmethod
     def _managed_status(*, generated_at=None, **overrides):
         generated_at = generated_at or datetime.now(timezone.utc).isoformat()

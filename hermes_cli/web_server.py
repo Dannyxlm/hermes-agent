@@ -1699,6 +1699,9 @@ _MEDIA_CONTENT_TYPES = {
 }
 _MEDIA_MAX_BYTES = 25 * 1024 * 1024
 _MANAGED_FILES_ROOT_ENV = "HERMES_DASHBOARD_FILES_ROOT"
+_DASHBOARD_UPDATE_MANAGED_EXTERNALLY_ENV = (
+    "HERMES_DASHBOARD_UPDATE_MANAGED_EXTERNALLY"
+)
 _MANAGED_FILE_MAX_BYTES = 100 * 1024 * 1024
 _HOSTED_MANAGED_FILES_ROOT = Path("/opt/data")
 
@@ -2100,6 +2103,11 @@ def _dashboard_local_update_managed_externally() -> bool:
     externally managed unless their apply path is proven safe inside the
     running container filesystem.
     """
+    # Presence is deliberately fail-closed: a malformed value must not reopen
+    # the in-place mutation path for a deployment owned by an outer release
+    # controller. Absence preserves the native Desktop/local-install behavior.
+    if _DASHBOARD_UPDATE_MANAGED_EXTERNALLY_ENV in os.environ:
+        return True
     if _default_hermes_root_is_opt_data():
         return True
     try:
