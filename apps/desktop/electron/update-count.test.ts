@@ -9,8 +9,10 @@ import { test } from 'vitest'
 import type { OfficialUpstreamTracking } from './update-count'
 import {
   inspectOfficialUpstream,
+  INSTALLED_BUILD_REF,
   normalizeGitHubRepository,
   OFFICIAL_UPSTREAM_REF,
+  OFFICIAL_UPSTREAM_URL,
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
@@ -581,6 +583,83 @@ test('mutable fork history hydration never sends comparison-cache fetches to off
   assert.ok(comparisonCalls.some(args => args.includes('/cache/official-upstream.git')))
   assert.ok(comparisonCalls.some(args => args.includes('/local/hermes-checkout')))
   assert.ok(comparisonCalls.every(args => !args.includes('https://github.com/NousResearch/hermes-agent.git')))
+})
+
+test('official-stamped identity hydration stays in the official-only cache', async () => {
+  const comparisonCalls: string[][] = []
+  const officialCalls: string[][] = []
+  let catFileCalls = 0
+  const installedSha = 'a'.repeat(40)
+  const targetSha = 'b'.repeat(40)
+
+  const identity = resolveInstalledIdentity({
+    installStamp: {
+      branch: 'release',
+      commit: installedSha,
+      repository: 'NousResearch/hermes-agent'
+    },
+    packaged: true
+  })
+
+  const status = await inspectOfficialUpstream({
+    identity,
+    identityRepositoryUrl: OFFICIAL_UPSTREAM_URL,
+    officialCacheUrl: '/cache/official-upstream.git',
+    runGit: async args => {
+      comparisonCalls.push(args)
+
+      if (args[0] === 'cat-file') {
+        catFileCalls += 1
+
+        return catFileCalls === 1
+          ? { code: 1, stderr: 'missing from fork-polluted comparison cache', stdout: '' }
+          : { code: 0, stderr: '', stdout: '' }
+      }
+
+      if (args[0] === 'rev-parse') {
+        return { code: 0, stderr: '', stdout: `${targetSha}\n` }
+      }
+
+      if (args[0] === 'merge-base') {
+        return { code: 0, stderr: '', stdout: `${installedSha}\n` }
+      }
+
+      if (args[0] === 'rev-list') {
+        return { code: 0, stderr: '', stdout: '5\t0\n' }
+      }
+
+      return { code: 0, stderr: '', stdout: '' }
+    },
+    runOfficialGit: async args => {
+      officialCalls.push(args)
+
+      // Force the exact-SHA fetch to fail so the stamped branch fallback is
+      // also proven to stay inside the official-only network cache.
+      if (args.at(-1) === `+${installedSha}:${INSTALLED_BUILD_REF}`) {
+        return { code: 1, stderr: 'exact SHA not advertised', stdout: '' }
+      }
+
+      return { code: 0, stderr: '', stdout: '' }
+    }
+  })
+
+  assert.equal(status.state, 'ready')
+  assert.equal(status.behind, 5)
+  assert.equal(status.ahead, 0)
+  assert.ok(officialCalls.some(args => args.includes(OFFICIAL_UPSTREAM_URL)))
+  assert.ok(
+    officialCalls.some(args => args.at(-1) === `+refs/heads/release:${INSTALLED_BUILD_REF}`),
+    'stamped branch fallback must run in the official-only cache'
+  )
+  assert.ok(comparisonCalls.every(args => !args.includes(OFFICIAL_UPSTREAM_URL)))
+  assert.ok(
+    comparisonCalls.some(
+      args =>
+        args.includes('/cache/official-upstream.git') &&
+        args.at(-1) === `+${INSTALLED_BUILD_REF}:${INSTALLED_BUILD_REF}`
+    ),
+    'comparison cache imports the hydrated official identity locally'
+  )
 })
 
 test('fetch failure without a dedicated ref is an error with unknown distance, never zero', async () => {

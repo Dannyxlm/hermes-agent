@@ -307,7 +307,51 @@ async function inspectOfficialUpstream({
   let fetchedAt: number | null = null
   let fetchError: string | null = null
   let officialFetched = false
+
   const officialGit = runOfficialGit ?? runGit
+
+  const officialIdentityHydration =
+    Boolean(runOfficialGit && officialCacheUrl && identityRepositoryUrl) &&
+    identity.repository?.toLowerCase() === repository.toLowerCase()
+
+  const fetchIdentityRef = async (sourceRef: string): Promise<GitResult> => {
+    if (!identityRepositoryUrl) {
+      return { code: 1, stderr: 'The installed identity has no history source.', stdout: '' }
+    }
+
+    if (!officialIdentityHydration) {
+      return runGit([
+        'fetch',
+        '--quiet',
+        '--no-tags',
+        identityRepositoryUrl,
+        `+${sourceRef}:${INSTALLED_BUILD_REF}`
+      ])
+    }
+
+    // Never let the mixed comparison cache negotiate directly with official
+    // GitHub. Fetch the official build ref in the official-only cache, then
+    // import that local ref into the comparison cache.
+    const fetched = await officialGit([
+      'fetch',
+      '--quiet',
+      '--no-tags',
+      identityRepositoryUrl,
+      `+${sourceRef}:${INSTALLED_BUILD_REF}`
+    ])
+
+    if (fetched.code !== 0) {
+      return fetched
+    }
+
+    return runGit([
+      'fetch',
+      '--quiet',
+      '--no-tags',
+      officialCacheUrl as string,
+      `+${INSTALLED_BUILD_REF}:${INSTALLED_BUILD_REF}`
+    ])
+  }
 
   try {
     const fetched = await officialGit([
@@ -359,22 +403,10 @@ async function inspectOfficialUpstream({
   let installed = await runGit(['cat-file', '-e', `${identity.sha}^{commit}`])
 
   if (installed.code !== 0 && identityRepositoryUrl) {
-    const exactFetch = await runGit([
-      'fetch',
-      '--quiet',
-      '--no-tags',
-      identityRepositoryUrl,
-      `+${identity.sha}:${INSTALLED_BUILD_REF}`
-    ])
+    const exactFetch = await fetchIdentityRef(identity.sha)
 
     if (exactFetch.code !== 0 && identity.branch) {
-      await runGit([
-        'fetch',
-        '--quiet',
-        '--no-tags',
-        identityRepositoryUrl,
-        `+refs/heads/${identity.branch}:${INSTALLED_BUILD_REF}`
-      ])
+      await fetchIdentityRef(`refs/heads/${identity.branch}`)
     }
 
     installed = await runGit(['cat-file', '-e', `${identity.sha}^{commit}`])
@@ -412,7 +444,7 @@ async function inspectOfficialUpstream({
   if ((mergeBase.code !== 0 || !firstLine(mergeBase.stdout)) && identityRepositoryUrl) {
     const identityRef = identity.branch ? `refs/heads/${identity.branch}` : identity.sha
 
-    await runGit(['fetch', '--quiet', '--no-tags', identityRepositoryUrl, `+${identityRef}:${INSTALLED_BUILD_REF}`])
+    await fetchIdentityRef(identityRef)
 
     mergeBase = await runGit(['merge-base', identity.sha, trackingRef])
   }
