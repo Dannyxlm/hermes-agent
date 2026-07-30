@@ -89,12 +89,14 @@ def memory_provider_tools_enabled(
     """Return whether external memory-provider tools should be exposed."""
     if disabled_toolsets and "memory" in disabled_toolsets:
         return False
+    # An explicit empty allowlist means no optional toolsets, even when the
+    # built-in memory tool is already present on the agent.
+    if enabled_toolsets is not None and not enabled_toolsets:
+        return False
     if memory_tool_present:
         return True
     if enabled_toolsets is None:
         return True
-    if not enabled_toolsets:
-        return False
     if "memory" in enabled_toolsets:
         return True
 
