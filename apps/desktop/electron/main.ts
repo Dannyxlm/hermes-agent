@@ -198,7 +198,6 @@ import {
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, writeUpdateMarker } from './update-marker'
 import { runRebuildWithRetry } from './update-rebuild'
-import { hasGitCheckoutMetadata, resolveGitCheckoutCandidate } from './update-root'
 import {
   buildRelaunchScript,
   collectRelaunchArgs,
@@ -209,6 +208,7 @@ import {
   sandboxPreflight
 } from './update-relaunch'
 import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
+import { hasGitCheckoutMetadata, resolveGitCheckoutCandidate } from './update-root'
 import { spawnUpdaterProcess } from './updater-process'
 import { formatBlockerMessage, formatProbeFailedMessage, scanVenvBlockers } from './venv-blocker-scan'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
@@ -2385,6 +2385,7 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
   return new Promise((resolve, reject) => {
     const timeoutMs = Number(options.timeoutMs)
     const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0
+
     const child = spawn(
       resolveGitBinary(),
       IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args,
@@ -2578,7 +2579,9 @@ async function performOfficialUpstreamCheck(updateRoot) {
     const checkoutRepository = hasGitCheckoutMetadata(updateRoot)
       ? normalizeGitHubRepository(await getOriginUrl(updateRoot))
       : null
+
     const identityRepository = identity.repository || checkoutRepository
+
     const identityRepositoryUrl = identityRepository
       ? `https://github.com/${identityRepository}.git`
       : hasGitCheckoutMetadata(updateRoot)
@@ -2634,10 +2637,14 @@ async function performMutationTargetCheck(updateRoot) {
     runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot }),
     getOriginUrl(updateRoot)
   ])
+
   const checkoutRepository = normalizeGitHubRepository(originUrl)
+
   const checkoutHead = head.code === 0 ? firstLine(head.stdout).trim() : null
+
   const checkoutBranch =
     branch.code === 0 && firstLine(branch.stdout).trim() !== 'HEAD' ? firstLine(branch.stdout).trim() : null
+
   const identity = resolveInstalledIdentity({
     checkoutBranch,
     checkoutHead,

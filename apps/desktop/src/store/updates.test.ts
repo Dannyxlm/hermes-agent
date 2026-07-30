@@ -432,6 +432,7 @@ describe('requestActiveUpdate', () => {
 describe('desktop upstream tracking lane', () => {
   const checkMock = vi.fn()
   const checkUpstreamMock = vi.fn()
+
   const upstream = (overrides: Partial<DesktopUpstreamTracking> = {}): DesktopUpstreamTracking => ({
     ahead: 5,
     behind: 1218,
@@ -494,6 +495,7 @@ describe('desktop upstream tracking lane', () => {
 
   it('does not let an older publication response overwrite a newer dedicated check', async () => {
     let resolvePublication: (value: DesktopUpdateStatus) => void = () => undefined
+
     const publicationResponse = new Promise<DesktopUpdateStatus>(resolve => {
       resolvePublication = resolve
     })

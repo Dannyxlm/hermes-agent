@@ -54,6 +54,7 @@ function isPinnedCommit(commit) {
 
 function normalizeInstallRepository(value) {
   const repository = String(value || '').trim().replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
+
   return INSTALL_REPOSITORY_RE.test(repository) ? repository : null
 }
 
@@ -365,10 +366,12 @@ async function resolveInstallScript({
   }
 
   const installRepository = installRepositoryForStamp(installStamp)
+
   const cached = cachedScriptPath(
     hermesHome,
     repositoryCacheKey(installRepository, installRef.cacheKey)
   )
+
   const resolvedCommit = installRef.pinned ? installRef.ref : null
 
   try {

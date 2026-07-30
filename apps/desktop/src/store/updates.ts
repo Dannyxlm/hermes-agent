@@ -403,6 +403,7 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
     const checked = await bridge.check()
     const currentUpstream = $updateStatus.get()?.upstreamTracking
     const checkedUpstream = checked.upstreamTracking
+
     const upstreamTracking =
       currentUpstream && (!checkedUpstream || currentUpstream.checkedAt > checkedUpstream.checkedAt)
         ? currentUpstream
