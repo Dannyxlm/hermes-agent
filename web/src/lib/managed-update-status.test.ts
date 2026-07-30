@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ManagedUpdateSource } from "./api";
-import { presentManagedUpdate } from "./managed-update-status";
+import {
+  presentManagedRefresh,
+  presentManagedUpdate,
+} from "./managed-update-status";
 
 function managedSource(
   overrides: Partial<ManagedUpdateSource> = {},
@@ -58,6 +61,40 @@ describe("presentManagedUpdate", () => {
     ).toMatchObject({
       badge: "count unavailable",
       tone: "secondary",
+    });
+  });
+});
+
+describe("presentManagedRefresh", () => {
+  it("does not translate a rejected refresh into a false latest result", () => {
+    expect(
+      presentManagedRefresh(
+        managedSource({
+          refresh_request_available: true,
+          refresh_request: {
+            requested: false,
+            error: "refresh_request_unavailable",
+          },
+        }),
+      ),
+    ).toEqual({
+      message: "refresh_request_unavailable",
+      tone: "error",
+    });
+  });
+
+  it("reports an accepted request without claiming the old receipt is current", () => {
+    expect(
+      presentManagedRefresh(
+        managedSource({
+          refresh_request_available: true,
+          refresh_request: { requested: true, error: null },
+        }),
+      ),
+    ).toEqual({
+      message:
+        "Source-monitor refresh requested. The status will update after the monitor finishes.",
+      tone: "success",
     });
   });
 });

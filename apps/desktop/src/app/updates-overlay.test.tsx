@@ -26,9 +26,12 @@ function managedStatus(
     targetSha: 'b'.repeat(40),
     managedSource: {
       availability: 'ready',
+      schemaVersion: 'hermes-update-status.v2',
+      countBasis: 'running_source',
       stale: false,
       statusError: null,
       runningRelease: 'ava-converge-p1-f22a217b8dab',
+      runningSource: 'c'.repeat(40),
       runningUpstreamBase: 'a'.repeat(40),
       trackedUpstream: 'NousResearch/main',
       upstreamHead: 'b'.repeat(40),
@@ -224,6 +227,7 @@ describe('ManagedSourceUpdateView', () => {
         onCheckNow={vi.fn()}
         status={managedStatus({
           availability: 'invalid',
+          schemaVersion: 'hermes-update-status.v1',
           statusError: 'status_schema_invalid',
           canBuildCandidate: false,
           candidateRequestAvailable: false,
@@ -233,6 +237,8 @@ describe('ManagedSourceUpdateView', () => {
     )
 
     expect(screen.getByText(/status is invalid/i)).toBeTruthy()
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText(/4 upstream commits/)).toBeNull()
     expect((screen.getByRole('button', { name: 'Check now' }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('button', { name: 'Build candidate' }) as HTMLButtonElement).disabled).toBe(true)
   })

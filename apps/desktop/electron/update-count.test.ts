@@ -13,6 +13,7 @@ import {
   normalizeGitHubRepository,
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_URL,
+  probeCheckoutIdentity,
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
@@ -298,6 +299,40 @@ test('GitHub checkout remotes recover repository provenance for legacy stamps', 
   assert.equal(normalizeGitHubRepository('https://example.com/Dannyxlm/hermes-agent.git'), null)
 })
 
+test('checkout identity probes bound every Git read and fail closed on timeout', async () => {
+  const calls: Array<{ args: string[]; timeoutMs: number }> = []
+
+  const result = await probeCheckoutIdentity({
+    runGit: async (args, options) => {
+      calls.push({ args, timeoutMs: options.timeoutMs })
+
+      if (args[0] === 'status') {
+        return { code: 124, stderr: 'git command timed out.', stdout: '' }
+      }
+
+      if (args[0] === 'remote') {
+        return { code: 0, stderr: '', stdout: 'git@github.com:Dannyxlm/hermes-agent.git\n' }
+      }
+
+      if (args.includes('--abbrev-ref')) {
+        return { code: 0, stderr: '', stdout: 'main\n' }
+      }
+
+      return { code: 0, stderr: '', stdout: `${'a'.repeat(40)}\n` }
+    },
+    timeoutMs: 321
+  })
+
+  assert.equal(calls.length, 4)
+  assert.ok(calls.every(call => call.timeoutMs === 321))
+  assert.deepEqual(result, {
+    checkoutBranch: 'main',
+    checkoutDirty: true,
+    checkoutHead: 'a'.repeat(40),
+    checkoutRepository: 'Dannyxlm/hermes-agent'
+  })
+})
+
 function runGit(cwd: string, args: string[]) {
   const result = spawnSync('git', args, {
     cwd,
@@ -536,6 +571,7 @@ test('fetch failure uses an existing dedicated ref only as explicitly stale data
 
 test('mutable fork history hydration never sends comparison-cache fetches to official GitHub', async () => {
   const comparisonCalls: string[][] = []
+  const officialCalls: string[][] = []
   let mergeBaseCalls = 0
 
   const identity = resolveInstalledIdentity({
@@ -548,8 +584,8 @@ test('mutable fork history hydration never sends comparison-cache fetches to off
   const status = await inspectOfficialUpstream({
     identity,
     identityRepositoryUrl: '/local/hermes-checkout',
-    repositoryRef: OFFICIAL_UPSTREAM_REF,
-    repositoryUrl: '/cache/official-upstream.git',
+    officialCacheUrl: '/cache/official-upstream.git',
+    repositoryUrl: OFFICIAL_UPSTREAM_URL,
     runGit: async args => {
       comparisonCalls.push(args)
 
@@ -574,6 +610,11 @@ test('mutable fork history hydration never sends comparison-cache fetches to off
       }
 
       return { code: 0, stderr: '', stdout: '' }
+    },
+    runOfficialGit: async args => {
+      officialCalls.push(args)
+
+      return { code: 0, stderr: '', stdout: '' }
     }
   })
 
@@ -583,6 +624,7 @@ test('mutable fork history hydration never sends comparison-cache fetches to off
   assert.ok(comparisonCalls.some(args => args.includes('/cache/official-upstream.git')))
   assert.ok(comparisonCalls.some(args => args.includes('/local/hermes-checkout')))
   assert.ok(comparisonCalls.every(args => !args.includes('https://github.com/NousResearch/hermes-agent.git')))
+  assert.ok(officialCalls.every(args => !args.includes('/local/hermes-checkout')))
 })
 
 test('official-stamped identity hydration stays in the official-only cache', async () => {

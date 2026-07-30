@@ -46,7 +46,10 @@ import { HermesConsoleModal } from "@/components/HermesConsoleModal";
 import { ManagedUpstreamStatus } from "@/components/ManagedUpstreamStatus";
 import { cn, themedBody } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { presentManagedUpdate } from "@/lib/managed-update-status";
+import {
+  presentManagedRefresh,
+  presentManagedUpdate,
+} from "@/lib/managed-update-status";
 import type {
   StatusResponse,
   MemoryStatus,
@@ -518,7 +521,10 @@ export default function SystemPage() {
         const info = await api.checkHermesUpdate(force);
         setUpdateInfo(info);
         if (force) {
-          if (info.update_available) {
+          if (info.managed_source) {
+            const refresh = presentManagedRefresh(info.managed_source);
+            showToast(refresh.message, refresh.tone);
+          } else if (info.update_available) {
             showToast(
               info.behind && info.behind > 0
                 ? `Update available — ${info.behind} commit${info.behind === 1 ? "" : "s"} behind`
@@ -923,7 +929,7 @@ export default function SystemPage() {
               <ManagedUpstreamStatus
                 source={managedSource}
                 checking={checkingUpdate}
-                onReload={() => void checkForUpdate(false)}
+                onReload={() => void checkForUpdate(true)}
               />
             )}
             {canUpdateHermes && (

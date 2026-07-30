@@ -41,6 +41,17 @@ interface GitResult {
   stdout: string
 }
 
+interface GitRunOptions {
+  timeoutMs: number
+}
+
+interface CheckoutIdentityProbe {
+  checkoutBranch: string | null
+  checkoutDirty: boolean
+  checkoutHead: string | null
+  checkoutRepository: string | null
+}
+
 interface InstallStampInput {
   branch?: unknown
   commit?: unknown
@@ -171,6 +182,32 @@ function normalizeGitHubRepository(value: unknown): string | null {
   }
 
   return normalizeRepository(repository)
+}
+
+async function probeCheckoutIdentity({
+  runGit,
+  timeoutMs
+}: {
+  runGit: (args: string[], options: GitRunOptions) => Promise<GitResult>
+  timeoutMs: number
+}): Promise<CheckoutIdentityProbe> {
+  const boundedRun = (args: string[]) => runGit(args, { timeoutMs })
+
+  const [head, branch, origin, worktreeStatus] = await Promise.all([
+    boundedRun(['rev-parse', '--verify', 'HEAD']),
+    boundedRun(['rev-parse', '--abbrev-ref', 'HEAD']),
+    boundedRun(['remote', 'get-url', 'origin']),
+    boundedRun(['status', '--porcelain', '-uno'])
+  ])
+
+  const branchName = branch.code === 0 ? firstLine(branch.stdout).trim() : ''
+
+  return {
+    checkoutBranch: branchName && branchName !== 'HEAD' ? branchName : null,
+    checkoutDirty: worktreeStatus.code !== 0 || Boolean(worktreeStatus.stdout.trim()),
+    checkoutHead: head.code === 0 ? firstLine(head.stdout).trim() || null : null,
+    checkoutRepository: origin.code === 0 ? normalizeGitHubRepository(origin.stdout.trim()) : null
+  }
 }
 
 // A packaged app is identified by the commit embedded at build time, never by
@@ -311,6 +348,7 @@ async function inspectOfficialUpstream({
   const officialGit = runOfficialGit ?? runGit
 
   const officialIdentityHydration =
+    identity.source === 'install-stamp' &&
     Boolean(runOfficialGit && officialCacheUrl && identityRepositoryUrl) &&
     identity.repository?.toLowerCase() === repository.toLowerCase()
 
@@ -550,10 +588,11 @@ export {
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_REPOSITORY,
   OFFICIAL_UPSTREAM_URL,
+  probeCheckoutIdentity,
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveLegacyUpdateSafety,
   shouldCountCommits
 }
-export type { GitResult, InstalledIdentity, OfficialUpstreamTracking }
+export type { CheckoutIdentityProbe, GitResult, InstalledIdentity, OfficialUpstreamTracking }

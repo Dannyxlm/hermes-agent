@@ -1780,7 +1780,7 @@ export interface UpdateCheckResponse {
 }
 
 export interface ManagedUpdateSource {
-  schema_version: string;
+  schema_version: "hermes-update-status.v2";
   count_basis?: "running_source";
   availability: "ready" | "stale" | "missing" | "invalid" | "unreadable";
   stale: boolean;

@@ -6,6 +6,7 @@
 import { atom } from 'nanostores'
 
 import type {
+  DesktopManagedSourceUpdate,
   DesktopUpdateApplyOptions,
   DesktopUpdateApplyResult,
   DesktopUpdateProgress,
@@ -311,16 +312,40 @@ function isRemoteMode(): boolean {
   return $connection.get()?.mode === 'remote'
 }
 
+const MANAGED_UPDATE_SHA_RE = /^[0-9a-f]{40}$/i
+
+export function verifiedManagedBehind(source: DesktopManagedSourceUpdate | undefined): number | null {
+  if (
+    !source ||
+    source.schemaVersion !== 'hermes-update-status.v2' ||
+    source.countBasis !== 'running_source' ||
+    (source.availability !== 'ready' && source.availability !== 'stale') ||
+    !source.runningSource ||
+    !MANAGED_UPDATE_SHA_RE.test(source.runningSource) ||
+    !source.upstreamHead ||
+    !MANAGED_UPDATE_SHA_RE.test(source.upstreamHead) ||
+    !Number.isInteger(source.commitsBehind) ||
+    (source.commitsBehind ?? -1) < 0
+  ) {
+    return null
+  }
+
+  return source.commitsBehind ?? null
+}
+
 function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
-  const behind = res.behind ?? 0
+  const backendBehind = res.behind ?? 0
   const managed = res.managed_source
 
   const managedSource = managed
     ? {
         availability: managed.availability,
+        schemaVersion: managed.schema_version,
+        countBasis: managed.count_basis,
         stale: managed.stale,
         statusError: managed.status_error,
         runningRelease: managed.running_release,
+        runningSource: managed.running_source,
         runningUpstreamBase: managed.running_upstream_base,
         trackedUpstream: managed.tracked_upstream,
         upstreamHead: managed.upstream_head,
@@ -341,19 +366,27 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
       }
     : undefined
 
+  const managedBehind = verifiedManagedBehind(managedSource)
+
+  if (managedSource && managedBehind === null) {
+    managedSource.canBuildCandidate = false
+  }
+
   return {
     // A managed immutable runtime cannot apply an update in place, but it does
     // support the dedicated source-monitor/update-train surface.
     supported: Boolean(managed) || res.can_apply,
     message: res.message ?? undefined,
-    updateAvailable: res.update_available,
-    behind: behind > 0 ? behind : 0,
+    updateAvailable: managed ? managedBehind !== null && managedBehind > 0 : res.update_available,
+    behind: managed ? (managedBehind ?? undefined) : backendBehind > 0 ? backendBehind : 0,
     currentVersion: res.current_version,
     targetSha:
-      managed?.availability === 'ready' && managed.upstream_head
-        ? managed.upstream_head
+      managed && managedBehind !== null
+        ? managedSource?.upstreamHead
         : res.update_available
-          ? `backend:${res.current_version}`
+          ? managed
+            ? undefined
+            : `backend:${res.current_version}`
           : undefined,
     commits: res.commits,
     fetchedAt: Date.now(),

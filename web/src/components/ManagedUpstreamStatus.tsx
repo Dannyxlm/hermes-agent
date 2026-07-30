@@ -56,7 +56,7 @@ export function ManagedUpstreamStatus({
         <Button
           size="sm"
           ghost
-          disabled={checking}
+          disabled={checking || source?.refresh_request_available !== true}
           prefix={
             checking ? (
               <Spinner className="h-3.5 w-3.5" />
@@ -66,7 +66,9 @@ export function ManagedUpstreamStatus({
           }
           onClick={onReload}
         >
-          Reload status
+          {source?.refresh_request_available === true
+            ? "Request refresh"
+            : "Refresh unavailable"}
         </Button>
       </div>
 

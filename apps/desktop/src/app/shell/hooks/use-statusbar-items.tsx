@@ -226,6 +226,7 @@ export function useStatusbarItems({
     const trackingProblem = upstream?.state === 'error' || upstream?.state === 'stale'
     const applying = updateApply.applying || updateApply.stage === 'restart'
     const remote = connection?.mode === 'remote'
+
     const upstreamBranch = upstream
       ? `${upstream.repository.split('/')[0] ?? upstream.repository}/${upstream.branch}`
       : 'NousResearch/main'

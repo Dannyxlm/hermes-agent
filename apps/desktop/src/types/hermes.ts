@@ -1131,11 +1131,13 @@ export interface BackendManagedUpdateRefreshRequest {
 }
 
 export interface BackendManagedSourceUpdate {
-  schema_version: 'hermes-update-status.v1'
+  schema_version: string
+  count_basis?: 'running_source'
   availability: BackendManagedSourceAvailability
   stale: boolean
   status_error: string | null
   running_release?: string
+  running_source?: string
   running_upstream_base?: string
   tracked_upstream?: string
   upstream_head?: string

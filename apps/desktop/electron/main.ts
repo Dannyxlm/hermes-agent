@@ -186,10 +186,10 @@ import {
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import {
   inspectOfficialUpstream,
-  normalizeGitHubRepository,
   OFFICIAL_UPSTREAM_BRANCH,
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_REPOSITORY,
+  probeCheckoutIdentity,
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
@@ -2549,17 +2549,33 @@ let officialUpstreamCheckInFlight = null
 
 async function performOfficialUpstreamCheck(updateRoot) {
   let checkoutHead = null
+  let checkoutBranch = null
+  let checkoutDirty = false
+  let checkoutRepository = null
 
-  try {
-    const resolved = await runGit(['rev-parse', '--verify', 'HEAD'], { cwd: updateRoot })
-    checkoutHead = resolved.code === 0 ? firstLine(resolved.stdout).trim() : null
-  } catch {
-    // Packaged builds use the immutable stamp. A missing mutable checkout is
-    // not itself an upstream-tracking failure.
+  if (!IS_PACKAGED && hasGitCheckoutMetadata(updateRoot)) {
+    try {
+      const checkout = await probeCheckoutIdentity({
+        runGit: (args, options) => runGit(args, { cwd: updateRoot, ...options }),
+        timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+      })
+
+      checkoutHead = checkout.checkoutHead
+      checkoutBranch = checkout.checkoutBranch
+      checkoutDirty = checkout.checkoutDirty
+      checkoutRepository = checkout.checkoutRepository
+    } catch {
+      // A dev checkout whose identity cannot be read must fail closed below;
+      // packaged builds never enter this branch and use the immutable stamp.
+      checkoutDirty = true
+    }
   }
 
   const identity = resolveInstalledIdentity({
+    checkoutBranch,
+    checkoutDirty,
     checkoutHead,
+    checkoutRepository,
     installStamp: INSTALL_STAMP,
     packaged: IS_PACKAGED
   })
@@ -2619,25 +2635,16 @@ async function checkOfficialUpstream(updateRoot) {
 let mutationTargetCheckInFlight = null
 
 async function performMutationTargetCheck(updateRoot) {
-  const [head, branch, originUrl, worktreeStatus] = await Promise.all([
-    runGit(['rev-parse', '--verify', 'HEAD'], { cwd: updateRoot }),
-    runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot }),
-    getOriginUrl(updateRoot),
-    runGit(['status', '--porcelain', '-uno'], { cwd: updateRoot })
-  ])
-
-  const checkoutRepository = normalizeGitHubRepository(originUrl)
-
-  const checkoutHead = head.code === 0 ? firstLine(head.stdout).trim() : null
-
-  const checkoutBranch =
-    branch.code === 0 && firstLine(branch.stdout).trim() !== 'HEAD' ? firstLine(branch.stdout).trim() : null
+  const checkout = await probeCheckoutIdentity({
+    runGit: (args, options) => runGit(args, { cwd: updateRoot, ...options }),
+    timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+  })
 
   const identity = resolveInstalledIdentity({
-    checkoutBranch,
-    checkoutDirty: worktreeStatus.code !== 0 || Boolean(worktreeStatus.stdout.trim()),
-    checkoutHead,
-    checkoutRepository,
+    checkoutBranch: checkout.checkoutBranch,
+    checkoutDirty: checkout.checkoutDirty,
+    checkoutHead: checkout.checkoutHead,
+    checkoutRepository: checkout.checkoutRepository,
     installStamp: null,
     packaged: false
   })

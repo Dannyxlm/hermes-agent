@@ -38,7 +38,8 @@ import {
   resetUpdateApplyState,
   setUpdateOverlayOpen,
   type UpdateApplyState,
-  type UpdateTarget
+  type UpdateTarget,
+  verifiedManagedBehind
 } from '@/store/updates'
 
 function totalItems(groups: readonly CommitGroup[]) {
@@ -442,8 +443,8 @@ export function ManagedSourceUpdateView({
     ? u.managedCandidateStatuses[source.candidateStatus]
     : u.managedUnknown
 
-  const behind = source.commitsBehind ?? status.behind ?? 0
-  const localPatches = source.localPatchCount
+  const behind = verifiedManagedBehind(source)
+  const localPatches = behind === null ? null : source.localPatchCount
   const canCheck = source.refreshRequestAvailable && !checking
   const canBuild = source.canBuildCandidate && source.candidateRequestAvailable && !building
 
@@ -478,7 +479,9 @@ export function ManagedSourceUpdateView({
       <dl className="grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-md border border-border/70 px-3 py-2">
           <dt className="text-muted-foreground">{u.managedUpstream}</dt>
-          <dd className="mt-1 font-semibold">{u.managedCommitsBehind(behind)}</dd>
+          <dd className="mt-1 font-semibold">
+            {behind === null ? u.managedUnknown : u.managedCommitsBehind(behind)}
+          </dd>
         </div>
         <div className="rounded-md border border-border/70 px-3 py-2">
           <dt className="text-muted-foreground">{u.managedCandidate}</dt>

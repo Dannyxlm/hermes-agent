@@ -377,9 +377,12 @@ export interface DesktopManagedUpdateRefreshRequest {
 
 export interface DesktopManagedSourceUpdate {
   availability: DesktopManagedSourceAvailability
+  schemaVersion?: string
+  countBasis?: 'running_source'
   stale: boolean
   statusError: string | null
   runningRelease?: string
+  runningSource?: string
   runningUpstreamBase?: string
   trackedUpstream?: string
   upstreamHead?: string

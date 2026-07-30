@@ -13,6 +13,11 @@ export interface ManagedUpdatePresentation {
   tone: ManagedUpdateTone;
 }
 
+export interface ManagedRefreshPresentation {
+  message: string;
+  tone: "error" | "success";
+}
+
 function commitsLabel(count: number): string {
   return `${count.toLocaleString("en-US")} official upstream commit${
     count === 1 ? "" : "s"
@@ -84,4 +89,31 @@ export function presentManagedUpdate(
     },
   };
   return { ...unavailable[source.availability], blocked };
+}
+
+export function presentManagedRefresh(
+  source: ManagedUpdateSource,
+): ManagedRefreshPresentation {
+  if (!source.refresh_request_available) {
+    return {
+      message:
+        "This runtime cannot request a source-monitor refresh from the dashboard.",
+      tone: "error",
+    };
+  }
+
+  if (!source.refresh_request?.requested) {
+    return {
+      message:
+        source.refresh_request?.error ??
+        "The source-monitor refresh request was not accepted.",
+      tone: "error",
+    };
+  }
+
+  return {
+    message:
+      "Source-monitor refresh requested. The status will update after the monitor finishes.",
+    tone: "success",
+  };
 }
