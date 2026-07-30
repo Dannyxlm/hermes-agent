@@ -351,6 +351,8 @@ export interface Translations {
       translucencyDesc: string
       backdropTitle: string
       backdropDesc: string
+      reactionsTitle: string
+      reactionsDesc: string
       embedsTitle: string
       embedsDesc: string
       embedsAsk: string
@@ -1006,6 +1008,10 @@ export interface Translations {
     goTo: string
     goToSession: string
     branches: string
+    projects: string
+    openFolder: string
+    openFolderAt: (path: string) => string
+    newSessionInProject: (project: string) => string
     commands: string
     startInBranch: (branch: string) => string
     commandCenter: string
@@ -2338,6 +2344,7 @@ export interface Translations {
       refresh: string
       moreActions: string
       branchNewChat: string
+      react: string
       dismissError: string
       readAloudFailed: string
       preparingAudio: string
