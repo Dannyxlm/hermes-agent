@@ -4,12 +4,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import type { DesktopUpdateStatus } from '@/global'
+import {
+  $backendUpdateApply,
+  $updateApply,
+  $updateOverlayOpen,
+  $updateOverlayTarget,
+  $updateStatus
+} from '@/store/updates'
 
-import { ManagedSourceUpdateView } from './updates-overlay'
+import { DesktopUpstreamTrackingView, ManagedSourceUpdateView, UpdatesOverlay } from './updates-overlay'
 
 afterEach(() => cleanup())
 
-function managedStatus(overrides: Partial<NonNullable<DesktopUpdateStatus['managedSource']>> = {}): DesktopUpdateStatus {
+function managedStatus(
+  overrides: Partial<NonNullable<DesktopUpdateStatus['managedSource']>> = {}
+): DesktopUpdateStatus {
   return {
     supported: true,
     behind: 4,
@@ -48,6 +57,113 @@ function renderManaged(ui: ReactNode) {
     </Dialog>
   )
 }
+
+function upstreamStatus(
+  overrides: Partial<NonNullable<DesktopUpdateStatus['upstreamTracking']>> = {}
+): DesktopUpdateStatus {
+  return {
+    supported: true,
+    upstreamTracking: {
+      ahead: 5,
+      behind: 1197,
+      branch: 'main',
+      checkedAt: Date.now(),
+      error: null,
+      fetchedAt: Date.now(),
+      identityDirty: false,
+      identitySource: 'install-stamp',
+      installedRepository: 'Dannyxlm/hermes-agent',
+      installedSha: 'a'.repeat(40),
+      message: null,
+      readOnly: true,
+      repository: 'NousResearch/hermes-agent',
+      state: 'ready',
+      targetSha: 'b'.repeat(40),
+      trackingRef: 'refs/hermes-desktop-upstream/main',
+      ...overrides
+    }
+  }
+}
+
+describe('DesktopUpstreamTrackingView', () => {
+  it('shows packaged-app provenance and upstream drift without an apply action', () => {
+    const onCheckNow = vi.fn()
+    const onDone = vi.fn()
+
+    renderManaged(
+      <DesktopUpstreamTrackingView checking={false} onCheckNow={onCheckNow} onDone={onDone} status={upstreamStatus()} />
+    )
+
+    expect(screen.getByText('Desktop upstream')).toBeTruthy()
+    expect(screen.getByText('1197')).toBeTruthy()
+    expect(screen.getByText('5')).toBeTruthy()
+    expect(screen.getByText(/Dannyxlm\/hermes-agent@aaaaaaaaaaaa/)).toBeTruthy()
+    expect(screen.getByText(/never resets a checkout/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(onCheckNow).toHaveBeenCalledOnce()
+    expect(onDone).toHaveBeenCalledOnce()
+  })
+
+  it('labels cached data stale instead of presenting its count as current', () => {
+    renderManaged(
+      <DesktopUpstreamTrackingView
+        checking={false}
+        onCheckNow={vi.fn()}
+        onDone={vi.fn()}
+        status={upstreamStatus({
+          error: 'fetch-failed',
+          fetchedAt: null,
+          message: 'offline',
+          state: 'stale'
+        })}
+      />
+    )
+
+    expect(screen.getByText('Showing cached official upstream status.')).toBeTruthy()
+    expect(screen.getByText('offline')).toBeTruthy()
+    expect(screen.getByText('1197')).toBeTruthy()
+  })
+
+  it('cannot inherit a failed app-update retry action', () => {
+    $updateStatus.set(upstreamStatus())
+    $updateApply.set({
+      applying: false,
+      command: null,
+      error: 'apply-failed',
+      log: [],
+      message: 'A prior application update failed.',
+      percent: null,
+      stage: 'error'
+    })
+    $backendUpdateApply.set({
+      applying: false,
+      command: 'managed update',
+      error: null,
+      log: [],
+      message: 'A backend update is waiting for manual completion.',
+      percent: null,
+      stage: 'manual'
+    })
+    $updateOverlayTarget.set('client-upstream')
+    $updateOverlayOpen.set(true)
+
+    render(<UpdatesOverlay />)
+
+    expect(screen.getByText('Desktop upstream')).toBeTruthy()
+    expect(screen.queryByText('A prior application update failed.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    expect($updateOverlayOpen.get()).toBe(false)
+    expect($updateApply.get().stage).toBe('error')
+    expect($backendUpdateApply.get().stage).toBe('manual')
+  })
+})
 
 describe('ManagedSourceUpdateView', () => {
   it('renders immutable source state and labels both request-only actions honestly', () => {

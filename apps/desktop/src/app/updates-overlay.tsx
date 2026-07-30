@@ -18,7 +18,7 @@ import type { DesktopUpdateCommit, DesktopUpdateStage, DesktopUpdateStatus } fro
 import { useI18n } from '@/i18n'
 import { buildCommitChangelog, type CommitGroup } from '@/lib/commit-changelog'
 import { AlertCircle, Check, Copy, Terminal } from '@/lib/icons'
-import { resolveUpdateCopy, type UpdateTarget } from '@/lib/update-copy'
+import { resolveUpdateCopy } from '@/lib/update-copy'
 import { cn } from '@/lib/utils'
 import {
   $backendUpdateApply,
@@ -29,13 +29,16 @@ import {
   $updateOverlayOpen,
   $updateOverlayTarget,
   $updateStatus,
+  $upstreamTrackingChecking,
   applyBackendUpdate,
   applyUpdates,
   checkBackendUpdates,
   checkUpdates,
+  checkUpstreamTracking,
   resetUpdateApplyState,
   setUpdateOverlayOpen,
-  type UpdateApplyState
+  type UpdateApplyState,
+  type UpdateTarget
 } from '@/store/updates'
 
 function totalItems(groups: readonly CommitGroup[]) {
@@ -48,16 +51,18 @@ export function UpdatesOverlay() {
 
   const clientStatus = useStore($updateStatus)
   const clientChecking = useStore($updateChecking)
+  const upstreamChecking = useStore($upstreamTrackingChecking)
   const clientApply = useStore($updateApply)
   const backendStatus = useStore($backendUpdateStatus)
   const backendChecking = useStore($backendUpdateChecking)
   const backendApply = useStore($backendUpdateApply)
 
   const isBackend = target === 'backend'
+  const readOnlyUpstream = target === 'client-upstream'
   const status = isBackend ? backendStatus : clientStatus
-  const checking = isBackend ? backendChecking : clientChecking
+  const checking = isBackend ? backendChecking : readOnlyUpstream ? upstreamChecking : clientChecking
   const apply = isBackend ? backendApply : clientApply
-  const check = isBackend ? checkBackendUpdates : checkUpdates
+  const check = isBackend ? checkBackendUpdates : readOnlyUpstream ? checkUpstreamTracking : checkUpdates
   const install = isBackend ? applyBackendUpdate : applyUpdates
 
   useEffect(() => {
@@ -69,8 +74,9 @@ export function UpdatesOverlay() {
   const behind = status?.behind ?? 0
   const updateAvailable = status?.updateAvailable || behind > 0
 
-  const phase: 'idle' | 'applying' | 'manual' | 'guiSkew' | 'error' =
-    apply.stage === 'manual'
+  const phase: 'idle' | 'applying' | 'manual' | 'guiSkew' | 'error' = readOnlyUpstream
+    ? 'idle'
+    : apply.stage === 'manual'
       ? 'manual'
       : apply.stage === 'guiSkew'
         ? 'guiSkew'
@@ -89,6 +95,7 @@ export function UpdatesOverlay() {
 
     if (
       !next &&
+      !readOnlyUpstream &&
       (apply.stage === 'error' || apply.stage === 'restart' || apply.stage === 'manual' || apply.stage === 'guiSkew')
     ) {
       resetUpdateApplyState()
@@ -100,7 +107,7 @@ export function UpdatesOverlay() {
   }
 
   const handleCheckNow = () => {
-    void (isBackend ? checkBackendUpdates(true) : checkUpdates())
+    void (isBackend ? checkBackendUpdates(true) : readOnlyUpstream ? checkUpstreamTracking() : checkUpdates())
   }
 
   return (
@@ -198,6 +205,10 @@ function IdleView({
     )
   }
 
+  if (target === 'client-upstream') {
+    return <DesktopUpstreamTrackingView checking={checking} onCheckNow={onCheckNow} onDone={onLater} status={status} />
+  }
+
   if (target === 'backend' && status.managedSource) {
     return (
       <ManagedSourceUpdateView
@@ -291,6 +302,107 @@ function IdleView({
       </div>
 
       {remaining > 0 && <p className="text-center text-xs text-muted-foreground">{u.moreChanges(remaining)}</p>}
+    </div>
+  )
+}
+
+export function DesktopUpstreamTrackingView({
+  checking,
+  onCheckNow,
+  onDone,
+  status
+}: {
+  checking: boolean
+  onCheckNow: () => void
+  onDone: () => void
+  status: DesktopUpdateStatus
+}) {
+  const { t } = useI18n()
+  const u = t.updates
+  const source = status.upstreamTracking
+
+  if (!source) {
+    return (
+      <CenteredStatus
+        action={
+          <Button disabled={checking} onClick={onCheckNow} size="sm">
+            {u.tryAgain}
+          </Button>
+        }
+        body={u.desktopUpstreamUnavailable}
+        icon={<ErrorIcon />}
+        title={u.desktopUpstreamError}
+      />
+    )
+  }
+
+  const stateCopy = {
+    error: u.desktopUpstreamError,
+    ready: u.desktopUpstreamReady,
+    stale: u.desktopUpstreamStale
+  }[source.state]
+
+  const installedIdentity =
+    [source.installedRepository, source.installedSha?.slice(0, 12)].filter(Boolean).join('@') || u.managedUnknown
+
+  const officialIdentity = source.targetSha
+    ? `${source.repository}@${source.targetSha.slice(0, 12)}`
+    : `${source.repository}/${source.branch}`
+
+  const degraded = source.state !== 'ready' || source.identityDirty
+
+  return (
+    <div className="grid gap-5 px-6 pb-6 pt-7 pr-8">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <BrandMark className="size-14" />
+        <DialogTitle className="text-center text-xl">{u.desktopUpstreamTitle}</DialogTitle>
+        <DialogDescription className="max-w-prose text-center text-sm leading-5">
+          {u.desktopUpstreamSubtitle}
+        </DialogDescription>
+      </div>
+
+      <div className="rounded-md border border-border/70 bg-muted/25 px-4 py-3">
+        <div className="flex items-start gap-2">
+          {degraded ? (
+            <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+          ) : (
+            <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+          )}
+          <div className="min-w-0">
+            <p className="text-sm font-medium">{stateCopy}</p>
+            {source.message ? <p className="mt-1 text-xs text-muted-foreground">{source.message}</p> : null}
+            {source.identityDirty ? <p className="mt-1 text-xs text-amber-600">{u.desktopUpstreamDirty}</p> : null}
+          </div>
+        </div>
+      </div>
+
+      <dl className="grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.desktopUpstreamBehind}</dt>
+          <dd className="mt-1 font-semibold">{source.behind === null ? u.managedUnknown : source.behind}</dd>
+        </div>
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.desktopUpstreamAhead}</dt>
+          <dd className="mt-1 font-semibold">{source.ahead === null ? u.managedUnknown : source.ahead}</dd>
+        </div>
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.desktopUpstreamInstalled}</dt>
+          <dd className="mt-1 truncate font-mono text-[11px] font-semibold">{installedIdentity}</dd>
+        </div>
+        <div className="rounded-md border border-border/70 px-3 py-2">
+          <dt className="text-muted-foreground">{u.desktopUpstreamOfficial}</dt>
+          <dd className="mt-1 truncate font-mono text-[11px] font-semibold">{officialIdentity}</dd>
+        </div>
+      </dl>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button disabled={checking} onClick={onCheckNow} variant="secondary">
+          {checking ? u.checking : u.managedCheckNow}
+        </Button>
+        <Button onClick={onDone}>{u.done}</Button>
+      </div>
+
+      <p className="text-center text-[11px] leading-4 text-muted-foreground">{u.desktopUpstreamReadOnlyNotice}</p>
     </div>
   )
 }

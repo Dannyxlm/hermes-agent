@@ -184,10 +184,21 @@ import {
   SshConnection
 } from './ssh-connection'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
-import { resolveBehindCount, shouldCountCommits } from './update-count'
+import {
+  inspectOfficialUpstream,
+  normalizeGitHubRepository,
+  OFFICIAL_UPSTREAM_BRANCH,
+  OFFICIAL_UPSTREAM_REF,
+  OFFICIAL_UPSTREAM_REPOSITORY,
+  resolveBehindCount,
+  resolveInstalledIdentity,
+  resolveLegacyUpdateSafety,
+  shouldCountCommits
+} from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, writeUpdateMarker } from './update-marker'
 import { runRebuildWithRetry } from './update-rebuild'
+import { hasGitCheckoutMetadata, resolveGitCheckoutCandidate } from './update-root'
 import {
   buildRelaunchScript,
   collectRelaunchArgs,
@@ -448,7 +459,7 @@ const SOURCE_REPO_ROOT = path.resolve(APP_ROOT, '../..')
 // build hasn't been invoked, or schema mismatch). Callers must handle null.
 //
 // Schema:
-//   { schemaVersion: 1, commit, branch, builtAt, dirty, source }
+//   { schemaVersion: 1, commit, branch, repository?, builtAt, dirty, source }
 const INSTALL_STAMP_SCHEMA_VERSION = 1
 
 function loadInstallStamp() {
@@ -479,6 +490,7 @@ function loadInstallStamp() {
           schemaVersion: parsed.schemaVersion,
           commit: parsed.commit,
           branch: parsed.branch || null,
+          repository: parsed.repository || null,
           builtAt: parsed.builtAt || null,
           dirty: Boolean(parsed.dirty),
           source: parsed.source || null,
@@ -498,7 +510,7 @@ const INSTALL_STAMP = loadInstallStamp()
 
 if (INSTALL_STAMP) {
   console.log(
-    `[hermes] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
+    `[hermes] install stamp: ${INSTALL_STAMP.repository ? `${INSTALL_STAMP.repository}@` : ''}${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ''}${INSTALL_STAMP.dirty ? ' [DIRTY]' : ''} from ${INSTALL_STAMP.source || 'unknown'}`
   )
 } else if (IS_PACKAGED) {
   // Dev builds without a stamp are normal; packaged builds without one
@@ -602,6 +614,8 @@ const BOOTSTRAP_MARKER_SCHEMA_VERSION = 1
 const DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath('userData'), 'connection.json')
 const DESKTOP_INSTALLATION_PATH = path.join(app.getPath('userData'), 'desktop-installation.json')
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
+const DESKTOP_UPSTREAM_TRACKING_PATH = path.join(app.getPath('userData'), 'upstream-tracking.git')
+const DESKTOP_OFFICIAL_UPSTREAM_CACHE_PATH = path.join(app.getPath('userData'), 'official-upstream.git')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
 // active-profile.json records which Hermes profile the desktop launches its
 // local backend as. When set, startHermes() passes `hermes --profile <name>
@@ -617,6 +631,8 @@ const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 // tracks main. User can also override at runtime via
 // hermesDesktop.updates.setBranch().
 const DEFAULT_UPDATE_BRANCH = 'main'
+const OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS = 60_000
+const MUTATION_TARGET_REF = 'refs/hermes-desktop-update-target/current'
 // desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
 // errors.log, gateway.log produced by hermes_logging.setup_logging — one log
 // directory per user, regardless of which UI surface produced the line.
@@ -2362,16 +2378,19 @@ function resolveUpdateRoot() {
     isHermesSourceRoot(ACTIVE_HERMES_ROOT) ? ACTIVE_HERMES_ROOT : null
   ].filter(Boolean)
 
-  return candidates.find(c => directoryExists(path.join(c, '.git'))) || candidates[0] || ACTIVE_HERMES_ROOT
+  return resolveGitCheckoutCandidate(candidates, ACTIVE_HERMES_ROOT)
 }
 
 function runGit(args, options: any = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const timeoutMs = Number(options.timeoutMs)
+    const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0
     const child = spawn(
       resolveGitBinary(),
       IS_WINDOWS ? ['-c', 'windows.appendAtomically=false', ...args] : args,
       hiddenWindowsChildOptions({
         cwd: options.cwd,
+        detached: !IS_WINDOWS && hasTimeout,
         env: { ...process.env, ...((options.env || {}) as any), GIT_TERMINAL_PROMPT: '0' },
         stdio: ['ignore', 'pipe', 'pipe']
       })
@@ -2379,6 +2398,16 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
 
     let stdout = ''
     let stderr = ''
+    let timedOut = false
+    let timeout: ReturnType<typeof setTimeout> | null = null
+
+    const clearTimeoutIfNeeded = () => {
+      if (timeout) {
+        clearTimeout(timeout)
+        timeout = null
+      }
+    }
+
     child.stdout.on('data', chunk => {
       const text = chunk.toString()
       stdout += text
@@ -2389,8 +2418,37 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
       stderr += text
       options.onLine?.('stderr', text)
     })
-    child.once('error', reject)
-    child.once('exit', code => resolve({ code, stdout, stderr }))
+    child.once('error', error => {
+      clearTimeoutIfNeeded()
+      reject(error)
+    })
+    child.once('exit', code => {
+      clearTimeoutIfNeeded()
+
+      resolve({
+        code: timedOut ? 124 : (code ?? 1),
+        stdout,
+        stderr: timedOut ? `${stderr}${stderr ? '\n' : ''}git command timed out.` : stderr
+      })
+    })
+
+    if (hasTimeout) {
+      timeout = setTimeout(() => {
+        timedOut = true
+
+        if (IS_WINDOWS && Number.isInteger(child.pid)) {
+          forceKillProcessTree(child.pid)
+        } else if (Number.isInteger(child.pid)) {
+          try {
+            process.kill(-child.pid, 'SIGKILL')
+          } catch {
+            child.kill('SIGKILL')
+          }
+        } else {
+          child.kill('SIGKILL')
+        }
+      }, timeoutMs)
+    }
   })
 }
 
@@ -2408,6 +2466,58 @@ function emitUpdateProgress(payload) {
 
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('hermes:updates:progress', merged)
+  }
+}
+
+function officialUpstreamFailure(identity, error, message) {
+  const checkedAt = Date.now()
+
+  return {
+    ahead: null,
+    behind: null,
+    branch: OFFICIAL_UPSTREAM_BRANCH,
+    checkedAt,
+    error,
+    fetchedAt: null,
+    identityDirty: identity.dirty,
+    identitySource: identity.source,
+    installedRepository: identity.repository,
+    installedSha: identity.sha,
+    message,
+    readOnly: true,
+    repository: OFFICIAL_UPSTREAM_REPOSITORY,
+    state: 'error',
+    targetSha: null,
+    trackingRef: OFFICIAL_UPSTREAM_REF
+  }
+}
+
+async function ensureBareGitRepository(repositoryPath, label) {
+  fs.mkdirSync(repositoryPath, { recursive: true })
+
+  let probe = await runGit(['rev-parse', '--is-bare-repository'], {
+    cwd: repositoryPath,
+    timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+  })
+
+  if (probe.code !== 0 || probe.stdout.trim() !== 'true') {
+    const initialized = await runGit(['init', '--bare'], {
+      cwd: repositoryPath,
+      timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+    })
+
+    if (initialized.code !== 0) {
+      throw new Error(firstLine(initialized.stderr) || `Could not initialize the isolated ${label}.`)
+    }
+
+    probe = await runGit(['rev-parse', '--is-bare-repository'], {
+      cwd: repositoryPath,
+      timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+    })
+  }
+
+  if (probe.code !== 0 || probe.stdout.trim() !== 'true') {
+    throw new Error(`The isolated ${label} is not a valid bare Git repository.`)
   }
 }
 
@@ -2440,18 +2550,195 @@ async function resolveHealedBranch(updateRoot, branch) {
   return 'main'
 }
 
+let officialUpstreamCheckInFlight = null
+
+async function performOfficialUpstreamCheck(updateRoot) {
+  let checkoutHead = null
+
+  try {
+    const resolved = await runGit(['rev-parse', '--verify', 'HEAD'], { cwd: updateRoot })
+    checkoutHead = resolved.code === 0 ? firstLine(resolved.stdout).trim() : null
+  } catch {
+    // Packaged builds use the immutable stamp. A missing mutable checkout is
+    // not itself an upstream-tracking failure.
+  }
+
+  const identity = resolveInstalledIdentity({
+    checkoutHead,
+    installStamp: INSTALL_STAMP,
+    packaged: IS_PACKAGED
+  })
+
+  try {
+    await Promise.all([
+      ensureBareGitRepository(DESKTOP_OFFICIAL_UPSTREAM_CACHE_PATH, 'official-upstream cache'),
+      ensureBareGitRepository(DESKTOP_UPSTREAM_TRACKING_PATH, 'upstream comparison cache')
+    ])
+
+    const checkoutRepository = hasGitCheckoutMetadata(updateRoot)
+      ? normalizeGitHubRepository(await getOriginUrl(updateRoot))
+      : null
+    const identityRepository = identity.repository || checkoutRepository
+    const identityRepositoryUrl = identityRepository
+      ? `https://github.com/${identityRepository}.git`
+      : hasGitCheckoutMetadata(updateRoot)
+        ? updateRoot
+        : null
+
+    return await inspectOfficialUpstream({
+      identity,
+      identityRepositoryUrl,
+      officialCacheUrl: DESKTOP_OFFICIAL_UPSTREAM_CACHE_PATH,
+      runGit: args =>
+        runGit(args, {
+          cwd: DESKTOP_UPSTREAM_TRACKING_PATH,
+          timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+        }),
+      runOfficialGit: args =>
+        runGit(args, {
+          cwd: DESKTOP_OFFICIAL_UPSTREAM_CACHE_PATH,
+          timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+        })
+    })
+  } catch (error) {
+    return officialUpstreamFailure(
+      identity,
+      'tracking-check-failed',
+      error instanceof Error ? error.message : String(error)
+    )
+  }
+}
+
+async function checkOfficialUpstream(updateRoot) {
+  if (officialUpstreamCheckInFlight) {
+    return officialUpstreamCheckInFlight
+  }
+
+  const pending = performOfficialUpstreamCheck(updateRoot)
+  officialUpstreamCheckInFlight = pending
+
+  try {
+    return await pending
+  } finally {
+    if (officialUpstreamCheckInFlight === pending) {
+      officialUpstreamCheckInFlight = null
+    }
+  }
+}
+
+let mutationTargetCheckInFlight = null
+
+async function performMutationTargetCheck(updateRoot) {
+  const [head, branch, originUrl] = await Promise.all([
+    runGit(['rev-parse', '--verify', 'HEAD'], { cwd: updateRoot }),
+    runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot }),
+    getOriginUrl(updateRoot)
+  ])
+  const checkoutRepository = normalizeGitHubRepository(originUrl)
+  const checkoutHead = head.code === 0 ? firstLine(head.stdout).trim() : null
+  const checkoutBranch =
+    branch.code === 0 && firstLine(branch.stdout).trim() !== 'HEAD' ? firstLine(branch.stdout).trim() : null
+  const identity = resolveInstalledIdentity({
+    checkoutBranch,
+    checkoutHead,
+    checkoutRepository,
+    installStamp: null,
+    packaged: false
+  })
+
+  if (identity.sha) {
+    // Read the mutation target into the comparison cache. This fetch runs FROM
+    // the checkout and never writes its refs, index, config, or worktree.
+    await runGit(['fetch', '--quiet', '--no-tags', updateRoot, `+${identity.sha}:${MUTATION_TARGET_REF}`], {
+      cwd: DESKTOP_UPSTREAM_TRACKING_PATH,
+      timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+    })
+  }
+
+  const identityRepositoryUrl = checkoutRepository
+    ? `https://github.com/${checkoutRepository}.git`
+    : hasGitCheckoutMetadata(updateRoot)
+      ? updateRoot
+      : null
+
+  return inspectOfficialUpstream({
+    identity,
+    identityRepositoryUrl,
+    repositoryRef: OFFICIAL_UPSTREAM_REF,
+    repositoryUrl: DESKTOP_OFFICIAL_UPSTREAM_CACHE_PATH,
+    runGit: args =>
+      runGit(args, {
+        cwd: DESKTOP_UPSTREAM_TRACKING_PATH,
+        timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+      })
+  })
+}
+
+async function checkMutationTarget(updateRoot) {
+  if (mutationTargetCheckInFlight) {
+    return mutationTargetCheckInFlight
+  }
+
+  const pending = performMutationTargetCheck(updateRoot)
+  mutationTargetCheckInFlight = pending
+
+  try {
+    return await pending
+  } finally {
+    if (mutationTargetCheckInFlight === pending) {
+      mutationTargetCheckInFlight = null
+    }
+  }
+}
+
 async function checkUpdates() {
   const updateRoot = resolveUpdateRoot()
   let { branch } = readDesktopUpdateConfig()
-  const gitDir = path.join(updateRoot, '.git')
+  const upstreamTracking = await checkOfficialUpstream(updateRoot)
 
-  if (!directoryExists(gitDir)) {
+  if (!hasGitCheckoutMetadata(updateRoot)) {
     return {
       supported: false,
       reason: 'not-a-git-checkout',
       message: `${updateRoot} isn't a git checkout — desktop self-update only runs against a source install.`,
       hermesRoot: updateRoot,
-      branch
+      branch,
+      upstreamTracking
+    }
+  }
+
+  const legacySafety = resolveLegacyUpdateSafety(IS_PACKAGED, upstreamTracking)
+
+  if (!legacySafety.allowed) {
+    return {
+      supported: false,
+      reason: legacySafety.reason,
+      message: legacySafety.message,
+      branch,
+      currentSha: upstreamTracking.installedSha || undefined,
+      dirty: upstreamTracking.identityDirty,
+      fetchedAt: Date.now(),
+      hermesRoot: updateRoot,
+      upstreamTracking
+    }
+  }
+
+  if (IS_PACKAGED) {
+    const mutationTarget = await checkMutationTarget(updateRoot)
+    const mutationSafety = resolveLegacyUpdateSafety(true, mutationTarget, 'update-target')
+
+    if (!mutationSafety.allowed) {
+      return {
+        supported: false,
+        reason: mutationSafety.reason,
+        message: mutationSafety.message,
+        branch,
+        currentSha: mutationTarget.installedSha || undefined,
+        dirty: upstreamTracking.identityDirty,
+        fetchedAt: Date.now(),
+        hermesRoot: updateRoot,
+        upstreamTracking
+      }
     }
   }
 
@@ -2477,7 +2764,8 @@ async function checkUpdates() {
         error: 'fetch-failed',
         message: firstLine(target.stderr) || 'git ls-remote failed.',
         hermesRoot: updateRoot,
-        fetchedAt: Date.now()
+        fetchedAt: Date.now(),
+        upstreamTracking
       }
     }
 
@@ -2491,7 +2779,8 @@ async function checkUpdates() {
       commits: [],
       dirty: dirtyStr.length > 0,
       hermesRoot: updateRoot,
-      fetchedAt: Date.now()
+      fetchedAt: Date.now(),
+      upstreamTracking
     }
   }
 
@@ -2504,7 +2793,8 @@ async function checkUpdates() {
       error: 'fetch-failed',
       message: firstLine(fetched.stderr) || 'git fetch failed.',
       hermesRoot: updateRoot,
-      fetchedAt: Date.now()
+      fetchedAt: Date.now(),
+      upstreamTracking
     }
   }
 
@@ -2552,7 +2842,8 @@ async function checkUpdates() {
     commits,
     dirty: dirtyStr.length > 0,
     hermesRoot: updateRoot,
-    fetchedAt: Date.now()
+    fetchedAt: Date.now(),
+    upstreamTracking
   }
 }
 
@@ -2830,6 +3121,39 @@ async function applyUpdates(opts = {}) {
   updateInFlight = true
 
   try {
+    if (IS_PACKAGED) {
+      const updateRoot = resolveUpdateRoot()
+      const upstreamTracking = await checkOfficialUpstream(updateRoot)
+      const legacySafety = resolveLegacyUpdateSafety(true, upstreamTracking)
+
+      if (!legacySafety.allowed) {
+        rememberLog(`[updates] refusing legacy apply: ${legacySafety.reason}`)
+
+        return {
+          ok: false,
+          error: legacySafety.reason || 'upstream-unproven',
+          message: legacySafety.message || 'The packaged app could not be compared safely with official upstream.',
+          hermesRoot: updateRoot
+        }
+      }
+
+      const mutationTarget = await checkMutationTarget(updateRoot)
+      const mutationSafety = resolveLegacyUpdateSafety(true, mutationTarget, 'update-target')
+
+      if (!mutationSafety.allowed) {
+        rememberLog(`[updates] refusing legacy apply for mutable checkout: ${mutationSafety.reason}`)
+
+        return {
+          ok: false,
+          error: mutationSafety.reason || 'upstream-unproven',
+          message:
+            mutationSafety.message ||
+            'The mutable Hermes checkout could not be compared safely with official upstream.',
+          hermesRoot: updateRoot
+        }
+      }
+    }
+
     const updater = resolveUpdaterBinary()
 
     if (!updater && !IS_WINDOWS) {
@@ -11222,6 +11546,8 @@ ipcMain.handle('hermes:updates:check', async () =>
     fetchedAt: Date.now()
   }))
 )
+
+ipcMain.handle('hermes:updates:check-upstream', async () => checkOfficialUpstream(resolveUpdateRoot()))
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
   applyUpdates(payload || {}).catch(error => ({

@@ -266,6 +266,7 @@ declare global {
       getRemoteDisplayReason?: () => Promise<string | null>
       updates: {
         check: () => Promise<DesktopUpdateStatus>
+        checkUpstream: () => Promise<DesktopUpstreamTracking>
         apply: (opts?: DesktopUpdateApplyOptions) => Promise<DesktopUpdateApplyResult>
         getBranch: () => Promise<{ branch: string }>
         setBranch: (name: string) => Promise<{ branch: string }>
@@ -398,6 +399,27 @@ export interface DesktopManagedSourceUpdate {
   refreshRequest: DesktopManagedUpdateRefreshRequest | null
 }
 
+export type DesktopUpstreamTrackingState = 'error' | 'ready' | 'stale'
+
+export interface DesktopUpstreamTracking {
+  ahead: number | null
+  behind: number | null
+  branch: string
+  checkedAt: number
+  error: string | null
+  fetchedAt: number | null
+  identityDirty: boolean
+  identitySource: 'checkout-head' | 'install-stamp' | null
+  installedRepository: string | null
+  installedSha: string | null
+  message: string | null
+  readOnly: true
+  repository: string
+  state: DesktopUpstreamTrackingState
+  targetSha: string | null
+  trackingRef: string
+}
+
 export interface DesktopUpdateStatus {
   supported: boolean
   updateAvailable?: boolean
@@ -415,6 +437,7 @@ export interface DesktopUpdateStatus {
   dirty?: boolean
   fetchedAt?: number
   managedSource?: DesktopManagedSourceUpdate
+  upstreamTracking?: DesktopUpstreamTracking
 }
 
 export type DesktopUpdateDirtyStrategy = 'abort' | 'stash' | 'force'

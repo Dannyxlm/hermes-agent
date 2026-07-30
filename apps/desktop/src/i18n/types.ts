@@ -1803,6 +1803,18 @@ export interface Translations {
     availableTitleBackend: string
     availableBodyBackend: string
     availableBodyNoChangelog: string
+    desktopUpstreamTitle: string
+    desktopUpstreamSubtitle: string
+    desktopUpstreamReady: string
+    desktopUpstreamStale: string
+    desktopUpstreamError: string
+    desktopUpstreamUnavailable: string
+    desktopUpstreamDirty: string
+    desktopUpstreamBehind: string
+    desktopUpstreamAhead: string
+    desktopUpstreamInstalled: string
+    desktopUpstreamOfficial: string
+    desktopUpstreamReadOnlyNotice: string
     managedTitle: string
     managedSubtitle: string
     managedReady: string

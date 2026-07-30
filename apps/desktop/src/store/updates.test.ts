@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { DesktopUpdateStatus } from '@/global'
+import type { DesktopUpdateStatus, DesktopUpstreamTracking } from '@/global'
 
 const storage = new Map<string, string>()
 
@@ -44,6 +44,7 @@ vi.mock('@/hermes', () => ({
 const {
   maybeNotifyUpdateAvailable,
   checkBackendUpdates,
+  checkUpdates,
   $backendUpdateStatus,
   applyBackendUpdate,
   $backendUpdateApply,
@@ -53,6 +54,9 @@ const {
   $updateOverlayOpen,
   $updateOverlayTarget,
   requestActiveUpdate,
+  $upstreamTrackingChecking,
+  checkUpstreamTracking,
+  openUpdateOverlayFor,
   resetUpdateApplyState,
   startUpdatePoller,
   stopUpdatePoller,
@@ -121,6 +125,11 @@ describe('maybeNotifyUpdateAvailable', () => {
 
   it('does nothing when already up to date', () => {
     maybeNotifyUpdateAvailable(status({ behind: 0 }))
+    expect(notifySpy).not.toHaveBeenCalled()
+  })
+
+  it('does not advertise a blocked packaged-app update', () => {
+    maybeNotifyUpdateAvailable(status({ supported: false, behind: 1218, reason: 'fork-divergent' }))
     expect(notifySpy).not.toHaveBeenCalled()
   })
 })
@@ -417,6 +426,94 @@ describe('requestActiveUpdate', () => {
 
     requestActiveUpdate()
     await vi.waitFor(() => expect(updateHermesSpy).toHaveBeenCalled())
+  })
+})
+
+describe('desktop upstream tracking lane', () => {
+  const checkMock = vi.fn()
+  const checkUpstreamMock = vi.fn()
+  const upstream = (overrides: Partial<DesktopUpstreamTracking> = {}): DesktopUpstreamTracking => ({
+    ahead: 5,
+    behind: 1218,
+    branch: 'main',
+    checkedAt: 1,
+    error: null,
+    fetchedAt: 1,
+    identityDirty: false,
+    identitySource: 'install-stamp',
+    installedRepository: 'Dannyxlm/hermes-agent',
+    installedSha: 'a'.repeat(40),
+    message: null,
+    readOnly: true,
+    repository: 'NousResearch/hermes-agent',
+    state: 'ready',
+    targetSha: 'b'.repeat(40),
+    trackingRef: 'refs/hermes-desktop-upstream/main',
+    ...overrides
+  })
+
+  beforeEach(() => {
+    checkMock.mockReset()
+    checkUpstreamMock.mockReset()
+    $updateStatus.set(status({ behind: 3, targetSha: 'publication-sha' }))
+    $upstreamTrackingChecking.set(false)
+    checkUpstreamMock.mockResolvedValue(upstream())
+    ;(globalThis as unknown as { window: unknown }).window = {
+      hermesDesktop: {
+        updates: {
+          check: checkMock,
+          checkUpstream: checkUpstreamMock
+        }
+      }
+    }
+  })
+
+  afterEach(() => {
+    delete (globalThis as unknown as { window?: unknown }).window
+  })
+
+  it('opens and refreshes the read-only surface without running the publication update check', async () => {
+    openUpdateOverlayFor('client-upstream')
+
+    await vi.waitFor(() => expect(checkUpstreamMock).toHaveBeenCalledTimes(1))
+
+    expect(checkMock).not.toHaveBeenCalled()
+    expect($updateStatus.get()?.behind).toBe(3)
+    expect($updateStatus.get()?.targetSha).toBe('publication-sha')
+    expect($updateStatus.get()?.upstreamTracking?.behind).toBe(1218)
+  })
+
+  it('updates only the nested upstream state when called directly', async () => {
+    await checkUpstreamTracking()
+
+    expect(checkUpstreamMock).toHaveBeenCalledTimes(1)
+    expect(checkMock).not.toHaveBeenCalled()
+    expect($updateStatus.get()?.supported).toBe(true)
+    expect($updateStatus.get()?.upstreamTracking?.ahead).toBe(5)
+  })
+
+  it('does not let an older publication response overwrite a newer dedicated check', async () => {
+    let resolvePublication: (value: DesktopUpdateStatus) => void = () => undefined
+    const publicationResponse = new Promise<DesktopUpdateStatus>(resolve => {
+      resolvePublication = resolve
+    })
+
+    checkMock.mockReturnValue(publicationResponse)
+    checkUpstreamMock.mockResolvedValue(upstream({ checkedAt: 200, behind: 9 }))
+
+    const publicationCheck = checkUpdates()
+    await vi.waitFor(() => expect(checkMock).toHaveBeenCalledTimes(1))
+    await checkUpstreamTracking()
+
+    resolvePublication(
+      status({
+        upstreamTracking: upstream({ checkedAt: 100, behind: 12 })
+      })
+    )
+    await publicationCheck
+
+    expect($updateStatus.get()?.upstreamTracking?.checkedAt).toBe(200)
+    expect($updateStatus.get()?.upstreamTracking?.behind).toBe(9)
   })
 })
 

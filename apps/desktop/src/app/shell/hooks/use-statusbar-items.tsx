@@ -219,33 +219,65 @@ export function useStatusbarItems({
       : 'text-destructive hover:text-destructive'
 
   const clientVersionItem = useMemo<StatusbarItem>(() => {
+    const appVersion = desktopVersion?.appVersion
+    const upstream = updateStatus?.upstreamTracking
+    const sha = upstream?.installedSha?.slice(0, 7) ?? updateStatus?.currentSha?.slice(0, 7) ?? null
+    const behind = upstream?.behind ?? 0
+    const trackingProblem = upstream?.state === 'error' || upstream?.state === 'stale'
     const applying = updateApply.applying || updateApply.stage === 'restart'
+    const remote = connection?.mode === 'remote'
+    const upstreamBranch = upstream
+      ? `${upstream.repository.split('/')[0] ?? upstream.repository}/${upstream.branch}`
+      : 'NousResearch/main'
 
     const status = resolveVersionStatus({
       applying,
       applyMessage: updateApply.message,
-      behind: updateStatus?.behind ?? 0,
-      branch: updateStatus?.branch,
+      behind,
+      branch: upstreamBranch,
       copy,
-      remote: connection?.mode === 'remote',
+      remote,
       restarting: updateApply.stage === 'restart',
-      sha: updateStatus?.currentSha?.slice(0, 7) ?? null,
+      sha,
       target: 'client',
-      version: desktopVersion?.appVersion
+      version: appVersion
     })
 
+    const label =
+      !applying && upstream?.state === 'stale' && behind > 0
+        ? status.label.replace(`(+${behind})`, `(+${behind}?)`)
+        : !applying && upstream?.state === 'error'
+          ? `${status.label} (!)`
+          : status.label
+
+    const tooltip = [
+      status.tooltip,
+      !applying && upstream?.state === 'stale' && t.updates.desktopUpstreamStale,
+      !applying && upstream?.state === 'error' && t.updates.desktopUpstreamError,
+      !applying && upstream?.message,
+      upstream && t.updates.desktopUpstreamReadOnlyNotice
+    ]
+      .filter(Boolean)
+      .join(' · ')
+
     return {
-      className: status.hasUpdate ? 'text-primary hover:text-primary' : undefined,
+      className: !applying
+        ? trackingProblem
+          ? 'text-amber-600 hover:text-amber-600'
+          : status.hasUpdate
+            ? 'text-primary hover:text-primary'
+            : undefined
+        : undefined,
       detail: status.detail,
       hidden: status.unknown,
       icon: applying ? <Loader2 className="size-3 animate-spin" /> : <Hash className="size-3" />,
       id: 'version-client',
-      label: status.label,
+      label,
       // Update state is not a preference: hiding it is how a user misses that
       // their client is behind. Listed in the menu, but locked on.
       lockedVisible: true,
-      onSelect: () => openUpdateOverlayFor('client'),
-      title: status.tooltip,
+      onSelect: () => openUpdateOverlayFor('client-upstream'),
+      title: tooltip || undefined,
       toggleLabel: copy.toggleVersion,
       variant: 'action'
     }
@@ -256,9 +288,11 @@ export function useStatusbarItems({
     updateApply.applying,
     updateApply.message,
     updateApply.stage,
-    updateStatus?.behind,
-    updateStatus?.branch,
-    updateStatus?.currentSha
+    updateStatus?.currentSha,
+    updateStatus?.upstreamTracking,
+    t.updates.desktopUpstreamError,
+    t.updates.desktopUpstreamReadOnlyNotice,
+    t.updates.desktopUpstreamStale
   ])
 
   const backendVersionItem = useMemo<StatusbarItem | null>(() => {

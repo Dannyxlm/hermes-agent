@@ -2007,6 +2007,20 @@ export const ja = defineLocale({
     availableBodyBackend: '接続中の Hermes バックエンドの新しいバージョンをインストールできます。',
     availableBodyNoChangelog:
       '新しいバージョンを利用できます。このインストール形式ではリリースノートは表示できません。',
+    desktopUpstreamTitle: 'デスクトップの上流状態',
+    desktopUpstreamSubtitle: 'パッケージ済みアプリと NousResearch/main を読み取り専用で比較します。',
+    desktopUpstreamReady: '公式上流の状態は最新です。',
+    desktopUpstreamStale: 'キャッシュ済みの公式上流状態を表示しています。',
+    desktopUpstreamError: '公式上流の状態を取得できません。',
+    desktopUpstreamUnavailable: '信頼できるデスクトップビルドの識別情報がありません。',
+    desktopUpstreamDirty:
+      'このアプリは未コミットの変更を含むソースからビルドされているため、その変更は件数に含まれません。',
+    desktopUpstreamBehind: '公式上流からの遅れ',
+    desktopUpstreamAhead: 'フォーク固有のコミット',
+    desktopUpstreamInstalled: 'パッケージ済みアプリ',
+    desktopUpstreamOfficial: 'NousResearch/main',
+    desktopUpstreamReadOnlyNotice:
+      '読み取り専用：チェックアウトのリセット、更新の適用、CloudSeed パッチの削除は行いません。',
     managedTitle: 'イミュータブル更新トレイン',
     managedSubtitle: 'Hermes は読み取り専用の本番リリース外で上流ソースを監視します。',
     managedReady: 'ソースモニターの状態は最新です。',

@@ -11,6 +11,7 @@ import type {
   DesktopUpdateProgress,
   DesktopUpdateStage,
   DesktopUpdateStatus,
+  DesktopUpstreamTracking,
   DesktopVersionInfo
 } from '@/global'
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
@@ -45,6 +46,7 @@ const IDLE: UpdateApplyState = {
 export const $desktopVersion = atom<DesktopVersionInfo | null>(null)
 export const $updateApply = atom<UpdateApplyState>(IDLE)
 export const $updateChecking = atom<boolean>(false)
+export const $upstreamTrackingChecking = atom<boolean>(false)
 export const $updateOverlayOpen = atom<boolean>(false)
 export const $updateStatus = atom<DesktopUpdateStatus | null>(null)
 
@@ -53,7 +55,7 @@ export const $backendUpdateStatus = atom<DesktopUpdateStatus | null>(null)
 export const $backendUpdateApply = atom<UpdateApplyState>(IDLE)
 export const $backendUpdateChecking = atom<boolean>(false)
 
-export type UpdateTarget = 'client' | 'backend'
+export type UpdateTarget = 'backend' | 'client' | 'client-upstream'
 export const $updateOverlayTarget = atom<UpdateTarget>('client')
 
 export const setUpdateOverlayOpen = (open: boolean) => $updateOverlayOpen.set(open)
@@ -61,7 +63,11 @@ export const setUpdateOverlayOpen = (open: boolean) => $updateOverlayOpen.set(op
 export const openUpdateOverlayFor = (target: UpdateTarget) => {
   $updateOverlayTarget.set(target)
   $updateOverlayOpen.set(true)
-  void (target === 'backend' ? checkBackendUpdates() : checkUpdates())
+  void (target === 'backend'
+    ? checkBackendUpdates()
+    : target === 'client-upstream'
+      ? checkUpstreamTracking()
+      : checkUpdates())
 }
 
 export const resetUpdateApplyState = () => {
@@ -394,7 +400,19 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
   $updateChecking.set(true)
 
   try {
-    const status = await bridge.check()
+    const checked = await bridge.check()
+    const currentUpstream = $updateStatus.get()?.upstreamTracking
+    const checkedUpstream = checked.upstreamTracking
+    const upstreamTracking =
+      currentUpstream && (!checkedUpstream || currentUpstream.checkedAt > checkedUpstream.checkedAt)
+        ? currentUpstream
+        : checkedUpstream
+
+    const status = {
+      ...checked,
+      upstreamTracking
+    }
+
     $updateStatus.set(status)
     maybeNotifyUpdateAvailable(status)
     void refreshDesktopVersion()
@@ -408,7 +426,8 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
       branch: previous?.branch,
       error: 'check-failed',
       message: error instanceof Error ? error.message : String(error),
-      fetchedAt: Date.now()
+      fetchedAt: Date.now(),
+      upstreamTracking: previous?.upstreamTracking
     }
 
     $updateStatus.set(fallback)
@@ -416,6 +435,70 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
     return fallback
   } finally {
     $updateChecking.set(false)
+  }
+}
+
+export async function checkUpstreamTracking(): Promise<DesktopUpstreamTracking | null> {
+  const bridge = window.hermesDesktop?.updates
+  const previous = $updateStatus.get()?.upstreamTracking
+
+  if (!bridge?.checkUpstream || $upstreamTrackingChecking.get()) {
+    return previous ?? null
+  }
+
+  $upstreamTrackingChecking.set(true)
+
+  try {
+    const upstreamTracking = await bridge.checkUpstream()
+    const current = $updateStatus.get()
+
+    $updateStatus.set({
+      ...(current ?? { supported: false }),
+      upstreamTracking
+    })
+
+    return upstreamTracking
+  } catch (error) {
+    const checkedAt = Date.now()
+    const message = error instanceof Error ? error.message : String(error)
+
+    const upstreamTracking: DesktopUpstreamTracking = previous
+      ? {
+          ...previous,
+          checkedAt,
+          error: 'check-failed',
+          message,
+          state: previous.behind === null ? 'error' : 'stale'
+        }
+      : {
+          ahead: null,
+          behind: null,
+          branch: 'main',
+          checkedAt,
+          error: 'check-failed',
+          fetchedAt: null,
+          identityDirty: false,
+          identitySource: null,
+          installedRepository: null,
+          installedSha: null,
+          message,
+          readOnly: true,
+          repository: 'NousResearch/hermes-agent',
+          state: 'error',
+          targetSha: null,
+          trackingRef: 'refs/hermes-desktop-upstream/main'
+        }
+
+    const current = $updateStatus.get()
+
+    $updateStatus.set({
+      ...(current ?? { supported: false }),
+      upstreamTracking
+    })
+
+    return upstreamTracking
+  } finally {
+    $upstreamTrackingChecking.set(false)
   }
 }
 
@@ -735,6 +818,7 @@ export function startUpdatePoller(): void {
 
   pollerStarted = true
   void checkUpdates()
+  void checkUpstreamTracking()
   void checkBackendUpdates()
   void refreshDesktopVersion()
   bridge.onProgress(ingestProgress)
@@ -758,6 +842,7 @@ export function startUpdatePoller(): void {
   backgroundTimer = setInterval(
     () => {
       void checkUpdates()
+      void checkUpstreamTracking()
       void checkBackendUpdates()
     },
     30 * 60 * 1000
@@ -786,6 +871,7 @@ function onFocus() {
 
   lastFocusAt = now
   void checkUpdates()
+  void checkUpstreamTracking()
   void checkBackendUpdates()
   void refreshDesktopVersion()
 }
