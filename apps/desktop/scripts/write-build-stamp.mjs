@@ -99,11 +99,12 @@ export function fromCI(env = process.env) {
   const branch = branchFromCI(env)
   const repository =
     normalizeRepository(env.HERMES_DESKTOP_UPDATE_REPOSITORY || env.GITHUB_REPOSITORY) || FALLBACK_REPOSITORY
+  const dirty = /^(?:1|true)$/i.test(String(env.HERMES_DESKTOP_UPDATE_DIRTY || "").trim())
   return {
     commit: sha,
     branch,
     repository,
-    dirty: false, // CI builds from a checkout-of-ref by definition
+    dirty,
     source: "ci"
   }
 }

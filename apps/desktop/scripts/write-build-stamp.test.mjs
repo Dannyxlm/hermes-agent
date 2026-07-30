@@ -33,6 +33,24 @@ test('fromCI reads exact publication provenance', () => {
   assert.equal(fromCI({}), null)
 })
 
+test('installer-seeded provenance preserves the declared repository and dirty tree state', () => {
+  assert.deepEqual(
+    fromCI({
+      GITHUB_SHA: 'a'.repeat(40),
+      GITHUB_REF_NAME: 'release',
+      HERMES_DESKTOP_UPDATE_DIRTY: 'true',
+      HERMES_DESKTOP_UPDATE_REPOSITORY: 'Dannyxlm/hermes-agent'
+    }),
+    {
+      commit: 'a'.repeat(40),
+      branch: 'release',
+      repository: 'Dannyxlm/hermes-agent',
+      dirty: true,
+      source: 'ci'
+    }
+  )
+})
+
 test('CI provenance never stamps a synthetic pull-request merge branch or a release tag', () => {
   assert.equal(
     branchFromCI({ GITHUB_REF_NAME: '123/merge', GITHUB_HEAD_REF: 'fix/desktop', GITHUB_REF_TYPE: 'branch' }),

@@ -517,6 +517,57 @@ describe('desktop upstream tracking lane', () => {
     expect($updateStatus.get()?.upstreamTracking?.checkedAt).toBe(200)
     expect($updateStatus.get()?.upstreamTracking?.behind).toBe(9)
   })
+
+  it('does not let an older dedicated response overwrite a newer publication check', async () => {
+    let resolveUpstream: (value: DesktopUpstreamTracking) => void = () => undefined
+
+    const upstreamResponse = new Promise<DesktopUpstreamTracking>(resolve => {
+      resolveUpstream = resolve
+    })
+
+    checkUpstreamMock.mockReturnValue(upstreamResponse)
+    checkMock.mockResolvedValue(
+      status({
+        upstreamTracking: upstream({ checkedAt: 200, behind: 9 })
+      })
+    )
+
+    const upstreamCheck = checkUpstreamTracking()
+    await vi.waitFor(() => expect(checkUpstreamMock).toHaveBeenCalledTimes(1))
+    await checkUpdates()
+
+    resolveUpstream(upstream({ checkedAt: 100, behind: 12 }))
+    await upstreamCheck
+
+    expect($updateStatus.get()?.upstreamTracking?.checkedAt).toBe(200)
+    expect($updateStatus.get()?.upstreamTracking?.behind).toBe(9)
+  })
+
+  it('does not let a delayed dedicated failure stale a newer publication success', async () => {
+    let rejectUpstream: (error: Error) => void = () => undefined
+
+    const upstreamResponse = new Promise<DesktopUpstreamTracking>((_resolve, reject) => {
+      rejectUpstream = reject
+    })
+
+    checkUpstreamMock.mockReturnValue(upstreamResponse)
+    checkMock.mockResolvedValue(
+      status({
+        upstreamTracking: upstream({ checkedAt: 200, behind: 9, state: 'ready' })
+      })
+    )
+
+    const upstreamCheck = checkUpstreamTracking()
+    await vi.waitFor(() => expect(checkUpstreamMock).toHaveBeenCalledTimes(1))
+    await checkUpdates()
+
+    rejectUpstream(new Error('offline'))
+    await upstreamCheck
+
+    expect($updateStatus.get()?.upstreamTracking?.checkedAt).toBe(200)
+    expect($updateStatus.get()?.upstreamTracking?.behind).toBe(9)
+    expect($updateStatus.get()?.upstreamTracking?.state).toBe('ready')
+  })
 })
 
 describe('applyUpdates terminal state', () => {

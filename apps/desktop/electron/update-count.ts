@@ -59,6 +59,7 @@ interface InstalledIdentity {
 
 interface ResolveInstalledIdentityOptions {
   checkoutBranch?: unknown
+  checkoutDirty?: unknown
   checkoutHead?: unknown
   checkoutRepository?: unknown
   installStamp?: InstallStampInput | null
@@ -105,6 +106,19 @@ interface LegacyUpdateSafety {
 }
 
 type LegacyUpdateSafetySubject = 'package' | 'update-target'
+
+// Resolve where the comparison cache may read the installed commit's history.
+// A stamped repository is immutable build provenance and is safe to contact.
+// Legacy schema-v1 stamps have no such provenance, so they may only read from
+// the local checkout; inferring its mutable origin could disclose a fork-only
+// stamped SHA to the official upstream server.
+function resolveIdentityHistorySource(identity: InstalledIdentity, checkoutPath: string | null): string | null {
+  if (identity.source === 'install-stamp' && identity.repository) {
+    return `https://github.com/${identity.repository}.git`
+  }
+
+  return checkoutPath
+}
 
 function normalizeCommit(value: unknown): string | null {
   const commit = typeof value === 'string' ? value.trim() : ''
@@ -164,6 +178,7 @@ function normalizeGitHubRepository(value: unknown): string | null {
 // have no package stamp, so they retain a clearly-labelled HEAD fallback.
 function resolveInstalledIdentity({
   checkoutBranch,
+  checkoutDirty,
   checkoutHead,
   checkoutRepository,
   installStamp,
@@ -175,7 +190,7 @@ function resolveInstalledIdentity({
   if (!packaged && checkoutCommit) {
     return {
       branch: typeof checkoutBranch === 'string' ? checkoutBranch.trim() || null : null,
-      dirty: false,
+      dirty: Boolean(checkoutDirty),
       error: null,
       repository: normalizeGitHubRepository(checkoutRepository),
       sha: checkoutCommit,
@@ -462,7 +477,10 @@ function resolveLegacyUpdateSafety(
   if (tracking.identityDirty) {
     return {
       allowed: false,
-      message: 'Automatic updates are disabled because this packaged app was built from a dirty source tree.',
+      message:
+        subject === 'update-target'
+          ? 'Automatic updates are disabled because the mutable Hermes checkout has tracked local changes.'
+          : 'Automatic updates are disabled because this packaged app was built from a dirty source tree.',
       reason: 'identity-dirty'
     }
   }
@@ -501,6 +519,7 @@ export {
   OFFICIAL_UPSTREAM_REPOSITORY,
   OFFICIAL_UPSTREAM_URL,
   resolveBehindCount,
+  resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveLegacyUpdateSafety,
   shouldCountCommits

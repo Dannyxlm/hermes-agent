@@ -12,6 +12,7 @@ import {
   normalizeGitHubRepository,
   OFFICIAL_UPSTREAM_REF,
   resolveBehindCount,
+  resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveLegacyUpdateSafety,
   shouldCountCommits
@@ -43,6 +44,34 @@ test('shallow checkout with no merge-base but identical SHA reports up-to-date',
       hasMergeBase: false
     }),
     0
+  )
+})
+
+test('legacy packaged identity reads history locally instead of inferring a mutable remote', () => {
+  const identity = resolveInstalledIdentity({
+    installStamp: {
+      branch: 'main',
+      commit: '1234567890abcdef1234567890abcdef12345678'
+    },
+    packaged: true
+  })
+
+  assert.equal(resolveIdentityHistorySource(identity, '/local/hermes-checkout'), '/local/hermes-checkout')
+})
+
+test('repository-stamped packaged identity reads history from its declared producer', () => {
+  const identity = resolveInstalledIdentity({
+    installStamp: {
+      branch: 'main',
+      commit: '1234567890abcdef1234567890abcdef12345678',
+      repository: 'Dannyxlm/hermes-agent'
+    },
+    packaged: true
+  })
+
+  assert.equal(
+    resolveIdentityHistorySource(identity, '/local/hermes-checkout'),
+    'https://github.com/Dannyxlm/hermes-agent.git'
   )
 })
 
@@ -203,6 +232,36 @@ test('dev runs prefer the current checkout HEAD over a stale local build stamp',
       repository: null,
       sha: checkoutHead,
       source: 'checkout-head'
+    }
+  )
+})
+
+test('mutable checkout identity preserves tracked local changes for update safety', () => {
+  const identity = resolveInstalledIdentity({
+    checkoutBranch: 'main',
+    checkoutDirty: true,
+    checkoutHead: 'c'.repeat(40),
+    checkoutRepository: 'Dannyxlm/hermes-agent',
+    packaged: false
+  })
+
+  assert.equal(identity.dirty, true)
+  assert.equal(identity.sha, 'c'.repeat(40))
+  assert.deepEqual(
+    resolveLegacyUpdateSafety(
+      true,
+      trackingStatus({
+        identityDirty: identity.dirty,
+        identitySource: identity.source,
+        installedRepository: identity.repository,
+        installedSha: identity.sha
+      }),
+      'update-target'
+    ),
+    {
+      allowed: false,
+      message: 'Automatic updates are disabled because the mutable Hermes checkout has tracked local changes.',
+      reason: 'identity-dirty'
     }
   )
 })
@@ -471,6 +530,57 @@ test('fetch failure uses an existing dedicated ref only as explicitly stale data
   assert.equal(status.fetchedAt, null)
   assert.ok(calls.some(args => args.at(-1) === `+refs/heads/main:${OFFICIAL_UPSTREAM_REF}`))
   assert.ok(calls.every(args => !args.some(arg => arg === 'origin/main')))
+})
+
+test('mutable fork history hydration never sends comparison-cache fetches to official GitHub', async () => {
+  const comparisonCalls: string[][] = []
+  let mergeBaseCalls = 0
+
+  const identity = resolveInstalledIdentity({
+    checkoutBranch: 'local-fork',
+    checkoutHead: 'a'.repeat(40),
+    checkoutRepository: 'NousResearch/hermes-agent',
+    packaged: false
+  })
+
+  const status = await inspectOfficialUpstream({
+    identity,
+    identityRepositoryUrl: '/local/hermes-checkout',
+    repositoryRef: OFFICIAL_UPSTREAM_REF,
+    repositoryUrl: '/cache/official-upstream.git',
+    runGit: async args => {
+      comparisonCalls.push(args)
+
+      if (args[0] === 'cat-file') {
+        return { code: 0, stderr: '', stdout: '' }
+      }
+
+      if (args[0] === 'rev-parse') {
+        return { code: 0, stderr: '', stdout: `${'b'.repeat(40)}\n` }
+      }
+
+      if (args[0] === 'merge-base') {
+        mergeBaseCalls += 1
+
+        return mergeBaseCalls === 1
+          ? { code: 1, stderr: 'history missing', stdout: '' }
+          : { code: 0, stderr: '', stdout: `${'c'.repeat(40)}\n` }
+      }
+
+      if (args[0] === 'rev-list') {
+        return { code: 0, stderr: '', stdout: '5\t2\n' }
+      }
+
+      return { code: 0, stderr: '', stdout: '' }
+    }
+  })
+
+  assert.equal(status.state, 'ready')
+  assert.equal(status.behind, 5)
+  assert.equal(status.ahead, 2)
+  assert.ok(comparisonCalls.some(args => args.includes('/cache/official-upstream.git')))
+  assert.ok(comparisonCalls.some(args => args.includes('/local/hermes-checkout')))
+  assert.ok(comparisonCalls.every(args => !args.includes('https://github.com/NousResearch/hermes-agent.git')))
 })
 
 test('fetch failure without a dedicated ref is an error with unknown distance, never zero', async () => {

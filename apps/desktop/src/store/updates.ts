@@ -404,10 +404,7 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
     const currentUpstream = $updateStatus.get()?.upstreamTracking
     const checkedUpstream = checked.upstreamTracking
 
-    const upstreamTracking =
-      currentUpstream && (!checkedUpstream || currentUpstream.checkedAt > checkedUpstream.checkedAt)
-        ? currentUpstream
-        : checkedUpstream
+    const upstreamTracking = newestUpstreamTracking(currentUpstream, checkedUpstream)
 
     const status = {
       ...checked,
@@ -439,6 +436,17 @@ export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
   }
 }
 
+function newestUpstreamTracking(
+  current: DesktopUpstreamTracking | null | undefined,
+  candidate: DesktopUpstreamTracking | null | undefined
+): DesktopUpstreamTracking | undefined {
+  if (!candidate || (current && current.checkedAt > candidate.checkedAt)) {
+    return current ?? undefined
+  }
+
+  return candidate
+}
+
 export async function checkUpstreamTracking(): Promise<DesktopUpstreamTracking | null> {
   const bridge = window.hermesDesktop?.updates
   const previous = $updateStatus.get()?.upstreamTracking
@@ -452,24 +460,41 @@ export async function checkUpstreamTracking(): Promise<DesktopUpstreamTracking |
   try {
     const upstreamTracking = await bridge.checkUpstream()
     const current = $updateStatus.get()
+    const newest = newestUpstreamTracking(current?.upstreamTracking, upstreamTracking)
 
     $updateStatus.set({
       ...(current ?? { supported: false }),
-      upstreamTracking
+      upstreamTracking: newest
     })
 
-    return upstreamTracking
+    return newest ?? null
   } catch (error) {
     const checkedAt = Date.now()
     const message = error instanceof Error ? error.message : String(error)
+    const current = $updateStatus.get()
+    const currentUpstream = current?.upstreamTracking
 
-    const upstreamTracking: DesktopUpstreamTracking = previous
+    // A publication check may have completed successfully while this
+    // dedicated request was in flight. Its server-provided checkedAt is newer
+    // than the snapshot captured above, so a renderer-local error timestamp
+    // must not turn that fresh success into stale data.
+    if (
+      currentUpstream &&
+      currentUpstream !== previous &&
+      (!previous || currentUpstream.checkedAt >= previous.checkedAt)
+    ) {
+      return currentUpstream
+    }
+
+    const base = currentUpstream ?? previous
+
+    const upstreamTracking: DesktopUpstreamTracking = base
       ? {
-          ...previous,
+          ...base,
           checkedAt,
           error: 'check-failed',
           message,
-          state: previous.behind === null ? 'error' : 'stale'
+          state: base.behind === null ? 'error' : 'stale'
         }
       : {
           ahead: null,
@@ -490,14 +515,14 @@ export async function checkUpstreamTracking(): Promise<DesktopUpstreamTracking |
           trackingRef: 'refs/hermes-desktop-upstream/main'
         }
 
-    const current = $updateStatus.get()
+    const newest = newestUpstreamTracking(current?.upstreamTracking, upstreamTracking)
 
     $updateStatus.set({
       ...(current ?? { supported: false }),
-      upstreamTracking
+      upstreamTracking: newest
     })
 
-    return upstreamTracking
+    return newest ?? null
   } finally {
     $upstreamTrackingChecking.set(false)
   }

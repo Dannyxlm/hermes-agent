@@ -1,5 +1,6 @@
 export interface BootstrapMarkerLike {
   pinnedCommit?: unknown
+  pinnedRepository?: unknown
   schemaVersion?: unknown
 }
 

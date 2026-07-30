@@ -191,12 +191,14 @@ import {
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_REPOSITORY,
   resolveBehindCount,
+  resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveLegacyUpdateSafety,
   shouldCountCommits
 } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, writeUpdateMarker } from './update-marker'
+import { terminateTimedOutProcess } from './update-process-timeout'
 import { runRebuildWithRetry } from './update-rebuild'
 import {
   buildRelaunchScript,
@@ -2436,18 +2438,10 @@ function runGit(args, options: any = {}): Promise<{ code: number; stdout: string
     if (hasTimeout) {
       timeout = setTimeout(() => {
         timedOut = true
-
-        if (IS_WINDOWS && Number.isInteger(child.pid)) {
-          forceKillProcessTree(child.pid)
-        } else if (Number.isInteger(child.pid)) {
-          try {
-            process.kill(-child.pid, 'SIGKILL')
-          } catch {
-            child.kill('SIGKILL')
-          }
-        } else {
-          child.kill('SIGKILL')
-        }
+        terminateTimedOutProcess(child, {
+          forceKillProcessTree,
+          isWindows: IS_WINDOWS
+        })
       }, timeoutMs)
     }
   })
@@ -2576,17 +2570,10 @@ async function performOfficialUpstreamCheck(updateRoot) {
       ensureBareGitRepository(DESKTOP_UPSTREAM_TRACKING_PATH, 'upstream comparison cache')
     ])
 
-    const checkoutRepository = hasGitCheckoutMetadata(updateRoot)
-      ? normalizeGitHubRepository(await getOriginUrl(updateRoot))
-      : null
-
-    const identityRepository = identity.repository || checkoutRepository
-
-    const identityRepositoryUrl = identityRepository
-      ? `https://github.com/${identityRepository}.git`
-      : hasGitCheckoutMetadata(updateRoot)
-        ? updateRoot
-        : null
+    const identityRepositoryUrl = resolveIdentityHistorySource(
+      identity,
+      hasGitCheckoutMetadata(updateRoot) ? updateRoot : null
+    )
 
     return await inspectOfficialUpstream({
       identity,
@@ -2632,10 +2619,11 @@ async function checkOfficialUpstream(updateRoot) {
 let mutationTargetCheckInFlight = null
 
 async function performMutationTargetCheck(updateRoot) {
-  const [head, branch, originUrl] = await Promise.all([
+  const [head, branch, originUrl, worktreeStatus] = await Promise.all([
     runGit(['rev-parse', '--verify', 'HEAD'], { cwd: updateRoot }),
     runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot }),
-    getOriginUrl(updateRoot)
+    getOriginUrl(updateRoot),
+    runGit(['status', '--porcelain', '-uno'], { cwd: updateRoot })
   ])
 
   const checkoutRepository = normalizeGitHubRepository(originUrl)
@@ -2647,6 +2635,7 @@ async function performMutationTargetCheck(updateRoot) {
 
   const identity = resolveInstalledIdentity({
     checkoutBranch,
+    checkoutDirty: worktreeStatus.code !== 0 || Boolean(worktreeStatus.stdout.trim()),
     checkoutHead,
     checkoutRepository,
     installStamp: null,
@@ -2662,11 +2651,7 @@ async function performMutationTargetCheck(updateRoot) {
     })
   }
 
-  const identityRepositoryUrl = checkoutRepository
-    ? `https://github.com/${checkoutRepository}.git`
-    : hasGitCheckoutMetadata(updateRoot)
-      ? updateRoot
-      : null
+  const identityRepositoryUrl = hasGitCheckoutMetadata(updateRoot) ? updateRoot : null
 
   return inspectOfficialUpstream({
     identity,
@@ -2977,24 +2962,26 @@ function isShimLocked(shimPath) {
 // only signals the direct child, so on Windows a backend `hermes.exe` that
 // spawned its own grandchildren (a `hermes` REPL, a pty terminal session, the
 // gateway) would survive and keep the venv shim locked. taskkill /T /F reaps
-// the whole tree synchronously. Windows-only: this is called solely from the
-// Windows shim-unlock path, and the backend is NOT spawned detached (so it's
-// not a process-group leader — a POSIX negative-pgid kill would be meaningless
-// here anyway). POSIX teardown stays with the existing before-quit SIGTERM.
+// the whole tree synchronously. Windows-only: callers use it for timed-out Git
+// commands and shim-unlock teardown. Windows children are not process-group
+// leaders, so a POSIX negative-pgid kill would be meaningless here.
 function forceKillProcessTree(pid) {
   if (!IS_WINDOWS) {
-    return
+    return false
   }
 
   if (!Number.isInteger(pid) || pid <= 0) {
-    return
+    return false
   }
 
   try {
     execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], hiddenWindowsChildOptions({ stdio: 'ignore' }))
+
+    return true
   } catch {
-    // Already gone, or no permission — best effort; the unlock wait below is
-    // the real gate.
+    // Already gone, or no permission. Timeout callers fall back to the direct
+    // child; shim-unlock callers perform their existing bounded wait.
+    return false
   }
 }
 
@@ -3868,6 +3855,7 @@ function readJson(filePath) {
 //     schemaVersion: 1,
 //     pinnedCommit: "<40-char SHA>",       // what install.ps1 was driven against
 //     pinnedBranch: "<branch name>" | null,
+//     pinnedRepository: "<owner/repo>" | null,
 //     completedAt:  "<ISO 8601>",
 //     desktopVersion: "<app.getVersion()>"  // for forensics
 //   }
@@ -3910,6 +3898,7 @@ function writeBootstrapMarker(payload) {
     schemaVersion: BOOTSTRAP_MARKER_SCHEMA_VERSION,
     pinnedCommit: payload.pinnedCommit || null,
     pinnedBranch: payload.pinnedBranch || null,
+    pinnedRepository: payload.pinnedRepository || null,
     completedAt: new Date().toISOString(),
     desktopVersion: app.getVersion()
   }

@@ -164,6 +164,23 @@ $InstallStageProtocolVersion = 1
 # ============================================================================
 # Helper functions
 
+function Get-GitHubArchiveUrl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [string]$Commit,
+        [string]$Tag,
+        [Parameter(Mandatory = $true)][string]$Branch
+    )
+
+    if ($Commit) {
+        return "https://github.com/$Repository/archive/$Commit.zip"
+    }
+    if ($Tag) {
+        return "https://github.com/$Repository/archive/refs/tags/$Tag.zip"
+    }
+    return "https://github.com/$Repository/archive/refs/heads/$Branch.zip"
+}
+
 # Return the real OS processor architecture as a lowercase string suitable for
 # Node.js / electron download URL slugs: "arm64", "x64", or "x86".
 #
@@ -1697,15 +1714,13 @@ function Install-Repository {
                 # for.  GitHub supports archive URLs for commits, tags, and
                 # branches; we honour Commit > Tag > Branch.
                 if ($Commit) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
                     $zipLabel = $Commit
                 } elseif ($Tag) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
                     $zipLabel = $Tag
                 } else {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
                     $zipLabel = $Branch
                 }
+                $zipUrl = Get-GitHubArchiveUrl -Repository $InstallRepository -Commit $Commit -Tag $Tag -Branch $Branch
                 $zipPath = "$env:TEMP\hermes-agent-$zipLabel.zip"
                 $extractPath = "$env:TEMP\hermes-agent-extract"
 
@@ -3014,6 +3029,8 @@ function Install-Desktop {
     # even though this PowerShell session can, (2) ZIP/init trees that still
     # lack a HEAD after a failed post-extract fetch. Without it the desktop
     # pack dies with "could not determine git commit" (#50823).
+    $prevGithubSha = $env:GITHUB_SHA
+    $prevGithubRefName = $env:GITHUB_REF_NAME
     if (-not $env:GITHUB_SHA) {
         if ($Commit) {
             $env:GITHUB_SHA = $Commit
@@ -3049,11 +3066,31 @@ function Install-Desktop {
     $prevCSCAuto = $env:CSC_IDENTITY_AUTO_DISCOVERY
     $prevWinCscLink = $env:WIN_CSC_LINK
     $prevWinCscKeyPassword = $env:WIN_CSC_KEY_PASSWORD
+    $prevDesktopUpdateRepository = $env:HERMES_DESKTOP_UPDATE_REPOSITORY
+    $prevDesktopUpdateDirty = $env:HERMES_DESKTOP_UPDATE_DIRTY
+
+    # Installer-seeded GITHUB_SHA is not proof of a clean CI checkout. Record
+    # the actual managed tree state so update safety can fail closed when local
+    # tracked patches were restored before this rebuild.
+    $desktopStampDirty = $true
+    Push-Location $InstallDir
+    try {
+        $global:LASTEXITCODE = 0
+        $desktopStatus = @(& git -c windows.appendAtomically=false status --porcelain -uno 2>$null)
+        if ($LASTEXITCODE -eq 0) {
+            $desktopStampDirty = $desktopStatus.Count -gt 0
+        }
+    } catch { } finally {
+        Pop-Location
+    }
+
     try {
         $ErrorActionPreference = "Continue"
         $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
         $env:WIN_CSC_LINK = ""
         $env:WIN_CSC_KEY_PASSWORD = ""
+        $env:HERMES_DESKTOP_UPDATE_REPOSITORY = $InstallRepository
+        $env:HERMES_DESKTOP_UPDATE_DIRTY = if ($desktopStampDirty) { "true" } else { "false" }
         & $npmExe run pack 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $buildLog
         $code = $LASTEXITCODE
         if ($code -ne 0) {
@@ -3111,6 +3148,10 @@ function Install-Desktop {
         $env:CSC_IDENTITY_AUTO_DISCOVERY = $prevCSCAuto
         $env:WIN_CSC_LINK = $prevWinCscLink
         $env:WIN_CSC_KEY_PASSWORD = $prevWinCscKeyPassword
+        $env:HERMES_DESKTOP_UPDATE_REPOSITORY = $prevDesktopUpdateRepository
+        $env:HERMES_DESKTOP_UPDATE_DIRTY = $prevDesktopUpdateDirty
+        $env:GITHUB_SHA = $prevGithubSha
+        $env:GITHUB_REF_NAME = $prevGithubRefName
     }
     Pop-Location
 

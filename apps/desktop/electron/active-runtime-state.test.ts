@@ -6,6 +6,7 @@ import { classifyActiveRuntime, hasValidBootstrapMarker } from './active-runtime
 
 const VALID_MARKER = {
   pinnedCommit: '1234567890abcdef1234567890abcdef12345678',
+  pinnedRepository: 'Dannyxlm/hermes-agent',
   schemaVersion: 1
 }
 
