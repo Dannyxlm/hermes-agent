@@ -1776,6 +1776,37 @@ export interface UpdateCheckResponse {
   can_apply: boolean;
   update_command: string;
   message: string | null;
+  managed_source?: ManagedUpdateSource;
+}
+
+export interface ManagedUpdateSource {
+  schema_version: string;
+  count_basis?: "running_source";
+  availability: "ready" | "stale" | "missing" | "invalid" | "unreadable";
+  stale: boolean;
+  status_error: string | null;
+  running_release?: string;
+  running_source?: string | null;
+  running_upstream_base?: string;
+  tracked_upstream?: string;
+  upstream_head?: string;
+  commits_behind?: number;
+  local_patch_count?: number;
+  last_fetched_at?: string;
+  generated_at?: string;
+  age_seconds?: number;
+  candidate_status?: "not_built" | "building" | "passed" | "blocked" | "ready";
+  blockers?: string[];
+  next_action?: string;
+  source_worktree_clean?: boolean;
+  source_refs_remotely_reachable?: boolean;
+  can_build_candidate: boolean;
+  candidate_request_available: boolean;
+  refresh_request_available: boolean;
+  refresh_request: {
+    requested: boolean;
+    error: string | null;
+  } | null;
 }
 
 export interface SystemStats {

@@ -43,8 +43,10 @@ import { ConfirmDialog } from "@nous-research/ui/ui/components/confirm-dialog";
 import { useModalBehavior } from "@/hooks/useModalBehavior";
 import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { HermesConsoleModal } from "@/components/HermesConsoleModal";
+import { ManagedUpstreamStatus } from "@/components/ManagedUpstreamStatus";
 import { cn, themedBody } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { presentManagedUpdate } from "@/lib/managed-update-status";
 import type {
   StatusResponse,
   MemoryStatus,
@@ -508,11 +510,9 @@ export default function SystemPage() {
     }
   }, [shareRedact, showToast]);
 
-
   // ── Update check / apply ───────────────────────────────────────────
   const checkForUpdate = useCallback(
     async (force = false) => {
-      if (status?.can_update_hermes === false) return;
       setCheckingUpdate(true);
       try {
         const info = await api.checkHermesUpdate(force);
@@ -537,7 +537,7 @@ export default function SystemPage() {
         setCheckingUpdate(false);
       }
     },
-    [showToast, status?.can_update_hermes],
+    [showToast],
   );
 
   // Auto-check (cached) runs inside loadAll on mount; this is the
@@ -638,6 +638,11 @@ export default function SystemPage() {
 
   const gatewayRunning = status?.gateway_running;
   const canUpdateHermes = status?.can_update_hermes !== false;
+  const managedRuntime = updateInfo?.install_method === "managed-runtime";
+  const managedSource = managedRuntime ? updateInfo.managed_source : undefined;
+  const managedUpdate = managedSource
+    ? presentManagedUpdate(managedSource)
+    : null;
   const activeMemoryProvider = memory?.active
     ? memory.providers.find((provider) => provider.name === memory.active)
     : null;
@@ -849,7 +854,11 @@ export default function SystemPage() {
                 <div className="text-xs uppercase tracking-wider text-muted-foreground">Hermes</div>
                 <div className="flex items-center gap-2">
                   <span>v{stats?.hermes_version}</span>
-                  {canUpdateHermes &&
+                  {managedUpdate ? (
+                    <Badge tone={managedUpdate.tone}>
+                      {managedUpdate.badge}
+                    </Badge>
+                  ) : canUpdateHermes &&
                     updateInfo &&
                     (updateInfo.update_available ? (
                       <Badge tone="warning">
@@ -909,6 +918,13 @@ export default function SystemPage() {
                 Install the <span className="font-mono">psutil</span> extra for
                 CPU / memory / disk metrics.
               </p>
+            )}
+            {managedRuntime && (
+              <ManagedUpstreamStatus
+                source={managedSource}
+                checking={checkingUpdate}
+                onReload={() => void checkForUpdate(false)}
+              />
             )}
             {canUpdateHermes && (
               <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">

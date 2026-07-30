@@ -835,8 +835,10 @@ class TestUpdateCheckEndpoint:
     def _managed_status(*, generated_at=None, **overrides):
         generated_at = generated_at or datetime.now(timezone.utc).isoformat()
         status = {
-            "schema_version": "hermes-update-status.v1",
+            "schema_version": "hermes-update-status.v2",
             "running_release": "ava-converge-p1-f22a217b8dab",
+            "running_source": "c" * 40,
+            "count_basis": "running_source",
             "running_upstream_base": "a" * 40,
             "tracked_upstream": "NousResearch/main",
             "upstream_head": "b" * 40,
@@ -885,11 +887,48 @@ class TestUpdateCheckEndpoint:
         assert source["availability"] == "ready"
         assert source["stale"] is False
         assert source["running_release"] == "ava-converge-p1-f22a217b8dab"
+        assert source["running_source"] == "c" * 40
+        assert source["count_basis"] == "running_source"
         assert source["running_upstream_base"] == "a" * 40
         assert source["upstream_head"] == "b" * 40
         assert source["candidate_status"] == "not_built"
         assert source["can_build_candidate"] is True
         assert source["blockers"] == []
+
+    def test_managed_runtime_rejects_legacy_or_unbounded_count_basis(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        legacy_status = self._managed_status()
+        legacy_status.pop("running_source")
+        status_path.write_text(json.dumps(legacy_status), encoding="utf-8")
+        status_path.chmod(0o600)
+
+        source = self.client.get("/api/hermes/update/check").json()[
+            "managed_source"
+        ]
+        assert source["availability"] == "invalid"
+        assert source["status_error"] == "status_schema_invalid"
+
+        status_path.write_text(
+            json.dumps(self._managed_status(running_source="not-a-commit")),
+            encoding="utf-8",
+        )
+        source = self.client.get("/api/hermes/update/check").json()[
+            "managed_source"
+        ]
+        assert source["availability"] == "invalid"
+        assert source["status_error"] == "status_schema_invalid"
+
+        status_path.write_text(
+            json.dumps(self._managed_status(count_basis="running_upstream_base")),
+            encoding="utf-8",
+        )
+        source = self.client.get("/api/hermes/update/check").json()[
+            "managed_source"
+        ]
+        assert source["availability"] == "invalid"
+        assert source["status_error"] == "status_schema_invalid"
 
     @pytest.mark.parametrize(
         ("file_value", "expected"),

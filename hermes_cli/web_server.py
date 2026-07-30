@@ -4002,7 +4002,8 @@ _MANAGED_UPDATE_REFRESH_REQUEST_PATH = Path(
 _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH = Path(
     "/home/ubuntu/.local/state/cloudseed/update-requests/candidate.json"
 )
-_MANAGED_UPDATE_SCHEMA = "hermes-update-status.v1"
+_MANAGED_UPDATE_SCHEMA = "hermes-update-status.v2"
+_MANAGED_UPDATE_COUNT_BASIS = "running_source"
 _MANAGED_UPDATE_MAX_BYTES = 64 * 1024
 _MANAGED_UPDATE_DEFAULT_MAX_AGE_SECONDS = 3 * 60 * 60
 _MANAGED_UPDATE_MIN_MAX_AGE_SECONDS = 60 * 60
@@ -4164,6 +4165,8 @@ def _read_managed_update_source() -> Dict[str, Any]:
     running_release = _managed_safe_string(
         raw.get("running_release"), maximum=160
     )
+    running_source = _managed_safe_string(raw.get("running_source"), maximum=40)
+    count_basis = _managed_safe_string(raw.get("count_basis"), maximum=32)
     running_upstream_base = _managed_safe_string(
         raw.get("running_upstream_base"), maximum=40
     )
@@ -4199,6 +4202,9 @@ def _read_managed_update_source() -> Dict[str, Any]:
     valid = (
         raw.get("schema_version") == _MANAGED_UPDATE_SCHEMA
         and running_release is not None
+        and running_source is not None
+        and _MANAGED_UPDATE_SHA_RE.fullmatch(running_source) is not None
+        and count_basis == _MANAGED_UPDATE_COUNT_BASIS
         and running_upstream_base is not None
         and _MANAGED_UPDATE_SHA_RE.fullmatch(running_upstream_base) is not None
         and tracked_upstream is not None
@@ -4243,6 +4249,8 @@ def _read_managed_update_source() -> Dict[str, Any]:
     source.update(
         {
             "running_release": running_release,
+            "running_source": running_source,
+            "count_basis": count_basis,
             "running_upstream_base": running_upstream_base,
             "tracked_upstream": tracked_upstream,
             "upstream_head": upstream_head,
