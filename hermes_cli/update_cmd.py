@@ -3073,15 +3073,35 @@ def _normalize_managed_eol(git_cmd, repo_root):
     probe = git_cmd + ["-c", "core.autocrlf=false"]
 
     def _dirty(*extra):
+        # Force Git past its cached stat result before comparing content.
+        # A freshly checked-out CRLF file can otherwise look unchanged on
+        # coarse- or same-tick filesystems even under the temporary LF policy.
+        subprocess.run(
+            probe + ["update-index", "--really-refresh", "-q"],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        ignored_eol = "--ignore-cr-at-eol" in extra
+        output_mode = ["--numstat"] if ignored_eol else ["--name-only"]
         out = subprocess.run(
-            probe + ["diff", "-z", "--name-only", *extra],
+            probe + ["diff", "-z", *output_mode, *extra],
             cwd=repo_root,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
         )
         if out.returncode != 0:
             return None
-        return {p for p in out.stdout.split("\0") if p}
+        records = {record for record in out.stdout.split("\0") if record}
+        if ignored_eol:
+            # --name-only reports paths even when an ignore option removes
+            # every changed line. --numstat omits those zero-diff records.
+            return {
+                record.split("\t", 2)[-1]
+                for record in records
+                if record.count("\t") >= 2
+            }
+        return records
 
     def _eol_only():
         all_dirty, real_dirty = _dirty(), _dirty("--ignore-cr-at-eol")
@@ -3109,9 +3129,15 @@ def _normalize_managed_eol(git_cmd, repo_root):
             # thousands of paths, well past the Windows command-line limit.
             subprocess.run(
                 probe
-                + ["checkout", "--pathspec-from-file=-", "--pathspec-file-nul", "--"],
+                + [
+                    "checkout",
+                    "--force",
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
+                    "--",
+                ],
                 cwd=repo_root,
-                input="\0".join(sorted(eol_only)),
+                input="\0".join(sorted(eol_only)) + "\0",
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 check=False,
