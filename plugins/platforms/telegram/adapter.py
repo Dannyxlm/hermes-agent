@@ -581,6 +581,13 @@ _POLLING_ERROR_TASK_STUCK_TIMEOUT = 300.0
 # A generation is not healthy until the dedicated getUpdates request returns
 # successfully. This exceeds a normal long-poll cycle for healthy idle bots.
 _POLLING_PROGRESS_TIMEOUT = 60.0
+# Telegram transcodes an uploaded video before it answers sendVideo, so the
+# wait for the response is unrelated to how fast the bytes went out and can
+# outlast the 20s read timeout the rest of the Bot API is tuned for. Only
+# media sends take this longer budget; ordinary calls keep the short one so a
+# dead request is still noticed quickly. Kept modest deliberately — this is
+# also how long a user waits to be told the attachment failed.
+_MEDIA_SEND_READ_TIMEOUT = 60.0
 _POLLING_GENERATION_CONTEXT: ContextVar[Optional[int]] = ContextVar(
     "telegram_polling_generation", default=None
 )
@@ -3664,6 +3671,17 @@ class TelegramAdapter(BasePlatformAdapter):
                 "connect_timeout": _env_float("HERMES_TELEGRAM_HTTP_CONNECT_TIMEOUT", 10.0),
                 "read_timeout": _env_float("HERMES_TELEGRAM_HTTP_READ_TIMEOUT", 20.0),
                 "write_timeout": _env_float("HERMES_TELEGRAM_HTTP_WRITE_TIMEOUT", 20.0),
+                # Not a duplicate of write_timeout: PTB routes any request
+                # carrying files to media_write_timeout instead, so the line
+                # above never applied to an upload and every upload was pinned
+                # to PTB's own 20s default. httpx budgets this per socket
+                # write rather than across the upload, so it is stall
+                # tolerance, not a size or bandwidth allowance — a slow but
+                # steady uplink never accumulates against it. 60s rides out
+                # the buffer stalls a congested link produces; going higher
+                # only lengthens how long a dead socket takes to report
+                # itself.
+                "media_write_timeout": 60.0,
             }
 
             # CLOSE_WAIT fd leak (#31599, same class as #18451): PTB's
@@ -6538,6 +6556,18 @@ class TelegramAdapter(BasePlatformAdapter):
                     )
             return
 
+        # --- CloudSeed Slack approval callbacks (sa:verb:draft_id) ---
+        if data.startswith("sa:"):
+            await self._handle_slack_approval_callback(
+                query,
+                data,
+                query_chat_id=query_chat_id,
+                query_chat_type=query_chat_type,
+                query_thread_id=query_thread_id,
+                query_user_name=query_user_name,
+            )
+            return
+
         # --- Update prompt callbacks ---
         if not data.startswith("update_prompt:"):
             return
@@ -6575,6 +6605,270 @@ class TelegramAdapter(BasePlatformAdapter):
                         answer, getattr(query.from_user, "id", "unknown"))
         except Exception as exc:
             logger.error("Failed to write update response from callback: %s", exc)
+
+    _SLACK_APPROVAL_VERBS = frozenset({"send", "edit", "skip", "task", "view"})
+    _SLACK_APPROVAL_DRAFT_ID_RE = re.compile(r"^s[0-9a-f]{10}$")
+    _SLACK_APPROVAL_COMMAND_RE = re.compile(
+        r"^/s(send|edit|skip|task|view)(?:@([A-Za-z0-9_]+))?"
+        r"(?:\s+(s[0-9a-f]{10}))?(?:\s+([\s\S]*))?$",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _available_slack_approval_wrapper_path() -> Optional[_Path]:
+        """Return the executable Slack approval wrapper, if installed."""
+        try:
+            from hermes_constants import get_hermes_home
+
+            script_path = (
+                get_hermes_home()
+                / "scripts"
+                / "slack-approval"
+                / "slack-approval.sh"
+            )
+        except Exception:
+            return None
+
+        if script_path.is_file() and os.access(script_path, os.X_OK):
+            return script_path
+        return None
+
+    async def _run_slack_approval_action(
+        self,
+        verb: str,
+        draft_id: str,
+        *,
+        actor_id: str,
+        edit_text: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """Serialize actions per draft so rapid double taps cannot double-send."""
+        locks = self.__dict__.setdefault("_slack_approval_action_locks", {})
+        lock = locks.setdefault(draft_id, asyncio.Lock())
+        async with lock:
+            return await self._run_slack_approval_action_unlocked(
+                verb,
+                draft_id,
+                actor_id=actor_id,
+                edit_text=edit_text,
+            )
+
+    async def _run_slack_approval_action_unlocked(
+        self,
+        verb: str,
+        draft_id: str,
+        *,
+        actor_id: str,
+        edit_text: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """Run the bounded CloudSeed Slack approval wrapper without a shell."""
+        if verb not in self._SLACK_APPROVAL_VERBS:
+            return False, "❌ Unknown Slack approval action."
+        if not self._SLACK_APPROVAL_DRAFT_ID_RE.fullmatch(draft_id):
+            return False, "❌ Invalid Slack draft ID."
+        if verb == "edit" and edit_text is not None:
+            edit_text = edit_text.strip()
+            if not edit_text:
+                return False, "❌ Edited Slack message cannot be empty."
+            if edit_text.startswith("-"):
+                return False, "❌ Edited Slack message cannot begin with a dash."
+
+        script_path = self._available_slack_approval_wrapper_path()
+        if script_path is None:
+            logger.error("[%s] Slack approval wrapper is unavailable", self.name)
+            return False, "❌ Slack approval wrapper is unavailable."
+
+        actor = f"telegram:{actor_id}" if actor_id else "telegram"
+        cmd = [str(script_path), verb, draft_id]
+        if edit_text is not None:
+            cmd.append(edit_text)
+        cmd.extend(["--actor", actor])
+
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=90,
+            )
+        except asyncio.TimeoutError:
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
+            logger.error(
+                "[%s] Slack approval action timed out: verb=%s draft=%s",
+                self.name,
+                verb,
+                draft_id,
+            )
+            return False, f"❌ Slack {verb} timed out."
+        except Exception as exc:
+            logger.error(
+                "[%s] Slack approval action failed to start: verb=%s draft=%s err=%s",
+                self.name,
+                verb,
+                draft_id,
+                exc,
+                exc_info=True,
+            )
+            return False, f"❌ Slack {verb} could not start."
+
+        stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        if proc.returncode != 0:
+            detail = stderr_text.splitlines()[-1] if stderr_text else f"exit {proc.returncode}"
+            detail = _redact_telegram_error_text(detail)[:180]
+            logger.error(
+                "[%s] Slack approval action failed: verb=%s draft=%s rc=%s",
+                self.name,
+                verb,
+                draft_id,
+                proc.returncode,
+            )
+            return False, f"❌ Slack {verb} failed: {detail}"
+
+        result = stdout_text or f"✓ Slack {verb} completed for {draft_id}."
+        logger.info(
+            "[%s] Slack approval action completed: verb=%s draft=%s actor=%s",
+            self.name,
+            verb,
+            draft_id,
+            actor,
+        )
+        return True, result[:1200]
+
+    async def _handle_slack_approval_callback(
+        self,
+        query,
+        data: str,
+        *,
+        query_chat_id,
+        query_chat_type,
+        query_thread_id,
+        query_user_name,
+    ) -> None:
+        """Dispatch a Slack approval card tap (sa:verb:draft_id)."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer(text="Invalid Slack approval data.")
+            return
+        verb, draft_id = parts[1].lower(), parts[2].lower()
+        if (
+            verb not in self._SLACK_APPROVAL_VERBS
+            or not self._SLACK_APPROVAL_DRAFT_ID_RE.fullmatch(draft_id)
+        ):
+            await query.answer(text="Invalid Slack approval action.")
+            return
+
+        caller_id = str(getattr(query.from_user, "id", ""))
+        if not self._is_callback_user_authorized(
+            caller_id,
+            chat_id=query_chat_id,
+            chat_type=str(query_chat_type) if query_chat_type is not None else None,
+            thread_id=str(query_thread_id) if query_thread_id is not None else None,
+            user_name=query_user_name,
+        ):
+            await query.answer(text="⛔ You are not authorized to act on this Slack draft.")
+            return
+
+        # Acknowledge immediately so Telegram does not leave a silent spinner
+        # while the bounded local wrapper performs the action.
+        await query.answer(text=f"Working on Slack {verb}…")
+        success, result_text = await self._run_slack_approval_action(
+            verb,
+            draft_id,
+            actor_id=caller_id,
+        )
+
+        original_text = (query.message.text or "") if query.message else ""
+        # Telegram caps text messages at 4096 characters. Always preserve the
+        # action receipt; truncate the older card body rather than silently
+        # cutting off the only visible success/failure result.
+        result_text = result_text[:1200]
+        separator = "\n\n" if original_text else ""
+        original_budget = max(0, 4096 - len(separator) - len(result_text))
+        visible_original = original_text[:original_budget]
+        appended = f"{visible_original}{separator}{result_text}"
+        try:
+            if success:
+                # Send/skip/edit are one-shot decisions. Task/view actions can
+                # keep the original keyboard available for a later decision.
+                reply_markup = (
+                    getattr(query.message, "reply_markup", None)
+                    if verb in {"task", "view"} and query.message
+                    else None
+                )
+            else:
+                # Keep the card actionable after a transient failure.
+                reply_markup = getattr(query.message, "reply_markup", None) if query.message else None
+            await query.edit_message_text(
+                text=appended[:4096],
+                parse_mode=None,
+                reply_markup=reply_markup,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Could not update Slack approval card after %s: %s",
+                self.name,
+                verb,
+                exc,
+            )
+
+    async def _handle_slack_approval_command_message(self, msg) -> bool:
+        """Intercept /ssend, /sedit, /sskip, /stask, and /sview locally."""
+        text = str(getattr(msg, "text", "") or "").strip()
+        match = self._SLACK_APPROVAL_COMMAND_RE.fullmatch(text)
+        if not match:
+            return False
+
+        verb = match.group(1).lower()
+        addressed_bot = (match.group(2) or "").lower()
+        if addressed_bot and addressed_bot != self._current_bot_username():
+            return False
+        # These names may also belong to user skills or quick commands on a
+        # generic Hermes install. Only reserve them for CloudSeed's local lane
+        # when its executable wrapper is actually present.
+        if self._available_slack_approval_wrapper_path() is None:
+            return False
+        draft_id = (match.group(3) or "").lower()
+        edit_text = match.group(4)
+
+        # `_handle_command` uses an intake prefilter that intentionally permits
+        # unknown DMs to reach the normal pairing flow when no allowlist is
+        # configured. Local approval commands bypass that normal runner path,
+        # so enforce the strict callback authorization contract again here.
+        source = self._source_from_message_for_auth(msg)
+        caller_id = str(source.user_id or "")
+        if not self._is_callback_user_authorized(
+            caller_id,
+            chat_id=source.chat_id,
+            chat_type=source.chat_type,
+            thread_id=source.thread_id,
+            user_name=source.user_name,
+        ):
+            await msg.reply_text("⛔ You are not authorized to act on Slack drafts.")
+            return True
+
+        if not draft_id:
+            await msg.reply_text(f"Usage: /s{verb} <draft_id>" + (" <new Slack message>" if verb == "edit" else ""))
+            return True
+        if verb == "edit" and not (edit_text or "").strip():
+            await msg.reply_text("Usage: /sedit <draft_id> <new Slack message>")
+            return True
+        if verb != "edit" and edit_text:
+            await msg.reply_text(f"Usage: /s{verb} <draft_id>")
+            return True
+
+        success, result_text = await self._run_slack_approval_action(
+            verb,
+            draft_id,
+            actor_id=caller_id,
+            edit_text=edit_text if verb == "edit" else None,
+        )
+        await msg.reply_text(result_text[:4096])
+        return True
 
     # Maps `gt:<verb>` -> (script-name, extra-args, success-label, is_state).
     # Scripts live in ~/.hermes/scripts/gmail-triage/. `arg` from the callback
@@ -6803,6 +7097,7 @@ class TelegramAdapter(BasePlatformAdapter):
                                     "parse_mode": _cap_parse_mode,
                                     "reply_to_message_id": reply_to_id,
                                     "duration": _duration_secs,
+                                    "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                                     **voice_thread_kwargs,
                                     **self._notification_kwargs(metadata),
                                 },
@@ -6852,6 +7147,7 @@ class TelegramAdapter(BasePlatformAdapter):
                             "caption": caption[:1024] if caption else None,
                             "reply_to_message_id": reply_to_id,
                             "duration": _duration_secs,
+                            "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                             **audio_thread_kwargs,
                             **self._notification_kwargs(metadata),
                         },
@@ -6990,6 +7286,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         "chat_id": normalize_telegram_chat_id(chat_id),
                         "media": media,
                         "reply_to_message_id": reply_to_id,
+                        "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                         **thread_kwargs,
                         **self._notification_kwargs(metadata),
                     },
@@ -7049,6 +7346,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         "photo": image_file,
                         "caption": caption[:1024] if caption else None,
                         "reply_to_message_id": reply_to_id,
+                        "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                         **thread_kwargs,
                         **self._notification_kwargs(metadata),
                     },
@@ -7146,6 +7444,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         "filename": display_name,
                         "caption": caption[:1024] if caption else None,
                         "reply_to_message_id": reply_to_id,
+                        "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                         **thread_kwargs,
                         **self._notification_kwargs(metadata),
                     },
@@ -7196,6 +7495,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         "video": f,
                         "caption": caption[:1024] if caption else None,
                         "reply_to_message_id": reply_to_id,
+                        "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                         **thread_kwargs,
                         **self._notification_kwargs(metadata),
                     },
@@ -7340,6 +7640,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     "animation": animation_url,
                     "caption": caption[:1024] if caption else None,
                     "reply_to_message_id": reply_to_id,
+                    "read_timeout": _MEDIA_SEND_READ_TIMEOUT,
                     **animation_thread_kwargs,
                     **self._notification_kwargs(metadata),
                 },
@@ -8708,6 +9009,12 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             return
         await self._ensure_forum_commands(msg)
+
+        # CloudSeed's Slack approval cockpit is a bounded local command lane.
+        # Intercept it before generic slash-command dispatch so actions produce
+        # immediate Telegram receipts instead of becoming agent prompts.
+        if await self._handle_slack_approval_command_message(msg):
+            return
 
         event = self._build_message_event(msg, MessageType.COMMAND, update_id=update.update_id)
         event.text = self._clean_bot_trigger_text(event.text)

@@ -1,5 +1,6 @@
 """Tests for Telegram inline keyboard approval buttons."""
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -360,3 +361,259 @@ class TestTelegramApprovalCallback:
         assert runner.last_source.platform == Platform.TELEGRAM
         assert runner.last_source.user_id == "222"
 
+
+class TestTelegramSlackApprovalCockpit:
+    """CloudSeed Slack approval cards must dispatch locally and visibly."""
+
+    @staticmethod
+    def _query(data: str):
+        query = MagicMock()
+        query.data = data
+        query.message = MagicMock()
+        query.message.chat_id = -1003963755551
+        query.message.chat.type = "supergroup"
+        query.message.message_thread_id = 3252
+        query.message.text = "Slack draft card"
+        query.message.reply_markup = "keyboard"
+        query.from_user = MagicMock()
+        query.from_user.id = 123
+        query.from_user.first_name = "Danny"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        return query
+
+    def test_wrapper_path_requires_executable_file(self, tmp_path):
+        adapter = _make_adapter()
+        wrapper = tmp_path / "scripts" / "slack-approval" / "slack-approval.sh"
+        wrapper.parent.mkdir(parents=True)
+        wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        with patch("hermes_constants.get_hermes_home", return_value=tmp_path), patch(
+            "plugins.platforms.telegram.adapter.os.access",
+            side_effect=[False, True],
+        ):
+            assert adapter._available_slack_approval_wrapper_path() is None
+            assert adapter._available_slack_approval_wrapper_path() == wrapper
+
+    @pytest.mark.asyncio
+    async def test_skip_callback_runs_bounded_action_and_closes_keyboard(self):
+        adapter = _make_adapter()
+        adapter._is_callback_user_authorized = lambda *args, **kwargs: True
+        adapter._run_slack_approval_action = AsyncMock(
+            return_value=(True, "⏭ Skipped s288e675f7b.")
+        )
+        query = self._query("sa:skip:s288e675f7b")
+
+        await adapter._handle_callback_query(
+            SimpleNamespace(callback_query=query), SimpleNamespace()
+        )
+
+        query.answer.assert_awaited_once_with(text="Working on Slack skip…")
+        adapter._run_slack_approval_action.assert_awaited_once_with(
+            "skip", "s288e675f7b", actor_id="123"
+        )
+        edit_kwargs = query.edit_message_text.call_args.kwargs
+        assert "Skipped s288e675f7b" in edit_kwargs["text"]
+        assert edit_kwargs["reply_markup"] is None
+
+    @pytest.mark.asyncio
+    async def test_callback_preserves_receipt_when_card_nears_telegram_limit(self):
+        adapter = _make_adapter()
+        adapter._is_callback_user_authorized = lambda *args, **kwargs: True
+        adapter._run_slack_approval_action = AsyncMock(
+            return_value=(True, "✅ Sent s288e675f7b to Slack.")
+        )
+        query = self._query("sa:send:s288e675f7b")
+        query.message.text = "x" * 4090
+
+        await adapter._handle_callback_query(
+            SimpleNamespace(callback_query=query), SimpleNamespace()
+        )
+
+        text = query.edit_message_text.call_args.kwargs["text"]
+        assert len(text) <= 4096
+        assert text.endswith("✅ Sent s288e675f7b to Slack.")
+
+    @pytest.mark.asyncio
+    async def test_missing_wrapper_callback_keeps_card_actionable(self):
+        adapter = _make_adapter()
+        adapter._is_callback_user_authorized = lambda *args, **kwargs: True
+        adapter._available_slack_approval_wrapper_path = MagicMock(return_value=None)
+        query = self._query("sa:send:s288e675f7b")
+
+        await adapter._handle_callback_query(
+            SimpleNamespace(callback_query=query), SimpleNamespace()
+        )
+
+        query.answer.assert_awaited_once_with(text="Working on Slack send…")
+        edit_kwargs = query.edit_message_text.call_args.kwargs
+        assert edit_kwargs["text"].endswith("❌ Slack approval wrapper is unavailable.")
+        assert edit_kwargs["reply_markup"] == "keyboard"
+
+    @pytest.mark.asyncio
+    async def test_callback_rejects_unauthorized_user_without_running_action(self):
+        adapter = _make_adapter()
+        adapter._is_callback_user_authorized = lambda *args, **kwargs: False
+        adapter._run_slack_approval_action = AsyncMock()
+        query = self._query("sa:send:s288e675f7b")
+
+        await adapter._handle_callback_query(
+            SimpleNamespace(callback_query=query), SimpleNamespace()
+        )
+
+        assert "not authorized" in query.answer.call_args.kwargs["text"].lower()
+        adapter._run_slack_approval_action.assert_not_awaited()
+        query.edit_message_text.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_edit_command_preserves_message_as_one_subprocess_argument(self):
+        adapter = _make_adapter()
+        adapter._is_callback_user_authorized = lambda *args, **kwargs: True
+        adapter._available_slack_approval_wrapper_path = MagicMock(
+            return_value=Path("slack-approval.sh")
+        )
+        adapter._run_slack_approval_action = AsyncMock(
+            return_value=(True, "✏️ Updated s288e675f7b.")
+        )
+        msg = MagicMock()
+        msg.text = "/sedit s288e675f7b keep this exact Slack message"
+        msg.from_user.id = 123
+        msg.reply_text = AsyncMock()
+
+        handled = await adapter._handle_slack_approval_command_message(msg)
+
+        assert handled is True
+        adapter._run_slack_approval_action.assert_awaited_once_with(
+            "edit",
+            "s288e675f7b",
+            actor_id="123",
+            edit_text="keep this exact Slack message",
+        )
+        msg.reply_text.assert_awaited_once_with("✏️ Updated s288e675f7b.")
+
+    @pytest.mark.asyncio
+    async def test_edit_action_rejects_option_shaped_body_before_subprocess(self):
+        adapter = _make_adapter()
+
+        success, result = await adapter._run_slack_approval_action(
+            "edit",
+            "s288e675f7b",
+            actor_id="123",
+            edit_text="--dry-run should stay message text",
+        )
+
+        assert success is False
+        assert "cannot begin with a dash" in result
+
+    @pytest.mark.asyncio
+    async def test_missing_wrapper_action_returns_explicit_error(self):
+        adapter = _make_adapter()
+        adapter._available_slack_approval_wrapper_path = MagicMock(return_value=None)
+
+        success, result = await adapter._run_slack_approval_action(
+            "send",
+            "s288e675f7b",
+            actor_id="123",
+        )
+
+        assert success is False
+        assert result == "❌ Slack approval wrapper is unavailable."
+
+    @pytest.mark.asyncio
+    async def test_same_draft_actions_are_serialized(self):
+        adapter = _make_adapter()
+        active = 0
+        max_active = 0
+
+        async def fake_unlocked(*args, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return True, "ok"
+
+        adapter._run_slack_approval_action_unlocked = fake_unlocked
+        await asyncio.gather(
+            adapter._run_slack_approval_action(
+                "send", "s288e675f7b", actor_id="123"
+            ),
+            adapter._run_slack_approval_action(
+                "send", "s288e675f7b", actor_id="123"
+            ),
+        )
+
+        assert max_active == 1
+
+    @pytest.mark.asyncio
+    async def test_command_strictly_rechecks_runner_authorization(self):
+        adapter = _make_adapter()
+        runner = _AuthRunner(authorized=False)
+        adapter._message_handler = runner._handle_message
+        adapter._available_slack_approval_wrapper_path = MagicMock(
+            return_value=Path("slack-approval.sh")
+        )
+        adapter._run_slack_approval_action = AsyncMock()
+        msg = MagicMock()
+        msg.text = "/ssend s288e675f7b"
+        msg.from_user.id = 222
+        msg.from_user.username = "blocked"
+        msg.chat.id = -1003963755551
+        msg.chat.type = "supergroup"
+        msg.chat.is_forum = True
+        msg.message_thread_id = 3252
+        msg.is_topic_message = True
+        msg.reply_text = AsyncMock()
+
+        with patch.dict(os.environ, {}, clear=True):
+            handled = await adapter._handle_slack_approval_command_message(msg)
+
+        assert handled is True
+        assert "not authorized" in msg.reply_text.call_args.args[0].lower()
+        adapter._run_slack_approval_action.assert_not_awaited()
+        assert runner.last_source is not None
+        assert runner.last_source.user_id == "222"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/ssend s288e675f7b",
+            "/sedit s288e675f7b revised message",
+            "/sskip s288e675f7b",
+            "/stask s288e675f7b",
+            "/sview s288e675f7b",
+        ],
+    )
+    async def test_commands_fall_through_when_wrapper_is_unavailable(self, command):
+        adapter = _make_adapter()
+        adapter._available_slack_approval_wrapper_path = MagicMock(return_value=None)
+        adapter._is_callback_user_authorized = MagicMock(return_value=True)
+        adapter._run_slack_approval_action = AsyncMock()
+        msg = MagicMock()
+        msg.text = command
+        msg.reply_text = AsyncMock()
+
+        handled = await adapter._handle_slack_approval_command_message(msg)
+
+        assert handled is False
+        adapter._is_callback_user_authorized.assert_not_called()
+        adapter._run_slack_approval_action.assert_not_awaited()
+        msg.reply_text.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_command_addressed_to_another_bot_is_not_intercepted(self):
+        adapter = _make_adapter()
+        adapter._bot.username = "AvaBot"
+        msg = MagicMock()
+        msg.text = "/ssend@OtherBot s288e675f7b"
+
+        assert await adapter._handle_slack_approval_command_message(msg) is False
+
+    @pytest.mark.asyncio
+    async def test_unrelated_command_is_not_intercepted(self):
+        adapter = _make_adapter()
+        msg = MagicMock()
+        msg.text = "/status"
+
+        assert await adapter._handle_slack_approval_command_message(msg) is False

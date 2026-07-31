@@ -57,6 +57,7 @@ import { ActionBadges } from './micro-actions'
 import { chipTypedPathOnSpace, pathifyRefs } from './path-refs'
 import { QueuePanel } from './queue-panel'
 import {
+  COMPOSER_PLACEHOLDER_CLASS,
   composerPlainText,
   deleteChipBeforeCaret,
   deleteSelectionInEditor,
@@ -67,7 +68,7 @@ import {
 import { useComposerScope } from './scope'
 import { ComposerStatusStack } from './status-stack'
 import { CodingStatusRow } from './status-stack/coding-row'
-import { extractClipboardImageBlobs } from './text-utils'
+import { extractClipboardImageBlobs, openDirectiveScope } from './text-utils'
 import { ComposerTriggerPopover } from './trigger-popover'
 import type { ChatBarProps } from './types'
 import { isRedoShortcut, isUndoShortcut } from './undo-history'
@@ -491,8 +492,13 @@ export function ChatBar({
     // Links in the paste land as `@url:` chips rather than a wall of URL text —
     // the same reference the "Add URL" dialog inserts, parsed in place so a link
     // mid-sentence keeps its position. Bare `@path` tokens promote the same way.
+    // A paste into an open `@url:`/`@file:` scope CONSUMES that scope instead of
+    // stacking on it — the scope is the browse mode the user is pasting into,
+    // not text they typed and want to keep (`@url:@url:\`https://…\``).
+    const scope = openDirectiveScope(event.currentTarget)
+
     recordUndoPoint()
-    insertComposerContentsAtCaret(event.currentTarget, pathifyRefs(linkifyUrls(pastedText)))
+    insertComposerContentsAtCaret(event.currentTarget, pathifyRefs(linkifyUrls(pastedText)), scope)
     scheduleFlushEditorToDraft(event.currentTarget)
   }
 
@@ -941,7 +947,7 @@ export function ChatBar({
         autoCorrect="off"
         className={cn(
           'min-h-[1.625rem] min-h-(--composer-input-min-height) max-h-(--composer-input-max-height) cursor-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-transparent pb-1 pr-1 pt-1 leading-normal text-foreground outline-none disabled:cursor-not-allowed',
-          'empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground/60',
+          COMPOSER_PLACEHOLDER_CLASS,
           '**:data-ref-text:cursor-default',
           stacked && 'pl-3',
           stacked ? 'w-full' : 'min-w-(--composer-input-inline-min-width) flex-1'
@@ -1138,6 +1144,7 @@ export function ChatBar({
                 loading={triggerLoading}
                 onHover={setTriggerActive}
                 onPick={replaceTriggerWithChip}
+                scope={trigger.scope}
               />
             )}
             {!poppedOut && (
@@ -1182,7 +1189,10 @@ export function ChatBar({
                   onBranchOff={handleBranchOff}
                   onConvertBranch={handleConvertBranch}
                   onListBranches={handleListBranches}
-                  onOpen={toggleReview}
+                  // A tile's rail reviews ITS worktree: pin the pane's scope to
+                  // this surface's cwd. Main keeps the classic follow-the-
+                  // active-session scope (null).
+                  onOpen={() => toggleReview(scope.target === 'main' ? null : (cwd ?? null))}
                   onOpenWorktree={openInWorktree}
                   onSwitchBranch={handleSwitchBranch}
                   repoPath={cwd}

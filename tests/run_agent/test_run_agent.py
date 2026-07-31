@@ -1926,7 +1926,9 @@ class TestConcurrentToolExecution:
         assert agent_runtime_owns_post_tool_hook(agent, "context_query") is True
 
         agent._memory_manager = SimpleNamespace(has_tool=lambda name: name == "memory_extra")
+        agent._memory_provider_tool_names = {"memory_extra"}
         assert agent_runtime_owns_post_tool_hook(agent, "memory_extra") is True
+        assert agent_runtime_owns_post_tool_hook(agent, "unadvertised_memory_tool") is False
         assert agent_runtime_owns_post_tool_hook(agent, "web_search") is False
 
     def test_blocked_memory_tool_does_not_reset_counter(self, agent, monkeypatch):
@@ -5712,5 +5714,4 @@ class TestMemoryContextSanitization:
         assert "memory-context" not in result.lower()
         assert "stale observation" not in result
         assert "how is the honcho working" in result
-
 
