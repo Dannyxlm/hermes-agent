@@ -6614,6 +6614,25 @@ class TelegramAdapter(BasePlatformAdapter):
         re.IGNORECASE,
     )
 
+    @staticmethod
+    def _available_slack_approval_wrapper_path() -> Optional[_Path]:
+        """Return the executable Slack approval wrapper, if installed."""
+        try:
+            from hermes_constants import get_hermes_home
+
+            script_path = (
+                get_hermes_home()
+                / "scripts"
+                / "slack-approval"
+                / "slack-approval.sh"
+            )
+        except Exception:
+            return None
+
+        if script_path.is_file() and os.access(script_path, os.X_OK):
+            return script_path
+        return None
+
     async def _run_slack_approval_action(
         self,
         verb: str,
@@ -6653,20 +6672,9 @@ class TelegramAdapter(BasePlatformAdapter):
             if edit_text.startswith("-"):
                 return False, "❌ Edited Slack message cannot begin with a dash."
 
-        try:
-            from hermes_constants import get_hermes_home
-
-            script_path = (
-                get_hermes_home()
-                / "scripts"
-                / "slack-approval"
-                / "slack-approval.sh"
-            )
-        except Exception:
-            script_path = _Path.home() / ".hermes" / "scripts" / "slack-approval" / "slack-approval.sh"
-
-        if not script_path.is_file() or not os.access(script_path, os.X_OK):
-            logger.error("[%s] Slack approval wrapper missing: %s", self.name, script_path)
+        script_path = self._available_slack_approval_wrapper_path()
+        if script_path is None:
+            logger.error("[%s] Slack approval wrapper is unavailable", self.name)
             return False, "❌ Slack approval wrapper is unavailable."
 
         actor = f"telegram:{actor_id}" if actor_id else "telegram"
@@ -6818,6 +6826,11 @@ class TelegramAdapter(BasePlatformAdapter):
         verb = match.group(1).lower()
         addressed_bot = (match.group(2) or "").lower()
         if addressed_bot and addressed_bot != self._current_bot_username():
+            return False
+        # These names may also belong to user skills or quick commands on a
+        # generic Hermes install. Only reserve them for CloudSeed's local lane
+        # when its executable wrapper is actually present.
+        if self._available_slack_approval_wrapper_path() is None:
             return False
         draft_id = (match.group(3) or "").lower()
         edit_text = match.group(4)

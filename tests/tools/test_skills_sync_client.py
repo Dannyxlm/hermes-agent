@@ -1112,4 +1112,34 @@ class TestEmptyActualConflict:
         result = ssc.push_skills(client=client, identity=identity)
         assert result["ok"] is True
         assert result.get("recovered_stale_head") is True
-        assert state.refs[ssc.user_head_ref(identity["owner"])] == result["head"]
+        head = state.refs[ssc.user_head_ref(identity["owner"])]
+        assert head == result["head"]
+
+        # The created ref must point at the replacement commit uploaded after
+        # the conflict, not the already-built commit whose foreign parent does
+        # not exist on this sync plane.
+        kind, data = state.objects[head]
+        assert kind == ssc.KIND_COMMIT
+        commit = json.loads(data)
+        assert commit["parents"] == []
+
+        # Every object reachable from the replacement commit is present on the
+        # server: its newly uploaded commit plus the tree/blob closure uploaded
+        # before the first CAS attempt.
+        pending = [head]
+        seen = set()
+        while pending:
+            object_hash = pending.pop()
+            if object_hash in seen:
+                continue
+            seen.add(object_hash)
+            object_kind, object_data = state.objects[object_hash]
+            if object_kind == ssc.KIND_COMMIT:
+                object_json = json.loads(object_data)
+                pending.append(object_json["tree"])
+                pending.extend(object_json["parents"])
+            elif object_kind == ssc.KIND_TREE:
+                object_json = json.loads(object_data)
+                pending.extend(entry["hash"] for entry in object_json["entries"])
+
+        assert result["pushed_objects"] == len(state.objects)

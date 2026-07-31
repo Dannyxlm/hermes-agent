@@ -105,6 +105,14 @@ export function looksLikeDroppedPath(text: string): boolean {
   return false
 }
 
+/** Image paths released by a local clear; submitted images belong to the gateway. */
+export function imagePathsReleasedOnClear(
+  tokens: readonly ComposerToken[],
+  reason: 'discard' | 'submit'
+): string[] {
+  return reason === 'discard' ? tokens.filter(token => token.kind === 'image').map(token => token.path) : []
+}
+
 export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions): UseComposerStateResult {
   const [input, setInputState] = useState('')
   const [inputBuf, setInputBuf] = useState<string[]>([])
@@ -144,14 +152,32 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
   const { historyRef, historyIdx, setHistoryIdx, historyDraftRef, pushHistory } = useInputHistory()
   const { completions, compIdx, setCompIdx, compReplace } = useCompletion(input, isBlocked, gw)
 
-  const clearIn = useCallback(() => {
-    setInput('')
-    setInputBuf([])
-    setComposerTokens([])
-    setQueueEdit(null)
-    setHistoryIdx(null)
-    historyDraftRef.current = ''
-  }, [historyDraftRef, setComposerTokens, setHistoryIdx, setInput, setQueueEdit])
+  const clearComposer = useCallback(
+    (reason: 'discard' | 'submit') => {
+      const sid = getUiState().sid
+
+      for (const path of imagePathsReleasedOnClear(tokensRef.current, reason)) {
+        void gw.request('image.detach', { path, session_id: sid }).catch(() => {})
+      }
+
+      setInput('')
+      setInputBuf([])
+      setComposerTokens([])
+      setQueueEdit(null)
+      setHistoryIdx(null)
+      historyDraftRef.current = ''
+    },
+    [gw, historyDraftRef, setComposerTokens, setHistoryIdx, setInput, setQueueEdit]
+  )
+
+  // Submission hands attached images to prompt.submit, whose gateway path
+  // consumes them. Clearing the local receipt must not race that handoff by
+  // sending image.detach first.
+  const clearForSubmit = useCallback(() => clearComposer('submit'), [clearComposer])
+
+  // Discarding never reaches prompt.submit, so explicitly release every image
+  // represented by the draft before dropping its local token.
+  const discardIn = useCallback(() => clearComposer('discard'), [clearComposer])
 
   /**
    * Deleting an `[[ Image N ]]` token IS how you unattach the image — there is
@@ -430,8 +456,9 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
     () => ({
       attachClipboardImage,
       attachImagePath,
-      clearIn,
+      clearForSubmit,
       dequeue,
+      discardIn,
       enqueue,
       handleTextPaste,
       openEditor,
@@ -450,8 +477,9 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
     [
       attachClipboardImage,
       attachImagePath,
-      clearIn,
+      clearForSubmit,
       dequeue,
+      discardIn,
       enqueue,
       handleTextPaste,
       openEditor,

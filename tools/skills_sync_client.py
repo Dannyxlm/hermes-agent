@@ -1316,14 +1316,26 @@ def push_skills(
         if not conflict.actual:
             # The ref does not exist server-side: our `from` was a stale head
             # (commonly a local state file carried over from another sync
-            # plane). There is nothing to merge — redo the CAS as a create.
-            client.cas_ref(ref, None, commit_hash)
-            manifest["head"] = commit_hash
+            # plane). The commit we already uploaded still names that foreign
+            # head as its parent, so rebuild just the commit as a parentless
+            # root before creating the ref. Its tree closure is already
+            # durable from the initial object upload above.
+            recovered_commit = build_commit(
+                root_hash,
+                [],
+                owner=owner,
+                device=device,
+                message=message,
+                objects=objects,
+            )
+            client.put_objects({recovered_commit: objects.objects[recovered_commit]})
+            client.cas_ref(ref, None, recovered_commit)
+            manifest["head"] = recovered_commit
             manifest["root"] = root_hash
             write_sync_state(manifest)
             return {
                 "ok": True,
-                "head": commit_hash,
+                "head": recovered_commit,
                 "pushed_objects": len(objects),
                 "recovered_stale_head": True,
             }

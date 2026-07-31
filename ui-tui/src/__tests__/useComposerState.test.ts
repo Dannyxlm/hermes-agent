@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest'
 
-import { looksLikeDroppedPath } from '../app/useComposerState.js'
+import type { ComposerToken } from '../app/interfaces.js'
+import { imagePathsReleasedOnClear, looksLikeDroppedPath } from '../app/useComposerState.js'
+
+const image = (index: number, path: string): ComposerToken => ({
+  index,
+  kind: 'image',
+  label: `[[ Image ${index} ]]`,
+  path
+})
+
+const paste = (label: string): ComposerToken => ({ kind: 'paste', label, text: 'payload' })
+
+describe('composer clear attachment ownership', () => {
+  const tokens = [image(1, '/tmp/one.png'), paste('[[ Pasted text #1 +1 lines ]]'), image(2, '/tmp/two.png')]
+
+  it('releases image paths when the draft is discarded', () => {
+    expect(imagePathsReleasedOnClear(tokens, 'discard')).toEqual(['/tmp/one.png', '/tmp/two.png'])
+  })
+
+  it('preserves image paths when the draft is submitted for gateway consumption', () => {
+    expect(imagePathsReleasedOnClear(tokens, 'submit')).toEqual([])
+  })
+})
 
 describe('looksLikeDroppedPath', () => {
   it('recognizes macOS screenshot temp paths and file URIs', () => {

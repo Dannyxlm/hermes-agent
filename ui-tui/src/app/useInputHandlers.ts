@@ -341,7 +341,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
           cActions.pushHistory(cState.input)
         }
 
-        cActions.clearIn()
+        cActions.discardIn()
 
         return
       }
@@ -522,7 +522,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     // explicitly promises "Esc cancel", so honoring it takes priority over the
     // implicit selection-dismissal convention. Without an active edit, fall through.
     if (key.escape && cState.queueEditIdx !== null) {
-      return cActions.clearIn()
+      return cActions.discardIn()
     }
 
     if (key.escape && terminal.hasSelection) {
@@ -578,7 +578,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     if (isCtrl(key, ch, 'x') && cState.queueEditIdx !== null) {
       cActions.removeQueue(cState.queueEditIdx)
 
-      return cActions.clearIn()
+      return cActions.discardIn()
     }
 
     if (isCtrl(key, ch, 'x')) {
@@ -605,7 +605,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       }
 
       if (cState.input || cState.inputBuf.length) {
-        return cActions.clearIn()
+        return cActions.discardIn()
       }
 
       return handleIdleHotkeyExit(actions, DASHBOARD_TUI_MODE, () => {

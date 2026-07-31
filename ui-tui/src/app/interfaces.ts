@@ -367,8 +367,11 @@ export interface ComposerActions {
   attachClipboardImage: () => void
   /** Attach an image by path in as a token. */
   attachImagePath: (path: string) => void
-  clearIn: () => void
+  /** Clear a submitted draft without detaching images the gateway must consume. */
+  clearForSubmit: () => void
   dequeue: () => string | undefined
+  /** Discard the current draft and detach any images it owns. */
+  discardIn: () => void
   enqueue: (text: string) => void
   handleTextPaste: (event: PasteEvent) => MaybePromise<ComposerPasteResult | null>
   openEditor: () => Promise<void>

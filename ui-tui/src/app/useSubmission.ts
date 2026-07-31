@@ -210,7 +210,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
       // History stores resolved content, not `[[…]]` labels: tokens are cleared
       // on submit, so recall must be self-contained. Image tokens resolve to
-      // nothing — a detached image can't be re-attached by recalling the text.
+      // nothing — a consumed image can't be re-attached by recalling the text.
       // Idempotent on token-free text, so re-submitting a recalled entry is
       // stable.
       const toHistory = expandTokens(composerRefs.tokensRef.current)(full)
@@ -219,13 +219,13 @@ export function useSubmission(opts: UseSubmissionOptions) {
         appendMessage({ kind: 'slash', role: 'system', text: full })
         composerActions.pushHistory(toHistory)
         slashRef.current(full)
-        composerActions.clearIn()
+        composerActions.clearForSubmit()
 
         return
       }
 
       if (full.startsWith('!')) {
-        composerActions.clearIn()
+        composerActions.clearForSubmit()
 
         return shellExec(full.slice(1).trim())
       }
@@ -235,13 +235,13 @@ export function useSubmission(opts: UseSubmissionOptions) {
       if (!live.sid) {
         composerActions.pushHistory(toHistory)
         composerActions.enqueue(full)
-        composerActions.clearIn()
+        composerActions.clearForSubmit()
 
         return
       }
 
       const editIdx = composerRefs.queueEditRef.current
-      composerActions.clearIn()
+      composerActions.clearForSubmit()
 
       if (editIdx !== null) {
         composerActions.replaceQueue(editIdx, full)
