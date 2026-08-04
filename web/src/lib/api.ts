@@ -1725,14 +1725,17 @@ export interface MemoryProviderFieldOption {
 export interface MemoryProviderField {
   key: string;
   label: string;
-  kind: "text" | "secret" | "select" | "boolean";
+  kind: "text" | "secret" | "select" | "boolean" | "integer" | "number";
   description: string;
   placeholder: string;
   required: boolean;
-  value: string | boolean;
+  value: string | boolean | number;
   is_set: boolean;
   options: MemoryProviderFieldOption[];
   url: string;
+  minimum?: number | null;
+  maximum?: number | null;
+  step?: number | null;
   when?: Record<string, string | boolean | number> | null;
 }
 
@@ -1781,7 +1784,7 @@ export interface UpdateCheckResponse {
 
 export interface ManagedUpdateSource {
   schema_version: "hermes-update-status.v2";
-  count_basis?: "running_source";
+  count_basis?: "running_source" | "unavailable_non_ancestral";
   availability: "ready" | "stale" | "missing" | "invalid" | "unreadable";
   stale: boolean;
   status_error: string | null;
@@ -1790,12 +1793,17 @@ export interface ManagedUpdateSource {
   running_upstream_base?: string;
   tracked_upstream?: string;
   upstream_head?: string;
-  commits_behind?: number;
+  commits_behind?: number | null;
+  running_source_is_ancestor_of_upstream?: boolean | null;
   local_patch_count?: number;
   last_fetched_at?: string;
   generated_at?: string;
   age_seconds?: number;
   candidate_status?: "not_built" | "building" | "passed" | "blocked" | "ready";
+  candidate_target_revision?: string | null;
+  candidate_target_is_ancestor_of_upstream?: boolean | null;
+  running_upstream_base_is_ancestor_of_candidate_target?: boolean | null;
+  candidate_target_commits_behind?: number | null;
   blockers?: string[];
   next_action?: string;
   source_worktree_clean?: boolean;

@@ -948,6 +948,41 @@ class TestUpdateCheckEndpoint:
         assert source["can_build_candidate"] is True
         assert source["blockers"] == []
 
+    def test_managed_runtime_accepts_honest_non_ancestral_source(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        status_path.write_text(
+            json.dumps(
+                self._managed_status(
+                    count_basis="unavailable_non_ancestral",
+                    commits_behind=None,
+                    running_source_is_ancestor_of_upstream=False,
+                    candidate_status="ready",
+                    candidate_target_revision="d" * 40,
+                    candidate_target_is_ancestor_of_upstream=True,
+                    running_upstream_base_is_ancestor_of_candidate_target=True,
+                    candidate_target_commits_behind=17,
+                )
+            ),
+            encoding="utf-8",
+        )
+        status_path.chmod(0o600)
+
+        body = self.client.get("/api/hermes/update/check").json()
+
+        assert body["behind"] is None
+        assert body["update_available"] is False
+        assert "direct upstream commit count does not apply" in body["message"]
+        source = body["managed_source"]
+        assert source["availability"] == "ready"
+        assert source["count_basis"] == "unavailable_non_ancestral"
+        assert source["commits_behind"] is None
+        assert source["running_source_is_ancestor_of_upstream"] is False
+        assert source["candidate_target_revision"] == "d" * 40
+        assert source["candidate_target_is_ancestor_of_upstream"] is True
+        assert source["candidate_target_commits_behind"] == 17
+
     def test_managed_runtime_rejects_legacy_or_unbounded_count_basis(
         self, monkeypatch, tmp_path
     ):
@@ -975,6 +1010,38 @@ class TestUpdateCheckEndpoint:
 
         status_path.write_text(
             json.dumps(self._managed_status(count_basis="running_upstream_base")),
+            encoding="utf-8",
+        )
+        source = self.client.get("/api/hermes/update/check").json()[
+            "managed_source"
+        ]
+        assert source["availability"] == "invalid"
+        assert source["status_error"] == "status_schema_invalid"
+
+        status_path.write_text(
+            json.dumps(
+                self._managed_status(
+                    count_basis="unavailable_non_ancestral",
+                    commits_behind=3_468,
+                    running_source_is_ancestor_of_upstream=False,
+                )
+            ),
+            encoding="utf-8",
+        )
+        source = self.client.get("/api/hermes/update/check").json()[
+            "managed_source"
+        ]
+        assert source["availability"] == "invalid"
+        assert source["status_error"] == "status_schema_invalid"
+
+        status_path.write_text(
+            json.dumps(
+                self._managed_status(
+                    count_basis="unavailable_non_ancestral",
+                    commits_behind=None,
+                    running_source_is_ancestor_of_upstream=True,
+                )
+            ),
             encoding="utf-8",
         )
         source = self.client.get("/api/hermes/update/check").json()[
