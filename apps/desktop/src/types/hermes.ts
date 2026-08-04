@@ -1154,7 +1154,7 @@ export interface BackendManagedUpdateRefreshRequest {
 
 export interface BackendManagedSourceUpdate {
   schema_version: string
-  count_basis?: 'running_source'
+  count_basis?: 'running_source' | 'unavailable_non_ancestral'
   availability: BackendManagedSourceAvailability
   stale: boolean
   status_error: string | null
@@ -1163,12 +1163,17 @@ export interface BackendManagedSourceUpdate {
   running_upstream_base?: string
   tracked_upstream?: string
   upstream_head?: string
-  commits_behind?: number
+  commits_behind?: number | null
+  running_source_is_ancestor_of_upstream?: boolean | null
   local_patch_count?: number
   last_fetched_at?: string
   generated_at?: string
   age_seconds?: number
   candidate_status?: 'blocked' | 'building' | 'not_built' | 'passed' | 'ready'
+  candidate_target_revision?: string | null
+  candidate_target_is_ancestor_of_upstream?: boolean | null
+  running_upstream_base_is_ancestor_of_candidate_target?: boolean | null
+  candidate_target_commits_behind?: number | null
   blockers?: string[]
   next_action?: string
   source_worktree_clean?: boolean

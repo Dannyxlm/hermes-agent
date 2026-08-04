@@ -4094,7 +4094,10 @@ _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH = Path(
     "/home/ubuntu/.local/state/cloudseed/update-requests/candidate.json"
 )
 _MANAGED_UPDATE_SCHEMA = "hermes-update-status.v2"
-_MANAGED_UPDATE_COUNT_BASIS = "running_source"
+_MANAGED_UPDATE_COUNT_BASES = {
+    "running_source",
+    "unavailable_non_ancestral",
+}
 _MANAGED_UPDATE_MAX_BYTES = 64 * 1024
 _MANAGED_UPDATE_DEFAULT_MAX_AGE_SECONDS = 3 * 60 * 60
 _MANAGED_UPDATE_MIN_MAX_AGE_SECONDS = 60 * 60
@@ -4266,6 +4269,11 @@ def _read_managed_update_source() -> Dict[str, Any]:
     )
     upstream_head = _managed_safe_string(raw.get("upstream_head"), maximum=40)
     commits_behind = _managed_nonnegative_int(raw.get("commits_behind"))
+    running_source_is_ancestor = raw.get(
+        "running_source_is_ancestor_of_upstream"
+    )
+    if not isinstance(running_source_is_ancestor, bool):
+        running_source_is_ancestor = None
     local_patch_count = _managed_nonnegative_int(raw.get("local_patch_count"))
     last_fetched_at = _managed_safe_string(
         raw.get("last_fetched_at"), maximum=64
@@ -4277,6 +4285,22 @@ def _read_managed_update_source() -> Dict[str, Any]:
     last_fetched_timestamp = _managed_timestamp(last_fetched_at)
     candidate_status = _managed_safe_string(
         raw.get("candidate_status"), maximum=32
+    )
+    candidate_target_revision = _managed_safe_string(
+        raw.get("candidate_target_revision"), maximum=40
+    )
+    candidate_target_is_ancestor = raw.get(
+        "candidate_target_is_ancestor_of_upstream"
+    )
+    if not isinstance(candidate_target_is_ancestor, bool):
+        candidate_target_is_ancestor = None
+    running_base_is_ancestor_of_candidate = raw.get(
+        "running_upstream_base_is_ancestor_of_candidate_target"
+    )
+    if not isinstance(running_base_is_ancestor_of_candidate, bool):
+        running_base_is_ancestor_of_candidate = None
+    candidate_target_commits_behind = _managed_nonnegative_int(
+        raw.get("candidate_target_commits_behind")
     )
     next_action = _managed_safe_string(
         raw.get("next_action"), maximum=500, allow_empty=True
@@ -4290,24 +4314,45 @@ def _read_managed_update_source() -> Dict[str, Any]:
         if all(item is not None for item in parsed_blockers):
             blockers = [item for item in parsed_blockers if item is not None]
 
+    count_semantics_valid = (
+        count_basis == "running_source"
+        and commits_behind is not None
+        and running_source_is_ancestor in {None, True}
+    ) or (
+        count_basis == "unavailable_non_ancestral"
+        and raw.get("commits_behind") is None
+        and running_source_is_ancestor is False
+    )
+    candidate_semantics_valid = candidate_status not in {
+        "building",
+        "passed",
+        "ready",
+    } or (
+        candidate_target_revision is not None
+        and _MANAGED_UPDATE_SHA_RE.fullmatch(candidate_target_revision) is not None
+        and candidate_target_is_ancestor is True
+        and running_base_is_ancestor_of_candidate is True
+        and candidate_target_commits_behind is not None
+    )
     valid = (
         raw.get("schema_version") == _MANAGED_UPDATE_SCHEMA
         and running_release is not None
         and running_source is not None
         and _MANAGED_UPDATE_SHA_RE.fullmatch(running_source) is not None
-        and count_basis == _MANAGED_UPDATE_COUNT_BASIS
+        and count_basis in _MANAGED_UPDATE_COUNT_BASES
+        and count_semantics_valid
         and running_upstream_base is not None
         and _MANAGED_UPDATE_SHA_RE.fullmatch(running_upstream_base) is not None
         and tracked_upstream is not None
         and _MANAGED_UPDATE_TRACKED_RE.fullmatch(tracked_upstream) is not None
         and upstream_head is not None
         and _MANAGED_UPDATE_SHA_RE.fullmatch(upstream_head) is not None
-        and commits_behind is not None
         and local_patch_count is not None
         and last_fetched_at is not None
         and last_fetched_timestamp is not None
         and generated_timestamp is not None
         and candidate_status in _MANAGED_UPDATE_CANDIDATE_STATUSES
+        and candidate_semantics_valid
         and blockers is not None
         and next_action is not None
         and isinstance(raw.get("source_worktree_clean"), bool)
@@ -4346,11 +4391,24 @@ def _read_managed_update_source() -> Dict[str, Any]:
             "tracked_upstream": tracked_upstream,
             "upstream_head": upstream_head,
             "commits_behind": commits_behind,
+            "running_source_is_ancestor_of_upstream": (
+                running_source_is_ancestor
+            ),
             "local_patch_count": local_patch_count,
             "last_fetched_at": last_fetched_at,
             "generated_at": generated_at or last_fetched_at,
             "age_seconds": int(age_seconds),
             "candidate_status": candidate_status,
+            "candidate_target_revision": candidate_target_revision,
+            "candidate_target_is_ancestor_of_upstream": (
+                candidate_target_is_ancestor
+            ),
+            "running_upstream_base_is_ancestor_of_candidate_target": (
+                running_base_is_ancestor_of_candidate
+            ),
+            "candidate_target_commits_behind": (
+                candidate_target_commits_behind
+            ),
             "blockers": blockers,
             "next_action": next_action,
             "source_worktree_clean": raw["source_worktree_clean"],
@@ -4362,6 +4420,7 @@ def _read_managed_update_source() -> Dict[str, Any]:
     source["can_build_candidate"] = bool(
         not stale
         and source["candidate_request_available"]
+        and isinstance(commits_behind, int)
         and commits_behind > 0
         and candidate_status == "not_built"
         and not blockers
@@ -4494,7 +4553,12 @@ def _managed_update_check_payload(*, request_refresh: bool) -> Dict[str, Any]:
     behind = source.get("commits_behind")
     availability = source["availability"]
     if availability == "ready":
-        if behind:
+        if source.get("count_basis") == "unavailable_non_ancestral":
+            message = (
+                "This managed fork has verified upstream provenance; a direct "
+                "upstream commit count does not apply."
+            )
+        elif behind:
             message = (
                 f"{behind} upstream commit{'s' if behind != 1 else ''} "
                 "are waiting in the immutable update train."

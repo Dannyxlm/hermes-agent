@@ -32,6 +32,18 @@ export function presentManagedUpdate(
     source.candidate_status === "blocked" || Boolean(source.blockers?.length);
 
   if (source.availability === "ready") {
+    if (
+      source.count_basis === "unavailable_non_ancestral" &&
+      source.running_source_is_ancestor_of_upstream === false
+    ) {
+      return {
+        badge: "managed fork",
+        blocked,
+        headline:
+          'This fork has verified upstream provenance; a direct "commits behind" count does not apply.',
+        tone: "success",
+      };
+    }
     if (behind === 0) {
       return {
         badge: "upstream current",
@@ -57,6 +69,15 @@ export function presentManagedUpdate(
   }
 
   if (source.availability === "stale") {
+    if (source.count_basis === "unavailable_non_ancestral") {
+      return {
+        badge: "status stale",
+        blocked,
+        headline:
+          "Managed-fork provenance is stale; no direct upstream count is being claimed.",
+        tone: "warning",
+      };
+    }
     return {
       badge: "status stale",
       blocked,

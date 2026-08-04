@@ -387,7 +387,7 @@ export interface DesktopManagedUpdateRefreshRequest {
 export interface DesktopManagedSourceUpdate {
   availability: DesktopManagedSourceAvailability
   schemaVersion?: string
-  countBasis?: 'running_source'
+  countBasis?: 'running_source' | 'unavailable_non_ancestral'
   stale: boolean
   statusError: string | null
   runningRelease?: string
@@ -395,12 +395,17 @@ export interface DesktopManagedSourceUpdate {
   runningUpstreamBase?: string
   trackedUpstream?: string
   upstreamHead?: string
-  commitsBehind?: number
+  commitsBehind?: number | null
+  runningSourceIsAncestorOfUpstream?: boolean | null
   localPatchCount?: number
   lastFetchedAt?: string
   generatedAt?: string
   ageSeconds?: number
   candidateStatus?: 'blocked' | 'building' | 'not_built' | 'passed' | 'ready'
+  candidateTargetRevision?: string | null
+  candidateTargetIsAncestorOfUpstream?: boolean | null
+  runningUpstreamBaseIsAncestorOfCandidateTarget?: boolean | null
+  candidateTargetCommitsBehind?: number | null
   blockers?: string[]
   nextAction?: string
   sourceWorktreeClean?: boolean

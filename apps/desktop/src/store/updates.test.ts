@@ -308,6 +308,58 @@ describe('checkBackendUpdates', () => {
     expect(result?.managedSource?.canBuildCandidate).toBe(true)
   })
 
+  it('keeps non-ancestral managed forks honest instead of showing a false count', async () => {
+    setRemote(true)
+    checkHermesUpdateSpy.mockResolvedValue({
+      install_method: 'managed-runtime',
+      current_version: '0.20.0',
+      behind: null,
+      update_available: false,
+      can_apply: false,
+      update_command: 'managed by immutable update train',
+      message: 'A direct upstream commit count does not apply to this managed fork.',
+      managed_source: {
+        schema_version: 'hermes-update-status.v2',
+        availability: 'ready',
+        stale: false,
+        status_error: null,
+        count_basis: 'unavailable_non_ancestral',
+        running_release: 'hermes-v020',
+        running_source: 'c'.repeat(40),
+        running_upstream_base: 'a'.repeat(40),
+        tracked_upstream: 'NousResearch/main',
+        upstream_head: 'b'.repeat(40),
+        running_source_is_ancestor_of_upstream: false,
+        candidate_status: 'ready',
+        candidate_target_revision: 'd'.repeat(40),
+        candidate_target_is_ancestor_of_upstream: true,
+        candidate_target_commits_behind: 17,
+        local_patch_count: 3,
+        last_fetched_at: '2026-08-04T02:00:00+00:00',
+        generated_at: '2026-08-04T02:00:00+00:00',
+        blockers: [],
+        next_action: 'Activate or defer this exact immutable candidate.',
+        source_worktree_clean: true,
+        source_refs_remotely_reachable: true,
+        can_build_candidate: false,
+        candidate_request_available: true,
+        refresh_request_available: true,
+        refresh_request: null
+      }
+    })
+
+    const result = await checkBackendUpdates()
+
+    expect(result?.supported).toBe(true)
+    expect(result?.behind).toBeUndefined()
+    expect(result?.updateAvailable).toBe(false)
+    expect(result?.targetSha).toBeUndefined()
+    expect(result?.managedSource?.countBasis).toBe('unavailable_non_ancestral')
+    expect(result?.managedSource?.runningSourceIsAncestorOfUpstream).toBe(false)
+    expect(result?.managedSource?.candidateTargetRevision).toBe('d'.repeat(40))
+    expect(result?.managedSource?.candidateTargetCommitsBehind).toBe(17)
+  })
+
   it('rejects legacy or incomplete managed receipts instead of displaying a false exact count', async () => {
     setRemote(true)
     checkHermesUpdateSpy.mockResolvedValue({
