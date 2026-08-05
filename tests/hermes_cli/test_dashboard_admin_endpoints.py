@@ -983,6 +983,45 @@ class TestUpdateCheckEndpoint:
         assert source["candidate_target_is_ancestor_of_upstream"] is True
         assert source["candidate_target_commits_behind"] == 17
 
+    def test_managed_runtime_uses_recorded_official_base_and_overlay_ledger(
+        self, monkeypatch, tmp_path
+    ):
+        status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
+        status_path.write_text(
+            json.dumps(
+                self._managed_status(
+                    count_basis="recorded_official_base",
+                    commits_behind=0,
+                    running_source_is_ancestor_of_upstream=False,
+                    release_id="hermes-20260804-aec3318",
+                    hermes_version="0.20.0",
+                    local_patch_count=2,
+                    overlay_count=2,
+                    overlay_ids=[
+                        "managed-upstream-status",
+                        "managed-desktop-publication",
+                    ],
+                    carried_commit_count=25,
+                    install_mode="managed-immutable",
+                    candidate_status="current",
+                )
+            ),
+            encoding="utf-8",
+        )
+        status_path.chmod(0o600)
+
+        body = self.client.get("/api/hermes/update/check").json()
+
+        assert body["behind"] == 0
+        source = body["managed_source"]
+        assert source["availability"] == "ready"
+        assert source["count_basis"] == "recorded_official_base"
+        assert source["release_id"] == "hermes-20260804-aec3318"
+        assert source["hermes_version"] == "0.20.0"
+        assert source["overlay_count"] == 2
+        assert source["carried_commit_count"] == 25
+        assert source["candidate_status"] == "current"
+
     def test_managed_runtime_rejects_legacy_or_unbounded_count_basis(
         self, monkeypatch, tmp_path
     ):

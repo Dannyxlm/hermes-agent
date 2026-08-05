@@ -196,7 +196,8 @@ import {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
-  resolveLegacyUpdateSafety,
+  resolveManagedPublicationBranch,
+  resolveManagedPublicationSafety,
   shouldCountCommits
 } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
@@ -474,7 +475,9 @@ const SOURCE_REPO_ROOT = path.resolve(APP_ROOT, '../..')
 // Returns null when the file is missing (dev runs from a checkout where
 // build hasn't been invoked, or schema mismatch). Callers must handle null.
 //
-// Schema:
+// Runtime identity fields from schema v1. The packaged JSON also carries
+// release provenance for the release-train receipt; the app does not need to
+// retain those fields in memory.
 //   { schemaVersion: 1, commit, branch, repository?, builtAt, dirty, source }
 const INSTALL_STAMP_SCHEMA_VERSION = 1
 
@@ -638,6 +641,7 @@ const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 // tracks main. User can also override at runtime via
 // hermesDesktop.updates.setBranch().
 const DEFAULT_UPDATE_BRANCH = 'main'
+const MANAGED_TARGET_SHA_RE = /^[0-9a-f]{40}$/i
 const OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS = 60_000
 const MUTATION_TARGET_REF = 'refs/hermes-desktop-update-target/current'
 // desktop.log lives under HERMES_HOME/logs/ so it sits next to agent.log,
@@ -2331,6 +2335,17 @@ function writeDesktopUpdateConfig(config) {
   writeFileAtomic(DESKTOP_UPDATE_CONFIG_PATH, JSON.stringify(config, null, 2))
 }
 
+function readEffectiveDesktopUpdateConfig() {
+  const configured = readDesktopUpdateConfig()
+  const branch = resolveManagedPublicationBranch(IS_PACKAGED, INSTALL_STAMP, configured.branch)
+
+  if (branch !== configured.branch) {
+    writeDesktopUpdateConfig({ branch })
+  }
+
+  return { branch }
+}
+
 // ─── Main-window geometry persistence (window-state.json) ──────────────────
 
 function readWindowState() {
@@ -2497,6 +2512,7 @@ function officialUpstreamFailure(identity, error, message) {
     fetchedAt: null,
     identityDirty: identity.dirty,
     identitySource: identity.source,
+    installedBranch: identity.branch,
     installedRepository: identity.repository,
     installedSha: identity.sha,
     message,
@@ -2544,6 +2560,10 @@ async function ensureBareGitRepository(repositoryPath, label) {
 // "ref absent" (exit 2), never on a transient network error, so a flaky
 // connection can't strand a user on the wrong branch.
 async function resolveHealedBranch(updateRoot, branch) {
+  if (IS_PACKAGED && INSTALL_STAMP?.branch) {
+    return resolveManagedPublicationBranch(true, INSTALL_STAMP, branch)
+  }
+
   if (!branch || branch === 'main') {
     return branch || 'main'
   }
@@ -2713,7 +2733,7 @@ async function checkMutationTarget(updateRoot) {
 
 async function checkUpdates() {
   const updateRoot = resolveUpdateRoot()
-  let { branch } = readDesktopUpdateConfig()
+  let { branch } = readEffectiveDesktopUpdateConfig()
   const upstreamTracking = await checkOfficialUpstream(updateRoot)
 
   if (!hasGitCheckoutMetadata(updateRoot)) {
@@ -2727,25 +2747,9 @@ async function checkUpdates() {
     }
   }
 
-  const legacySafety = resolveLegacyUpdateSafety(IS_PACKAGED, upstreamTracking)
-
-  if (!legacySafety.allowed) {
-    return {
-      supported: false,
-      reason: legacySafety.reason,
-      message: legacySafety.message,
-      branch,
-      currentSha: upstreamTracking.installedSha || undefined,
-      dirty: upstreamTracking.identityDirty,
-      fetchedAt: Date.now(),
-      hermesRoot: updateRoot,
-      upstreamTracking
-    }
-  }
-
   if (IS_PACKAGED) {
     const mutationTarget = await checkMutationTarget(updateRoot)
-    const mutationSafety = resolveLegacyUpdateSafety(true, mutationTarget, 'update-target')
+    const mutationSafety = resolveManagedPublicationSafety(true, upstreamTracking, mutationTarget)
 
     if (!mutationSafety.allowed) {
       return {
@@ -3131,7 +3135,7 @@ async function releaseBackendLock(updateRoot, tag) {
 //
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
 // only this apply action changed.
-async function applyUpdates(opts = {}) {
+async function applyUpdates(opts: { dirtyStrategy?: string; expectedTargetSha?: string } = {}) {
   if (updateInFlight) {
     throw new Error('An update is already in progress.')
   }
@@ -3139,24 +3143,37 @@ async function applyUpdates(opts = {}) {
   updateInFlight = true
 
   try {
+    const expectedTargetSha =
+      typeof opts.expectedTargetSha === 'string' && MANAGED_TARGET_SHA_RE.test(opts.expectedTargetSha)
+        ? opts.expectedTargetSha.toLowerCase()
+        : null
+
+    if (IS_PACKAGED && !expectedTargetSha) {
+      return {
+        ok: false,
+        error: 'publication-target-unproven',
+        message: 'Check for Desktop updates again so the exact paired release can be verified.'
+      }
+    }
+
     if (IS_PACKAGED) {
       const updateRoot = resolveUpdateRoot()
-      const upstreamTracking = await checkOfficialUpstream(updateRoot)
-      const legacySafety = resolveLegacyUpdateSafety(true, upstreamTracking)
-
-      if (!legacySafety.allowed) {
-        rememberLog(`[updates] refusing legacy apply: ${legacySafety.reason}`)
-
-        return {
-          ok: false,
-          error: legacySafety.reason || 'upstream-unproven',
-          message: legacySafety.message || 'The packaged app could not be compared safely with official upstream.',
-          hermesRoot: updateRoot
-        }
+      const installedIdentity = resolveInstalledIdentity({
+        checkoutBranch: null,
+        checkoutDirty: false,
+        checkoutHead: null,
+        checkoutRepository: null,
+        installStamp: INSTALL_STAMP,
+        packaged: true
+      })
+      const installedPublication = {
+        identityDirty: installedIdentity.dirty,
+        installedBranch: installedIdentity.branch,
+        installedRepository: installedIdentity.repository,
+        installedSha: installedIdentity.sha
       }
-
       const mutationTarget = await checkMutationTarget(updateRoot)
-      const mutationSafety = resolveLegacyUpdateSafety(true, mutationTarget, 'update-target')
+      const mutationSafety = resolveManagedPublicationSafety(true, installedPublication, mutationTarget)
 
       if (!mutationSafety.allowed) {
         rememberLog(`[updates] refusing legacy apply for mutable checkout: ${mutationSafety.reason}`)
@@ -3241,7 +3258,7 @@ async function applyUpdates(opts = {}) {
     repairMacUpdaterHelper(updater)
 
     const updateRoot = resolveUpdateRoot()
-    const { branch: configuredBranch } = readDesktopUpdateConfig()
+    const { branch: configuredBranch } = readEffectiveDesktopUpdateConfig()
     const branch = await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
     const updaterArgs = ['--update', '--branch', branch]
     const targetApp = IS_MAC ? runningAppBundle() : null
@@ -3319,7 +3336,16 @@ async function applyUpdates(opts = {}) {
       env: {
         ...process.env,
         HERMES_HOME,
-        PATH: pathWithHermesManagedNode(venvBin)
+        PATH: pathWithHermesManagedNode(venvBin),
+        ...(IS_PACKAGED
+          ? {
+              HERMES_MANAGED_PUBLICATION_UPDATE: '1',
+              HERMES_MANAGED_PUBLICATION_REPOSITORY:
+                INSTALL_STAMP?.repository || 'the configured publication',
+              HERMES_MANAGED_PUBLICATION_BRANCH: branch,
+              HERMES_MANAGED_PUBLICATION_TARGET_SHA: expectedTargetSha
+            }
+          : {})
       },
       detached: true,
       stdio: 'ignore'
@@ -3396,7 +3422,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
   }
 
   const updateRoot = resolveUpdateRoot()
-  const { branch: configuredBranch } = readDesktopUpdateConfig()
+  const { branch: configuredBranch } = readEffectiveDesktopUpdateConfig()
 
   const branch = directoryExists(path.join(updateRoot, '.git'))
     ? await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
@@ -3424,7 +3450,16 @@ async function handOffWindowsBootstrapRecovery(reason) {
     env: {
       ...process.env,
       HERMES_HOME,
-      PATH: pathWithHermesManagedNode(venvBin)
+      PATH: pathWithHermesManagedNode(venvBin),
+      ...(IS_PACKAGED && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit)
+        ? {
+            HERMES_MANAGED_PUBLICATION_UPDATE: '1',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY:
+              INSTALL_STAMP.repository || 'the configured publication',
+            HERMES_MANAGED_PUBLICATION_BRANCH: branch,
+            HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit.toLowerCase()
+          }
+        : {})
     },
     detached: true,
     stdio: 'ignore'
@@ -3643,6 +3678,15 @@ async function applyUpdatesPosixInApp(opts: any) {
     PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
   }
 
+  if (IS_PACKAGED) {
+    const publication = readEffectiveDesktopUpdateConfig()
+    env.HERMES_MANAGED_PUBLICATION_UPDATE = '1'
+    env.HERMES_MANAGED_PUBLICATION_REPOSITORY =
+      INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication'
+    env.HERMES_MANAGED_PUBLICATION_BRANCH = publication.branch
+    env.HERMES_MANAGED_PUBLICATION_TARGET_SHA = opts.expectedTargetSha
+  }
+
   // `hermes update` reaps stale `hermes serve` backends (a code update
   // leaves the running process serving old Python against the freshly-updated
   // JS bundle). But OUR backend is one of those processes, and killing it
@@ -3673,13 +3717,13 @@ async function applyUpdatesPosixInApp(opts: any) {
 
   // Branch-pin so a non-main checkout doesn't get switched to main (and self-heal
   // to main when the pinned branch no longer exists on origin).
-  let branchArgs = []
+  let branchArgs = IS_PACKAGED ? ['--branch', readEffectiveDesktopUpdateConfig().branch] : []
 
   try {
     const head = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot })
     const current = (head.stdout || '').trim()
 
-    if (head.code === 0 && current && current !== 'HEAD') {
+    if (!IS_PACKAGED && head.code === 0 && current && current !== 'HEAD') {
       branchArgs = ['--branch', await resolveHealedBranch(updateRoot, current)]
     }
   } catch {
@@ -11732,7 +11776,7 @@ ipcMain.handle('hermes:terminal:dispose', (_event, id) => disposeTerminalSession
 ipcMain.handle('hermes:updates:check', async () =>
   checkUpdates().catch(error => ({
     supported: true,
-    branch: readDesktopUpdateConfig().branch,
+    branch: readEffectiveDesktopUpdateConfig().branch,
     error: 'check-failed',
     message: error?.message || String(error),
     fetchedAt: Date.now()
@@ -11749,10 +11793,11 @@ ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
   }))
 )
 
-ipcMain.handle('hermes:updates:branch:get', async () => readDesktopUpdateConfig())
+ipcMain.handle('hermes:updates:branch:get', async () => readEffectiveDesktopUpdateConfig())
 
 ipcMain.handle('hermes:updates:branch:set', async (_event, name) => {
-  const branch = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
+  const requested = typeof name === 'string' && name.trim() ? name.trim() : DEFAULT_UPDATE_BRANCH
+  const branch = resolveManagedPublicationBranch(IS_PACKAGED, INSTALL_STAMP, requested)
   writeDesktopUpdateConfig({ branch })
 
   return { branch }

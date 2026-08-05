@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -3784,6 +3785,43 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print(f"  {stderr.splitlines()[0]}")
             sys.exit(1)
 
+        if os.environ.get("HERMES_MANAGED_PUBLICATION_UPDATE") == "1":
+            managed_branch = os.environ.get(
+                "HERMES_MANAGED_PUBLICATION_BRANCH", branch
+            )
+            if managed_branch != branch:
+                print("✗ Managed Desktop update stopped: the publication branch changed.")
+                print(f"  Expected branch {managed_branch}; received {branch}.")
+                sys.exit(1)
+
+            expected_target = os.environ.get(
+                "HERMES_MANAGED_PUBLICATION_TARGET_SHA", ""
+            ).lower()
+            if expected_target:
+                if not re.fullmatch(r"[0-9a-f]{40}", expected_target):
+                    print("✗ Managed Desktop update stopped: the approved target is invalid.")
+                    sys.exit(1)
+                target_result = subprocess.run(
+                    git_cmd
+                    + ["rev-parse", "--verify", f"origin/{branch}^{{commit}}"],
+                    cwd=_m().PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                fetched_target = target_result.stdout.strip().lower()
+                if (
+                    target_result.returncode != 0
+                    or fetched_target != expected_target
+                ):
+                    print(
+                        "✗ Managed Desktop update stopped: the publication moved "
+                        "after the paired release check."
+                    )
+                    print("  Check Ava and Desktop updates again; no files or refs were changed.")
+                    sys.exit(1)
+
         # Get current branch (returns literal "HEAD" when detached)
         result = subprocess.run(
             git_cmd + ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -3985,8 +4023,29 @@ def _cmd_update_impl(args, gateway_mode: bool):
             )
             if pull_result.returncode != 0:
                 # ff-only failed — local and remote have diverged (e.g. upstream
-                # force-pushed or rebase).  Since local changes are already
-                # stashed, reset to match the remote exactly.
+                # force-pushed or rebase). Managed Desktop publications must
+                # never rewrite a checkout behind the user's back: the exact
+                # publication identity was approved, not a destructive reset.
+                if os.environ.get("HERMES_MANAGED_PUBLICATION_UPDATE") == "1":
+                    repository = os.environ.get(
+                        "HERMES_MANAGED_PUBLICATION_REPOSITORY",
+                        "the configured publication",
+                    )
+                    managed_branch = os.environ.get(
+                        "HERMES_MANAGED_PUBLICATION_BRANCH", branch
+                    )
+                    print("✗ Managed Desktop update stopped: the checkout cannot fast-forward.")
+                    print(
+                        f"  Expected a clean {repository}@{managed_branch} checkout."
+                    )
+                    print(
+                        "  Reinstall the current managed Desktop checkout, then retry; "
+                        "no files or refs were reset."
+                    )
+                    sys.exit(1)
+
+                # Legacy source installs retain the historical reset fallback.
+                # Managed publication updates take the refusal path above.
                 print(
                     "  ⚠ Fast-forward not possible (history diverged), resetting to match remote..."
                 )

@@ -444,7 +444,7 @@ export function ManagedSourceUpdateView({
     : u.managedUnknown
 
   const behind = verifiedManagedBehind(source)
-  const localPatches = behind === null ? null : source.localPatchCount
+  const overlayCount = behind === null ? null : source.overlayCount
   const canCheck = source.refreshRequestAvailable && !checking
   const canBuild = source.canBuildCandidate && source.candidateRequestAvailable && !building
 
@@ -489,7 +489,7 @@ export function ManagedSourceUpdateView({
         </div>
         <div className="rounded-md border border-border/70 px-3 py-2">
           <dt className="text-muted-foreground">{u.managedLocalPatches}</dt>
-          <dd className="mt-1 font-semibold">{localPatches ?? u.managedUnknown}</dd>
+          <dd className="mt-1 font-semibold">{overlayCount ?? u.managedUnknown}</dd>
         </div>
         <div className="rounded-md border border-border/70 px-3 py-2">
           <dt className="text-muted-foreground">{u.managedSourceRefs}</dt>

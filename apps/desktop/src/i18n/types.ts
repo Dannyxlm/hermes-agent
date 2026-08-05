@@ -1852,7 +1852,7 @@ export interface Translations {
     managedUpstream: string
     managedCommitsBehind: (count: number) => string
     managedCandidate: string
-    managedCandidateStatuses: Record<'blocked' | 'building' | 'not_built' | 'passed' | 'ready', string>
+    managedCandidateStatuses: Record<'blocked' | 'building' | 'current' | 'not_built' | 'passed' | 'ready', string>
     managedLocalPatches: string
     managedSourceRefs: string
     managedReachable: string

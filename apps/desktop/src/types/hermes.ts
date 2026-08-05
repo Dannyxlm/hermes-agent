@@ -1174,11 +1174,13 @@ export interface BackendManagedUpdateRefreshRequest {
 
 export interface BackendManagedSourceUpdate {
   schema_version: string
-  count_basis?: 'running_source' | 'unavailable_non_ancestral'
+  count_basis?: 'recorded_official_base' | 'running_source' | 'unavailable_non_ancestral'
   availability: BackendManagedSourceAvailability
   stale: boolean
   status_error: string | null
   running_release?: string
+  release_id?: string
+  hermes_version?: string
   running_source?: string
   running_upstream_base?: string
   tracked_upstream?: string
@@ -1186,10 +1188,14 @@ export interface BackendManagedSourceUpdate {
   commits_behind?: number | null
   running_source_is_ancestor_of_upstream?: boolean | null
   local_patch_count?: number
+  overlay_count?: number
+  overlay_ids?: string[]
+  carried_commit_count?: number
+  install_mode?: string
   last_fetched_at?: string
   generated_at?: string
   age_seconds?: number
-  candidate_status?: 'blocked' | 'building' | 'not_built' | 'passed' | 'ready'
+  candidate_status?: 'blocked' | 'building' | 'current' | 'not_built' | 'passed' | 'ready'
   candidate_target_revision?: string | null
   candidate_target_is_ancestor_of_upstream?: boolean | null
   running_upstream_base_is_ancestor_of_candidate_target?: boolean | null

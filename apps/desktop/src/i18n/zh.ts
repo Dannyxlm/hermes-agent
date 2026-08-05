@@ -2415,11 +2415,12 @@ export const zh: Translations = {
     managedCandidateStatuses: {
       blocked: '已阻止',
       building: '构建中',
+      current: '最新',
       not_built: '未构建',
       passed: '已通过',
       ready: '已就绪'
     },
-    managedLocalPatches: '本地补丁',
+    managedLocalPatches: 'CloudSeed 覆盖层',
     managedSourceRefs: '源引用',
     managedReachable: '可访问',
     managedNotReachable: '不可访问',

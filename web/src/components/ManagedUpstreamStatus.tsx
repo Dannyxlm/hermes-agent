@@ -112,14 +112,29 @@ export function ManagedUpstreamStatus({
             </div>
             <div>
               <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                Local patches
+                CloudSeed overlays
               </div>
               <div>
-                {typeof source.local_patch_count === "number"
-                  ? `${source.local_patch_count.toLocaleString("en-US")} commit${
-                      source.local_patch_count === 1 ? "" : "s"
+                {typeof source.overlay_count === "number"
+                  ? `${source.overlay_count.toLocaleString("en-US")} maintained feature${
+                      source.overlay_count === 1 ? "" : "s"
                     }`
                   : "not reported"}
+              </div>
+              {source.overlay_ids && source.overlay_ids.length > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {source.overlay_ids.join(", ")}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                Carried Git commits
+              </div>
+              <div>
+                {typeof source.carried_commit_count === "number"
+                  ? source.carried_commit_count.toLocaleString("en-US")
+                  : "diagnostic unavailable"}
               </div>
             </div>
             <div>
@@ -148,6 +163,15 @@ export function ManagedUpstreamStatus({
                 Candidate state
               </div>
               <div>{stateLabel(source.candidate_status)}</div>
+            </div>
+            <div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                Release identity
+              </div>
+              <div>{source.hermes_version ? `Hermes ${source.hermes_version}` : "version not reported"}</div>
+              <div className="break-all font-mono text-xs text-muted-foreground">
+                {source.release_id ?? "release ID not reported"}
+              </div>
             </div>
           </div>
 

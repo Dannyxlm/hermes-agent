@@ -393,10 +393,12 @@ export interface DesktopManagedUpdateRefreshRequest {
 export interface DesktopManagedSourceUpdate {
   availability: DesktopManagedSourceAvailability
   schemaVersion?: string
-  countBasis?: 'running_source' | 'unavailable_non_ancestral'
+  countBasis?: 'recorded_official_base' | 'running_source' | 'unavailable_non_ancestral'
   stale: boolean
   statusError: string | null
   runningRelease?: string
+  releaseId?: string
+  hermesVersion?: string
   runningSource?: string
   runningUpstreamBase?: string
   trackedUpstream?: string
@@ -404,10 +406,14 @@ export interface DesktopManagedSourceUpdate {
   commitsBehind?: number | null
   runningSourceIsAncestorOfUpstream?: boolean | null
   localPatchCount?: number
+  overlayCount?: number
+  overlayIds?: string[]
+  carriedCommitCount?: number
+  installMode?: string
   lastFetchedAt?: string
   generatedAt?: string
   ageSeconds?: number
-  candidateStatus?: 'blocked' | 'building' | 'not_built' | 'passed' | 'ready'
+  candidateStatus?: 'blocked' | 'building' | 'current' | 'not_built' | 'passed' | 'ready'
   candidateTargetRevision?: string | null
   candidateTargetIsAncestorOfUpstream?: boolean | null
   runningUpstreamBaseIsAncestorOfCandidateTarget?: boolean | null
@@ -433,6 +439,7 @@ export interface DesktopUpstreamTracking {
   fetchedAt: number | null
   identityDirty: boolean
   identitySource: 'checkout-head' | 'install-stamp' | null
+  installedBranch?: string | null
   installedRepository: string | null
   installedSha: string | null
   message: string | null
@@ -467,6 +474,9 @@ export type DesktopUpdateDirtyStrategy = 'abort' | 'stash' | 'force'
 
 export interface DesktopUpdateApplyOptions {
   dirtyStrategy?: DesktopUpdateDirtyStrategy
+  /** Exact publication commit approved by the update check and, for Ava,
+   *  confirmed active before apply. The updater aborts if the branch moves. */
+  expectedTargetSha?: string
 }
 
 export interface DesktopUpdateApplyResult {

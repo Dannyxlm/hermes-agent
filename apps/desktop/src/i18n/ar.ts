@@ -1880,11 +1880,12 @@ export const ar = defineLocale({
     managedCandidateStatuses: {
       blocked: 'محظور',
       building: 'قيد البناء',
+      current: 'محدّث',
       not_built: 'لم يُبنَ',
       passed: 'نجح',
       ready: 'جاهز'
     },
-    managedLocalPatches: 'التصحيحات المحلية',
+    managedLocalPatches: 'تراكبات CloudSeed',
     managedSourceRefs: 'مراجع المصدر',
     managedReachable: 'يمكن الوصول إليها',
     managedNotReachable: 'لا يمكن الوصول إليها',

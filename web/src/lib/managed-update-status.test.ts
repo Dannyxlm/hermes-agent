@@ -35,6 +35,25 @@ describe("presentManagedUpdate", () => {
     });
   });
 
+  it("reports the exact official distance from immutable release provenance", () => {
+    expect(
+      presentManagedUpdate(
+        managedSource({
+          count_basis: "recorded_official_base",
+          commits_behind: 0,
+          running_source_is_ancestor_of_upstream: false,
+          overlay_count: 8,
+        }),
+      ),
+    ).toEqual({
+      badge: "upstream current",
+      blocked: false,
+      headline:
+        "This immutable release is based on the current official upstream head.",
+      tone: "success",
+    });
+  });
+
   it("does not invent a behind count for a non-ancestral managed fork", () => {
     expect(
       presentManagedUpdate(

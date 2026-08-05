@@ -17,9 +17,16 @@ import {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
+  resolveManagedPublicationBranch,
   resolveLegacyUpdateSafety,
+  resolveManagedPublicationSafety,
   shouldCountCommits
 } from './update-count'
+
+test('managed packaged updates stay pinned to their stamped branch', () => {
+  assert.equal(resolveManagedPublicationBranch(true, { branch: 'main' }, 'feature/override'), 'main')
+  assert.equal(resolveManagedPublicationBranch(false, { branch: 'main' }, 'feature/dev'), 'feature/dev')
+})
 
 // FAIL-BEFORE: pre-fix the function did `Number.parseInt(countStr) || 0`
 // unconditionally, so a shallow checkout with no merge-base surfaced the bogus
@@ -738,6 +745,7 @@ function trackingStatus(overrides: Partial<OfficialUpstreamTracking> = {}): Offi
     fetchedAt: 1,
     identityDirty: false,
     identitySource: 'install-stamp',
+    installedBranch: 'main',
     installedRepository: 'Dannyxlm/hermes-agent',
     installedSha: 'a'.repeat(40),
     message: null,
@@ -800,4 +808,42 @@ test('dev runs keep their existing update workflow regardless of fork distance',
     message: null,
     reason: null
   })
+})
+
+test('managed packaged updater allows expected fork commits from the stamped publication', () => {
+  const installed = trackingStatus({ ahead: 25 })
+  const updateTarget = trackingStatus({
+    ahead: 26,
+    identitySource: 'checkout-head',
+    installedSha: 'c'.repeat(40)
+  })
+
+  assert.deepEqual(resolveManagedPublicationSafety(true, installed, updateTarget), {
+    allowed: true,
+    message: null,
+    reason: null
+  })
+})
+
+test('managed packaged updater rejects a different publication checkout', () => {
+  const installed = trackingStatus({ ahead: 25 })
+  const updateTarget = trackingStatus({
+    installedRepository: 'NousResearch/hermes-agent',
+    identitySource: 'checkout-head',
+    installedSha: 'c'.repeat(40)
+  })
+
+  assert.deepEqual(resolveManagedPublicationSafety(true, installed, updateTarget), {
+    allowed: false,
+    message:
+      'Automatic updates are disabled because this app was published from Dannyxlm/hermes-agent@main, but the managed checkout follows NousResearch/hermes-agent@main.',
+    reason: 'publication-mismatch'
+  })
+})
+
+test('managed packaged updater rejects a dirty publication checkout', () => {
+  assert.equal(
+    resolveManagedPublicationSafety(true, trackingStatus(), trackingStatus({ identityDirty: true })).reason,
+    'identity-dirty'
+  )
 })

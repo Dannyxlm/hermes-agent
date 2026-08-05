@@ -48,7 +48,10 @@ export function presentManagedUpdate(
       return {
         badge: "upstream current",
         blocked,
-        headline: "This immutable release matches official upstream.",
+        headline:
+          source.count_basis === "recorded_official_base"
+            ? "This immutable release is based on the current official upstream head."
+            : "This immutable release matches official upstream.",
         tone: "success",
       };
     }

@@ -4095,6 +4095,7 @@ _MANAGED_UPDATE_CANDIDATE_REQUEST_PATH = Path(
 )
 _MANAGED_UPDATE_SCHEMA = "hermes-update-status.v2"
 _MANAGED_UPDATE_COUNT_BASES = {
+    "recorded_official_base",
     "running_source",
     "unavailable_non_ancestral",
 }
@@ -4106,6 +4107,7 @@ _MANAGED_UPDATE_MAX_FUTURE_SKEW_SECONDS = 5 * 60
 _MANAGED_UPDATE_CANDIDATE_STATUSES = {
     "not_built",
     "building",
+    "current",
     "passed",
     "blocked",
     "ready",
@@ -4259,6 +4261,10 @@ def _read_managed_update_source() -> Dict[str, Any]:
     running_release = _managed_safe_string(
         raw.get("running_release"), maximum=160
     )
+    release_id = _managed_safe_string(raw.get("release_id"), maximum=160)
+    hermes_version = _managed_safe_string(
+        raw.get("hermes_version"), maximum=64
+    )
     running_source = _managed_safe_string(raw.get("running_source"), maximum=40)
     count_basis = _managed_safe_string(raw.get("count_basis"), maximum=32)
     running_upstream_base = _managed_safe_string(
@@ -4275,6 +4281,24 @@ def _read_managed_update_source() -> Dict[str, Any]:
     if not isinstance(running_source_is_ancestor, bool):
         running_source_is_ancestor = None
     local_patch_count = _managed_nonnegative_int(raw.get("local_patch_count"))
+    overlay_count = _managed_nonnegative_int(raw.get("overlay_count"))
+    carried_commit_count = _managed_nonnegative_int(
+        raw.get("carried_commit_count")
+    )
+    install_mode = _managed_safe_string(raw.get("install_mode"), maximum=64)
+    overlay_ids_raw = raw.get("overlay_ids")
+    overlay_ids: Optional[List[str]] = None
+    if isinstance(overlay_ids_raw, list) and len(overlay_ids_raw) <= 100:
+        parsed_overlay_ids = [
+            _managed_safe_string(item, maximum=80) for item in overlay_ids_raw
+        ]
+        if (
+            all(item is not None for item in parsed_overlay_ids)
+            and len(set(parsed_overlay_ids)) == len(parsed_overlay_ids)
+        ):
+            overlay_ids = [
+                item for item in parsed_overlay_ids if item is not None
+            ]
     last_fetched_at = _managed_safe_string(
         raw.get("last_fetched_at"), maximum=64
     )
@@ -4315,9 +4339,12 @@ def _read_managed_update_source() -> Dict[str, Any]:
             blockers = [item for item in parsed_blockers if item is not None]
 
     count_semantics_valid = (
-        count_basis == "running_source"
+        count_basis in {"recorded_official_base", "running_source"}
         and commits_behind is not None
-        and running_source_is_ancestor in {None, True}
+        and (
+            count_basis == "recorded_official_base"
+            or running_source_is_ancestor in {None, True}
+        )
     ) or (
         count_basis == "unavailable_non_ancestral"
         and raw.get("commits_behind") is None
@@ -4348,6 +4375,19 @@ def _read_managed_update_source() -> Dict[str, Any]:
         and upstream_head is not None
         and _MANAGED_UPDATE_SHA_RE.fullmatch(upstream_head) is not None
         and local_patch_count is not None
+        and (
+            count_basis != "recorded_official_base"
+            or (
+                release_id is not None
+                and hermes_version is not None
+                and overlay_count is not None
+                and overlay_count == local_patch_count
+                and overlay_ids is not None
+                and len(overlay_ids) == overlay_count
+                and carried_commit_count is not None
+                and install_mode == "managed-immutable"
+            )
+        )
         and last_fetched_at is not None
         and last_fetched_timestamp is not None
         and generated_timestamp is not None
@@ -4385,6 +4425,8 @@ def _read_managed_update_source() -> Dict[str, Any]:
     source.update(
         {
             "running_release": running_release,
+            "release_id": release_id,
+            "hermes_version": hermes_version,
             "running_source": running_source,
             "count_basis": count_basis,
             "running_upstream_base": running_upstream_base,
@@ -4395,6 +4437,10 @@ def _read_managed_update_source() -> Dict[str, Any]:
                 running_source_is_ancestor
             ),
             "local_patch_count": local_patch_count,
+            "overlay_count": overlay_count,
+            "overlay_ids": overlay_ids,
+            "carried_commit_count": carried_commit_count,
+            "install_mode": install_mode,
             "last_fetched_at": last_fetched_at,
             "generated_at": generated_at or last_fetched_at,
             "age_seconds": int(age_seconds),

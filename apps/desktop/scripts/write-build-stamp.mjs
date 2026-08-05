@@ -27,9 +27,10 @@
  * commit as unpinned and follows the branch instead of fetching a fake SHA.
  */
 
-import { mkdirSync, writeFileSync } from "fs"
+import { mkdirSync, readFileSync, writeFileSync } from "fs"
 import { resolve, join, relative } from "path"
 import { execSync } from "child_process"
+import { createHash } from "crypto"
 
 import { isMain } from "./utils.mjs"
 
@@ -84,6 +85,8 @@ const DESKTOP_ROOT = resolve(import.meta.dirname, "..")
 const REPO_ROOT = resolve(DESKTOP_ROOT, "..", "..")
 const OUT_DIR = join(DESKTOP_ROOT, "build")
 const OUT_FILE = join(OUT_DIR, "install-stamp.json")
+const OVERLAY_MANIFEST = join(REPO_ROOT, "cloudseed", "hermes-overlays.v1.json")
+const PUBLICATION_MANIFEST = join(REPO_ROOT, "cloudseed", "hermes-publication.v1.json")
 
 function tryExec(cmd, opts) {
   try {
@@ -164,6 +167,91 @@ export function isFallbackCommit(commit) {
   return typeof commit === "string" && /^0{7,40}$/.test(commit)
 }
 
+function cleanEnv(value) {
+  const text = String(value || "").trim()
+  return text || null
+}
+
+export function releaseProvenance(
+  env = process.env,
+  manifestPath = OVERLAY_MANIFEST,
+  publicationPath = PUBLICATION_MANIFEST
+) {
+  let overlayIds = []
+  let overlayManifestSha256 = null
+  let publication = null
+
+  try {
+    const raw = readFileSync(manifestPath)
+    const manifest = JSON.parse(raw.toString("utf8"))
+    const rows = Array.isArray(manifest?.overlays) ? manifest.overlays : []
+    const ids = rows.map(row => String(row?.id || "").trim())
+
+    if (
+      manifest?.schema_version === "cloudseed-hermes-overlays.v1" &&
+      ids.length > 0 &&
+      ids.every(id => /^[a-z0-9][a-z0-9-]{0,79}$/.test(id)) &&
+      new Set(ids).size === ids.length
+    ) {
+      overlayIds = ids
+      overlayManifestSha256 = createHash("sha256").update(raw).digest("hex")
+    }
+  } catch {
+    // Ordinary upstream builds have no CloudSeed overlay manifest.
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(publicationPath, "utf8"))
+    const transition = parsed?.overlay_transition
+    const transitioned = [
+      ...(Array.isArray(transition?.added) ? transition.added : []),
+      ...(Array.isArray(transition?.retained) ? transition.retained : [])
+    ]
+    const retired = Array.isArray(transition?.retired) ? transition.retired : []
+    const transitionIsExact =
+      transitioned.length === overlayIds.length &&
+      new Set(transitioned).size === transitioned.length &&
+      new Set(retired).size === retired.length &&
+      transitioned.every(id => overlayIds.includes(id)) &&
+      overlayIds.every(id => transitioned.includes(id)) &&
+      retired.every(id => !overlayIds.includes(id))
+
+    if (
+      parsed?.schema_version === "cloudseed-hermes-publication.v1" &&
+      /^[0-9a-f]{40}$/i.test(String(parsed.official_revision || "")) &&
+      normalizeRepository(parsed.official_repository) === "NousResearch/hermes-agent" &&
+      normalizeRepository(parsed.integration_repository) === "Dannyxlm/hermes-agent" &&
+      parsed.official_branch === "main" &&
+      parsed.integration_branch === "main" &&
+      transitionIsExact
+    ) {
+      publication = parsed
+    }
+  } catch {
+    // Ordinary upstream builds have no managed publication manifest.
+  }
+
+  const officialUpstreamCommit = cleanEnv(env.HERMES_OFFICIAL_UPSTREAM_COMMIT) || publication?.official_revision
+  const selfUpdateOverride = cleanEnv(env.HERMES_DESKTOP_SELF_UPDATE_ALLOWED)
+
+  return {
+    releaseId: cleanEnv(env.HERMES_RELEASE_ID) || publication?.release_id || null,
+    officialUpstreamCommit:
+      officialUpstreamCommit && /^[0-9a-f]{40}$/i.test(officialUpstreamCommit)
+        ? officialUpstreamCommit.toLowerCase()
+        : null,
+    officialReleaseTag: cleanEnv(env.HERMES_OFFICIAL_RELEASE_TAG) || publication?.official_release_tag || null,
+    overlayIds,
+    overlayManifestSha256,
+    installMode:
+      cleanEnv(env.HERMES_DESKTOP_INSTALL_MODE) || publication?.desktop_install_mode || "source",
+    selfUpdateAllowed:
+      selfUpdateOverride !== null
+        ? /^(?:1|true)$/i.test(selfUpdateOverride)
+        : publication?.desktop_self_update_allowed === true
+  }
+}
+
 function main() {
   const stamp = resolveStamp()
   if (!stamp || !stamp.commit) {
@@ -199,14 +287,17 @@ function main() {
     )
   }
 
+  const provenance = releaseProvenance()
   const payload = {
     schemaVersion: STAMP_SCHEMA_VERSION,
     commit: stamp.commit,
+    integrationCommit: stamp.commit,
     branch: stamp.branch,
     repository: stamp.repository,
     builtAt: new Date().toISOString(),
     dirty: stamp.dirty,
-    source: stamp.source
+    source: stamp.source,
+    ...provenance
   }
 
   mkdirSync(OUT_DIR, { recursive: true })

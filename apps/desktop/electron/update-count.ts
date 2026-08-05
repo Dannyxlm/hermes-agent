@@ -59,6 +59,17 @@ interface InstallStampInput {
   repository?: unknown
 }
 
+function resolveManagedPublicationBranch(
+  packaged: boolean,
+  installStamp: InstallStampInput | null,
+  configuredBranch: unknown
+): string {
+  const stampedBranch = packaged && typeof installStamp?.branch === 'string' ? installStamp.branch.trim() : ''
+  const configured = typeof configuredBranch === 'string' ? configuredBranch.trim() : ''
+
+  return stampedBranch || configured || OFFICIAL_UPSTREAM_BRANCH
+}
+
 interface InstalledIdentity {
   branch: string | null
   dirty: boolean
@@ -100,6 +111,7 @@ interface OfficialUpstreamTracking {
   fetchedAt: number | null
   identityDirty: boolean
   identitySource: InstalledIdentity['source']
+  installedBranch: string | null
   installedRepository: string | null
   installedSha: string | null
   message: string | null
@@ -114,6 +126,19 @@ interface LegacyUpdateSafety {
   allowed: boolean
   message: string | null
   reason: 'fork-divergent' | 'identity-dirty' | 'upstream-unproven' | null
+}
+
+interface ManagedPublicationSafety {
+  allowed: boolean
+  message: string | null
+  reason: 'identity-dirty' | 'publication-mismatch' | 'publication-unproven' | null
+}
+
+interface ManagedPublicationIdentity {
+  identityDirty: boolean
+  installedBranch: string | null
+  installedRepository: string | null
+  installedSha: string | null
 }
 
 type LegacyUpdateSafetySubject = 'package' | 'update-target'
@@ -294,6 +319,7 @@ function trackingError(
     fetchedAt: null,
     identityDirty: identity.dirty,
     identitySource: identity.source,
+    installedBranch: identity.branch,
     installedRepository: identity.repository,
     installedSha: identity.sha,
     message,
@@ -524,6 +550,7 @@ async function inspectOfficialUpstream({
     fetchedAt,
     identityDirty: identity.dirty,
     identitySource: identity.source,
+    installedBranch: identity.branch,
     installedRepository: identity.repository,
     installedSha: identity.sha,
     message: fetchError,
@@ -580,6 +607,66 @@ function resolveLegacyUpdateSafety(
   return { allowed: true, message: null, reason: null }
 }
 
+// Managed Desktop builds update from their stamped publication repository,
+// not directly from official upstream. Official divergence remains useful
+// read-only status, but it is not an update veto: CloudSeed's carried commits
+// are expected. The mutation is allowed only when the packaged app and the
+// clean source checkout name the same repository and branch. `hermes update`
+// still performs the actual fetch + ff-only merge, so this never authorizes a
+// reset or a cross-publication checkout switch.
+function resolveManagedPublicationSafety(
+  packaged: boolean,
+  installed: ManagedPublicationIdentity,
+  updateTarget: ManagedPublicationIdentity
+): ManagedPublicationSafety {
+  if (!packaged) {
+    return { allowed: true, message: null, reason: null }
+  }
+
+  if (installed.identityDirty || updateTarget.identityDirty) {
+    return {
+      allowed: false,
+      message: 'Automatic updates are disabled because the managed Hermes build or checkout has tracked changes.',
+      reason: 'identity-dirty'
+    }
+  }
+
+  const installedRepository = normalizeRepository(installed.installedRepository)
+  const updateRepository = normalizeRepository(updateTarget.installedRepository)
+  const installedBranch = installed.installedBranch?.trim() || null
+  const updateBranch = updateTarget.installedBranch?.trim() || null
+
+  if (
+    !installed.installedSha ||
+    !updateTarget.installedSha ||
+    !installedRepository ||
+    !updateRepository ||
+    !installedBranch ||
+    !updateBranch
+  ) {
+    return {
+      allowed: false,
+      message: 'Automatic updates are disabled until the managed publication identity can be proven.',
+      reason: 'publication-unproven'
+    }
+  }
+
+  if (
+    installedRepository.toLowerCase() !== updateRepository.toLowerCase() ||
+    installedBranch !== updateBranch
+  ) {
+    return {
+      allowed: false,
+      message:
+        `Automatic updates are disabled because this app was published from ${installedRepository}@${installedBranch}, ` +
+        `but the managed checkout follows ${updateRepository}@${updateBranch}.`,
+      reason: 'publication-mismatch'
+    }
+  }
+
+  return { allowed: true, message: null, reason: null }
+}
+
 export {
   inspectOfficialUpstream,
   INSTALLED_BUILD_REF,
@@ -592,7 +679,9 @@ export {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
+  resolveManagedPublicationBranch,
   resolveLegacyUpdateSafety,
+  resolveManagedPublicationSafety,
   shouldCountCommits
 }
 export type { CheckoutIdentityProbe, GitResult, InstalledIdentity, OfficialUpstreamTracking }

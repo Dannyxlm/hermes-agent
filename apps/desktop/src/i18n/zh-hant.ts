@@ -1995,11 +1995,12 @@ export const zhHant = defineLocale({
     managedCandidateStatuses: {
       blocked: '已阻止',
       building: '建置中',
+      current: '最新',
       not_built: '未建置',
       passed: '已通過',
       ready: '已就緒'
     },
-    managedLocalPatches: '本機修補',
+    managedLocalPatches: 'CloudSeed 覆蓋層',
     managedSourceRefs: '來源參照',
     managedReachable: '可存取',
     managedNotReachable: '無法存取',

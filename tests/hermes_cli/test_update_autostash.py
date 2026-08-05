@@ -118,6 +118,7 @@ def _make_update_side_effect(
     reset_fails=False,
     fetch_fails=False,
     fetch_stderr="",
+    remote_target="b" * 40,
 ):
     """Build a subprocess.run side_effect for cmd_update tests."""
     recorded = []
@@ -131,6 +132,8 @@ def _make_update_side_effect(
             return SimpleNamespace(stdout="", stderr="", returncode=0)
         if "rev-parse" in joined and "--abbrev-ref" in joined:
             return SimpleNamespace(stdout=f"{current_branch}\n", stderr="", returncode=0)
+        if "rev-parse" in joined and "origin/" in joined:
+            return SimpleNamespace(stdout=f"{remote_target}\n", stderr="", returncode=0)
         if "checkout" in joined and "main" in joined:
             return SimpleNamespace(stdout="", stderr="", returncode=0)
         if "rev-list" in joined:
@@ -191,6 +194,47 @@ def test_cmd_update_skips_stash_restore_when_reset_fails(monkeypatch, tmp_path, 
 
     out = capsys.readouterr().out
     assert "preserved in stash" in out
+
+
+def test_managed_desktop_update_refuses_divergence_without_reset(
+    monkeypatch, tmp_path, capsys
+):
+    """Managed publication updates fail closed instead of rewriting history."""
+    _setup_update_mocks(monkeypatch, tmp_path)
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_UPDATE", "1")
+    monkeypatch.setenv(
+        "HERMES_MANAGED_PUBLICATION_REPOSITORY", "Dannyxlm/hermes-agent"
+    )
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_BRANCH", "main")
+    side_effect, recorded = _make_update_side_effect(ff_only_fails=True)
+    monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
+
+    with pytest.raises(SystemExit, match="1"):
+        hermes_main.cmd_update(SimpleNamespace())
+
+    assert not any("reset --hard" in " ".join(command) for command in recorded)
+    out = capsys.readouterr().out
+    assert "Dannyxlm/hermes-agent@main" in out
+    assert "no files or refs were reset" in out
+
+
+def test_managed_desktop_update_refuses_a_branch_that_moved_after_check(
+    monkeypatch, tmp_path, capsys
+):
+    """The fetched publication must still equal the Ava-approved Desktop SHA."""
+    _setup_update_mocks(monkeypatch, tmp_path)
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_UPDATE", "1")
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_BRANCH", "main")
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_TARGET_SHA", "a" * 40)
+    side_effect, recorded = _make_update_side_effect(remote_target="b" * 40)
+    monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
+
+    with pytest.raises(SystemExit, match="1"):
+        hermes_main.cmd_update(SimpleNamespace())
+
+    assert not any("merge --ff-only" in " ".join(command) for command in recorded)
+    assert not any("reset --hard" in " ".join(command) for command in recorded)
+    assert "publication moved after the paired release check" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

@@ -2224,11 +2224,12 @@ export const en: Translations = {
     managedCandidateStatuses: {
       blocked: 'Blocked',
       building: 'Building',
+      current: 'Current',
       not_built: 'Not built',
       passed: 'Passed',
       ready: 'Ready'
     },
-    managedLocalPatches: 'Local patches',
+    managedLocalPatches: 'CloudSeed overlays',
     managedSourceRefs: 'Source refs',
     managedReachable: 'Reachable',
     managedNotReachable: 'Not reachable',

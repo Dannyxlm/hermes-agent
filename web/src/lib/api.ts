@@ -1771,11 +1771,13 @@ export interface UpdateCheckResponse {
 
 export interface ManagedUpdateSource {
   schema_version: "hermes-update-status.v2";
-  count_basis?: "running_source" | "unavailable_non_ancestral";
+  count_basis?: "recorded_official_base" | "running_source" | "unavailable_non_ancestral";
   availability: "ready" | "stale" | "missing" | "invalid" | "unreadable";
   stale: boolean;
   status_error: string | null;
   running_release?: string;
+  release_id?: string;
+  hermes_version?: string;
   running_source?: string | null;
   running_upstream_base?: string;
   tracked_upstream?: string;
@@ -1783,10 +1785,14 @@ export interface ManagedUpdateSource {
   commits_behind?: number | null;
   running_source_is_ancestor_of_upstream?: boolean | null;
   local_patch_count?: number;
+  overlay_count?: number;
+  overlay_ids?: string[];
+  carried_commit_count?: number;
+  install_mode?: string;
   last_fetched_at?: string;
   generated_at?: string;
   age_seconds?: number;
-  candidate_status?: "not_built" | "building" | "passed" | "blocked" | "ready";
+  candidate_status?: "not_built" | "building" | "passed" | "blocked" | "ready" | "current";
   candidate_target_revision?: string | null;
   candidate_target_is_ancestor_of_upstream?: boolean | null;
   running_upstream_base_is_ancestor_of_candidate_target?: boolean | null;

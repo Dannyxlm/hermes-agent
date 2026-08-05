@@ -1,0 +1,38 @@
+{
+  "schema_version": "cloudseed-hermes-overlays.v1",
+  "description": "CloudSeed-owned Hermes behaviors. This semantic ledger, not Git commit topology, defines the maintained overlay count.",
+  "overlays": [
+    {
+      "id": "codex-ephemeral-context",
+      "summary": "Bounded ephemeral Codex context and tool-routing support"
+    },
+    {
+      "id": "managed-upstream-status",
+      "summary": "Immutable-release upstream provenance and truthful dashboard status"
+    },
+    {
+      "id": "managed-desktop-publication",
+      "summary": "Desktop build provenance and trusted CloudSeed publication updates"
+    },
+    {
+      "id": "external-memory-provider",
+      "summary": "External memory-provider configuration and lifecycle support"
+    },
+    {
+      "id": "managed-claude-credentials",
+      "summary": "Managed Claude Code credential paths for Ava profiles"
+    },
+    {
+      "id": "public-dashboard-hardening",
+      "summary": "CloudSeed dashboard authentication and health behavior"
+    },
+    {
+      "id": "telegram-approval-cockpit",
+      "summary": "Telegram and Slack approval-cockpit actions"
+    },
+    {
+      "id": "runtime-review-hardening",
+      "summary": "CloudSeed runtime safety and integration review fixes"
+    }
+  ]
+}

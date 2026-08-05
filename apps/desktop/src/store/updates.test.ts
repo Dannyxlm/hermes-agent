@@ -678,8 +678,12 @@ describe('applyUpdates terminal state', () => {
     notifySpy.mockClear()
     dismissSpy.mockClear()
     applyMock.mockReset()
+    checkHermesUpdateSpy.mockReset()
     resetUpdateApplyState()
     $updateOverlayOpen.set(true)
+    $updateStatus.set(null)
+    $backendUpdateStatus.set(null)
+    setRemote(false)
     ;(globalThis as unknown as { window: unknown }).window = {
       hermesDesktop: { updates: { apply: applyMock } }
     }
@@ -700,6 +704,105 @@ describe('applyUpdates terminal state', () => {
     expect($updateApply.get().applying).toBe(true)
     expect($updateOverlayOpen.get()).toBe(true)
     expect(notifySpy).not.toHaveBeenCalled()
+  })
+
+  it('waits for the matching Ava integration before applying a managed Desktop update', async () => {
+    const clientTarget = 'a'.repeat(40)
+    const cloudTarget = 'b'.repeat(40)
+    setRemote(true)
+    $updateStatus.set(status({ targetSha: clientTarget, updateAvailable: true }))
+    checkHermesUpdateSpy.mockResolvedValue({
+      install_method: 'managed-runtime',
+      current_version: '0.20.0',
+      behind: 0,
+      update_available: false,
+      can_apply: false,
+      update_command: 'managed by immutable update train',
+      message: null,
+      managed_source: {
+        schema_version: 'hermes-update-status.v2',
+        count_basis: 'recorded_official_base',
+        availability: 'ready',
+        stale: false,
+        status_error: null,
+        running_source: cloudTarget,
+        running_upstream_base: 'c'.repeat(40),
+        upstream_head: 'c'.repeat(40),
+        commits_behind: 0,
+        local_patch_count: 8,
+        can_build_candidate: false,
+        candidate_request_available: false,
+        refresh_request_available: false,
+        refresh_request: null
+      }
+    })
+
+    const result = await applyUpdates()
+
+    expect(result).toMatchObject({ ok: false, error: 'paired-cloud-not-active' })
+    expect(result.message).toContain('Update Ava first')
+    expect(applyMock).not.toHaveBeenCalled()
+  })
+
+  it('fails closed without Ava provenance and serializes the async preflight', async () => {
+    const clientTarget = 'a'.repeat(40)
+    let resolveBackend: (value: unknown) => void = () => undefined
+    const backendResponse = new Promise(resolve => {
+      resolveBackend = resolve
+    })
+    setRemote(true)
+    $updateStatus.set(status({ targetSha: clientTarget, updateAvailable: true }))
+    checkHermesUpdateSpy.mockReturnValue(backendResponse)
+
+    const first = applyUpdates()
+    await vi.waitFor(() => expect(checkHermesUpdateSpy).toHaveBeenCalledTimes(1))
+
+    const second = await applyUpdates()
+    expect(second).toMatchObject({ ok: false, error: 'update-in-progress' })
+
+    resolveBackend({
+      install_method: 'managed-runtime',
+      current_version: '0.20.0',
+      behind: 0,
+      update_available: false,
+      can_apply: false,
+      update_command: 'managed by immutable update train',
+      message: null,
+      managed_source: null
+    })
+
+    const result = await first
+    expect(result).toMatchObject({ ok: false, error: 'paired-cloud-not-active' })
+    expect(result.message).toContain("cannot verify Ava's active Hermes release")
+    expect(applyMock).not.toHaveBeenCalled()
+  })
+
+  it('passes the exact Ava-matched publication SHA into Desktop apply', async () => {
+    const target = 'a'.repeat(40)
+    setRemote(true)
+    $updateStatus.set(status({ targetSha: target, updateAvailable: true }))
+    checkHermesUpdateSpy.mockResolvedValue({
+      install_method: 'managed-runtime',
+      current_version: '0.20.0',
+      behind: 0,
+      update_available: false,
+      can_apply: false,
+      managed_source: {
+        schema_version: 'hermes-update-status.v2',
+        count_basis: 'recorded_official_base',
+        availability: 'ready',
+        stale: false,
+        running_source: target,
+        upstream_head: target,
+        commits_behind: 0
+      }
+    })
+    applyMock.mockResolvedValue({ ok: true, handedOff: true })
+
+    const result = await applyUpdates()
+
+    expect(result.ok).toBe(true)
+    expect(applyMock).toHaveBeenCalledWith({ expectedTargetSha: target })
   })
 
   it('closes the overlay + toasts when updated but not relaunched in place', async () => {

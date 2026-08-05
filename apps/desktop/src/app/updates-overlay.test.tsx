@@ -27,7 +27,7 @@ function managedStatus(
     managedSource: {
       availability: 'ready',
       schemaVersion: 'hermes-update-status.v2',
-      countBasis: 'running_source',
+      countBasis: 'recorded_official_base',
       stale: false,
       statusError: null,
       runningRelease: 'ava-converge-p1-f22a217b8dab',
@@ -37,6 +37,7 @@ function managedStatus(
       upstreamHead: 'b'.repeat(40),
       commitsBehind: 4,
       localPatchCount: 2,
+      overlayCount: 2,
       lastFetchedAt: '2026-07-27T18:00:00+00:00',
       generatedAt: '2026-07-27T18:00:00+00:00',
       candidateStatus: 'not_built',
@@ -241,5 +242,21 @@ describe('ManagedSourceUpdateView', () => {
     expect(screen.queryByText(/4 upstream commits/)).toBeNull()
     expect((screen.getByRole('button', { name: 'Check now' }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('button', { name: 'Build candidate' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('does not relabel a legacy Git patch count as CloudSeed overlays', () => {
+    renderManaged(
+      <ManagedSourceUpdateView
+        building={false}
+        checking={false}
+        onBuildCandidate={vi.fn()}
+        onCheckNow={vi.fn()}
+        status={managedStatus({ countBasis: 'running_source', overlayCount: undefined, localPatchCount: 46 })}
+      />
+    )
+
+    expect(screen.getByText('CloudSeed overlays')).toBeTruthy()
+    expect(screen.getByText('Unknown')).toBeTruthy()
+    expect(screen.queryByText('46')).toBeNull()
   })
 })

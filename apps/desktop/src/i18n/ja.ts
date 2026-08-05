@@ -2058,11 +2058,12 @@ export const ja = defineLocale({
     managedCandidateStatuses: {
       blocked: 'ブロック中',
       building: 'ビルド中',
+      current: '最新',
       not_built: '未ビルド',
       passed: '合格',
       ready: '準備完了'
     },
-    managedLocalPatches: 'ローカルパッチ',
+    managedLocalPatches: 'CloudSeed オーバーレイ',
     managedSourceRefs: 'ソース参照',
     managedReachable: '到達可能',
     managedNotReachable: '到達不可',

@@ -318,7 +318,7 @@ export function verifiedManagedBehind(source: DesktopManagedSourceUpdate | undef
   if (
     !source ||
     source.schemaVersion !== 'hermes-update-status.v2' ||
-    source.countBasis !== 'running_source' ||
+    !['recorded_official_base', 'running_source'].includes(source.countBasis ?? '') ||
     (source.availability !== 'ready' && source.availability !== 'stale') ||
     !source.runningSource ||
     !MANAGED_UPDATE_SHA_RE.test(source.runningSource) ||
@@ -345,6 +345,8 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
         stale: managed.stale,
         statusError: managed.status_error,
         runningRelease: managed.running_release,
+        releaseId: managed.release_id,
+        hermesVersion: managed.hermes_version,
         runningSource: managed.running_source,
         runningUpstreamBase: managed.running_upstream_base,
         trackedUpstream: managed.tracked_upstream,
@@ -352,6 +354,10 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
         commitsBehind: managed.commits_behind,
         runningSourceIsAncestorOfUpstream: managed.running_source_is_ancestor_of_upstream,
         localPatchCount: managed.local_patch_count,
+        overlayCount: managed.overlay_count,
+        overlayIds: managed.overlay_ids,
+        carriedCommitCount: managed.carried_commit_count,
+        installMode: managed.install_mode,
         lastFetchedAt: managed.last_fetched_at,
         generatedAt: managed.generated_at,
         ageSeconds: managed.age_seconds,
@@ -574,11 +580,54 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     return { ok: false, error: 'unavailable', message: 'Desktop bridge unavailable.' }
   }
 
-  dismissNotification(UPDATE_TOAST_ID)
-  $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' })
+  if ($updateApply.get().applying) {
+    return { ok: false, error: 'update-in-progress', message: 'An update is already in progress.' }
+  }
+
+  $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Checking Ava…' })
 
   try {
-    const result = await bridge.apply(opts)
+    const clientTarget = $updateStatus.get()?.targetSha
+
+    if (isRemoteMode() && clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget)) {
+      const backend = await checkBackendUpdates(true)
+      const managedSource = backend?.managedSource
+      const activeIntegration =
+        managedSource?.schemaVersion === 'hermes-update-status.v2' &&
+        managedSource.availability === 'ready' &&
+        managedSource.stale === false &&
+        managedSource.runningSource &&
+        MANAGED_UPDATE_SHA_RE.test(managedSource.runningSource)
+          ? managedSource.runningSource
+          : null
+
+      if (!activeIntegration) {
+        const message =
+          `Desktop ${clientTarget.slice(0, 12)} cannot verify Ava's active Hermes release yet. ` +
+          'Refresh Ava, then retry this update.'
+        $updateApply.set({ ...IDLE, stage: 'error', error: 'paired-cloud-not-active', message })
+
+        return { ok: false, error: 'paired-cloud-not-active', message }
+      }
+
+      if (activeIntegration !== clientTarget) {
+        const message =
+          `Desktop ${clientTarget.slice(0, 12)} is paired with an Ava release that is not active yet ` +
+          `(Ava is ${activeIntegration.slice(0, 12)}). Update Ava first, then retry here.`
+        $updateApply.set({ ...IDLE, stage: 'error', error: 'paired-cloud-not-active', message })
+
+        return { ok: false, error: 'paired-cloud-not-active', message }
+      }
+    }
+
+    dismissNotification(UPDATE_TOAST_ID)
+    $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' })
+
+    const result = await bridge.apply(
+      clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget)
+        ? { ...opts, expectedTargetSha: clientTarget }
+        : opts
+    )
 
     // CLI install with no staged updater: not an error — the user just runs
     // `hermes update` themselves. Land on a dedicated manual state so the

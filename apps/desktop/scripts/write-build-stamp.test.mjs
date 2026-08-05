@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'vitest'
 
 import {
@@ -11,6 +14,7 @@ import {
   fromLocalGit,
   isFallbackCommit,
   normalizeRepository,
+  releaseProvenance,
   resolveStamp
 } from './write-build-stamp.mjs'
 
@@ -130,4 +134,51 @@ test('resolveStamp falls back when neither CI nor git is available', () => {
     dirty: false,
     source: 'fallback'
   })
+})
+
+test('release provenance binds the frozen upstream and semantic overlay ledger', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hermes-overlay-stamp-'))
+  const manifest = join(root, 'overlays.json')
+  const publication = join(root, 'publication.json')
+  writeFileSync(
+    manifest,
+    JSON.stringify({
+      schema_version: 'cloudseed-hermes-overlays.v1',
+      overlays: [{ id: 'managed-desktop-publication' }, { id: 'managed-upstream-status' }]
+    })
+  )
+  writeFileSync(
+    publication,
+    JSON.stringify({
+      schema_version: 'cloudseed-hermes-publication.v1',
+      release_id: 'hermes-20260804-aec3318',
+      official_repository: 'NousResearch/hermes-agent',
+      official_branch: 'main',
+      official_revision: 'a'.repeat(40),
+      official_release_tag: 'v2026.8.3',
+      integration_repository: 'Dannyxlm/hermes-agent',
+      integration_branch: 'main',
+      desktop_install_mode: 'managed-publication',
+      desktop_self_update_allowed: true,
+      overlay_transition: {
+        added: ['managed-desktop-publication'],
+        retained: ['managed-upstream-status'],
+        retired: []
+      }
+    })
+  )
+
+  const provenance = releaseProvenance(
+    {},
+    manifest,
+    publication
+  )
+
+  assert.equal(provenance.releaseId, 'hermes-20260804-aec3318')
+  assert.equal(provenance.officialUpstreamCommit, 'a'.repeat(40))
+  assert.equal(provenance.officialReleaseTag, 'v2026.8.3')
+  assert.deepEqual(provenance.overlayIds, ['managed-desktop-publication', 'managed-upstream-status'])
+  assert.match(provenance.overlayManifestSha256, /^[0-9a-f]{64}$/)
+  assert.equal(provenance.installMode, 'managed-publication')
+  assert.equal(provenance.selfUpdateAllowed, true)
 })
