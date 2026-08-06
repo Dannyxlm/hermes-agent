@@ -727,7 +727,6 @@ function finishBackendApply(returned: boolean): DesktopUpdateApplyResult {
   if (returned) {
     $backendUpdateApply.set(IDLE)
     setUpdateOverlayOpen(false)
-    void checkBackendUpdates()
 
     return { ok: true, message: 'Backend update applied.' }
   }
