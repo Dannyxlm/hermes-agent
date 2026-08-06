@@ -1144,6 +1144,8 @@ export interface ActionResponse {
   name: string
   ok: boolean
   pid: number | null
+  action_id?: string
+  already_running?: boolean
   error?: string
   message?: string
   request_only?: boolean
