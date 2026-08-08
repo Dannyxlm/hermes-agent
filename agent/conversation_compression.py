@@ -1310,6 +1310,27 @@ def recover_rotated_compression_session(
                 return recovered
             holder = holder_getter(session_id) if callable(holder_getter) else None
             if not holder or attempt == 20:
+                if not holder:
+                    orphan_reopener = getattr(
+                        type(session_db),
+                        "reopen_orphaned_compression_session",
+                        None,
+                    )
+                    if callable(orphan_reopener):
+                        try:
+                            if orphan_reopener(session_db, session_id):
+                                logger.warning(
+                                    "compression recovery: reopened orphaned "
+                                    "session=%s with no continuation",
+                                    session_id,
+                                )
+                        except Exception as exc:
+                            logger.warning(
+                                "orphaned compression session reopen failed "
+                                "for %s: %s",
+                                session_id,
+                                exc,
+                            )
                 return None
             time.sleep(0.05)
         return None
@@ -3304,6 +3325,12 @@ def compress_context(
                         migrate_goal_to_session(old_session_id, agent.session_id, reason="compression")
                     except Exception as _goal_err:
                         logger.debug("Could not migrate goal on compression: %s", _goal_err)
+                    # Same boundary hazard for /heartbeat state — carry it too.
+                    try:
+                        from hermes_cli.heartbeat import migrate_heartbeat_to_session
+                        migrate_heartbeat_to_session(old_session_id, agent.session_id)
+                    except Exception as _hb_err:
+                        logger.debug("Could not migrate heartbeat on compression: %s", _hb_err)
                     # Auto-number the title for the continuation session
                     if old_title:
                         try:
