@@ -384,13 +384,7 @@ async function inspectOfficialUpstream({
     }
 
     if (!officialIdentityHydration) {
-      return runGit([
-        'fetch',
-        '--quiet',
-        '--no-tags',
-        identityRepositoryUrl,
-        `+${sourceRef}:${INSTALLED_BUILD_REF}`
-      ])
+      return runGit(['fetch', '--quiet', '--no-tags', identityRepositoryUrl, `+${sourceRef}:${INSTALLED_BUILD_REF}`])
     }
 
     // Never let the mixed comparison cache negotiate directly with official
@@ -651,10 +645,7 @@ function resolveManagedPublicationSafety(
     }
   }
 
-  if (
-    installedRepository.toLowerCase() !== updateRepository.toLowerCase() ||
-    installedBranch !== updateBranch
-  ) {
+  if (installedRepository.toLowerCase() !== updateRepository.toLowerCase() || installedBranch !== updateBranch) {
     return {
       allowed: false,
       message:
@@ -679,8 +670,8 @@ export {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
-  resolveManagedPublicationBranch,
   resolveLegacyUpdateSafety,
+  resolveManagedPublicationBranch,
   resolveManagedPublicationSafety,
   shouldCountCommits
 }

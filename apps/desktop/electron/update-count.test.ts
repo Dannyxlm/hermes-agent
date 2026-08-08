@@ -17,8 +17,8 @@ import {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
-  resolveManagedPublicationBranch,
   resolveLegacyUpdateSafety,
+  resolveManagedPublicationBranch,
   resolveManagedPublicationSafety,
   shouldCountCommits
 } from './update-count'
@@ -812,6 +812,7 @@ test('dev runs keep their existing update workflow regardless of fork distance',
 
 test('managed packaged updater allows expected fork commits from the stamped publication', () => {
   const installed = trackingStatus({ ahead: 25 })
+
   const updateTarget = trackingStatus({
     ahead: 26,
     identitySource: 'checkout-head',
@@ -827,6 +828,7 @@ test('managed packaged updater allows expected fork commits from the stamped pub
 
 test('managed packaged updater rejects a different publication checkout', () => {
   const installed = trackingStatus({ ahead: 25 })
+
   const updateTarget = trackingStatus({
     installedRepository: 'NousResearch/hermes-agent',
     identitySource: 'checkout-head',

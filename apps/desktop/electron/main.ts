@@ -3160,6 +3160,7 @@ async function applyUpdates(opts: { dirtyStrategy?: string; expectedTargetSha?: 
 
     if (IS_PACKAGED) {
       const updateRoot = resolveUpdateRoot()
+
       const installedIdentity = resolveInstalledIdentity({
         checkoutBranch: null,
         checkoutDirty: false,
@@ -3168,12 +3169,14 @@ async function applyUpdates(opts: { dirtyStrategy?: string; expectedTargetSha?: 
         installStamp: INSTALL_STAMP,
         packaged: true
       })
+
       const installedPublication = {
         identityDirty: installedIdentity.dirty,
         installedBranch: installedIdentity.branch,
         installedRepository: installedIdentity.repository,
         installedSha: installedIdentity.sha
       }
+
       const mutationTarget = await checkMutationTarget(updateRoot)
       const mutationSafety = resolveManagedPublicationSafety(true, installedPublication, mutationTarget)
 
@@ -3342,8 +3345,7 @@ async function applyUpdates(opts: { dirtyStrategy?: string; expectedTargetSha?: 
         ...(IS_PACKAGED
           ? {
               HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-              HERMES_MANAGED_PUBLICATION_REPOSITORY:
-                INSTALL_STAMP?.repository || 'the configured publication',
+              HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP?.repository || 'the configured publication',
               HERMES_MANAGED_PUBLICATION_BRANCH: branch,
               HERMES_MANAGED_PUBLICATION_TARGET_SHA: expectedTargetSha
             }
@@ -3456,8 +3458,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
       ...(IS_PACKAGED && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit)
         ? {
             HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-            HERMES_MANAGED_PUBLICATION_REPOSITORY:
-              INSTALL_STAMP.repository || 'the configured publication',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository || 'the configured publication',
             HERMES_MANAGED_PUBLICATION_BRANCH: branch,
             HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit.toLowerCase()
           }

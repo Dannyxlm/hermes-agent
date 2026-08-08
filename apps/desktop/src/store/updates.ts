@@ -364,8 +364,7 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
         candidateStatus: managed.candidate_status,
         candidateTargetRevision: managed.candidate_target_revision,
         candidateTargetIsAncestorOfUpstream: managed.candidate_target_is_ancestor_of_upstream,
-        runningUpstreamBaseIsAncestorOfCandidateTarget:
-          managed.running_upstream_base_is_ancestor_of_candidate_target,
+        runningUpstreamBaseIsAncestorOfCandidateTarget: managed.running_upstream_base_is_ancestor_of_candidate_target,
         candidateTargetCommitsBehind: managed.candidate_target_commits_behind,
         blockers: managed.blockers,
         nextAction: managed.next_action,
@@ -592,6 +591,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     if (isRemoteMode() && clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget)) {
       const backend = await checkBackendUpdates(true)
       const managedSource = backend?.managedSource
+
       const activeIntegration =
         managedSource?.schemaVersion === 'hermes-update-status.v2' &&
         managedSource.availability === 'ready' &&
@@ -605,6 +605,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
         const message =
           `Desktop ${clientTarget.slice(0, 12)} cannot verify Ava's active Hermes release yet. ` +
           'Refresh Ava, then retry this update.'
+
         $updateApply.set({ ...IDLE, stage: 'error', error: 'paired-cloud-not-active', message })
 
         return { ok: false, error: 'paired-cloud-not-active', message }
@@ -614,6 +615,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
         const message =
           `Desktop ${clientTarget.slice(0, 12)} is paired with an Ava release that is not active yet ` +
           `(Ava is ${activeIntegration.slice(0, 12)}). Update Ava first, then retry here.`
+
         $updateApply.set({ ...IDLE, stage: 'error', error: 'paired-cloud-not-active', message })
 
         return { ok: false, error: 'paired-cloud-not-active', message }
@@ -624,9 +626,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' })
 
     const result = await bridge.apply(
-      clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget)
-        ? { ...opts, expectedTargetSha: clientTarget }
-        : opts
+      clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget) ? { ...opts, expectedTargetSha: clientTarget } : opts
     )
 
     // CLI install with no staged updater: not an error — the user just runs

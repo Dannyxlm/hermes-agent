@@ -751,9 +751,11 @@ describe('applyUpdates terminal state', () => {
   it('fails closed without Ava provenance and serializes the async preflight', async () => {
     const clientTarget = 'a'.repeat(40)
     let resolveBackend: (value: unknown) => void = () => undefined
+
     const backendResponse = new Promise(resolve => {
       resolveBackend = resolve
     })
+
     setRemote(true)
     $updateStatus.set(status({ targetSha: clientTarget, updateAvailable: true }))
     checkHermesUpdateSpy.mockReturnValue(backendResponse)
