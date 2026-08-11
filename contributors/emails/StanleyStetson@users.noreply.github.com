@@ -1,2 +1,1 @@
-StanleyStetson
-# v0.20 upstream integration
+StanleyStetson <StanleyStetson@users.noreply.github.com>
