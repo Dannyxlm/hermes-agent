@@ -784,6 +784,14 @@ def _update_via_zip(args):
     import zipfile
     from urllib.request import urlretrieve
 
+    if os.environ.get("HERMES_MANAGED_PUBLICATION_UPDATE") == "1":
+        print("✗ Managed Desktop update stopped: ZIP fallback is not release-pinned.")
+        print(
+            "  Repair or reinstall the managed checkout, then check Ava and "
+            "Desktop updates again. No files were changed."
+        )
+        _m().sys.exit(1)
+
     # The ZIP fallback exists for Windows git-file-I/O breakage. It pulls a
     # static archive from GitHub, which is fine for the default "main"
     # channel but would silently ignore --branch and update from main even
@@ -4120,7 +4128,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print(f"  {stderr.splitlines()[0]}")
             sys.exit(1)
 
-        if os.environ.get("HERMES_MANAGED_PUBLICATION_UPDATE") == "1":
+        managed_publication_update = (
+            os.environ.get("HERMES_MANAGED_PUBLICATION_UPDATE") == "1"
+        )
+        expected_target = None
+        if managed_publication_update:
             managed_branch = os.environ.get(
                 "HERMES_MANAGED_PUBLICATION_BRANCH", branch
             )
@@ -4132,30 +4144,29 @@ def _cmd_update_impl(args, gateway_mode: bool):
             expected_target = os.environ.get(
                 "HERMES_MANAGED_PUBLICATION_TARGET_SHA", ""
             ).lower()
-            if expected_target:
-                if not re.fullmatch(r"[0-9a-f]{40}", expected_target):
-                    print("✗ Managed Desktop update stopped: the approved target is invalid.")
-                    sys.exit(1)
-                target_result = subprocess.run(
-                    git_cmd
-                    + ["rev-parse", "--verify", f"origin/{branch}^{{commit}}"],
-                    cwd=_m().PROJECT_ROOT,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
+            if not re.fullmatch(r"[0-9a-f]{40}", expected_target):
+                print("✗ Managed Desktop update stopped: the approved target is invalid.")
+                sys.exit(1)
+            target_result = subprocess.run(
+                git_cmd
+                + ["rev-parse", "--verify", f"origin/{branch}^{{commit}}"],
+                cwd=_m().PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            fetched_target = target_result.stdout.strip().lower()
+            if (
+                target_result.returncode != 0
+                or fetched_target != expected_target
+            ):
+                print(
+                    "✗ Managed Desktop update stopped: the publication moved "
+                    "after the paired release check."
                 )
-                fetched_target = target_result.stdout.strip().lower()
-                if (
-                    target_result.returncode != 0
-                    or fetched_target != expected_target
-                ):
-                    print(
-                        "✗ Managed Desktop update stopped: the publication moved "
-                        "after the paired release check."
-                    )
-                    print("  Check Ava and Desktop updates again; no files or refs were changed.")
-                    sys.exit(1)
+                print("  Check Ava and Desktop updates again; no files or refs were changed.")
+                sys.exit(1)
 
         # Get current branch (returns literal "HEAD" when detached)
         result = subprocess.run(
@@ -4223,8 +4234,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
         )
 
         # Check if there are updates
+        update_target = expected_target or f"origin/{branch}"
         result = subprocess.run(
-            git_cmd + ["rev-list", f"HEAD..origin/{branch}", "--count"],
+            git_cmd + ["rev-list", f"HEAD..{update_target}", "--count"],
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
@@ -4233,10 +4245,24 @@ def _cmd_update_impl(args, gateway_mode: bool):
         commit_count = int(result.stdout.strip())
 
         if commit_count == 0:
+            if managed_publication_update:
+                current_head = (
+                    _capture_head_sha(git_cmd, _m().PROJECT_ROOT) or ""
+                ).lower()
+                if current_head != expected_target:
+                    print(
+                        "✗ Managed Desktop update stopped: the checkout is not at "
+                        "the approved publication."
+                    )
+                    print(
+                        "  Reinstall the current managed Desktop checkout, then retry; "
+                        "no files or refs were reset."
+                    )
+                    sys.exit(1)
             _invalidate_update_cache()
 
             # Even if origin is up to date, the fork may be behind upstream
-            if is_fork and branch == "main":
+            if is_fork and branch == "main" and not managed_publication_update:
                 _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
 
             # Restore stash and switch back to original branch if we moved
@@ -4345,14 +4371,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # the bad commit and the fix landing).
         pre_pull_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
         try:
-            # Merge the ref we already fetched above (→ Fetching updates...)
+            # Merge the commit/ref we already fetched above (→ Fetching updates...)
             # instead of `git pull`, which performs a SECOND network fetch of
             # the same branch (~0.5-1.5 s of redundant round-trip per update).
-            # `merge --ff-only origin/<branch>` is byte-identical in effect to
-            # `pull --ff-only origin <branch>` given the fresh tracking ref;
-            # the divergence fallback below is unchanged.
+            # Managed publications use the already-validated immutable SHA;
+            # source installs retain origin/<branch>. The divergence fallback
+            # below is unchanged.
             pull_result = subprocess.run(
-                git_cmd + ["merge", "--ff-only", f"origin/{branch}"],
+                git_cmd + ["merge", "--ff-only", update_target],
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
@@ -4398,6 +4424,18 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print(
                         f"  Try manually: git fetch origin && git reset --hard origin/{branch}"
                     )
+                    sys.exit(1)
+
+            if managed_publication_update:
+                updated_head = (
+                    _capture_head_sha(git_cmd, _m().PROJECT_ROOT) or ""
+                ).lower()
+                if updated_head != expected_target:
+                    print(
+                        "✗ Managed Desktop update stopped: the checkout did not land "
+                        "on the approved publication."
+                    )
+                    print("  No dependency or Desktop rebuild was started.")
                     sys.exit(1)
 
             # Post-pull syntax guard: validate critical-path files actually
@@ -4483,7 +4521,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         _m()._refresh_bootstrap_cache_scripts(branch)
 
         # Fork upstream sync logic (only for main branch on forks)
-        if is_fork and branch == "main":
+        if is_fork and branch == "main" and not managed_publication_update:
             _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
 
         # Reinstall Python dependencies. Prefer .[all], but if one optional extra

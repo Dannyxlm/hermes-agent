@@ -9,6 +9,46 @@ export interface UpdaterChild {
   unref: () => void
 }
 
+export interface BuildUpdateHandoffEnvOptions {
+  baseEnv: Record<string, string | undefined>
+  branch: string
+  hermesHome: string
+  managedRepository: string
+  managedTargetSha?: string | null
+  packaged: boolean
+  pathValue: string
+}
+
+/** Build the detached updater environment and fail closed when a packaged
+ * hand-off has no valid immutable publication target. */
+export function buildUpdateHandoffEnv(options: BuildUpdateHandoffEnvOptions): Record<string, string | undefined> | null {
+  const env = {
+    ...options.baseEnv,
+    HERMES_HOME: options.hermesHome,
+    PATH: options.pathValue
+  }
+
+  if (!options.packaged) {
+    return env
+  }
+
+  const targetSha = String(options.managedTargetSha || '')
+    .trim()
+    .toLowerCase()
+
+  if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+    return null
+  }
+
+  return {
+    ...env,
+    HERMES_MANAGED_PUBLICATION_UPDATE: '1',
+    HERMES_MANAGED_PUBLICATION_REPOSITORY: options.managedRepository,
+    HERMES_MANAGED_PUBLICATION_BRANCH: options.branch,
+    HERMES_MANAGED_PUBLICATION_TARGET_SHA: targetSha
+  }
+}
+
 export interface ResolveUpdateScriptHandoffDeps {
   isWindows?: boolean
   fileExists?: (candidate: string) => boolean

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'vitest'
 
 import {
+  buildUpdateHandoffEnv,
   collectRelaunchArgs,
   MARKER_SELF_ADOPT_EPOCH_MS,
   resolvePosixScriptHandoff,
@@ -17,6 +18,53 @@ import {
 } from './updater-process'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+test('buildUpdateHandoffEnv carries the normalized managed publication identity', () => {
+  const env = buildUpdateHandoffEnv({
+    baseEnv: { LANG: 'en_CA.UTF-8' },
+    branch: 'main',
+    hermesHome: '/Users/hermes/.hermes',
+    managedRepository: 'Dannyxlm/hermes-agent',
+    managedTargetSha: 'A'.repeat(40),
+    packaged: true,
+    pathValue: '/Users/hermes/.hermes/hermes-agent/venv/bin:/usr/bin'
+  })
+
+  assert.ok(env)
+  assert.equal(env.HERMES_MANAGED_PUBLICATION_UPDATE, '1')
+  assert.equal(env.HERMES_MANAGED_PUBLICATION_REPOSITORY, 'Dannyxlm/hermes-agent')
+  assert.equal(env.HERMES_MANAGED_PUBLICATION_BRANCH, 'main')
+  assert.equal(env.HERMES_MANAGED_PUBLICATION_TARGET_SHA, 'a'.repeat(40))
+})
+
+test('buildUpdateHandoffEnv refuses a packaged handoff without an exact SHA', () => {
+  const common = {
+    baseEnv: {},
+    branch: 'main',
+    hermesHome: '/Users/hermes/.hermes',
+    managedRepository: 'Dannyxlm/hermes-agent',
+    packaged: true,
+    pathValue: '/usr/bin'
+  }
+
+  assert.equal(buildUpdateHandoffEnv({ ...common, managedTargetSha: undefined }), null)
+  assert.equal(buildUpdateHandoffEnv({ ...common, managedTargetSha: 'abc123' }), null)
+})
+
+test('buildUpdateHandoffEnv keeps source checkouts outside managed publication mode', () => {
+  const env = buildUpdateHandoffEnv({
+    baseEnv: { LANG: 'en_CA.UTF-8' },
+    branch: 'main',
+    hermesHome: '/Users/hermes/.hermes',
+    managedRepository: 'unused',
+    packaged: false,
+    pathValue: '/usr/bin'
+  })
+
+  assert.ok(env)
+  assert.equal(env.HERMES_HOME, '/Users/hermes/.hermes')
+  assert.equal(env.HERMES_MANAGED_PUBLICATION_UPDATE, undefined)
+})
 
 test('stagedUpdaterSupportsPrewrittenMarker rejects installers predating the self-adopt fix', () => {
   // The real-world trap: an installer staged at first install months ago, never

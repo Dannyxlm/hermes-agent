@@ -690,6 +690,20 @@ class TestCmdUpdateZipBranchRefusal:
         # No actual download attempted.
         assert "Downloading latest version" not in out
 
+    def test_zip_fallback_refuses_managed_publication(self, monkeypatch, capsys):
+        from hermes_cli.main import _update_via_zip
+
+        monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_UPDATE", "1")
+        args = SimpleNamespace(branch="main")
+
+        with pytest.raises(SystemExit) as exc_info:
+            _update_via_zip(args)
+
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "not release-pinned" in out
+        assert "Downloading latest version" not in out
+
 
 def test_is_termux_env_true_for_termux_prefix():
     from hermes_cli import main as hm

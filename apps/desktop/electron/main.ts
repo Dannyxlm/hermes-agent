@@ -224,6 +224,7 @@ import { terminateTimedOutProcess } from './update-process-timeout'
 import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
 import { hasGitCheckoutMetadata, resolveGitCheckoutCandidate } from './update-root'
 import {
+  buildUpdateHandoffEnv,
   collectRelaunchArgs,
   resolvePosixScriptHandoff,
   resolveStagedUpdaterBinary,
@@ -3402,19 +3403,23 @@ async function applyUpdates(opts: { dirtyStrategy?: string; expectedTargetSha?: 
     // next one. Checkouts that predate the script fall back to the binary
     // path unchanged.
     const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
-    const updateEnv = {
-      ...process.env,
-      HERMES_HOME,
-      PATH: pathWithHermesManagedNode(venvBin),
-      ...(IS_PACKAGED
-        ? {
-            HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-            HERMES_MANAGED_PUBLICATION_REPOSITORY:
-              INSTALL_STAMP?.repository || 'the configured publication',
-            HERMES_MANAGED_PUBLICATION_BRANCH: branch,
-            HERMES_MANAGED_PUBLICATION_TARGET_SHA: expectedTargetSha
-          }
-        : {})
+    const updateEnv = buildUpdateHandoffEnv({
+      baseEnv: process.env,
+      branch,
+      hermesHome: HERMES_HOME,
+      managedRepository: INSTALL_STAMP?.repository || 'the configured publication',
+      managedTargetSha: expectedTargetSha,
+      packaged: IS_PACKAGED,
+      pathValue: pathWithHermesManagedNode(venvBin)
+    })
+
+    if (!updateEnv) {
+      const message = 'Check for Desktop updates again so the exact paired release can be verified.'
+
+      emitUpdateProgress({ stage: 'error', message, percent: null })
+      startHermes().catch(() => {})
+
+      return { ok: false, error: 'publication-target-unproven', message }
     }
     let child
 
@@ -3786,22 +3791,28 @@ async function applyUpdatesPosixHandoff(opts: any) {
     }
   }
 
+  const updateEnv = buildUpdateHandoffEnv({
+    baseEnv: process.env,
+    branch,
+    hermesHome: HERMES_HOME,
+    managedRepository:
+      INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication',
+    managedTargetSha: opts.expectedTargetSha,
+    packaged: IS_PACKAGED,
+    pathValue: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
+  })
+
+  if (!updateEnv) {
+    const message = 'Check for Desktop updates again so the exact paired release can be verified.'
+
+    emitUpdateProgress({ stage: 'error', message, percent: null })
+
+    return { ok: false, error: 'publication-target-unproven', message }
+  }
+
   const child = spawnUpdaterProcess(handoff.command, args, {
     cwd: HERMES_HOME,
-    env: {
-      ...process.env,
-      HERMES_HOME,
-      PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin')),
-      ...(IS_PACKAGED
-        ? {
-            HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-            HERMES_MANAGED_PUBLICATION_REPOSITORY:
-              INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication',
-            HERMES_MANAGED_PUBLICATION_BRANCH: branch,
-            HERMES_MANAGED_PUBLICATION_TARGET_SHA: String(opts.expectedTargetSha).toLowerCase()
-          }
-        : {})
-    },
+    env: updateEnv,
     detached: true,
     stdio: 'ignore'
   })

@@ -206,6 +206,7 @@ def test_managed_desktop_update_refuses_divergence_without_reset(
         "HERMES_MANAGED_PUBLICATION_REPOSITORY", "Dannyxlm/hermes-agent"
     )
     monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_BRANCH", "main")
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_TARGET_SHA", "b" * 40)
     side_effect, recorded = _make_update_side_effect(ff_only_fails=True)
     monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
 
@@ -213,6 +214,10 @@ def test_managed_desktop_update_refuses_divergence_without_reset(
         hermes_main.cmd_update(SimpleNamespace())
 
     assert not any("reset --hard" in " ".join(command) for command in recorded)
+    assert any(
+        command[-3:] == ["merge", "--ff-only", "b" * 40]
+        for command in recorded
+    )
     out = capsys.readouterr().out
     assert "Dannyxlm/hermes-agent@main" in out
     assert "no files or refs were reset" in out
@@ -235,6 +240,25 @@ def test_managed_desktop_update_refuses_a_branch_that_moved_after_check(
     assert not any("merge --ff-only" in " ".join(command) for command in recorded)
     assert not any("reset --hard" in " ".join(command) for command in recorded)
     assert "publication moved after the paired release check" in capsys.readouterr().out
+
+
+def test_managed_desktop_update_refuses_an_ahead_checkout(
+    monkeypatch, tmp_path, capsys
+):
+    """A clean but ahead checkout is not the approved immutable publication."""
+    _setup_update_mocks(monkeypatch, tmp_path)
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_UPDATE", "1")
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_BRANCH", "main")
+    monkeypatch.setenv("HERMES_MANAGED_PUBLICATION_TARGET_SHA", "b" * 40)
+    side_effect, recorded = _make_update_side_effect(commit_count="0")
+    monkeypatch.setattr(hermes_main.subprocess, "run", side_effect)
+    monkeypatch.setattr(hermes_main, "_capture_head_sha", lambda *_args: "c" * 40)
+
+    with pytest.raises(SystemExit, match="1"):
+        hermes_main.cmd_update(SimpleNamespace())
+
+    assert not any("merge --ff-only" in " ".join(command) for command in recorded)
+    assert "not at the approved publication" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

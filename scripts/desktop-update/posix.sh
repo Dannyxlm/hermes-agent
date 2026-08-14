@@ -424,5 +424,21 @@ if [ "$CODE" -eq 0 ] && printf '%s' "$OUT" | grep -q "Desktop build failed"; the
 fi
 
 if [ "$CODE" -eq 0 ]; then FINAL_CODE=0 FINAL_MSG="Update complete."
-else FINAL_CODE="$CODE" FINAL_MSG="Update failed (exit $CODE). Run hermes debug share in a terminal to send a report."; fi
+else
+  FINAL_CODE="$CODE"
+  case "$OUT" in
+    *"publication moved after the paired release check"*)
+      FINAL_MSG="Update paused because the paired Ava/Desktop release changed. Check for updates again, then retry. Nothing was reset."
+      ;;
+    *"checkout cannot fast-forward"*|*"checkout is not at the approved publication"*|*"checkout did not land on the approved publication"*)
+      FINAL_MSG="Update paused because this managed checkout no longer matches the approved release. Reinstall the current Desktop checkout, then retry. Nothing was reset."
+      ;;
+    *"approved target is invalid"*|*"ZIP fallback is not release-pinned"*)
+      FINAL_MSG="Update paused because the approved Desktop release could not be verified. Check for updates again, then retry."
+      ;;
+    *)
+      FINAL_MSG="Update failed (exit $CODE). Run hermes debug share in a terminal to send a report."
+      ;;
+  esac
+fi
 exit "$FINAL_CODE"
