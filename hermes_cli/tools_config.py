@@ -12,11 +12,13 @@ the `platform_toolsets` key.
 import json as _json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
 
 
 from hermes_cli.config import (
@@ -2138,6 +2140,135 @@ def _parse_enabled_flag(value, default: bool = True) -> bool:
         if lowered in {"false", "0", "no", "off"}:
             return False
     return default
+
+
+_MCP_ENV_REFERENCE_RE = re.compile(
+    r"\s*(?:(?:Bearer|Basic|Token)\s+)?\$\{(?:env:)?[A-Za-z_][A-Za-z0-9_]*\}\s*",
+    re.IGNORECASE,
+)
+_MCP_SECRET_LEAF_KEYS = frozenset({
+    "access_token",
+    "api_key",
+    "apikey",
+    "bearer",
+    "bearer_token",
+    "client_secret",
+    "credentials",
+    "id_token",
+    "jwt",
+    "password",
+    "passwd",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "token",
+})
+_MCP_SECRET_HEADER_KEYS = frozenset({
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+})
+_MCP_SENSITIVE_QUERY_KEYS = _MCP_SECRET_LEAF_KEYS | frozenset({
+    "auth",
+    "code",
+    "key",
+    "session",
+    "signature",
+    "x-amz-signature",
+})
+
+
+def credential_safe_mcp_server_definition(entry: dict) -> tuple[dict, bool]:
+    """Copy an MCP definition without copying literal credentials.
+
+    Raw ``${VAR}`` / ``${env:VAR}`` references are safe to carry between
+    profiles because they resolve in the target profile's secret scope.
+    Literal credentials are omitted while ordinary transport, lifecycle,
+    environment, header, and tool-selection settings survive. Returns the
+    projected definition plus whether the target profile still needs one or
+    more credentials configured.
+    """
+    from hermes_cli.agent_import import is_secret_key
+
+    def is_reference_template(value) -> bool:
+        return isinstance(value, str) and bool(_MCP_ENV_REFERENCE_RE.fullmatch(value))
+
+    def is_sensitive_key(key, container) -> bool:
+        lowered = str(key).strip().lower()
+        if lowered in _MCP_SECRET_LEAF_KEYS:
+            return True
+        if container == "env":
+            return is_secret_key(str(key))
+        if container == "headers":
+            return lowered in _MCP_SECRET_HEADER_KEYS or is_secret_key(str(key))
+        return False
+
+    def safe_url(value):
+        if not isinstance(value, str):
+            return value, False
+        try:
+            parts = urlsplit(value)
+        except (TypeError, ValueError):
+            return None, True
+
+        credentials_required = False
+        netloc = parts.netloc
+        if "@" in netloc:
+            userinfo, host = netloc.rsplit("@", 1)
+            auth_parts = [unquote(part) for part in userinfo.split(":")]
+            credentials_required = True
+            if not auth_parts or not all(is_reference_template(part) for part in auth_parts):
+                netloc = host
+
+        query_fields = []
+        for field in parts.query.split("&") if parts.query else []:
+            raw_key, separator, raw_value = field.partition("=")
+            key = unquote_plus(raw_key).strip().lower()
+            if is_secret_key(key) or key in _MCP_SENSITIVE_QUERY_KEYS:
+                credentials_required = True
+                value_text = unquote_plus(raw_value) if separator else ""
+                if not is_reference_template(value_text):
+                    continue
+            query_fields.append(field)
+
+        return (
+            urlunsplit((parts.scheme, netloc, parts.path, "&".join(query_fields), parts.fragment)),
+            credentials_required,
+        )
+
+    def project(value, container=None):
+        if isinstance(value, dict):
+            projected = {}
+            credentials_required = False
+            for key, child in value.items():
+                lowered = str(key).strip().lower()
+                if lowered == "url":
+                    copied, child_required = safe_url(child)
+                    credentials_required = credentials_required or child_required
+                    if copied is not None:
+                        projected[key] = copied
+                    continue
+                if is_sensitive_key(key, container):
+                    credentials_required = True
+                    if is_reference_template(child):
+                        projected[key] = child
+                    continue
+                copied, child_required = project(child, lowered)
+                projected[key] = copied
+                credentials_required = credentials_required or child_required
+            return projected, credentials_required
+        if isinstance(value, list):
+            projected = []
+            credentials_required = False
+            for child in value:
+                copied, child_required = project(child, container)
+                projected.append(copied)
+                credentials_required = credentials_required or child_required
+            return projected, credentials_required
+        return value, False
+
+    return project(entry)
 
 
 def enabled_mcp_server_names(config: dict) -> Set[str]:

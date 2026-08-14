@@ -3502,13 +3502,21 @@ def _format_concise_process_notification(
 ) -> str:
     """One-line "pretty" completion message for the ``concise`` display mode.
 
-    Success is a single status line; failure appends a short tail of output so
-    the user can see what went wrong without the full raw dump. The full
-    output always remains available to the agent via process(log/wait).
+    Success and unknown status are single status lines; failure appends a short
+    tail of output so the user can see what went wrong without the full raw
+    dump. The full output always remains available to the agent via
+    process(log/wait).
     """
-    ok = exit_code in {0, None}
-    icon = "✅" if ok else "❌"
-    verb = "finished" if ok else f"failed (exit {exit_code})"
+    failed = exit_code is not None and exit_code != 0
+    if exit_code == 0:
+        icon = "✅"
+        verb = "finished"
+    elif exit_code is None:
+        icon = "⚪"
+        verb = "ended (exit status unknown)"
+    else:
+        icon = "❌"
+        verb = f"failed (exit {exit_code})"
     parts = [f"{icon} Background task {verb}"]
     short_cmd = _shorten_command_for_display(command)
     if short_cmd:
@@ -3523,7 +3531,7 @@ def _format_concise_process_notification(
             dur = f"{secs}s"
         parts.append(f"({dur})")
     text = " ".join(parts)
-    if not ok and output:
+    if failed and output:
         tail_lines = [ln for ln in output.strip().splitlines() if ln.strip()][-5:]
         tail = "\n".join(tail_lines)
         if len(tail) > 500:
@@ -24023,6 +24031,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Return a routing-complete key for short-window process fan-in."""
         return tuple(str(evt.get(field) or "") for field in (
             "session_key",
+            "parent_session_id",
             "platform",
             "chat_type",
             "chat_id",

@@ -11,10 +11,23 @@ import { AGENT_MESSAGE_RE, agentAvatarCache, resolveAgentAvatar } from '@/compon
 // quiet run returns the recipient's reply, "Message from X" — the same
 // compact event notices the receiving chat shows.
 const DELIVERY_COMMAND_RE =
-  /(?:^|[;&|]\s*|\bhermes\s+)-p\s+("?)([a-z0-9][a-z0-9_-]{0,63})\1\s+chat\b[\s\S]*?-q\s+["']Message from/iu
+  /^hermes\s+-p\s+("?)([a-z0-9][a-z0-9_-]{0,63})\1\s+chat\b[\s\S]*\s-q\s+(?:"Message from[^"\r\n]*"|'Message from[^'\r\n]*')\s*$/iu
+
+// Canonical Bot Mode calls may run from home and use a bounded timeout. Strip
+// only that exact harmless wrapper before validating the whole remaining
+// command; any other shell composition must retain the normal terminal audit
+// row. Strict false negatives are safe — they show more audit detail.
+const DELIVERY_WRAPPER_RE = /^(?:cd\s+(?:~|"~"|'~')\s*&&\s*)?(?:timeout\s+\d+(?:\.\d+)?[smhd]?\s+)?/iu
+const UNSAFE_DELIVERY_SHELL_RE = /[\r\n;&|<>`\\$]/u
 
 export function deliveryTargetFromCommand(command: string): null | string {
-  const match = DELIVERY_COMMAND_RE.exec(command)
+  const candidate = command.trim().replace(DELIVERY_WRAPPER_RE, '')
+
+  if (!candidate || UNSAFE_DELIVERY_SHELL_RE.test(candidate)) {
+    return null
+  }
+
+  const match = DELIVERY_COMMAND_RE.exec(candidate)
 
   return match ? match[2].toLowerCase() : null
 }

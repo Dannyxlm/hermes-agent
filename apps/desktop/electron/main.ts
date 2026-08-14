@@ -3949,12 +3949,12 @@ function resolveRendererIndex() {
   const candidates = [path.join(APP_ROOT, 'dist', 'index.html'), path.join(resolveWebDist(), 'index.html')]
   const present = candidates.filter(fileExists)
 
-  // index.html and the hashed chunks it names are one generation. An update
-  // that replaces only one of the two shipped copies (app.asar vs
+  // index.html and the hashed files in its manifest graph are one generation.
+  // An update that replaces only one of the two shipped copies (app.asar vs
   // app.asar.unpacked) leaves a TORN copy: the window loads, then dies on the
   // first lazy import with "Failed to fetch dynamically imported module" and
-  // every restart reloads the same torn copy. Prefer a copy whose modules are
-  // all present, so the intact generation heals the boot by itself.
+  // every restart reloads the same torn copy. Prefer a copy whose required
+  // renderer files are all present, so the intact generation heals the boot.
   for (const candidate of present) {
     const missing = missingRendererAssets(candidate)
 
@@ -3964,7 +3964,7 @@ function resolveRendererIndex() {
 
     rememberLog(
       `[renderer] skipping torn renderer bundle at ${candidate}: ` +
-        `${missing.length} module file(s) named by index.html are missing ` +
+        `${missing.length} file(s) required by the renderer bundle are missing ` +
         `(${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', …' : ''})`
     )
   }

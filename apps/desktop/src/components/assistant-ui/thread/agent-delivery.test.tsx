@@ -23,6 +23,22 @@ describe('delivery command detection', () => {
     expect(deliveryTargetFromCommand('hermes -p turqoise chat -q "plain question"')).toBeNull()
     expect(deliveryTargetFromCommand('hermes sessions list')).toBeNull()
   })
+
+  it('rejects compound commands so unrelated terminal activity remains visible', () => {
+    const delivery = 'hermes -p turqoise chat -Q -q "Message from 🤖 Hermes: hi there"'
+
+    expect(deliveryTargetFromCommand(`echo preflight && ${delivery}`)).toBeNull()
+    expect(deliveryTargetFromCommand(`${delivery}; touch /tmp/after-delivery`)).toBeNull()
+    expect(deliveryTargetFromCommand(`cd ~ && ls && timeout 240 ${delivery}`)).toBeNull()
+  })
+
+  it('rejects redirects and shell substitutions', () => {
+    const delivery = 'hermes -p turqoise chat -Q -q "Message from 🤖 Hermes: hi there"'
+
+    expect(deliveryTargetFromCommand(`${delivery} > /tmp/reply`)).toBeNull()
+    expect(deliveryTargetFromCommand(delivery.replace('hi there', '$(whoami)'))).toBeNull()
+    expect(deliveryTargetFromCommand(delivery.replace('hi there', '`whoami`'))).toBeNull()
+  })
 })
 
 describe('reply extraction', () => {

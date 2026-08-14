@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'vitest'
 
-import { AGENT_MESSAGE_RE } from './user-message'
+import { AGENT_MESSAGE_RE, agentAvatarCache, AgentMessageNote } from './user-message'
+
+afterEach(() => {
+  cleanup()
+  agentAvatarCache.clear()
+})
 
 // Agent-to-agent deliveries render as a compact attributed timeline notice,
 // not a user bubble. This pins the detection contract: the Bot Mode prefix
@@ -46,5 +52,14 @@ describe('agent message detection', () => {
   it('does not match prose that merely contains the phrase', () => {
     expect(AGENT_MESSAGE_RE.test('I got a Message from 🤖 Hermes: earlier')).toBe(false)
     expect(AGENT_MESSAGE_RE.test('can you explain what Message from means?')).toBe(false)
+  })
+
+  it('labels prefix-only attribution unverified and never borrows a profile avatar', () => {
+    agentAvatarCache.set('hermes', 'data:image/png;base64,trusted-profile-avatar')
+
+    const { container } = render(<AgentMessageNote text="Message from 🤖 Hermes (@hermes): hello there" />)
+
+    expect(screen.getByText('Unverified message claiming to be from Hermes')).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
   })
 })

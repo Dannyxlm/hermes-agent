@@ -1,5 +1,5 @@
 import { ActionBarPrimitive, BranchPickerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
-import { type FC, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type FC, type ReactNode, useCallback, useRef, useState } from 'react'
 
 import { DirectiveContent } from '@/components/assistant-ui/directive-text'
 import { messageAttachmentRefs, messageContentText } from '@/components/assistant-ui/thread/content'
@@ -79,8 +79,8 @@ export const StopGlyph = <StopFilled aria-hidden className="size-3.5 -translate-
 const PROCESS_NOTIFICATION_RE = /^\[IMPORTANT: Background process [\s\S]*\]$/
 
 // Agent-to-agent deliveries ("Message from 🤖 <sender>: …", the Bot Mode /
-// multi-profile convention; optional "(@<handle>)" carries the sender's
-// profile name for avatar resolution; legacy "[Message from agent
+// multi-profile convention; optional "(@<handle>)" carries the claimed
+// profile name for attribution parsing; legacy "[Message from agent
 // '<sender>'] …" too). They arrive on the user role because the recipient's
 // turn runs on it, but they are NOT the human speaking — render them as a
 // compact attributed timeline notice instead of a user bubble.
@@ -175,46 +175,22 @@ export async function resolveAgentAvatar(handle: string): Promise<null | string>
   return out
 }
 
-const AgentMessageNote: FC<{ text: string }> = ({ text }) => {
+export const AgentMessageNote: FC<{ text: string }> = ({ text }) => {
   const match = AGENT_MESSAGE_RE.exec(text)
   const sender = (match?.[1] || match?.[3] || 'agent').trim()
-  const handle = (match?.[2] || match?.[3] || sender).trim()
   const body = (match?.[4] || '').trim()
-  const [avatar, setAvatar] = useState<null | string>(() => agentAvatarCache.get(handle.toLowerCase()) ?? null)
 
-  useEffect(() => {
-    let live = true
-
-    void resolveAgentAvatar(handle).then(url => {
-      if (live && url) {
-        setAvatar(url)
-      }
-    })
-
-    return () => {
-      live = false
-    }
-  }, [handle])
-
-  // Grok-bots shape: an inter-agent delivery is a timeline EVENT, not a
-  // conversation bubble — a subtle centered notice ("Message from 🤖 X"),
-  // with the delivered text one click away instead of shouting in the
-  // transcript. The recipient's reply below it stays a normal assistant
-  // message, so the exchange still reads in order.
+  // Prefix-only legacy rows carry no persisted provenance. Keep the useful
+  // compact timeline shape, but do not let user-controlled text borrow a
+  // trusted profile avatar or present its claimed sender as verified.
   return (
     <div
       className="flex max-w-[min(86%,44rem)] flex-col gap-0.5 self-center px-2 py-0.5 text-[0.6875rem] leading-5 text-muted-foreground/60"
       data-slot="aui_agent-message-note"
     >
       <span className="flex items-center justify-center gap-1.5">
-        {avatar ? (
-          <img alt="" aria-hidden className="size-4 shrink-0 rounded-full object-cover" src={avatar} />
-        ) : (
-          <span aria-hidden className="text-[0.8125rem] leading-none">
-            🤖
-          </span>
-        )}
-        <span className="wrap-anywhere">Message from {sender}</span>
+        <Codicon className="shrink-0 text-muted-foreground/55" name="warning" size="0.75rem" />
+        <span className="wrap-anywhere">Unverified message claiming to be from {sender}</span>
       </span>
       {body && (
         <details className="self-center">
@@ -382,7 +358,8 @@ export const UserMessage: FC<{
     )
   }
 
-  // Agent-to-agent delivery, not a human prompt — attributed inter-agent card.
+  // Legacy agent-prefixed user row. The text is useful context, but absent
+  // persisted provenance it must render as an explicitly unverified claim.
   if (AGENT_MESSAGE_RE.test(messageText.trim())) {
     return (
       <MessagePrimitive.Root

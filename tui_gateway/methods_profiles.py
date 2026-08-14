@@ -523,6 +523,8 @@ def _(rid, params: dict) -> dict:
             # raw config shape.
             mcp_out = []
             try:
+                from hermes_cli.tools_config import _parse_enabled_flag
+
                 mcp_cfg = cfg.get("mcp_servers")
                 if isinstance(mcp_cfg, dict):
                     for srv_name in sorted(mcp_cfg.keys()):
@@ -535,7 +537,9 @@ def _(rid, params: dict) -> dict:
                         mcp_out.append(
                             {
                                 "name": str(srv_name),
-                                "enabled": not is_truthy_value(entry.get("disabled", False)),
+                                "enabled": _parse_enabled_flag(
+                                    entry.get("enabled", True), default=True
+                                ),
                                 "transport": transport,
                             }
                         )
@@ -588,6 +592,7 @@ def _(rid, params: dict) -> dict:
     Each section is applied independently and best-effort; the result
     reports per-section success so a UI can surface partial failures.
     """
+
     name = str(params.get("name") or "").strip()
     if not name:
         return _err(rid, 4063, "name required")
@@ -602,6 +607,7 @@ def _(rid, params: dict) -> dict:
             return _err(rid, 4064, f"profile '{name}' not found")
 
         applied = {}
+        mcp_credentials_required = None
 
         if isinstance(params.get("ui_meta"), dict):
             # Client-agnostic UI metadata (avatar/pet/etc.), merged key-wise
@@ -685,13 +691,15 @@ def _(rid, params: dict) -> dict:
         )
         if needs_cfg:
             # Launch profile's MCP catalog, read BEFORE the home override
-            # flips config resolution to the target profile.
+            # flips config resolution to the target profile. Read the raw file
+            # so env-reference templates remain references rather than expanded
+            # launch-profile credentials.
             launch_mcp = {}
             if isinstance(params.get("enabled_mcp_servers"), list):
                 try:
-                    from hermes_cli.config import load_config_readonly
+                    from hermes_cli.config import read_user_config_raw
 
-                    launch_cfg = load_config_readonly() or {}
+                    launch_cfg = read_user_config_raw() or {}
                     if isinstance(launch_cfg.get("mcp_servers"), dict):
                         launch_mcp = launch_cfg["mcp_servers"]
                 except Exception:
@@ -733,14 +741,20 @@ def _(rid, params: dict) -> dict:
                         applied["toolsets"] = False
 
                 # ``enabled_mcp_servers`` (list[str], replace semantics):
-                # toggle the profile's mcp_servers entries via the standard
-                # ``disabled`` flag. Enabling a server the profile doesn't
+                # toggle the profile's mcp_servers entries via the runtime's
+                # ``enabled`` flag. Enabling a server the profile doesn't
                 # define copies its definition from the LAUNCH profile's
                 # config (capabilities UIs offer the main profile's catalog);
-                # unknown names are skipped, never invented. Server defs are
-                # config, not secrets — credentials stay in .env/auth.
+                # unknown names are skipped, never invented. The copied
+                # definition is a deep credential-free projection: structural
+                # config and env references survive, literal credentials do not.
                 if isinstance(params.get("enabled_mcp_servers"), list):
                     try:
+                        from hermes_cli.tools_config import (
+                            credential_safe_mcp_server_definition,
+                        )
+
+                        credentials_required = {}
                         wanted = {
                             str(s).strip()
                             for s in params["enabled_mcp_servers"]
@@ -755,24 +769,36 @@ def _(rid, params: dict) -> dict:
 
                         for srv in wanted:
                             if srv in mcp_cfg and isinstance(mcp_cfg[srv], dict):
+                                mcp_cfg[srv]["enabled"] = True
                                 mcp_cfg[srv].pop("disabled", None)
                             elif srv in launch_mcp and isinstance(launch_mcp[srv], dict):
-                                mcp_cfg[srv] = dict(launch_mcp[srv])
+                                projected, requires_credentials = (
+                                    credential_safe_mcp_server_definition(launch_mcp[srv])
+                                )
+                                mcp_cfg[srv] = projected
+                                mcp_cfg[srv]["enabled"] = True
                                 mcp_cfg[srv].pop("disabled", None)
+                                if requires_credentials:
+                                    credentials_required[srv] = True
                         for srv, entry in mcp_cfg.items():
                             if srv not in wanted and isinstance(entry, dict):
-                                entry["disabled"] = True
+                                entry["enabled"] = False
+                                entry.pop("disabled", None)
 
                         if mcp_cfg:
                             cfg["mcp_servers"] = mcp_cfg
                         save_config(cfg)
                         applied["mcp_servers"] = True
+                        mcp_credentials_required = credentials_required
                     except Exception:
                         applied["mcp_servers"] = False
             finally:
                 reset_hermes_home_override(token)
 
-        return _ok(rid, {"ok": all(applied.values()) if applied else True, "applied": applied})
+        result = {"ok": all(applied.values()) if applied else True, "applied": applied}
+        if mcp_credentials_required is not None:
+            result["credentials_required"] = mcp_credentials_required
+        return _ok(rid, result)
     except Exception as e:
         return _err(rid, 5064, str(e))
 
