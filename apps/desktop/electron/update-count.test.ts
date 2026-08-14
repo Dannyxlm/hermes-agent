@@ -17,8 +17,8 @@ import {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
-  resolveManagedPublicationBranch,
   resolveLegacyUpdateSafety,
+  resolveManagedPublicationBranch,
   resolveManagedPublicationSafety,
   shouldCountCommits
 } from './update-count'

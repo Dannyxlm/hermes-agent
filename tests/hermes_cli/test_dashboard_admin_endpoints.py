@@ -1456,6 +1456,10 @@ def test_spawn_hermes_action_scrubs_gateway_loop_guard_env(monkeypatch, tmp_path
 
     monkeypatch.setenv("_HERMES_GATEWAY", "1")
     monkeypatch.setattr(ws, "_ACTION_LOG_DIR", tmp_path)
+    # Isolate the module-global proc registry: _spawn_hermes_action stores
+    # _FakeProc (no poll()) in _ACTION_PROCS, and later tests' lifespan
+    # shutdown (_terminate_desktop_managed_gateway) would trip over it.
+    monkeypatch.setattr(ws, "_ACTION_PROCS", {})
 
     captured = {}
 
@@ -1514,3 +1518,27 @@ def test_desktop_lifespan_reaps_orphan_gateways_on_startup(
 
     assert called == [True]
 
+
+def test_desktop_lifespan_terminates_managed_gateway_restart(monkeypatch):
+    """A Desktop-owned gateway child must not survive its serve backend."""
+    import hermes_cli.web_server as ws
+
+    calls = []
+
+    class _FakeRunningProc:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            calls.append("terminate")
+
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    monkeypatch.setattr(ws, "_warm_gateway_module", lambda: None)
+    monkeypatch.setattr(ws, "_start_desktop_cron_ticker", lambda *_args: None)
+    monkeypatch.setitem(ws._ACTION_PROCS, "gateway-restart", _FakeRunningProc())
+
+    client, _header = _client()
+    with client:
+        pass
+
+    assert calls == ["terminate"]

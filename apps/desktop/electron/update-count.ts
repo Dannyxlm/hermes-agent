@@ -679,8 +679,8 @@ export {
   resolveBehindCount,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
-  resolveManagedPublicationBranch,
   resolveLegacyUpdateSafety,
+  resolveManagedPublicationBranch,
   resolveManagedPublicationSafety,
   shouldCountCommits
 }
