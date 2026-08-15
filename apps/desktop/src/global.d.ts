@@ -117,6 +117,17 @@ declare global {
       saveConnectionConfig: (payload: DesktopConnectionConfigInput) => Promise<DesktopConnectionConfig>
       applyConnectionConfig: (payload: DesktopConnectionConfigInput) => Promise<DesktopConnectionConfig>
       testConnectionConfig: (payload: DesktopConnectionConfigInput) => Promise<DesktopConnectionTestResult>
+      // v2 multi-connection registry: named agent sources, all persisted
+      // together (local + any number of remote/cloud/ssh instances).
+      connections: {
+        list: () => Promise<DesktopConnectionsRegistry>
+        save: (
+          payload: DesktopRegistryConnectionInput
+        ) => Promise<{ ok: boolean; connection: DesktopRegistryConnection; registry: DesktopConnectionsRegistry }>
+        remove: (id: string) => Promise<{ ok: boolean; registry: DesktopConnectionsRegistry }>
+        setPrimary: (id: string) => Promise<{ ok: boolean; registry: DesktopConnectionsRegistry }>
+        test: (id: string) => Promise<DesktopConnectionTestResult>
+      }
       sshConfigHosts: () => Promise<DesktopSshHostsResult>
       sshResolveHost: (host: string) => Promise<DesktopSshResolveResult>
       probeConnectionConfig: (remoteUrl: string) => Promise<DesktopConnectionProbeResult>
@@ -171,6 +182,11 @@ declare global {
       }) => Promise<null | string>
       writeClipboard: (text: string) => Promise<boolean>
       readClipboard: () => Promise<string>
+      saveGatewayFile?: (payload: { path: string; profile?: null | string; suggestedName?: string }) => Promise<{
+        canceled?: boolean
+        path?: string
+        saved: boolean
+      }>
       saveImageFromUrl: (url: string) => Promise<boolean>
       saveImageBuffer: (data: ArrayBuffer | Uint8Array, ext: string) => Promise<string>
       saveClipboardImage: () => Promise<string>
@@ -728,6 +744,59 @@ export interface DesktopConnectionTestResult {
   remoteHermesPath?: string
   remoteHermesVersion?: string
   remotePlatform?: string
+}
+
+// ── v2 multi-connection registry (named agent sources) ─────────────────────
+
+export type DesktopConnectionKind = 'cloud' | 'local' | 'remote' | 'ssh'
+
+// A registered agent source as the renderer sees it: token bytes never cross
+// the IPC boundary (preview + set flag instead, like DesktopConnectionConfig).
+export interface DesktopRegistryConnection {
+  id: string
+  kind: DesktopConnectionKind
+  // Required, registry-unique device name ("Homelab", "Work laptop").
+  label: string
+  url?: string
+  authMode?: 'oauth' | 'token'
+  org?: string
+  host?: string
+  user?: string
+  port?: number
+  keyPath?: string
+  remoteHermesPath?: string
+  remoteProfile?: string
+  tokenSet: boolean
+  tokenPreview: null | string
+}
+
+export interface DesktopConnectionsRegistry {
+  version: number
+  // id of the connection that owns the window/primary backend.
+  primary: string
+  // Whether OS-keychain-backed encryption (Electron safeStorage) is available;
+  // false drives the plain-text token opt-in on keyring-less Linux.
+  secureTokenStorage: boolean
+  connections: DesktopRegistryConnection[]
+}
+
+export interface DesktopRegistryConnectionInput {
+  // Present for edits; omitted on create (the main process mints the id).
+  id?: string
+  kind: DesktopConnectionKind
+  label: string
+  url?: string
+  authMode?: 'oauth' | 'token'
+  // Plaintext token to store (encrypted at rest); omit to keep the saved one.
+  token?: string
+  allowPlainTextToken?: boolean
+  org?: string
+  host?: string
+  user?: string
+  port?: null | number
+  keyPath?: string
+  remoteHermesPath?: string
+  remoteProfile?: string
 }
 
 export interface DesktopSshResolveResult {

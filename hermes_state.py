@@ -1495,6 +1495,7 @@ def is_disk_full_error(exc: BaseException | str | None) -> bool:
 PERSISTENCE_ERROR_CAUSES = (
     "locked",
     "compression",
+    "compression_closed",
     "turn_lease",
     "disk",
     "unknown",
@@ -1515,6 +1516,10 @@ def classify_persistence_error(exc_or_str) -> str:
       database write lock); transient, retry-later guidance applies.
     * ``"compression"`` — a live compression lease refused the transcript
       write; the database itself is healthy and unlocked.
+    * ``"compression_closed"`` — the write targeted a session already
+      rotated (closed) by compression and no live continuation was adopted;
+      the store is healthy — the client must refresh/adopt the new session
+      id, so disk-space advice would be a misdiagnosis.
     * ``"turn_lease"`` — a presented session-turn-lease holder no longer
       owns the conversation (expired, released, or reclaimed); fail-fast
       fencing, not a storage fault.
@@ -1532,11 +1537,15 @@ def classify_persistence_error(exc_or_str) -> str:
     # survived RPC wrapping).
     if isinstance(exc_or_str, SessionTurnLeaseLostError):
         return "turn_lease"
+    if isinstance(exc_or_str, CompressionSessionClosedError):
+        return "compression_closed"
     if isinstance(exc_or_str, CompressionSessionBusyError):
         return "compression"
     text = str(exc_or_str).lower()
     if "turn lease" in text:
         return "turn_lease"
+    if "closed by compression" in text:
+        return "compression_closed"
     if "being compressed" in text or "compression lease" in text:
         return "compression"
     if (
@@ -2827,6 +2836,16 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 data["system_prompt"] = resolved
         return data
 
+    @staticmethod
+    def _close_connection_quietly(conn: Optional[sqlite3.Connection]) -> None:
+        """Close a partially initialized connection without masking its error."""
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            logger.debug("Could not close a SessionDB connection", exc_info=True)
+
     def __init__(self, db_path: Path = None, read_only: bool = False):
         self.db_path = db_path or _default_db_path()
         # Fail hard (before any connection/pragma/mkdir) if a pytest-context
@@ -2924,6 +2943,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         self._token_writer_thread: Optional[threading.Thread] = None
         self._token_writer_stop = False
         self._token_writer_busy = False
+        initialization_complete = False
         try:
             if read_only:
                 # Read-only attach for cross-profile aggregation: SELECT-only,
@@ -2948,8 +2968,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 # only so read-only search keeps its FTS and trigram paths.
                 # Close the connection on ANY probe failure (e.g. malformed
                 # schema raises DatabaseError, not the OperationalError the
-                # probe handles): the outer except re-raises without cleanup,
-                # and a leaked tracked connection blocks _backup_db_file's
+                # probe handles). The constructor's outer finally also covers
+                # failures before this probe and BaseException paths, so a
+                # leaked tracked connection cannot block _backup_db_file's
                 # raw-copy for the rest of the process — the writable heal
                 # that follows would then repair WITHOUT its forensic backup.
                 try:
@@ -2973,6 +2994,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     except Exception:
                         pass
                     raise
+                initialization_complete = True
                 return
 
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3106,6 +3128,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             # racing session lifecycle and the surprise disk/latency cost on
             # an unattended open. (An interrupted optimize resumes when the
             # user re-runs the command.)
+            initialization_complete = True
         except Exception as exc:
             # Capture the cause so /resume and friends can surface WHY the
             # session DB is unavailable instead of a bare "Session database
@@ -3121,6 +3144,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             # ``hermes_state._set_last_init_error(None)`` explicitly.
             _set_last_init_error(f"{type(exc).__name__}: {exc}")
             raise
+        finally:
+            if not initialization_complete:
+                conn, self._conn = self._conn, None
+                self._close_connection_quietly(conn)
 
     # ── Read-path split ──
 
@@ -3992,8 +4019,33 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                             "WAL checkpoint (PASSIVE) at close failed: %s",
                             exc,
                         )
-                self._conn.close()
-                self._conn = None
+                conn, self._conn = self._conn, None
+                self._close_connection_quietly(conn)
+
+    def __del__(self) -> None:
+        """Safety net: close the connection if the caller forgot.
+
+        ``atexit.register`` in ``__init__`` pins this instance alive until
+        interpreter exit, which prevents GC from collecting orphaned
+        ``SessionDB`` instances on exception paths.  When callers forget
+        ``.close()``, the sqlite FDs leak until the process exits (EMFILE).
+
+        A ``__del__`` finalizer is the last-resort guard: it fires when the
+        GC collects the object, which *can* happen once ``atexit`` is
+        unregistered (via ``close()``) **or** when the atexit-held
+        reference is the only remaining root and the interpreter is
+        shutting down.  During normal interpreter teardown the order of
+        module cleanup is undefined, so we guard every attribute access.
+
+        Delegates to ``close()`` so the read pool, token writer, and atexit
+        hook are all cleaned up — not just the writer connection.
+        """
+        if self.__dict__.get("_conn") is None:
+            return
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ── Chunked FTS rebuild engine (v23 opt-in optimize) ──
     #
@@ -5266,11 +5318,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         self,
         session_id: str,
         cwd: str,
-        git_branch: str = None,
-        git_repo_root: str = None,
+        git_branch: Optional[str] = None,
+        git_repo_root: Optional[str] = None,
         replace_git_meta: bool = False,
-    ) -> None:
-        """Persist the session working directory when a frontend knows it.
+    ) -> Optional[int]:
+        """Persist the authoritative cwd and claim a Git metadata generation.
 
         ``git_branch`` records the git branch checked out in ``cwd`` at the time
         the session started/resumed. The sidebar groups main-checkout sessions
@@ -5288,27 +5340,100 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         MOVE (re-homing a session into another project) must overwrite the old
         repo identity even when the new cwd resolves to none — keeping the stale
         root would leave the session grouped under the project it just left.
+
+        Every call increments ``git_metadata_generation`` in the same write
+        transaction. Async Git probes must publish through
+        :meth:`publish_session_git_metadata` with the returned generation, so
+        an older worker cannot overwrite a newer cwd claim even after an
+        A -> B -> A transition or from another process sharing this database.
+        Metadata from a different cwd is cleared atomically with the move.
         """
         if not session_id or not cwd:
-            return
+            return None
 
         branch = (git_branch or "").strip()
         repo_root = (git_repo_root or "").strip()
 
-        sets = ["cwd = ?"]
-        params: List[Any] = [cwd]
-        if branch or replace_git_meta:
+        def _do(conn):
+            current = conn.execute(
+                "SELECT cwd FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if current is None:
+                return None
+
+            current_cwd = current["cwd"] if isinstance(current, sqlite3.Row) else current[0]
+            sets = [
+                "cwd = ?",
+                "git_metadata_generation = COALESCE(git_metadata_generation, 0) + 1",
+            ]
+            params: List[Any] = [cwd]
+            if current_cwd != cwd or replace_git_meta:
+                sets.extend(("git_branch = ?", "git_repo_root = ?"))
+                params.extend((branch or None, repo_root or None))
+            elif branch:
+                sets.append("git_branch = ?")
+                params.append(branch)
+            if repo_root and current_cwd == cwd and not replace_git_meta:
+                sets.append("git_repo_root = ?")
+                params.append(repo_root)
+            params.append(session_id)
+            conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", params
+            )
+            row = conn.execute(
+                "SELECT git_metadata_generation FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            value = row["git_metadata_generation"] if isinstance(row, sqlite3.Row) else row[0]
+            return int(value)
+
+        return self._execute_write(_do)
+
+    def publish_session_git_metadata(
+        self,
+        session_id: str,
+        cwd: str,
+        generation: int,
+        git_branch: Optional[str] = None,
+        git_repo_root: Optional[str] = None,
+    ) -> bool:
+        """Publish async Git enrichment only while its cwd claim is current."""
+        if (
+            not session_id
+            or not cwd
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation < 1
+        ):
+            return False
+
+        branch = (git_branch or "").strip()
+        repo_root = (git_repo_root or "").strip()
+        if not branch and not repo_root:
+            return False
+
+        sets: List[str] = []
+        params: List[Any] = []
+        if branch:
             sets.append("git_branch = ?")
-            params.append(branch or None)
-        if repo_root or replace_git_meta:
+            params.append(branch)
+        if repo_root:
             sets.append("git_repo_root = ?")
-            params.append(repo_root or None)
-        params.append(session_id)
+            params.append(repo_root)
+        params.extend((session_id, cwd, generation))
 
         def _do(conn):
-            conn.execute(f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", params)
+            cursor = conn.execute(
+                f"UPDATE sessions SET {', '.join(sets)} "
+                "WHERE id = ? AND cwd = ? "
+                "AND git_metadata_generation = ?",
+                params,
+            )
+            return cursor.rowcount == 1
 
-        self._execute_write(_do)
+        return bool(self._execute_write(_do))
 
     def backfill_repo_roots(self, cwd_to_root: Dict[str, str]) -> None:
         """Persist resolved git repo roots for cwds that don't have one yet.
@@ -7547,6 +7672,60 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         rowcount = self._execute_write(_do)
         return rowcount > 0
 
+    def set_session_hidden(self, session_id: str, hidden: bool) -> bool:
+        """Hide or unhide a session (and its whole compression lineage).
+
+        ``hidden`` is a generic "don't show in the global Sessions sidebar"
+        flag: a hidden session is dropped from the default
+        :meth:`list_sessions_rich` listing (which omits ``include_hidden``) but
+        stays fully resumable by the surface that owns it — useful for plugins
+        that manage their own sessions (e.g. kanban) and don't want them
+        cluttering the shared recents list. Like :meth:`set_session_archived`
+        / :meth:`set_session_pinned` the whole compression chain is flipped as
+        a unit, so hiding the surfaced tip hides the root (and vice-versa) no
+        matter which id the caller holds. Returns True when at least one row
+        changed.
+        """
+        def _do(conn):
+            cursor = conn.execute(
+                """
+                WITH RECURSIVE
+                  ancestors(id) AS (
+                    SELECT ?
+                    UNION
+                    SELECT parent.id
+                    FROM ancestors a
+                    JOIN sessions child ON child.id = a.id
+                    JOIN sessions parent ON parent.id = child.parent_session_id
+                    WHERE parent.end_reason = 'compression'
+                  ),
+                  descendants(id) AS (
+                    SELECT ?
+                    UNION
+                    SELECT child.id
+                    FROM descendants d
+                    JOIN sessions parent ON parent.id = d.id
+                    JOIN sessions child ON child.parent_session_id = parent.id
+                    WHERE parent.end_reason = 'compression'
+                  ),
+                  lineage(id) AS (
+                    SELECT id FROM ancestors
+                    UNION
+                    SELECT id FROM descendants
+                  )
+                UPDATE sessions
+                SET hidden = ?
+                WHERE id IN (SELECT id FROM lineage)
+                """,
+                (session_id, session_id, 1 if hidden else 0),
+            )
+            rowcount = cursor.rowcount
+            if rowcount is None or rowcount < 0:
+                rowcount = conn.execute("SELECT changes()").fetchone()[0]
+            return rowcount
+        rowcount = self._execute_write(_do)
+        return rowcount > 0
+
     def set_session_read(self, session_id: str, read: bool = True) -> bool:
         """Mark a session read or unread (and its whole compression lineage).
 
@@ -7766,7 +7945,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
     # declarative reconciliation are included automatically instead of
     # silently dropping out of list rows.
     _SESSION_COMPACT_EXCLUDED = frozenset(
-        {"system_prompt", "system_prompt_hash"}
+        {"system_prompt", "system_prompt_hash", "git_metadata_generation"}
     )
     _session_compact_cols_sql: Optional[str] = None
 
@@ -7818,6 +7997,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         compact_rows: bool = False,
         include_pinned: bool = False,
         session_key: str = None,
+        include_hidden: bool = False,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -7920,6 +8100,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             where_clauses.append("s.archived = 1")
         elif not include_archived:
             where_clauses.append("s.archived = 0")
+        if not include_hidden:
+            where_clauses.append("s.hidden = 0")
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         # Snapshot the filter params before the query builders below extend
@@ -9142,6 +9324,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         self,
         session_id: str,
         include_inactive: bool = False,
+        include_compacted: bool = False,
         limit: Optional[int] = None,
         offset: int = 0,
         latest: bool = False,
@@ -9153,6 +9336,14 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         ``include_inactive=True`` to load soft-deleted rows (e.g. for
         audit / debug views of rewound history). See
         :meth:`rewind_to_message` for the soft-delete mechanic.
+
+        Pass ``include_compacted=True`` to additionally load rows preserved
+        by in-place context compaction (``active=0, compacted=1``). Those are
+        durable display history, not soft-deleted rows — a user-visible
+        transcript read must not drop them, or earlier turns silently become
+        unreachable once the UI exhausts its active-only window. Soft-deleted
+        Undo/Rewind rows (``active=0, compacted=0``) stay excluded; use
+        ``include_inactive`` for those.
 
         Ordered by AUTOINCREMENT id (true insertion order) rather than
         timestamp — see c03acca50 for the WSL2 clock-regression rationale.
@@ -9172,7 +9363,18 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         """
         if after_id is not None and (latest or offset):
             raise ValueError("after_id is incompatible with latest/offset paging")
-        active_clause = "" if include_inactive else " AND active = 1"
+        if after_id is not None and include_compacted:
+            raise ValueError("after_id is incompatible with include_compacted (deduped display reads use offset paging)")
+        if include_inactive:
+            # Audit / debug reads: every row, including soft-deleted.
+            active_clause = ""
+        elif include_compacted:
+            # Display history: active rows plus rows preserved by in-place
+            # compaction (active=0, compacted=1), but never soft-deleted
+            # Undo/Rewind rows (active=0, compacted=0).
+            active_clause = " AND (active = 1 OR compacted = 1)"
+        else:
+            active_clause = " AND active = 1"
         keyset_clause = " AND id > ?" if after_id is not None else ""
         sql = (
             "SELECT * FROM messages WHERE session_id = ?"
@@ -9181,15 +9383,57 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         params: list = [session_id]
         if after_id is not None:
             params.append(after_id)
-        if limit is not None or offset:
-            # SQLite's OFFSET requires LIMIT; -1 means "no limit".
-            sql += " LIMIT ? OFFSET ?"
-            params.extend([-1 if limit is None else limit, offset])
-        with self._read_ctx() as conn:
-            cursor = conn.execute(sql, params)
-            rows = cursor.fetchall()
-        if latest:
-            rows.reverse()
+        if include_compacted:
+            # Compaction epochs copy the protected tail into each new
+            # generation, so the same logical message can exist as several
+            # rows (identical role/content/timestamp) with different active
+            # flags and ids. A display read must surface each message exactly
+            # once: prefer the live row, then the newest generation. Read the
+            # full display set (a session's rows are bounded; the UI-level
+            # 500-row cap lives in the endpoint, not here), dedupe in Python,
+            # then apply paging.
+            with self._read_ctx() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM messages WHERE session_id = ?" + active_clause
+                    + " ORDER BY id ASC",
+                    [session_id],
+                )
+                all_rows = cursor.fetchall()
+            seen: dict = {}
+            for row in all_rows:
+                # Tool fields participate in the dedupe key: compaction copies
+                # them verbatim, so identical tool messages across generations
+                # still collapse, while distinct tool calls that happen to
+                # share role/content/timestamp are never merged.
+                key = (
+                    row["role"],
+                    row["content"],
+                    row["timestamp"],
+                    row["tool_call_id"],
+                    row["tool_calls"],
+                    row["tool_name"],
+                )
+                cur = seen.get(key)
+                if cur is None or (row["active"], row["id"]) > (cur["active"], cur["id"]):
+                    seen[key] = row
+            rows = sorted(seen.values(), key=lambda r: r["id"])
+            if latest:
+                rows = rows[::-1]
+            rows = rows[offset:]
+            if limit is not None:
+                rows = rows[:limit]
+            if latest:
+                rows = rows[::-1]
+        else:
+            if limit is not None or offset:
+                # SQLite's OFFSET requires LIMIT; -1 means "no limit".
+                sql += " LIMIT ? OFFSET ?"
+                params.extend([-1 if limit is None else limit, offset])
+            with self._read_ctx() as conn:
+                cursor = conn.execute(sql, params)
+                rows = cursor.fetchall()
+            if latest:
+                rows.reverse()
         result = []
         for row in rows:
             msg = dict(row)
@@ -9432,7 +9676,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         verbatim.
         """
         session_ids = [session_id]
-        if include_ancestors:
+        if include_ancestors and not self._is_explicit_branch_session(session_id):
             session_ids = self._session_lineage_root_to_tip(session_id)
 
         active_clause = "" if include_inactive else " AND active = 1"
@@ -9614,16 +9858,22 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         - ``model_history`` — the tip session's active rows, alternation-repaired
           (the live-replay working conversation). Equivalent to
           ``get_messages_as_conversation(session_id, repair_alternation=True)``.
-        - ``display_history`` — the full lineage (ancestors → tip), verbatim, with
-          replayed-user dedup. Equivalent to
-          ``get_messages_as_conversation(session_id, include_ancestors=True)``.
+        - ``display_history`` — the full compression lineage (ancestors → tip),
+          verbatim, with replayed-user dedup. Explicit ``/branch`` sessions are
+          excluded from this lineage because their own rows already contain the
+          copied transcript; including the live parent's rows would let messages
+          written to the original after the fork leak into the branch.
 
         The display fetch already reads a superset of the model fetch (the tip
         rows are part of the lineage), so serving both from one lineage SELECT
         halves the resume's DB work versus two separate calls, with byte-identical
         output (see test_get_resume_conversations_matches_separate_reads).
         """
-        session_ids = self._session_lineage_root_to_tip(session_id)
+        session_ids = (
+            [session_id]
+            if self._is_explicit_branch_session(session_id)
+            else self._session_lineage_root_to_tip(session_id)
+        )
         with self._read_ctx() as conn:
             placeholders = ",".join("?" for _ in session_ids)
             rows = conn.execute(
@@ -9759,6 +10009,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         returns ONLY the genuine ancestor messages, identified by
         ``session_id != tip_session_id``. (#65919)
         """
+        if self._is_explicit_branch_session(session_id):
+            return []
+
         session_ids = self._session_lineage_root_to_tip(session_id)
         if len(session_ids) <= 1:
             return []
@@ -9779,6 +10032,33 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             include_ancestors=True,
             repair_alternation=False,
         )
+
+    def _is_explicit_branch_session(self, session_id: str) -> bool:
+        """Return whether *session_id* is a copied user-facing branch.
+
+        Branches and compression continuations both use ``parent_session_id``,
+        but they have different history semantics: a branch owns a copied
+        transcript, while a compression continuation needs its ended parent's
+        archived rows for display. The durable ``_branched_from`` marker is the
+        existing discriminator written by all branch creation paths.
+        """
+        if not session_id:
+            return False
+        with self._read_ctx() as conn:
+            row = conn.execute(
+                "SELECT model_config FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return False
+        raw_config = row["model_config"] if hasattr(row, "keys") else row[0]
+        if not raw_config:
+            return False
+        try:
+            config = json.loads(raw_config) if isinstance(raw_config, str) else raw_config
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return isinstance(config, dict) and bool(config.get("_branched_from"))
 
     def get_conversation_root(self, session_id: str) -> str:
         """Return the ROOT id of *session_id*'s lineage chain.

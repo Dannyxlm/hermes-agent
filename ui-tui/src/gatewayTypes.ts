@@ -119,8 +119,14 @@ export interface ConfigVoiceConfig {
   submit_mode?: unknown
 }
 
+export interface ConfigApprovalsConfig {
+  // Raw config value: only the explicit boolean false disables the safety gate.
+  destructive_slash_confirm?: unknown
+}
+
 export interface ConfigFullResponse {
   config?: {
+    approvals?: ConfigApprovalsConfig
     display?: ConfigDisplayConfig
     voice?: ConfigVoiceConfig
     paste_collapse_threshold?: number
@@ -739,4 +745,5 @@ export type GatewayEvent =
       session_id?: string
       type: 'message.complete'
     }
+  | { payload?: { usage?: Usage }; session_id?: string; type: 'session.usage' }
   | { payload?: { message?: string }; session_id?: string; type: 'error' }

@@ -50,6 +50,9 @@ const MODIFIER_CODES = new Set([
   'ShiftRight'
 ])
 
+// Modifier names as reported by `event.key` on a bare modifier keydown.
+const MODIFIER_KEYS = new Set(['Alt', 'Control', 'Meta', 'Shift'])
+
 function baseKeyFromCode(code: string): string | null {
   if (code.startsWith('Key')) {
     return code.slice(3).toLowerCase()
@@ -101,7 +104,25 @@ function baseKeyFromEventKey(key: string, shiftKey: boolean): string | null {
 // Returns the canonical combo for a keydown, or null while only modifiers are
 // held (so capture mode keeps waiting for a real key).
 export function comboFromEvent(event: KeyboardEvent): string | null {
+  // IME composition (Chinese/Japanese/Korean input): the keydown events
+  // during composition carry preedit keystrokes and the commit keypress
+  // (Enter/Space/Shift for candidate selection). Treating them as combos
+  // fires unrelated keybinds — e.g. typing 你 with a Chinese IME sent a
+  // keydown that dispatched `session.new` and silently opened a new session.
+  // Bail out entirely while composing.
+  if (event.isComposing || event.key === 'Process') {
+    return null
+  }
+
   if (MODIFIER_CODES.has(event.code)) {
+    return null
+  }
+
+  // A keydown whose `key` is a modifier name but whose `code` is a regular
+  // key is not a real modifier chord — legacy IMEs that synthesize keystrokes
+  // (Q9 2002 sends key="Control" with code="KeyW") produce these, and they
+  // would canonicalize to phantom combos (Ctrl+W → close active tab). Ignore.
+  if (MODIFIER_KEYS.has(event.key)) {
     return null
   }
 
@@ -223,8 +244,27 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   )
 }
 
-// A primary modifier (Cmd/Ctrl/Control) fires even while typing (e.g. ⌘K or
-// ⌃Tab from the composer); bare/Shift-only combos are suppressed in inputs.
-export function comboAllowedInInput(combo: string): boolean {
-  return /^(?:mod|ctrl)(?:\+|$)/.test(combo)
+const INPUT_SAFE_ACTIONS = new Set([
+  'composer.modelPicker',
+  'composer.voice',
+  'keybinds.openPanel',
+  'nav.commandPalette',
+  'session.next',
+  'session.prev',
+  'view.findInPage'
+])
+
+const TEXT_NAVIGATION_KEYS = new Set(['up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown'])
+
+// Only explicit text-entry-safe actions fire while typing. Editing/navigation
+// chords such as Ctrl+Arrow/PageUp must stay with the input even if a user
+// rebinds them to a global navigation action.
+export function actionAllowedInInput(actionId: string, combo: string): boolean {
+  const base = combo.split('+').pop()
+
+  if (base && TEXT_NAVIGATION_KEYS.has(base)) {
+    return false
+  }
+
+  return INPUT_SAFE_ACTIONS.has(actionId)
 }

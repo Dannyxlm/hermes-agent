@@ -123,6 +123,14 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   saveConnectionConfig: payload => ipcRenderer.invoke('hermes:connection-config:save', payload),
   applyConnectionConfig: payload => ipcRenderer.invoke('hermes:connection-config:apply', payload),
   testConnectionConfig: payload => ipcRenderer.invoke('hermes:connection-config:test', payload),
+  // v2 multi-connection registry: named agent sources (local / remote / cloud / ssh).
+  connections: {
+    list: () => ipcRenderer.invoke('hermes:connections:list'),
+    save: payload => ipcRenderer.invoke('hermes:connections:save', payload),
+    remove: id => ipcRenderer.invoke('hermes:connections:remove', id),
+    setPrimary: id => ipcRenderer.invoke('hermes:connections:set-primary', id),
+    test: id => ipcRenderer.invoke('hermes:connections:test', id)
+  },
   sshConfigHosts: () => ipcRenderer.invoke('hermes:ssh-config:hosts'),
   sshResolveHost: host => ipcRenderer.invoke('hermes:ssh-config:resolve', host),
   probeConnectionConfig: remoteUrl => ipcRenderer.invoke('hermes:connection-config:probe', remoteUrl),
@@ -156,6 +164,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   selectSavePath: options => ipcRenderer.invoke('hermes:selectSavePath', options),
   writeClipboard: text => ipcRenderer.invoke('hermes:writeClipboard', text),
   readClipboard: () => ipcRenderer.invoke('hermes:readClipboard'),
+  saveGatewayFile: payload => ipcRenderer.invoke('hermes:saveGatewayFile', payload),
   saveImageFromUrl: url => ipcRenderer.invoke('hermes:saveImageFromUrl', url),
   saveImageBuffer: (data, ext) => ipcRenderer.invoke('hermes:saveImageBuffer', { data, ext }),
   saveClipboardImage: () => ipcRenderer.invoke('hermes:saveClipboardImage'),

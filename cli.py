@@ -224,7 +224,7 @@ from hermes_cli.browser_connect import (
     try_launch_chrome_debug,
 )
 from hermes_cli.env_loader import load_hermes_dotenv
-from utils import base_url_host_matches, fast_safe_load
+from utils import base_url_host_matches, base_url_hostname, fast_safe_load
 
 _hermes_home = get_hermes_home()
 _project_env = Path(__file__).parent / '.env'
@@ -4381,6 +4381,12 @@ def _normalize_moa_model(model: Optional[str]) -> tuple[Optional[str], Optional[
                 return "moa", preset
     return None, model
 
+def _split_model_config_default(raw_default: Any) -> tuple[str, str]:
+    # Thin wrapper around the shared helper in config.py — kept for
+    # backward compat with existing call sites in this module.
+    from hermes_cli.config import split_model_config_default
+    return split_model_config_default(raw_default)
+
 
 class _VoiceInputMessage:
     """Sentinel wrapper for voice-transcribed messages in ``_pending_input``.
@@ -4565,7 +4571,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # authoritative.  This avoids conflicts in multi-agent setups where
         # env vars would stomp each other.
         _model_config = CLI_CONFIG.get("model", {})
-        _config_model = (_model_config.get("default") or _model_config.get("model") or "") if isinstance(_model_config, dict) else (_model_config or "")
+        _raw_default = (_model_config.get("default") or _model_config.get("model") or "") if isinstance(_model_config, dict) else (_model_config or "")
+        # A dict-valued default (``model.default: {provider: ..., model: ...}``)
+        # carries its own provider; flatten it here so the nested provider is
+        # available when ``requested_provider`` is constructed below instead of
+        # being discarded and replaced by the outer merged ``model.provider``
+        # (typically ``"auto"``, which is authoritative at runtime resolution).
+        _config_model, _nested_provider = _split_model_config_default(_raw_default)
         _DEFAULT_CONFIG_MODEL = ""
         # Track whether the user passed -m / --model so resume knows not to
         # clobber an explicit override with the session's stored model.
@@ -4592,7 +4604,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Auto-detect model from local server if still on default
         if self.model == _DEFAULT_CONFIG_MODEL:
             _base_url = (_model_config.get("base_url") or "") if isinstance(_model_config, dict) else ""
-            if "localhost" in _base_url or "127.0.0.1" in _base_url:
+            if base_url_hostname(_base_url) in ("localhost", "127.0.0.1"):
                 from hermes_cli.runtime_provider import _auto_detect_local_model
                 _detected = _auto_detect_local_model(_base_url)
                 if _detected:
@@ -4614,6 +4626,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self.requested_provider = (
             _moa_provider_override
             or provider
+            or _nested_provider
             or CLI_CONFIG["model"].get("provider")
             or os.getenv("HERMES_INFERENCE_PROVIDER")
             or "auto"
@@ -4846,6 +4859,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # don't auto-queue another continuation on top of a user-cancelled
         # turn (which would make Ctrl+C feel like it did nothing).
         self._last_turn_interrupted = False
+        # When stdout/PTY raises EIO (broken pipe after a stream-stall
+        # interrupt), freeze further UI paints so we don't spin the main
+        # thread at hundreds of escape-sequence writes/sec (#81521).
+        self._terminal_io_broken = False
         self._should_exit = False
         # /exit --delete: when True, the current session's SQLite history and
         # on-disk transcripts are deleted during shutdown. Set by
@@ -5011,6 +5028,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         finally:
             self._active_session_lease = None
 
+    def _mark_terminal_io_broken(self, reason: str = "") -> None:
+        """Stop UI paints after the PTY/stdout becomes unusable (#81521)."""
+        if getattr(self, "_terminal_io_broken", False):
+            return
+        self._terminal_io_broken = True
+        try:
+            self._pet_stop_anim()
+        except Exception:
+            pass
+        logger.warning(
+            "Terminal I/O broken%s — freezing UI paints to avoid redraw storm (#81521)",
+            f" ({reason})" if reason else "",
+        )
+
     def _invalidate(self, min_interval: float = 0.25) -> None:
         """Throttled UI repaint for high-frequency background updates.
 
@@ -5028,12 +5059,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         within the 250ms window — or an in-flight resize — silently drop it, so
         the prompt never renders and times out unseen (#41098).
         """
+        if getattr(self, "_terminal_io_broken", False):
+            return
         if getattr(self, "_resize_recovery_pending", False):
             return
         now = time.monotonic()
         if hasattr(self, "_app") and self._app and (now - getattr(self, "_last_invalidate", 0.0)) >= min_interval:
             self._last_invalidate = now
-            self._app.invalidate()
+            try:
+                self._app.invalidate()
+            except OSError as exc:
+                if getattr(exc, "errno", None) == errno.EIO:
+                    self._mark_terminal_io_broken("invalidate")
+                    return
+                raise
 
     def _paint_now(self) -> None:
         """Immediate, unthrottled repaint for user-blocking modal prompts.
@@ -5046,10 +5085,17 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         already use. See ``_invalidate`` for why the throttle must not gate
         these paints (#41098).
         """
+        if getattr(self, "_terminal_io_broken", False):
+            return
         app = getattr(self, "_app", None)
         if app is not None:
             try:
                 app.invalidate()
+            except OSError as exc:
+                if getattr(exc, "errno", None) == errno.EIO:
+                    self._mark_terminal_io_broken("paint_now")
+                    return
+                raise
             except Exception:
                 pass
 
@@ -5068,6 +5114,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         matching the standard terminal-UX convention (bash, zsh, fish,
         vim, htop).
         """
+        if getattr(self, "_terminal_io_broken", False):
+            return
         app = getattr(self, "_app", None)
         if not app:
             return
@@ -5075,9 +5123,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             app,
             rebuild_scrollback=self._redraw_rebuilds_scrollback(),
         )
+        if getattr(self, "_terminal_io_broken", False):
+            return
         _replay_output_history()
         try:
             app.invalidate()
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.EIO:
+                self._mark_terminal_io_broken("force_full_redraw")
+                return
+            raise
         except Exception:
             pass
 
@@ -5142,8 +5197,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
              screen/cursor state and forces a clean repaint.
 
         Both steps are independently safe and self-guard, so a failure of one
-        never prevents the other.
+        never prevents the other. If the PTY is already dead (EIO), skip the
+        redraw entirely — painting a broken fd is the #81521 redraw storm.
         """
+        if getattr(self, "_terminal_io_broken", False):
+            return
         try:
             from hermes_cli.curses_ui import flush_stdin
             flush_stdin()
@@ -5160,6 +5218,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _clear_prompt_toolkit_screen(self, app, *, rebuild_scrollback: bool = False) -> None:
         """Clear the terminal and reset prompt_toolkit renderer state."""
+        if getattr(self, "_terminal_io_broken", False):
+            return
         try:
             renderer = app.renderer
             out = renderer.output
@@ -5176,6 +5236,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # next _redraw() starts from a known (0, 0) origin and
             # re-renders every cell rather than diffing against stale.
             renderer.reset(leave_alternate_screen=False)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.EIO:
+                self._mark_terminal_io_broken("clear_screen")
+                return
+            pass
         except Exception:
             pass
 
@@ -6050,7 +6115,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             display = cfg.get("display", {}) if isinstance(cfg.get("display"), dict) else {}
             pet_cfg = display.get("pet", {}) if isinstance(display.get("pet"), dict) else {}
 
-            enabled = bool(pet_cfg.get("enabled"))
+            from utils import is_truthy_value
+
+            enabled = is_truthy_value(pet_cfg.get("enabled"), default=False)
             slug = str(pet_cfg.get("slug", "") or "")
             scale = float(pet_cfg.get("scale", constants.DEFAULT_SCALE) or constants.DEFAULT_SCALE)
             cols = constants.resolve_cols(scale, pet_cfg.get("unicode_cols", 0))
@@ -6211,6 +6278,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """Advance the frame + invalidate on a timer while a pet is enabled."""
         while self._pet_anim_running:
             time.sleep(self._PET_FRAME_INTERVAL)
+            if getattr(self, "_terminal_io_broken", False):
+                self._pet_anim_running = False
+                break
             now = time.monotonic()
             if now - self._pet_cfg_checked >= self._PET_CFG_INTERVAL:
                 self._pet_cfg_checked = now
@@ -6223,6 +6293,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if app is not None:
                 try:
                     app.invalidate()
+                except OSError as exc:
+                    if getattr(exc, "errno", None) == errno.EIO:
+                        self._mark_terminal_io_broken("pet_anim")
+                        break
                 except Exception:
                     pass
 
@@ -6659,7 +6733,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _normalize_model_for_provider(self, resolved_provider: str) -> bool:
         """Normalize provider-specific model IDs and routing."""
-        current_model = (self.model or "").strip()
+        current_model = str(self.model or "").strip()
+        if isinstance(self.model, dict):
+            _m, _ = _split_model_config_default(self.model)
+            current_model = _m
         changed = False
 
         try:
@@ -7818,11 +7895,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 f"[dim]   Hermes needs at least {MINIMUM_CONTEXT_LENGTH:,} tokens. Tool schemas + system prompt use a large fixed prefix.[/]"
             )
             base_url = getattr(self, "base_url", "") or ""
-            if "11434" in base_url or "ollama" in base_url.lower():
+            from urllib.parse import urlparse as _urlparse
+            try:
+                _parsed = _urlparse(base_url if "://" in base_url else f"//{base_url}")
+                _port = _parsed.port
+            except ValueError:
+                _port = None
+            _host = base_url_hostname(base_url)
+            if _port == 11434 or "ollama" in _host:
                 self._console_print(
                     f"[dim]   Ollama fix: OLLAMA_CONTEXT_LENGTH={MINIMUM_CONTEXT_LENGTH} ollama serve[/]"
                 )
-            elif "1234" in base_url:
+            elif _port == 1234:
                 self._console_print(
                     "[dim]   LM Studio fix: Set context length in model settings → reload model[/]"
                 )
@@ -8973,11 +9057,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             CLI_CONFIG["agent"].get("service_tier", "")
         )
         _model_config = CLI_CONFIG.get("model", {})
-        _config_model = (
-            (_model_config.get("default") or _model_config.get("model") or "")
-            if isinstance(_model_config, dict)
-            else (_model_config or "")
-        )
+        _raw_default2 = (_model_config.get("default") or _model_config.get("model") or "") if isinstance(_model_config, dict) else (_model_config or "")
+        _config_model, _ = _split_model_config_default(_raw_default2)
         if _config_model and _config_model != getattr(self, "model", None):
             _config_provider = (
                 _model_config.get("provider", "")
@@ -12510,10 +12591,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             from agent.insights import InsightsEngine
 
             db = SessionDB()
-            engine = InsightsEngine(db)
-            report = engine.generate(days=days, source=source)
-            print(engine.format_terminal(report))
-            db.close()
+            try:
+                engine = InsightsEngine(db)
+                report = engine.generate(days=days, source=source)
+                print(engine.format_terminal(report))
+            finally:
+                db.close()
         except Exception as e:
             print(f"  Error generating insights: {e}")
 
@@ -14791,9 +14874,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
                 from hermes_cli.config import load_config
 
+                _img_model, _img_provider = "", ""
+                if isinstance(self.model, dict):
+                    _img_model, _ = _split_model_config_default(self.model)
+                else:
+                    _img_model = str(self.model or "")
+                if isinstance(self.provider, dict):
+                    _, _img_provider = _split_model_config_default(self.provider)
+                else:
+                    _img_provider = str(self.provider or "")
                 _img_mode = decide_image_input_mode(
-                    (self.provider or "").strip(),
-                    (self.model or "").strip(),
+                    _img_provider.strip(),
+                    _img_model.strip(),
                     load_config(),
                     requested_provider=(self.requested_provider or "").strip(),
                 )
@@ -18637,7 +18729,23 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         except Exception:
                             pass  # Non-fatal — don't break the main loop
 
+                except OSError as e:
+                    if getattr(e, "errno", None) == errno.EIO:
+                        self._mark_terminal_io_broken("process_loop")
+                        logger.warning(
+                            "process_loop EIO — freezing UI paints (#81521): %s",
+                            e,
+                        )
+                        continue
+                    logger.warning("process_loop unhandled error (msg may be lost): %s", e)
                 except Exception as e:
+                    if isinstance(e, OSError) and getattr(e, "errno", None) == errno.EIO:
+                        self._mark_terminal_io_broken("process_loop")
+                        logger.warning(
+                            "process_loop EIO — freezing UI paints (#81521): %s",
+                            e,
+                        )
+                        continue
                     logger.warning("process_loop unhandled error (msg may be lost): %s", e)
         
         # Start processing thread

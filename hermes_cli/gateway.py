@@ -1525,6 +1525,54 @@ def kill_gateway_processes(
     return killed
 
 
+_REAPER_SUPERVISOR_WALK_LIMIT = 12
+
+
+def _reaper_candidate_is_supervisor_owned(pid: int) -> bool:
+    """True when ``pid`` is a gateway process owned by the Windows Task Scheduler.
+
+    Windows-only backstop for the orphan reaper: ``_get_service_pids()`` is
+    empty on Windows (no systemd/launchd query), so a Scheduled-Task gateway
+    whose ``gateway.pid`` record is missing or stale is invisible to both the
+    service-PID and recorded-PID exclusions — yet it is alive and supervised.
+    Scheduled Tasks run under the services tree, so a candidate whose parent
+    chain reaches ``services.exe`` is spared even with no pidfile (#83683,
+    #86098).
+
+    This check is deliberately NOT applied on POSIX: there, every process has
+    PID 1 (launchd / init / systemd) in its ancestry — and a genuine orphan is
+    *reparented directly to PID 1* — so supervisor-name ancestry carries zero
+    signal and would spare every orphan the reaper exists to kill (#51325,
+    #75936). POSIX supervised gateways are already covered pidfile-
+    independently by the ``_get_service_pids()`` exclusion.
+
+    Known limitation (fail-open): if the Task-launched bootstrap parent has
+    already exited, Windows does not reparent the gateway, the chain breaks
+    before ``services.exe``, and the gateway is treated as an orphan. Any
+    error (process gone, psutil unavailable) is likewise treated as "not
+    owned" so a genuine orphan is still reaped.
+    """
+    if not is_windows():
+        return False
+    try:
+        import psutil  # type: ignore
+
+        parent = psutil.Process(pid).parent()
+        for _ in range(_REAPER_SUPERVISOR_WALK_LIMIT):
+            if parent is None:
+                break
+            try:
+                name = (parent.name() or "").lower()
+            except Exception:
+                name = ""
+            if name == "services.exe":
+                return True
+            parent = parent.parent()
+    except Exception:
+        pass
+    return False
+
+
 def _reap_unsupervised_gateway_orphans(extra_exclude: set | None = None) -> bool:
     """Kill no-supervisor gateway orphans the pidfile/runtime record can't see.
 
@@ -1555,20 +1603,54 @@ def _reap_unsupervised_gateway_orphans(extra_exclude: set | None = None) -> bool
     own = {os.getpid()}
     if extra_exclude:
         own |= extra_exclude
-    # On macOS, exclude the launchd-managed gateway PID so the orphan reaper
-    # doesn't kill a supervised gateway when Hermes Desktop opens (the serve
-    # process calls this on startup).  supports_systemd_services() returns
-    # False on macOS, so without this the launchd gateway looks like an
-    # unsupervised orphan and gets SIGTERM'd, causing launchd to restart it.
-    if is_macos():
-        try:
-            own |= _get_service_pids()
-        except Exception:
-            pass
+    # Service-managed gateways are not orphans — never reap them.  This
+    # covers macOS launchd (supports_systemd_services() is False there, so
+    # without this the launchd gateway looks like an unsupervised orphan and
+    # gets SIGTERM'd, causing launchd to restart it — or leaving it down
+    # under KeepAlive.SuccessfulExit=false) and any systemd unit reachable
+    # from a host that got past the gate above (#83683, #85344).
+    try:
+        own |= _get_service_pids()
+    except Exception:
+        pass
+    # On Windows there is no systemd/launchd service query at all
+    # (_get_service_pids() returns an empty set), so a gateway supervised by
+    # a Scheduled Task / Startup VBS looks like an unsupervised orphan to the
+    # process scan (#86098).  The same holds on every platform for a healthy
+    # gateway launched standalone (no service registration) whose PID the
+    # runtime record can see (#83683).  Exempt the recorded healthy gateway
+    # PID and its parent chain: a recorded, liveness-verified gateway is by
+    # definition not an orphan "the pidfile/runtime record can't see", and
+    # the Scheduled-Task bootstrap's argv (``gateway run``) matches the
+    # gateway scan — killing that bootstrap takes the detached gateway it
+    # spawned down with it.
+    try:
+        from gateway.status import get_running_pid
+
+        recorded = get_running_pid()
+        if recorded and recorded > 0:
+            own.add(recorded)
+            try:
+                import psutil  # type: ignore
+
+                parent = psutil.Process(recorded).parent()
+                while parent is not None:
+                    own.add(parent.pid)
+                    parent = parent.parent()
+            except Exception:
+                pass
+    except Exception:
+        pass
     try:
         # find_gateway_pids() includes no-supervisor `gateway restart` runtimes
-        # for the current profile when no systemd supervisor is present.
-        orphans = [p for p in find_gateway_pids(exclude_pids=own) if p and p > 0]
+        # for the current profile when no systemd supervisor is present.  On
+        # Windows, additionally drop any candidate the Task Scheduler owns —
+        # the pidfile-less gap neither exclusion above can see (#83683, #86098).
+        orphans = [
+            p
+            for p in find_gateway_pids(exclude_pids=own)
+            if p and p > 0 and not _reaper_candidate_is_supervisor_owned(p)
+        ]
     except Exception:
         return False
     if not orphans:

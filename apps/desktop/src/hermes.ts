@@ -86,6 +86,11 @@ import type {
 export const STARTUP_REQUEST_TIMEOUT_MS = 60_000
 const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 60_000
+// The cron trigger endpoint intentionally waits for the whole job so its
+// response reflects the persisted execution result. Agent jobs can run far
+// longer than the Electron fetch default; keep this override local to the one
+// synchronous long-operation endpoint rather than weakening all API timeouts.
+export const CRON_TRIGGER_REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000
 // prompt.submit is effectively fire-and-forget: turn completion is signaled by
 // stream / message.complete events, NOT by the RPC return. A long turn (MoA
 // presets running references + aggregator in series, deep reasoning, large tool
@@ -679,7 +684,7 @@ export function getSession(id: string, profile?: string | null): Promise<Session
 export function getSessionMessages(
   id: string,
   profile?: string | null,
-  page: { limit?: number; offset?: number; order?: 'latest' | 'oldest' } = {}
+  page: { limit?: number; offset?: number; order?: 'latest' | 'oldest'; includeCompacted?: boolean } = {}
 ): Promise<SessionMessagesResponse> {
   const query = new URLSearchParams()
 
@@ -699,6 +704,10 @@ export function getSessionMessages(
     query.set('order', page.order)
   }
 
+  if (page.includeCompacted !== undefined) {
+    query.set('include_compacted', String(page.includeCompacted))
+  }
+
   const suffix = query.size ? `?${query.toString()}` : ''
 
   return window.hermesDesktop.api<SessionMessagesResponse>({
@@ -708,7 +717,10 @@ export function getSessionMessages(
 }
 
 export function getLatestSessionMessages(id: string, profile?: string | null): Promise<SessionMessagesResponse> {
-  return getSessionMessages(id, profile, { limit: 500, order: 'latest' })
+  // includeCompacted: durable display history must include rows preserved by
+  // in-place compaction (active=0, compacted=1); without them the transcript
+  // silently ends at the compaction boundary and earlier turns are unreachable.
+  return getSessionMessages(id, profile, { limit: 500, order: 'latest', includeCompacted: true })
 }
 
 export async function getAllSessionMessages(
@@ -727,7 +739,8 @@ export async function getAllSessionMessages(
     const page = await getSessionMessages(id, profile, {
       limit: pageSize,
       offset,
-      order: 'oldest'
+      order: 'oldest',
+      includeCompacted: true
     })
 
     resolvedSessionId = page.session_id
@@ -1487,7 +1500,8 @@ export function triggerCronJob(jobId: string): Promise<CronJob> {
   return window.hermesDesktop.api<CronJob>({
     ...profileScoped(),
     path: `/api/cron/jobs/${encodeURIComponent(jobId)}/trigger`,
-    method: 'POST'
+    method: 'POST',
+    timeoutMs: CRON_TRIGGER_REQUEST_TIMEOUT_MS
   })
 }
 

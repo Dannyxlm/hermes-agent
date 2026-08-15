@@ -78,6 +78,15 @@ DEFAULT_CONFIG = {
         # (/restart, SIGUSR1), prefer restart_after_turn_timeout below so
         # active turns finish *before* stop() begins (#77184).
         "restart_drain_timeout": 0,
+        # Cron-only floor under the stop()/drain wait (seconds). A chat turn
+        # interrupted by a restart is announced to the user and resumed on
+        # their next message; an interrupted cron run is written to jobs.json
+        # as a permanent failure that nobody is waiting on, so it must not
+        # inherit restart_drain_timeout's 0 (#82161). Clamped at runtime to
+        # the shutdown-watchdog leash minus teardown headroom, so raising it
+        # past ~50s has no effect unless TimeoutStopSec is raised too.
+        # 0 = opt out (cron drains on restart_drain_timeout, legacy).
+        "cron_drain_timeout": 30,
         # In-band restart wait for active turns to finish before stop()
         # (seconds). /restart and SIGUSR1 refuse new work, then wait up to
         # this cap for in-flight agents/cron/api runs to complete naturally
@@ -1804,7 +1813,7 @@ DEFAULT_CONFIG = {
                                      # (floor 30s) to enforce a hard cap.
         "reasoning_effort": "",  # subagent effort: "ultra", "max", "xhigh", "high",
                                  # "medium", "low", "minimal", "none" (empty = inherit)
-        "max_concurrent_children": 3,  # unified concurrency cap: max parallel children per batch
+        "max_concurrent_children": 10,  # unified concurrency cap: max parallel children per batch
                                        # AND max concurrent background (background=true)
                                        # delegation units. New async dispatches beyond the cap
                                        # fall back to synchronous execution. Floor of 1, no ceiling.
@@ -2199,8 +2208,9 @@ DEFAULT_CONFIG = {
         # through tools.slash_confirm — native yes/no buttons on Telegram,
         # Discord, and Slack; text fallback elsewhere.  Users click "Always
         # Approve" to silence the prompt permanently; that flips this key to
-        # false.  TUI has its own modal overlay (HERMES_TUI_NO_CONFIRM=1 to
-        # opt out there).
+        # false.  TUI also honors this setting for its /clear, /new, and /reset
+        # modal; HERMES_TUI_NO_CONFIRM=1 force-skips that modal regardless of
+        # the configured value.
         "destructive_slash_confirm": True,
     },
 
@@ -3393,7 +3403,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 36,
+    "_config_version": 37,
 }
 
 # Optional environment variables that enhance functionality
