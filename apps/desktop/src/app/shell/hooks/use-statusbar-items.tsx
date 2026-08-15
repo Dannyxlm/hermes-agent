@@ -292,6 +292,7 @@ export function useStatusbarItems({
       restarting: updateApply.stage === 'restart',
       sha,
       target: 'client',
+      updateAvailable: updateStatus?.updateAvailable,
       version: appVersion
     })
 
@@ -342,6 +343,7 @@ export function useStatusbarItems({
     updateApply.stage,
     updateStatus?.currentSha,
     updateStatus?.upstreamTracking,
+    updateStatus?.updateAvailable,
     t.updates.desktopUpstreamError,
     t.updates.desktopUpstreamReadOnlyNotice,
     t.updates.desktopUpstreamStale

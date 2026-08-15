@@ -3239,10 +3239,13 @@ async def get_status(profile: Optional[str] = None):
         # to decide whether it can use the system-browser + loopback + PKCE
         # flow (no embedded webview, no session cookies) or must fall back to
         # the legacy embedded-webview cookie flow. "cookie" is always available
-        # in gated mode; "native_pkce" is present only when at least one
-        # registered session provider is a brokerable OAuth provider (not a
-        # password or token-only credential). Absent field / missing
-        # "native_pkce" ⇒ older gateway ⇒ desktop falls back automatically.
+        # in gated mode; "native_pkce" is present when at least one interactive
+        # session provider is registered — OAuth providers broker the upstream
+        # IDP round trip, password providers complete interactively at /login
+        # in the system browser (where OS password managers can autofill; an
+        # embedded webview cannot reach them). Token-only credentials (e.g.
+        # drain) don't count. Absent field / missing "native_pkce" ⇒ older
+        # gateway ⇒ desktop falls back automatically.
         auth_flows: list[str] = []
         try:
             from hermes_cli.dashboard_auth import (
@@ -3252,11 +3255,7 @@ async def get_status(profile: Optional[str] = None):
             auth_providers = [p.name for p in _list_providers()]
             if auth_required:
                 auth_flows.append("cookie")
-                brokerable = [
-                    p for p in _list_session_providers()
-                    if not getattr(p, "supports_password", False)
-                ]
-                if brokerable:
+                if _list_session_providers():
                     auth_flows.append("native_pkce")
         except Exception:
             # Module not importable yet (early startup) — leave as [].
@@ -7392,16 +7391,7 @@ def _apply_model_assignment_sync(
         model_cfg = _apply_main_model_assignment(
             cfg.get("model", {}), provider, model, base_url, api_key
         )
-        # Fall back to the provider entry's stored key only when the request
-        # didn't carry one — same precedence as the base_url fill above. An
-        # unconditional overwrite silently discards a key the caller is
-        # rotating in, and model.api_key outranks the environment at client
-        # construction (#62269), so the stale key keeps authenticating.
-        if (
-            not api_key
-            and isinstance(provider_entry, dict)
-            and provider_entry.get("api_key")
-        ):
+        if isinstance(provider_entry, dict) and provider_entry.get("api_key"):
             model_cfg["api_key"] = provider_entry["api_key"]
         cfg["model"] = model_cfg
 
@@ -16918,7 +16908,10 @@ async def pty_ws(ws: WebSocket) -> None:
         await ws.close(code=1011)
         return
 
-    await session.attach(ws)
+    # A fresh xterm cannot reliably reconstruct the TUI from an arbitrary
+    # bounded tail of alternate-screen, differential ANSI output. Reused PTYs
+    # emit a complete frame after replay so reconnects never reopen blank.
+    await session.attach(ws, force_redraw=not _created)
 
     # --- writer loop: WebSocket → PTY master ----------------------------
     # No reader task here: the session's drain task (spawned once per PTY,

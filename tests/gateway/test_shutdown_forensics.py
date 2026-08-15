@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import signal
@@ -133,6 +134,35 @@ class TestParseSystemdDuration:
 # ---------------------------------------------------------------------------
 
 class TestCheckSystemdTimingAlignment:
+
+    def test_system_service_queries_the_system_manager(self, monkeypatch):
+        monkeypatch.setenv("INVOCATION_ID", "abc")
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/self/cgroup":
+                return io.StringIO("0::/system.slice/hermes-gateway.service\n")
+            return real_open(path, *args, **kwargs)
+
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            timeout = "1min 30s" if "--user" in command else "3min 30s"
+            return sf.subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=f"TimeoutStopUSec={timeout}\n",
+            )
+
+        monkeypatch.setattr("builtins.open", fake_open)
+        monkeypatch.setattr(sf.subprocess, "run", fake_run)
+
+        result = sf.check_systemd_timing_alignment(180.0)
+
+        assert result is not None
+        assert result["timeout_stop_sec"] == 210.0
+        assert all("--user" not in command for command in calls)
 
     def test_returns_none_when_unit_undeterminable(self, monkeypatch):
         monkeypatch.setenv("INVOCATION_ID", "abc")

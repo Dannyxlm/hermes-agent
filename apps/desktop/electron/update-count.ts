@@ -1,30 +1,70 @@
 // Whether `git rev-list HEAD..origin/<branch> --count` produces a meaningful
-// number worth computing. On a SHALLOW checkout (installer clones with
-// --depth 1) the local history often shares no merge-base with the freshly
-// fetched origin tip, so the count enumerates the entire remote ancestry and
-// returns a bogus huge number (e.g. 12104) — see #51922. resolveBehindCount
-// discards that bogus count in favour of a SHA compare, so the caller should
-// SKIP the expensive rev-list entirely in that case rather than run it and
-// throw the result away.
-function shouldCountCommits({ isShallow, hasMergeBase }) {
-  return !(isShallow && !hasMergeBase)
+// number worth computing. Installer checkouts are shallow (`--depth 1`), so
+// their visible graph is incomplete even when `merge-base` happens to find a
+// common commit. Exact counts are only trustworthy in full clones.
+function shouldCountCommits({ isShallow }) {
+  return !isShallow
 }
 
 // Resolve how many commits the local checkout is behind origin for the desktop
-// update indicator. When the count isn't meaningful (shallow + no merge-base)
-// fall back to a binary up-to-date check by SHA, exactly like the official-SSH
-// path in checkUpdates() and the CLI guard in hermes_cli/banner.py. Full clones
-// (developers / Docker dev images) keep the exact count path unchanged.
-function resolveBehindCount({ countStr, currentSha, targetSha, isShallow, hasMergeBase }) {
-  if (!shouldCountCommits({ isShallow, hasMergeBase })) {
-    if (currentSha && targetSha && currentSha === targetSha) {
+// update indicator. Shallow checkouts use SHA equality plus any positively
+// proven local-ahead ancestry; exact counts remain exclusive to full clones.
+function resolveBehindCount({ countStr, currentSha, targetSha, isShallow, targetIsAncestorOfHead = false }) {
+  if (!shouldCountCommits({ isShallow })) {
+    if (currentSha && targetSha && (currentSha === targetSha || targetIsAncestorOfHead)) {
       return 0
     }
 
-    return 1 // behind by an unknown amount — show a generic "update available"
+    return null
   }
 
   return Number.parseInt(countStr, 10) || 0
+}
+
+function resolveCommitLogSelection({ branch, isShallow }) {
+  const remote = `origin/${branch}`
+
+  return isShallow ? { limit: 1, revision: remote } : { limit: 40, revision: `HEAD..${remote}` }
+}
+
+function compareApiUrl({ currentSha, originUrl, targetSha }) {
+  const sha = /^[0-9a-f]{40}$/i
+
+  if (!sha.test(currentSha || '') || !sha.test(targetSha || '')) {
+    return null
+  }
+
+  const canonical = canonicalRemoteForCompare(originUrl)
+
+  if (!canonical) {
+    return null
+  }
+
+  return `https://api.github.com/repos/${canonical}/compare/${currentSha}...${targetSha}`
+}
+
+function canonicalRemoteForCompare(originUrl) {
+  const value = String(originUrl || '').trim()
+
+  const match =
+    /^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(value) ||
+    /^(?:ssh:\/\/git@|https:\/\/|http:\/\/)github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(value)
+
+  return match ? match[1] : null
+}
+
+function parseCompareBehindCount(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+
+  const ahead = payload.ahead_by
+
+  if (typeof ahead !== 'number' || !Number.isInteger(ahead) || ahead < 0) {
+    return null
+  }
+
+  return ahead
 }
 
 const OFFICIAL_UPSTREAM_BRANCH = 'main'
@@ -668,6 +708,7 @@ function resolveManagedPublicationSafety(
 }
 
 export {
+  compareApiUrl,
   inspectOfficialUpstream,
   INSTALLED_BUILD_REF,
   normalizeGitHubRepository,
@@ -675,8 +716,10 @@ export {
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_REPOSITORY,
   OFFICIAL_UPSTREAM_URL,
+  parseCompareBehindCount,
   probeCheckoutIdentity,
   resolveBehindCount,
+  resolveCommitLogSelection,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveLegacyUpdateSafety,

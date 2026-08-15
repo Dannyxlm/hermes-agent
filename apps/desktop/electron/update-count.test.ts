@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,13 +8,16 @@ import { test } from 'vitest'
 
 import type { OfficialUpstreamTracking } from './update-count'
 import {
+  compareApiUrl,
   inspectOfficialUpstream,
   INSTALLED_BUILD_REF,
   normalizeGitHubRepository,
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_URL,
+  parseCompareBehindCount,
   probeCheckoutIdentity,
   resolveBehindCount,
+  resolveCommitLogSelection,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveLegacyUpdateSafety,
@@ -28,19 +31,33 @@ test('managed packaged updates stay pinned to their stamped branch', () => {
   assert.equal(resolveManagedPublicationBranch(false, { branch: 'main' }, 'feature/dev'), 'feature/dev')
 })
 
-// FAIL-BEFORE: pre-fix the function did `Number.parseInt(countStr) || 0`
-// unconditionally, so a shallow checkout with no merge-base surfaced the bogus
-// rev-list count (e.g. 12104). This asserts the new shallow/no-merge-base branch.
-test('shallow checkout with no merge-base does NOT trust the bogus rev-list count', () => {
+function createTempGitRepo() {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-update-count-'))
+  const git = (...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000 }).trim()
+
+  try {
+    git('init', '--quiet')
+    git('config', 'commit.gpgSign', 'false')
+    git('config', 'core.hooksPath', '.git/no-hooks')
+    git('config', 'user.name', 'Hermes Test')
+    git('config', 'user.email', 'hermes@example.invalid')
+
+    return { cwd, git }
+  } catch (error) {
+    fs.rmSync(cwd, { recursive: true, force: true })
+    throw error
+  }
+}
+
+test('shallow checkout with no merge-base reports null (unknown count), not a fake number', () => {
   assert.equal(
     resolveBehindCount({
       countStr: '12104',
       currentSha: 'aaa',
       targetSha: 'bbb',
-      isShallow: true,
-      hasMergeBase: false
+      isShallow: true
     }),
-    1
+    null
   )
 })
 
@@ -50,8 +67,7 @@ test('shallow checkout with no merge-base but identical SHA reports up-to-date',
       countStr: '12104',
       currentSha: 'abc',
       targetSha: 'abc',
-      isShallow: true,
-      hasMergeBase: false
+      isShallow: true
     }),
     0
   )
@@ -85,18 +101,86 @@ test('repository-stamped packaged identity reads history from its declared produ
   )
 })
 
-test('shallow checkout WITH a merge-base keeps the exact count (reliable)', () => {
+test('shallow checkout with a merge-base still uses presence-only status', () => {
   assert.equal(
     resolveBehindCount({
       countStr: '3',
       currentSha: 'aaa',
       targetSha: 'bbb',
-      isShallow: true,
-      hasMergeBase: true
+      isShallow: true
     }),
-    3
+    null
   )
 })
+
+test('shallow local-ahead checkout reports up-to-date when origin is a known ancestor', () => {
+  assert.equal(
+    resolveBehindCount({
+      countStr: '',
+      currentSha: 'local-child',
+      targetSha: 'origin-parent',
+      isShallow: true,
+      targetIsAncestorOfHead: true
+    }),
+    0
+  )
+})
+
+test('shallow Git graph proves the remote tip is an ancestor of a local commit', () => {
+  const { cwd, git } = createTempGitRepo()
+
+  try {
+    git('commit', '--allow-empty', '-m', 'origin tip')
+    const targetSha = git('rev-parse', 'HEAD')
+    git('update-ref', 'refs/remotes/origin/main', targetSha)
+    fs.writeFileSync(path.join(cwd, '.git', 'shallow'), `${targetSha}\n`)
+    git('commit', '--allow-empty', '-m', 'local child')
+    const currentSha = git('rev-parse', 'HEAD')
+
+    git('merge-base', '--is-ancestor', 'origin/main', 'HEAD')
+    assert.equal(
+      resolveBehindCount({
+        countStr: '',
+        currentSha,
+        targetSha,
+        isShallow: true,
+        targetIsAncestorOfHead: true
+      }),
+      0
+    )
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true })
+  }
+}, 30_000)
+
+test('shallow checkout with a merge-base does not trust an inflated rev-list count', () => {
+  const { cwd, git } = createTempGitRepo()
+
+  try {
+    git('commit', '--allow-empty', '-m', 'root')
+    git('commit', '--allow-empty', '-m', 'ancestor')
+    const redundantParent = git('rev-parse', 'HEAD')
+    git('commit', '--allow-empty', '-m', 'installed head')
+    const currentSha = git('rev-parse', 'HEAD')
+    const tree = git('rev-parse', 'HEAD^{tree}')
+    const targetSha = execFileSync('git', ['commit-tree', tree, '-p', currentSha, '-p', redundantParent], {
+      cwd,
+      encoding: 'utf8',
+      input: 'remote merge\n',
+      timeout: 10_000
+    }).trim()
+
+    git('update-ref', 'refs/remotes/origin/main', targetSha)
+    const completeCount = git('rev-list', 'HEAD..origin/main', '--count')
+    fs.writeFileSync(path.join(cwd, '.git', 'shallow'), `${currentSha}\n`)
+    const shallowCount = git('rev-list', 'HEAD..origin/main', '--count')
+
+    assert.ok(Number.parseInt(shallowCount, 10) > Number.parseInt(completeCount, 10))
+    assert.equal(resolveBehindCount({ countStr: shallowCount, currentSha, targetSha, isShallow: true }), null)
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true })
+  }
+}, 30_000)
 
 test('full (non-shallow) clone keeps the exact count path unchanged', () => {
   assert.equal(
@@ -104,8 +188,7 @@ test('full (non-shallow) clone keeps the exact count path unchanged', () => {
       countStr: '7',
       currentSha: 'aaa',
       targetSha: 'bbb',
-      isShallow: false,
-      hasMergeBase: true
+      isShallow: false
     }),
     7
   )
@@ -117,8 +200,7 @@ test('up-to-date full clone reports 0', () => {
       countStr: '0',
       currentSha: 'x',
       targetSha: 'x',
-      isShallow: false,
-      hasMergeBase: true
+      isShallow: false
     }),
     0
   )
@@ -130,28 +212,32 @@ test('non-numeric count falls back to 0 (defensive, unchanged behaviour)', () =>
       countStr: '',
       currentSha: 'aaa',
       targetSha: 'bbb',
-      isShallow: false,
-      hasMergeBase: true
+      isShallow: false
     }),
     0
   )
 })
 
-// shouldCountCommits gates the expensive `rev-list --count` in checkUpdates().
-// FAIL-BEFORE: in the shallow + no-merge-base case the caller ran rev-list
-// unconditionally and discarded the bogus result; this predicate lets the
-// caller SKIP the whole-ancestry enumeration in exactly that case (#51922).
-test('shallow checkout with no merge-base SKIPS the rev-list count', () => {
-  assert.equal(shouldCountCommits({ isShallow: true, hasMergeBase: false }), false)
+test('shallow checkouts skip the rev-list count', () => {
+  assert.equal(shouldCountCommits({ isShallow: true }), false)
 })
 
-test('shallow checkout WITH a merge-base still runs the count', () => {
-  assert.equal(shouldCountCommits({ isShallow: true, hasMergeBase: true }), true)
+test('full (non-shallow) clones run the rev-list count', () => {
+  assert.equal(shouldCountCommits({ isShallow: false }), true)
 })
 
-test('full (non-shallow) clone always runs the count', () => {
-  assert.equal(shouldCountCommits({ isShallow: false, hasMergeBase: true }), true)
-  assert.equal(shouldCountCommits({ isShallow: false, hasMergeBase: false }), true)
+test('shallow commit logs select only the fetched remote tip', () => {
+  assert.deepEqual(resolveCommitLogSelection({ branch: 'main', isShallow: true }), {
+    limit: 1,
+    revision: 'origin/main'
+  })
+})
+
+test('full-clone commit logs keep the complete behind range', () => {
+  assert.deepEqual(resolveCommitLogSelection({ branch: 'release', isShallow: false }), {
+    limit: 40,
+    revision: 'HEAD..origin/release'
+  })
 })
 
 // The skip path produces an empty countStr; resolveBehindCount must NOT trust
@@ -162,18 +248,16 @@ test('skipped-count path resolves via SHA compare, never via empty countStr', ()
       countStr: '',
       currentSha: 'aaa',
       targetSha: 'bbb',
-      isShallow: true,
-      hasMergeBase: false
+      isShallow: true
     }),
-    1
+    null
   )
   assert.equal(
     resolveBehindCount({
       countStr: '',
       currentSha: 'same',
       targetSha: 'same',
-      isShallow: true,
-      hasMergeBase: false
+      isShallow: true
     }),
     0
   )
@@ -846,4 +930,51 @@ test('managed packaged updater rejects a dirty publication checkout', () => {
     resolveManagedPublicationSafety(true, trackingStatus(), trackingStatus({ identityDirty: true })).reason,
     'identity-dirty'
   )
+})
+
+const SHA_A = 'a'.repeat(40)
+const SHA_B = 'b'.repeat(40)
+
+test('compareApiUrl builds the GitHub compare URL for HTTPS origins', () => {
+  assert.equal(
+    compareApiUrl({
+      currentSha: SHA_A,
+      originUrl: 'https://github.com/NousResearch/hermes-agent.git',
+      targetSha: SHA_B
+    }),
+    `https://api.github.com/repos/NousResearch/hermes-agent/compare/${SHA_A}...${SHA_B}`
+  )
+})
+
+test('compareApiUrl handles SSH origin forms', () => {
+  for (const originUrl of [
+    'git@github.com:NousResearch/hermes-agent.git',
+    'ssh://git@github.com/NousResearch/hermes-agent.git',
+    'git@github.com:NousResearch/hermes-agent'
+  ]) {
+    assert.equal(
+      compareApiUrl({ currentSha: SHA_A, originUrl, targetSha: SHA_B }),
+      `https://api.github.com/repos/NousResearch/hermes-agent/compare/${SHA_A}...${SHA_B}`
+    )
+  }
+})
+
+test('compareApiUrl refuses non-GitHub remotes and partial SHAs', () => {
+  assert.equal(compareApiUrl({ currentSha: SHA_A, originUrl: 'https://gitlab.com/x/y.git', targetSha: SHA_B }), null)
+  assert.equal(compareApiUrl({ currentSha: 'abc123', originUrl: 'https://github.com/x/y.git', targetSha: SHA_B }), null)
+  assert.equal(compareApiUrl({ currentSha: SHA_A, originUrl: '', targetSha: SHA_B }), null)
+})
+
+test('parseCompareBehindCount returns ahead_by (the behind count)', () => {
+  assert.equal(parseCompareBehindCount({ ahead_by: 61, status: 'ahead' }), 61)
+  assert.equal(parseCompareBehindCount({ ahead_by: 0, status: 'behind' }), 0)
+})
+
+test('parseCompareBehindCount rejects malformed payloads', () => {
+  assert.equal(parseCompareBehindCount(null), null)
+  assert.equal(parseCompareBehindCount({}), null)
+  assert.equal(parseCompareBehindCount({ ahead_by: -2 }), null)
+  assert.equal(parseCompareBehindCount({ ahead_by: '61' }), null)
+  assert.equal(parseCompareBehindCount({ ahead_by: 1.5 }), null)
+  assert.equal(parseCompareBehindCount([]), null)
 })
