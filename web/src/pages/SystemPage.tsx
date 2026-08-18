@@ -50,6 +50,7 @@ import {
   presentManagedRefresh,
   presentManagedUpdate,
 } from "@/lib/managed-update-status";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import type {
   StatusResponse,
   MemoryStatus,
@@ -479,14 +480,13 @@ export default function SystemPage() {
 
   const copyToClipboard = useCallback(
     async (text: string, label: string) => {
-      try {
-        await navigator.clipboard.writeText(text);
+      if (await copyTextToClipboard(text)) {
         setCopiedLabel(label);
         setTimeout(
           () => setCopiedLabel((cur) => (cur === label ? null : cur)),
           1500,
         );
-      } catch {
+      } else {
         showToast("Couldn't copy to clipboard", "error");
       }
     },

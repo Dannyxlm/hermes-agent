@@ -68,6 +68,7 @@ export const en: Translations = {
       connectingGateway: 'Connecting live desktop gateway',
       loadingSettings: 'Loading Hermes settings',
       loadingSessions: 'Loading recent sessions',
+      retryingRemoteBackend: 'Reconnecting to the remote Hermes backend…',
       startingDesktopConnection: 'Starting desktop connection',
       startingHermesDesktop: 'Starting Hermes Desktop…'
     },
@@ -353,8 +354,7 @@ export const en: Translations = {
       providerAccounts: 'Accounts',
       providerApiKeys: 'API keys',
       providerCustomEndpoints: 'Custom Endpoints',
-      gateway: 'Gateway',
-      connections: 'Connections',
+      gateway: 'Gateways',
       apiKeys: 'Tools & Keys',
       keybinds: 'Keyboard Shortcuts',
       keysTools: 'Tools',
@@ -381,7 +381,8 @@ export const en: Translations = {
       agent: {
         title: 'Agent plugins',
         blurb:
-          'Run in the Hermes backend — tools, skills, MCP servers, hooks, and slash commands. Portable ones are Agent Plugins packages (skills + MCP bundles that work in other agents too). Toggles apply to new sessions.',
+          'Plugins you installed into the Hermes backend — tools, skills, MCP servers, hooks, and slash commands. Portable ones are Agent Plugins packages (skills + MCP bundles that work in other agents too). Toggles apply to new sessions.',
+        appliesTo: 'Applies to:',
         empty: 'No agent plugins installed yet.',
         loadFailed: 'Could not load agent plugins',
         portable: 'portable',
@@ -561,6 +562,10 @@ export const en: Translations = {
       heading: 'Hermes Desktop',
       version: value => `Version ${value}`,
       versionUnavailable: 'Version unavailable',
+      bundleOutOfSync: 'App build out of date',
+      bundleOutOfSyncDesc:
+        'The Hermes runtime was updated, but the desktop app itself is still an older build — new interface features (like Bot Mode) will be missing until it updates. Run the update below to rebuild the app. If that doesn\u2019t clear this warning, reinstall from the latest desktop installer.',
+      bundleOutOfSyncAction: 'Get the installer',
       updates: 'Updates',
       checkNow: 'Check now',
       checking: 'Checking…',
@@ -684,6 +689,20 @@ export const en: Translations = {
       labelPlaceholder: 'Homelab',
       urlTitle: 'Gateway URL',
       sshHostTitle: 'SSH host',
+      headersTitle: 'Extra gateway headers',
+      headersDesc:
+        'Sent with every HTTP and WebSocket request to this gateway — for access proxies such as Cloudflare Access (CF-Access-Client-Id / CF-Access-Client-Secret). Values are stored encrypted. Headers Hermes manages (Authorization, Cookie, Host…) are ignored.',
+      headerValuePlaceholder: 'Value',
+      headerValueSaved: 'Saved — leave blank to keep',
+      headerAdd: 'Add header',
+      headerRemove: 'Remove',
+      duplicateLocal: 'This app already manages a local connection — there can only be one.',
+      duplicateUrl: (label: string) => `A connection to this gateway URL already exists (“${label}”).`,
+      duplicateSsh: (label: string) => `A connection to this SSH host already exists (“${label}”).`,
+      sameBackendHint: (label: string) => `Same backend as “${label}”`,
+      localAddHint: 'Local is unavailable: the managed local connection already exists (there is only ever one).',
+      cloudAddHint:
+        'Tip: signing in under Hermes Cloud above discovers your agents automatically — use this form only to register a known instance URL by hand.',
       save: 'Save connection',
       saving: 'Saving…',
       cancel: 'Cancel',
@@ -697,11 +716,16 @@ export const en: Translations = {
       envOverride: 'env override',
       intro:
         'Local by default. Use remote when this app should drive a Hermes backend elsewhere. Per-profile overrides below.',
-      appliesTo: 'Applies to',
       allProfiles: 'All profiles',
       defaultConnection: 'Default connection for every profile that has no override of its own.',
       profileConnection: profile =>
         `Connection used only when “${profile}” is the active profile. Choose Use default gateway to remove its override.`,
+      profileOverridesTitle: 'Per-profile overrides',
+      profileOverridesDesc:
+        'Each profile can point at its own gateway. The connection controls below edit the selected target; everything else on this page is app-wide.',
+      overrideEdit: 'Edit',
+      overrideEditing: 'Editing',
+      overrideSelectHint: 'Select to view or change the gateway this profile uses.',
       envOverrideTitle: 'Environment variables are controlling this desktop session.',
       envOverrideDesc:
         'Unset HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN to use the saved setting below.',
@@ -840,6 +864,10 @@ export const en: Translations = {
       loading: 'Loading API keys and credentials...',
       failedLoad: 'API keys failed to load',
       empty: 'Nothing configured in this category yet.'
+    },
+    profileScope: {
+      appliesTo: 'Applies to',
+      editsProfile: profile => `Changes on this page apply to the “${profile}” profile.`
     },
     mcp: {
       loading: 'Loading MCP servers...',
@@ -2033,6 +2061,8 @@ export const en: Translations = {
       baseBranchPlaceholder: 'Search branches…',
       baseBranchNone: 'No branches found',
       startWorkFailed: 'Could not create worktree',
+      worktreeStaleBackend:
+        'Update the Hermes backend to create worktrees over this remote connection — it predates the git worktree API.',
       worktreeProjectLabel: 'Project',
       worktreeProjectPlaceholder: 'Search projects…',
       worktreeProjectNone: 'No projects with a folder',
@@ -2688,6 +2718,7 @@ export const en: Translations = {
       inferenceNotReady: 'Inference not ready',
       checkingInference: 'Checking inference',
       disconnected: 'Disconnected',
+      reconnectGateway: 'Reconnect gateway',
       openSystem: 'Open system panel',
       connection: label => `Connection: ${label}`,
       recentActivity: 'Recent activity',

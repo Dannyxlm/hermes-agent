@@ -114,6 +114,7 @@ export interface Translations {
       connectingGateway: string
       loadingSettings: string
       loadingSessions: string
+      retryingRemoteBackend: string
       startingDesktopConnection: string
       startingHermesDesktop: string
     }
@@ -303,7 +304,6 @@ export interface Translations {
       providerApiKeys: string
       providerCustomEndpoints: string
       gateway: string
-      connections: string
       apiKeys: string
       keybinds: string
       keysTools: string
@@ -330,6 +330,7 @@ export interface Translations {
       agent: {
         title: string
         blurb: string
+        appliesTo: string
         empty: string
         loadFailed: string
         portable: string
@@ -457,6 +458,9 @@ export interface Translations {
       heading: string
       version: (value: string) => string
       versionUnavailable: string
+      bundleOutOfSync: string
+      bundleOutOfSyncDesc: string
+      bundleOutOfSyncAction: string
       updates: string
       checkNow: string
       checking: string
@@ -573,6 +577,18 @@ export interface Translations {
       labelPlaceholder: string
       urlTitle: string
       sshHostTitle: string
+      headersTitle: string
+      headersDesc: string
+      headerValuePlaceholder: string
+      headerValueSaved: string
+      headerAdd: string
+      headerRemove: string
+      duplicateLocal: string
+      duplicateUrl: (label: string) => string
+      duplicateSsh: (label: string) => string
+      sameBackendHint: (label: string) => string
+      localAddHint: string
+      cloudAddHint: string
       save: string
       saving: string
       cancel: string
@@ -585,10 +601,14 @@ export interface Translations {
       title: string
       envOverride: string
       intro: string
-      appliesTo: string
       allProfiles: string
       defaultConnection: string
       profileConnection: (profile: string) => string
+      profileOverridesTitle: string
+      profileOverridesDesc: string
+      overrideEdit: string
+      overrideEditing: string
+      overrideSelectHint: string
       envOverrideTitle: string
       envOverrideDesc: string
       modeTitle: string
@@ -714,6 +734,10 @@ export interface Translations {
       loading: string
       failedLoad: string
       empty: string
+    }
+    profileScope: {
+      appliesTo: string
+      editsProfile: (profile: string) => string
     }
     mcp: {
       loading: string
@@ -1715,6 +1739,7 @@ export interface Translations {
       baseBranchPlaceholder: string
       baseBranchNone: string
       startWorkFailed: string
+      worktreeStaleBackend: string
       worktreeProjectLabel: string
       worktreeProjectPlaceholder: string
       worktreeProjectNone: string
@@ -2261,6 +2286,7 @@ export interface Translations {
       inferenceNotReady: string
       checkingInference: string
       disconnected: string
+      reconnectGateway: string
       openSystem: string
       connection: (label: string) => string
       recentActivity: string
