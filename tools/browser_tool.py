@@ -24,13 +24,11 @@ Features:
 - Task-aware content extraction using LLM summarization
 - Automatic cleanup of browser sessions
 
-Configuration and Environment Variables:
+Environment Variables:
 - BROWSERBASE_API_KEY: API key for direct Browserbase cloud mode
 - BROWSERBASE_PROJECT_ID: Project ID for direct Browserbase cloud mode
 - BROWSER_USE_API_KEY: API key for direct Browser Use cloud mode
-- browser.browserbase.proxies: Enable/disable residential proxies in config.yaml
-- browser.browserbase.session_metadata: Attach bounded, queryable Browserbase metadata
-- BROWSERBASE_PROXIES: Legacy proxy override when config.yaml does not set it
+- BROWSERBASE_PROXIES: Enable/disable residential proxies (default: "true")
 - BROWSERBASE_ADVANCED_STEALTH: Enable advanced stealth mode with custom Chromium,
   requires Scale Plan (default: "false")
 - BROWSERBASE_KEEP_ALIVE: Enable keepAlive for session reconnection after disconnects,
