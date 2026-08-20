@@ -490,6 +490,14 @@ DEFAULT_CONFIG = {
         # website/docs/developer-guide/browser-supervisor.md.
         "dialog_policy": "must_respond",  # must_respond | auto_dismiss | auto_accept
         "dialog_timeout_s": 300,  # Safety auto-dismiss after N seconds under must_respond
+        "browserbase": {
+            # Residential proxy traffic is billable. Existing installations
+            # retain the legacy enabled default unless they opt out here.
+            "proxies": True,
+            # Opt-in Browserbase dashboard/API labels. Values are bounded and
+            # contain Hermes session identifiers, not prompts or page content.
+            "session_metadata": False,
+        },
         "camofox": {
             # When true, Hermes sends a stable profile-scoped userId to Camofox
             # so the server maps it to a persistent Firefox profile automatically.
