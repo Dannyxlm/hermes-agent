@@ -112,9 +112,6 @@ def _install_fake_tools_package():
     sys.modules["agent.credential_persistence"] = types.SimpleNamespace(
         sanitize_borrowed_credential_payload=lambda entry, provider_id=None: entry,
     )
-    sys.modules["agent.secret_scope"] = types.SimpleNamespace(
-        get_secret=lambda key: os.environ.get(key),
-    )
 
     # Stubs for the browser-provider plugin layer introduced in PR #25214.
     # The fake `agent` package has an empty __path__ so real submodules
