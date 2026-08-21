@@ -450,9 +450,7 @@ export function ManagedSourceUpdateView({
     unreadable: u.managedUnreadable
   }[source.availability]
 
-  const candidate = source.candidateStatus
-    ? u.managedCandidateStatuses[source.candidateStatus]
-    : u.managedUnknown
+  const candidate = source.candidateStatus ? u.managedCandidateStatuses[source.candidateStatus] : u.managedUnknown
 
   const behind = verifiedManagedBehind(source)
   const overlayCount = behind === null ? null : source.overlayCount
@@ -464,9 +462,7 @@ export function ManagedSourceUpdateView({
       <div className="flex flex-col items-center gap-3 text-center">
         <BrandMark className="size-14" />
         <DialogTitle className="text-center text-xl">{u.managedTitle}</DialogTitle>
-        <DialogDescription className="max-w-prose text-center text-sm leading-5">
-          {u.managedSubtitle}
-        </DialogDescription>
+        <DialogDescription className="max-w-prose text-center text-sm leading-5">{u.managedSubtitle}</DialogDescription>
       </div>
 
       <div className="rounded-md border border-border/70 bg-muted/25 px-4 py-3">
@@ -490,9 +486,7 @@ export function ManagedSourceUpdateView({
       <dl className="grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-md border border-border/70 px-3 py-2">
           <dt className="text-muted-foreground">{u.managedUpstream}</dt>
-          <dd className="mt-1 font-semibold">
-            {behind === null ? u.managedUnknown : u.managedCommitsBehind(behind)}
-          </dd>
+          <dd className="mt-1 font-semibold">{behind === null ? u.managedUnknown : u.managedCommitsBehind(behind)}</dd>
         </div>
         <div className="rounded-md border border-border/70 px-3 py-2">
           <dt className="text-muted-foreground">{u.managedCandidate}</dt>
@@ -516,9 +510,7 @@ export function ManagedSourceUpdateView({
 
       {source.blockers?.length ? (
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {u.managedBlockers}
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{u.managedBlockers}</p>
           <ul className="mt-2 grid gap-1.5 text-xs">
             {source.blockers.map(blocker => (
               <li className="flex items-start gap-2" key={blocker}>

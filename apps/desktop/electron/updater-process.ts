@@ -21,7 +21,9 @@ export interface BuildUpdateHandoffEnvOptions {
 
 /** Build the detached updater environment and fail closed when a packaged
  * hand-off has no valid immutable publication target. */
-export function buildUpdateHandoffEnv(options: BuildUpdateHandoffEnvOptions): Record<string, string | undefined> | null {
+export function buildUpdateHandoffEnv(
+  options: BuildUpdateHandoffEnvOptions
+): Record<string, string | undefined> | null {
   const env = {
     ...options.baseEnv,
     HERMES_HOME: options.hermesHome,

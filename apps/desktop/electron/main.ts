@@ -4211,8 +4211,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
       ...(IS_PACKAGED && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit)
         ? {
             HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-            HERMES_MANAGED_PUBLICATION_REPOSITORY:
-              INSTALL_STAMP.repository || 'the configured publication',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository || 'the configured publication',
             HERMES_MANAGED_PUBLICATION_BRANCH: branch,
             HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit.toLowerCase()
           }
@@ -4445,8 +4444,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
     baseEnv: process.env,
     branch,
     hermesHome: HERMES_HOME,
-    managedRepository:
-      INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication',
+    managedRepository: INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication',
     managedTargetSha: opts.expectedTargetSha,
     packaged: IS_PACKAGED,
     pathValue: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))

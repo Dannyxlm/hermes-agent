@@ -406,8 +406,7 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
         candidateStatus: managed.candidate_status,
         candidateTargetRevision: managed.candidate_target_revision,
         candidateTargetIsAncestorOfUpstream: managed.candidate_target_is_ancestor_of_upstream,
-        runningUpstreamBaseIsAncestorOfCandidateTarget:
-          managed.running_upstream_base_is_ancestor_of_candidate_target,
+        runningUpstreamBaseIsAncestorOfCandidateTarget: managed.running_upstream_base_is_ancestor_of_candidate_target,
         candidateTargetCommitsBehind: managed.candidate_target_commits_behind,
         blockers: managed.blockers,
         nextAction: managed.next_action,
@@ -669,9 +668,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' })
 
     const result = await bridge.apply(
-      clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget)
-        ? { ...opts, expectedTargetSha: clientTarget }
-        : opts
+      clientTarget && MANAGED_UPDATE_SHA_RE.test(clientTarget) ? { ...opts, expectedTargetSha: clientTarget } : opts
     )
 
     // CLI install with no staged updater: not an error — the user just runs
