@@ -46,8 +46,10 @@ import {
 } from './backend-probes'
 import { waitForDashboardPortAnnouncement } from './backend-ready'
 import {
+  isHostKeyChangedBootFailure,
   isRetryableRemoteBootFailure,
   shouldLatchBackendStartFailure,
+  shouldLatchHostKeyChangedFailure,
   shouldLatchRemoteReauthFailure
 } from './backend-start-failure'
 import {
@@ -139,6 +141,7 @@ import {
   terminalScriptExtension,
   tuiResumeArgs
 } from './external-terminal'
+import { type FaviconIo, resolveFavicon } from './favicon'
 import { findGitBash as _findGitBash } from './find-git-bash'
 import {
   installFindShortcut,
@@ -188,6 +191,7 @@ import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
   oauthGuardMayHardFail,
   oauthSessionIsLive,
+  resolveGatedDownloadAuth,
   resolveJsonBody,
   resolveOauthRestAuth,
   resolveReadinessProbeAuth
@@ -255,6 +259,7 @@ import {
 import { missingRendererAssets } from './renderer-bundle'
 import { attachRendererConsoleCapture, formatRendererBoundaryReport } from './renderer-log'
 import {
+  buildInstanceWindowUrl,
   buildSessionWindowUrl,
   chatWindowWebPreferences,
   createSessionWindowRegistry,
@@ -271,13 +276,16 @@ import { registerTerminalIpc } from './terminal-ipc'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import {
   backgroundMaterialFor,
+  defaultTranslucencyState,
   glassActive,
   glassSupportedOn,
   normalizeState as normalizeTranslucency,
+  opacityNeedsSetting,
   translucencySupportedOn,
   vibrancyFor as vibrancyForTranslucency,
   windowBackingOptions,
-  windowOpacityFor
+  windowOpacityFor,
+  windowOpacityOptions
 } from './translucency'
 import {
   compareApiUrl,
@@ -285,14 +293,14 @@ import {
   OFFICIAL_UPSTREAM_BRANCH,
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_REPOSITORY,
+  parseCompareBehindCount,
   probeCheckoutIdentity,
   resolveBehindCount,
+  resolveCommitLogSelection,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
   resolveManagedPublicationBranch,
   resolveManagedPublicationSafety,
-  parseCompareBehindCount,
-  resolveCommitLogSelection,
   shouldCountCommits
 } from './update-count'
 import { waitForUpdateClearance } from './update-gate'
@@ -357,7 +365,7 @@ import { installWindowsSystemCaTrust } from './windows-system-ca'
 import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
-import { resolvePickerDefaultPath } from './wsl-path-bridge'
+import { resolvePickerDefaultPath, setActiveGatewayProfile, setWslBridgeProfileState } from './wsl-path-bridge'
 
 const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR
 
@@ -896,7 +904,12 @@ function readPersistedTranslucency() {
   try {
     return normalizeTranslucency(JSON.parse(fs.readFileSync(TRANSLUCENCY_CONFIG_PATH, 'utf8')), GLASS_SUPPORTED)
   } catch {
-    return normalizeTranslucency(null, GLASS_SUPPORTED)
+    // Nothing persisted yet — a first launch. Glass ships on, so the FIRST
+    // window has to be created with the glass backing already: a window born
+    // opaque cannot reliably be swapped to glass afterwards (see
+    // windowBackingOptions). nativeTheme is the only appearance signal main
+    // has this early; the renderer's first resolved send corrects it.
+    return defaultTranslucencyState(nativeTheme.shouldUseDarkColors ? 'dark' : 'light', GLASS_SUPPORTED, IS_WINDOWS)
   }
 }
 
@@ -917,15 +930,23 @@ let translucencyState = readPersistedTranslucency()
 // painting a themed backing onto them would turn them into opaque rectangles.
 const translucencyBackedWindows = new WeakSet()
 
-function windowOpacity() {
-  return windowOpacityFor(translucencyState)
+// Set a live window's native opacity, but only when the state asks it to fade
+// — or when the window is already faded and is on its way back to opaque. The
+// window's own opacity is the record of whether that door was ever opened; see
+// opacityNeedsSetting for why it matters that it stays shut.
+function applyWindowOpacity(win) {
+  const opacity = windowOpacityFor(translucencyState)
+
+  if (typeof win.setOpacity === 'function' && opacityNeedsSetting(opacity, win.getOpacity?.() ?? 1)) {
+    win.setOpacity(opacity)
+  }
 }
 
 // Re-apply translucency to a live window (runtime toggle, no recreation).
-// `setOpacity` is a no-op on Linux, which is fine — it just stays opaque there.
-// The backing swap is the glass half: Chromium composites the page against
-// the window backing BEFORE the OS composites the window, so glass needs the
-// backing dropped for the platform material to reach a transparent page, and
+// Opacity goes through applyWindowOpacity, which knows when the call is worth
+// making at all. The backing swap is the glass half: Chromium composites the
+// page against the window backing BEFORE the OS composites the window, so
+// glass needs the backing dropped for the platform material to reach it, and
 // every other state needs the opaque themed backing (anti-flash, and it is
 // what makes clear mode fade to the desktop instead of to black).
 //
@@ -974,8 +995,8 @@ function applyWindowTranslucency(win, changed = { backing: true, material: true,
       }
     }
 
-    if (changed.opacity && typeof win.setOpacity === 'function') {
-      win.setOpacity(windowOpacity())
+    if (changed.opacity) {
+      applyWindowOpacity(win)
     }
   } catch (error) {
     rememberLog(`[translucency] apply failed: ${error.message}`)
@@ -983,11 +1004,12 @@ function applyWindowTranslucency(win, changed = { backing: true, material: true,
 }
 
 // Constructor options every chat window shares for its translucency surface:
-// the vibrancy material, the native opacity, and the webContents backing under
-// the CURRENT state. Glass omits backgroundColor so vibrancy shows from the
-// first frame (a non-transparent window silently ignores constructor alpha,
-// and runtime swaps are lost early in a window's life — see
-// applyWindowTranslucency); otherwise the opaque themed anti-flash backing.
+// the platform material, the webContents backing, and a native opacity only if
+// the state actually fades — all under the CURRENT state. Glass omits
+// backgroundColor so the material shows from the first frame (Electron hands a
+// translucent window a transparent default backing, and runtime swaps are lost
+// early in a window's life — see applyWindowTranslucency); otherwise the opaque
+// themed anti-flash backing.
 //
 // Call sites also register the window in translucencyBackedWindows so a live
 // toggle can re-apply. The HUD, pet overlay, quick entry and wake indicator
@@ -1003,13 +1025,22 @@ function chatWindowSurfaceOptions() {
     // user's frost choice whenever they click elsewhere. Only observable
     // under glass — everywhere else the page buries the material.
     visualEffectState: IS_MAC ? ('active' as const) : undefined,
-    // Win11 DWM materials only reach the client area on a transparent window
-    // (electron#49443). Chat windows on glass-capable Windows are born
-    // transparent so a live Clear→Glass toggle doesn't need a recreate; the
-    // opaque themed backgroundColor covers it while glass is off.
-    ...(IS_WINDOWS && GLASS_SUPPORTED ? { transparent: true } : {}),
+    // NOT `transparent: true` on Windows. The backdrop material already makes
+    // the window translucent on its own: `IsTranslucent` answers yes off
+    // `background_material_` alone, which is what gives the page its transparent
+    // default backing, and `SetBackgroundMaterial` flips widget translucency
+    // live, so a Clear→Glass toggle needs no recreate either way. Its one gate
+    // is a frameless window, and `titleBarStyle: 'hidden'` already makes
+    // `has_frame()` false here.
+    //
+    // What `transparent` adds on top is permanent and unwanted: it pins the
+    // widget to kTranslucent for the window's whole life, so even glass-OFF
+    // windows pay a DirectComposition redraw per frame (electron#39895), and it
+    // opts into the documented transparent-window limits — including that a
+    // RESIZABLE transparent window is unsupported and breaks (electron#48421).
+    // Every chat window is resizable.
     backgroundMaterial: IS_WINDOWS && GLASS_SUPPORTED ? backgroundMaterialFor(translucencyState) : undefined,
-    opacity: windowOpacity(),
+    ...windowOpacityOptions(translucencyState),
     ...windowBackingOptions(translucencyState, getWindowBackgroundColor())
   }
 }
@@ -3553,7 +3584,20 @@ const backendOwnership = createBackendOwnership({
         return null
       }
     },
-    write: writeBackendOwnership
+    write: writeBackendOwnership,
+    // A corrupt ownership file is moved aside instead of being rewritten
+    // away by the reap sweep — its records are the only pointer to any
+    // still-running backends it described (#89298).
+    quarantine: () => {
+      const parked = `${DESKTOP_BACKEND_OWNERSHIP_PATH}.corrupt`
+
+      try {
+        fs.renameSync(DESKTOP_BACKEND_OWNERSHIP_PATH, parked)
+        rememberLog(`Backend ownership file was unreadable; moved to ${parked}`)
+      } catch {
+        // Nothing to move (or no permission) — the sweep already skipped.
+      }
+    }
   }
 })
 
@@ -3750,6 +3794,7 @@ async function applyUpdates(
 
     if (IS_PACKAGED) {
       const updateRoot = resolveUpdateRoot()
+
       const installedIdentity = resolveInstalledIdentity({
         checkoutBranch: null,
         checkoutDirty: false,
@@ -3758,12 +3803,14 @@ async function applyUpdates(
         installStamp: INSTALL_STAMP,
         packaged: true
       })
+
       const installedPublication = {
         identityDirty: installedIdentity.dirty,
         installedBranch: installedIdentity.branch,
         installedRepository: installedIdentity.repository,
         installedSha: installedIdentity.sha
       }
+
       const mutationTarget = await checkMutationTarget(updateRoot)
       const mutationSafety = resolveManagedPublicationSafety(true, installedPublication, mutationTarget)
 
@@ -3956,6 +4003,7 @@ async function applyUpdates(
     // next one. Checkouts that predate the script fall back to the binary
     // path unchanged.
     const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
+
     const updateEnv = buildUpdateHandoffEnv({
       baseEnv: process.env,
       branch,
@@ -3974,9 +4022,12 @@ async function applyUpdates(
 
       return { ok: false, error: 'publication-target-unproven', message }
     }
+
     let child
 
     if (scriptHandoff) {
+      const updateStartedAt = Math.floor(Date.now() / 1000)
+
       // A bare detached+hidden powershell spawn silently dies before -File
       // processing (console-subsystem init failure — see
       // wrapHandoffForDetachedConsole). Route through `cmd start` so the
@@ -3997,7 +4048,10 @@ async function applyUpdates(
 
       child = spawnUpdaterProcess(wrapped.command, wrapped.args, {
         cwd: HERMES_HOME,
-        env: updateEnv,
+        env: {
+          ...updateEnv,
+          HERMES_UPDATE_STARTED_AT: String(updateStartedAt)
+        },
         detached: true,
         stdio: 'ignore'
       })
@@ -4010,7 +4064,7 @@ async function applyUpdates(
       // The `hermes update` child adopts the SCRIPT's claim via
       // update_lock.py's process-ancestry rule; no mtime heuristics needed.
       if (Number.isInteger(child.pid)) {
-        writeUpdateMarker(HERMES_HOME, child.pid)
+        writeUpdateMarker(HERMES_HOME, child.pid, { startedAt: updateStartedAt })
       }
 
       rememberLog(
@@ -4359,6 +4413,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   }
 
   const args = [...handoff.args, '--install-root', updateRoot, '--branch', branch, '--desktop-pid', String(process.pid)]
+  const updateStartedAt = Math.floor(Date.now() / 1000)
 
   // Relaunch target: the running .app bundle on mac (script swaps the
   // rebuilt bundle over it), the running binary elsewhere. The script's gate
@@ -4407,7 +4462,10 @@ async function applyUpdatesPosixHandoff(opts: any) {
 
   const child = spawnUpdaterProcess(handoff.command, args, {
     cwd: HERMES_HOME,
-    env: updateEnv,
+    env: {
+      ...updateEnv,
+      HERMES_UPDATE_STARTED_AT: String(updateStartedAt)
+    },
     detached: true,
     stdio: 'ignore'
   })
@@ -4416,7 +4474,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   // until the script claims the marker with its own pid as step 0. If the
   // script never starts, the dead pid reads as stale and self-deletes.
   if (Number.isInteger(child.pid)) {
-    writeUpdateMarker(HERMES_HOME, child.pid)
+    writeUpdateMarker(HERMES_HOME, child.pid, { startedAt: updateStartedAt })
   }
 
   rememberLog(`[updates] launched posix hand-off: ${handoff.scriptPath} (branch ${branch}); quitting to hand off`)
@@ -5237,7 +5295,8 @@ function fetchJson(url, token, options: any = {}) {
 // Token-auth download that streams the response body straight to a
 // user-selected destination (via finalizeGatewayDownload) instead of buffering
 // the whole file in memory. The connect timeout is cleared once headers arrive
-// so a slow save dialog or a large stream doesn't trip it.
+// so a slow save dialog or a large stream doesn't trip it. `options.bearer`
+// switches the header to Authorization (RFC 8252 native flow), matching fetchJson.
 function downloadViaTokenToFile(url, token, ctx, options: any = {}) {
   return new Promise((resolve, reject) => {
     let parsed
@@ -5263,9 +5322,7 @@ function downloadViaTokenToFile(url, token, ctx, options: any = {}) {
       parsed,
       {
         method: 'GET',
-        headers: {
-          'X-Hermes-Session-Token': token
-        }
+        headers: options.bearer ? { Authorization: `Bearer ${options.bearer}` } : { 'X-Hermes-Session-Token': token }
       },
       res => {
         // Headers arrived — the connection phase is done. Drop the idle timeout
@@ -5721,6 +5778,159 @@ function fetchLinkTitle(rawUrl) {
     })
 
   titleInflight.set(key, pending)
+
+  return pending
+}
+
+// ─── Favicon resolution ──────────────────────────────────────────────────────
+// The ladder itself is electron/favicon.ts; this is its I/O, its cache, and
+// the one rule that belongs to the app rather than the algorithm: one icon
+// per host. A connector's mark doesn't vary by path, and hosting the cache on
+// the host key means Linear's docs page and Linear's MCP endpoint cost one
+// lookup between them.
+
+const FAVICON_CACHE_PATH = path.join(app.getPath('userData'), 'favicon-cache.json')
+const FAVICON_CACHE_LIMIT = 400
+const FAVICON_TTL_MS = 30 * 24 * 60 * 60 * 1000
+// A miss is cheap to re-check and expensive to be wrong about (a site that
+// was behind a captcha yesterday has a logo today), so it expires fast.
+const FAVICON_MISS_TTL_MS = 12 * 60 * 60 * 1000
+const FAVICON_TIMEOUT_MS = 6000
+const FAVICON_MAX_BYTES = 256 * 1024
+const FAVICON_WRITE_DEBOUNCE_MS = 3000
+
+let faviconCache: Map<string, { at: number; icon: string }> | null = null
+let faviconWriteTimer: null | ReturnType<typeof setTimeout> = null
+const faviconInflight = new Map<string, Promise<string>>()
+
+function faviconCacheKey(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./i, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function loadFaviconCache(): Map<string, { at: number; icon: string }> {
+  if (faviconCache) {
+    return faviconCache
+  }
+
+  faviconCache = new Map()
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(FAVICON_CACHE_PATH, 'utf8'))
+
+    for (const [host, entry] of Object.entries(raw?.icons ?? {})) {
+      const at = Number((entry as { at?: number })?.at)
+      const icon = String((entry as { icon?: string })?.icon ?? '')
+
+      if (Number.isFinite(at) && Date.now() - at < (icon ? FAVICON_TTL_MS : FAVICON_MISS_TTL_MS)) {
+        faviconCache.set(host, { at, icon })
+      }
+    }
+  } catch {
+    // No cache yet, or it's unreadable — resolving again is the whole cost.
+  }
+
+  return faviconCache
+}
+
+function saveFaviconCacheSoon() {
+  if (faviconWriteTimer) {
+    return
+  }
+
+  faviconWriteTimer = setTimeout(() => {
+    faviconWriteTimer = null
+
+    try {
+      const icons = Object.fromEntries(loadFaviconCache())
+
+      fs.writeFileSync(FAVICON_CACHE_PATH, JSON.stringify({ icons }), 'utf8')
+    } catch {
+      // Cache is an optimization; failing to persist it costs one refetch.
+    }
+  }, FAVICON_WRITE_DEBOUNCE_MS)
+
+  faviconWriteTimer.unref?.()
+}
+
+async function faviconFetch(url: string, accept: string) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FAVICON_TIMEOUT_MS)
+
+  try {
+    return await electronNet.fetch(url, {
+      // Same browser-shaped identity the title fetcher uses: a plain Electron
+      // UA gets a challenge page from anything behind a bot wall.
+      headers: { Accept: accept, 'Accept-Language': 'en-US,en;q=0.7', 'User-Agent': TITLE_USER_AGENT },
+      redirect: 'follow',
+      signal: controller.signal
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+const faviconIo: FaviconIo = {
+  fetchImage: async url => {
+    const response = await faviconFetch(url, 'image/avif,image/webp,image/svg+xml,image/*;q=0.8,*/*;q=0.5')
+
+    if (!response.ok) {
+      return null
+    }
+
+    const buffer = await response.arrayBuffer()
+
+    if (buffer.byteLength === 0 || buffer.byteLength > FAVICON_MAX_BYTES) {
+      return null
+    }
+
+    return { bytes: new Uint8Array(buffer), mime: response.headers.get('content-type') ?? '' }
+  },
+  fetchText: async url => {
+    const response = await faviconFetch(url, 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5')
+
+    return response.ok ? (await response.text()).slice(0, TITLE_BYTE_BUDGET * 2) : ''
+  }
+}
+
+function resolveFaviconCached(rawUrl: string): Promise<string> {
+  const key = faviconCacheKey(String(rawUrl || '').trim())
+
+  if (!key) {
+    return Promise.resolve('')
+  }
+
+  const cache = loadFaviconCache()
+  const hit = cache.get(key)
+
+  if (hit && Date.now() - hit.at < (hit.icon ? FAVICON_TTL_MS : FAVICON_MISS_TTL_MS)) {
+    return Promise.resolve(hit.icon)
+  }
+
+  const inflight = faviconInflight.get(key)
+
+  if (inflight) {
+    return inflight
+  }
+
+  const pending = resolveFavicon(rawUrl, faviconIo)
+    .catch(() => '')
+    .then(icon => {
+      if (cache.size >= FAVICON_CACHE_LIMIT) {
+        cache.delete(cache.keys().next().value)
+      }
+
+      cache.set(key, { at: Date.now(), icon })
+      saveFaviconCacheSoon()
+      faviconInflight.delete(key)
+
+      return icon
+    })
+
+  faviconInflight.set(key, pending)
 
   return pending
 }
@@ -7629,6 +7839,13 @@ function readGatewayErrorText(res): Promise<string> {
   })
 }
 
+async function gatedFileAuth(connection) {
+  const nativeAt =
+    connection.authMode === 'oauth' ? await ensureNativeAccessToken(connection.baseUrl).catch(() => null) : null
+
+  return resolveGatedDownloadAuth(connection.authMode, nativeAt, connection.token)
+}
+
 async function saveGatewayFile(payload: any = {}) {
   const filePath = gatewayFilePath(payload.path)
 
@@ -7651,9 +7868,17 @@ async function saveGatewayFile(payload: any = {}) {
   const url = `${connection.baseUrl}${requestPath}`
 
   try {
-    return await (connection.authMode === 'oauth'
-      ? downloadViaOauthSessionToFile(url, ctx)
-      : downloadViaTokenToFile(url, connection.token, ctx))
+    const auth = await gatedFileAuth(connection)
+
+    if (auth.kind === 'bearer') {
+      return await downloadViaTokenToFile(url, auth.token, ctx, { bearer: auth.token })
+    }
+
+    if (auth.kind === 'cookie') {
+      return await downloadViaOauthSessionToFile(url, ctx)
+    }
+
+    return await downloadViaTokenToFile(url, auth.token, ctx)
   } catch (error) {
     // Desktop and the remote gateway update independently. A gateway predating
     // /api/fs/download 404s here; fall back (ONLY on 404) to the older capped
@@ -7678,10 +7903,16 @@ async function saveGatewayFileViaDataUrl(connection, profile, filePath, ctx: any
   )
 
   const url = `${connection.baseUrl}${requestPath}`
+  const auth = await gatedFileAuth(connection)
+  let json: any
 
-  const json = (
-    connection.authMode === 'oauth' ? await fetchJsonViaOauthSession(url) : await fetchJson(url, connection.token)
-  ) as any
+  if (auth.kind === 'bearer') {
+    json = await fetchJson(url, null, { bearer: auth.token })
+  } else if (auth.kind === 'cookie') {
+    json = await fetchJsonViaOauthSession(url)
+  } else {
+    json = await fetchJson(url, auth.token)
+  }
 
   const dataUrl = json?.dataUrl
 
@@ -10055,6 +10286,7 @@ async function ensureBackend(profile) {
 
   if (route.backend === 'primary') {
     const connection = await startHermes()
+    setWslBridgeProfileState(key, connection.mode !== 'remote')
 
     // A shared backend still owes the caller its profile scope, so renderer-side
     // WebSocket, filesystem, and cache routing target the selected profile.
@@ -10078,8 +10310,10 @@ async function ensureBackend(profile) {
 
   if (existing) {
     existing.lastActiveAt = Date.now()
+    const connection = await existing.connectionPromise
+    setWslBridgeProfileState(key, connection.mode !== 'remote')
 
-    return existing.connectionPromise
+    return connection
   }
 
   evictLruPoolBackends(POOL_MAX_BACKENDS - 1)
@@ -10094,6 +10328,13 @@ async function ensureBackend(profile) {
   }
 
   entry.connectionPromise = spawnPoolBackend(key, entry).catch(async error => {
+    // Land the failure in desktop.log: without this a spawn that dies before
+    // its child exists (guard rejection, runtime resolution) leaves no trace
+    // beyond renderer-side rejections users never see in a bundle.
+    rememberLog(
+      `Hermes backend for profile "${key}" failed to start: ${error instanceof Error ? error.message : String(error)}`
+    )
+
     if (backendPool.get(key) === entry) {
       backendPool.delete(key)
     }
@@ -10105,7 +10346,10 @@ async function ensureBackend(profile) {
   backendPool.set(key, entry)
   startPoolIdleReaper()
 
-  return entry.connectionPromise
+  const connection = await entry.connectionPromise
+  setWslBridgeProfileState(key, connection.mode !== 'remote')
+
+  return connection
 }
 
 // ── Registry-scoped backends (multi-connection, PR 2 of the campaign) ──────
@@ -10176,6 +10420,12 @@ async function ensureRegistryBackend(connectionId, profile) {
       forceLocal: true,
       poolKey: localRoute.poolKey
     }).catch(async error => {
+      // Same trace rule as the v1 pool path: a forced-local child whose spawn
+      // rejects before the child exists must still land in desktop.log.
+      rememberLog(
+        `Hermes backend for profile "${profileKey}" (forced-local) failed to start: ${error instanceof Error ? error.message : String(error)}`
+      )
+
       if (backendPool.get(localRoute.poolKey) === localEntry) {
         backendPool.delete(localRoute.poolKey)
       }
@@ -10457,12 +10707,18 @@ async function spawnPoolBackend(profile, entry, opts: { forceLocal?: boolean; po
   const webDist = resolveWebDist()
   const readyFile = backend.readyFile ? makeDashboardReadyFile() : null
 
-  rememberLog(`Starting Hermes backend for profile "${profile}" via ${backend.label}`)
-
-  const parentStartMarker = await desktopParentStartMarker()
+  // Guard BEFORE the "Starting" line: a profile that only exists on a remote
+  // backend (remote-primary desktop asked for a forced-local child) rejects
+  // here, and logging "Starting" first left an orphaned line with no READY
+  // and no exit — the exact undiagnosable burst signature in remote-gateway
+  // user bundles (Aug 2026, Dash's report).
   assertLocalProfileCanStart(profile, profileDeletionGate, key =>
     directoryExists(path.join(HERMES_HOME, 'profiles', key))
   )
+
+  rememberLog(`Starting Hermes backend for profile "${profile}" via ${backend.label}`)
+
+  const parentStartMarker = await desktopParentStartMarker()
   const backendNonce = crypto.randomBytes(16).toString('hex')
   const parentIdentityEnv = parentWatchdogEnv(process.pid, parentStartMarker, backendNonce)
 
@@ -10717,6 +10973,11 @@ async function startHermes() {
   }
 
   const connectionAttempt = backendConnectionState.startAttempt()
+  const primaryProfile = primaryProfileKey()
+
+  // Legacy path callers without an explicit profile belong to the primary
+  // window backend. Profile-scoped callers still pass their key directly.
+  setActiveGatewayProfile(primaryProfile)
 
   // Classify this boot BEFORE the throwing resolve/mint runs: a remote failure
   // must NOT latch (it's transient — see shouldLatchBackendStartFailure), while
@@ -10798,7 +11059,7 @@ async function startHermes() {
         // both for an already-saved remote and after first-run remote Apply.
         attemptedRemote = primaryBackendIsRemote()
 
-        return resolveRemoteBackend(primaryProfileKey())
+        return resolveRemoteBackend(primaryProfile)
       },
       waitForDecision: waitForFirstRunSetupChoice,
       // Mutual exclusion with an in-app update (#50238). Remote connections
@@ -10807,8 +11068,17 @@ async function startHermes() {
     })
 
     if (setup.kind === 'remote') {
+      // Paths from the remote backend belong to a host the Windows desktop
+      // cannot open via wsl.exe — disable WSL path bridging so native dialogs
+      // and file panels don't spawn wsl.exe (or the interactive install prompt
+      // on WSL-less machines) for unresolvable paths. (#66433)
+      setWslBridgeProfileState(primaryProfile, false)
+
       return setup.connection
     }
+
+    // Local WSL backend — paths are bridgeable.
+    setWslBridgeProfileState(primaryProfile, true)
 
     const backend = setup.backend
     // Route old runtimes (no `serve`) through the legacy `dashboard --no-open`.
@@ -11008,6 +11278,7 @@ async function startHermes() {
     }
 
     const message = error instanceof Error ? error.message : String(error)
+    const hostKeyChanged = isHostKeyChangedBootFailure(error)
 
     // Only latch LOCAL boot failures. A remote failure (lapsed session / mint
     // timeout / host briefly unreachable across sleep) is transient and has no
@@ -11015,6 +11286,16 @@ async function startHermes() {
     // on "session expired" until a full restart, defeating reconnect, the
     // "Sign out & sign in" reload, and the wake-recovery revalidate path.
     if (shouldLatchBackendStartFailure({ attemptedRemote })) {
+      backendStartFailure = error instanceof Error ? error : new Error(message)
+    }
+
+    // A host-key CHANGE is the terminal exception among remote failures: SSH
+    // fails closed until the user verifies the change and clears the stale
+    // known_hosts entry, so retrying re-drives the identical doomed boot (one
+    // bundle showed 157 consecutive failures over 2.5h). Latch it like a local
+    // failure — reset/repair/apply-config clear the latch after the user fixes
+    // known_hosts.
+    if (shouldLatchHostKeyChangedFailure({ attemptedRemote, isReauth: false, isHostKeyChanged: hostKeyChanged })) {
       backendStartFailure = error instanceof Error ? error : new Error(message)
     }
 
@@ -11032,9 +11313,14 @@ async function startHermes() {
         // Renderer contract for the self-heal loop (#82679): a transient
         // REMOTE failure (dropped SSH/HTTP registered connection, mint
         // timeout) is retryable — the renderer re-attempts the boot with
-        // bounded backoff. Local failures and confirmed reauth rejections
-        // are not: those end in the recovery overlay / sign-in affordance.
-        retryable: isRetryableRemoteBootFailure({ attemptedRemote, isReauth: isReauthRequiredError(error) }),
+        // bounded backoff. Local failures, confirmed reauth rejections, and
+        // host-key changes are not: those end in the recovery overlay /
+        // sign-in affordance.
+        retryable: isRetryableRemoteBootFailure({
+          attemptedRemote,
+          isReauth: isReauthRequiredError(error),
+          isHostKeyChanged: hostKeyChanged
+        }),
         running: false
       },
       { allowDecrease: true }
@@ -11228,8 +11514,10 @@ function createSessionWindow(sessionId, { watch = false } = {}) {
 // Additional full "instance" windows — peers of the primary that render the
 // COMPLETE app (sidebar, routing, its own draft) against the shared backend, so
 // a user can run multiple GUI windows at once (⌘⇧N / the "New Window" palette
-// command). Unlike the compact session windows they carry no `?win` flag. The
-// primary mainWindow stays the notification / deep-link / pet-overlay anchor and
+// command). Unlike the compact session windows they carry no `?win` flag; a
+// separate `peer=1` marker prevents them from replaying app-launch source
+// restoration after joining that shared backend. The primary mainWindow stays
+// the notification / deep-link / pet-overlay anchor and
 // is NOT tracked here. The set holds a strong reference so an open peer isn't
 // garbage-collected, and drops it on close.
 const instanceWindows = new Set<any>()
@@ -11309,7 +11597,14 @@ function createInstanceWindow() {
   })
 
   attachRendererConsoleCapture(win, 'instance', rememberLog)
-  loadWindowUrl(win, DEV_SERVER || pathToFileURL(resolveRendererIndex()).toString(), 'Instance window')
+  loadWindowUrl(
+    win,
+    buildInstanceWindowUrl({
+      devServer: DEV_SERVER,
+      rendererIndexPath: DEV_SERVER ? undefined : resolveRendererIndex()
+    }),
+    'Instance window'
+  )
 
   return win
 }
@@ -12966,6 +13261,31 @@ async function probeSshProfileInventory(connection) {
 }
 
 async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRegistry()) {
+  // One dead source must not wedge the whole roster: ensureRegistryBackend on
+  // an unreachable remote can block up to the 45s readiness timeout, and the
+  // Bot Mode poll runs every 5s — each poll queued behind the dead dial, so
+  // the renderer painted stale rows for the entire outage (and the roster IPC
+  // hung >30s in live repro). Bound each source's enumeration; a timeout is
+  // reported like any other unreachable source and retried on the next poll.
+  const perSourceTimeoutMs = 10_000
+
+  const withEnumerationDeadline = async <T>(work: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('roster enumeration timed out')), perSourceTimeoutMs)
+        })
+      ])
+    } finally {
+      if (timer !== null) {
+        clearTimeout(timer)
+      }
+    }
+  }
+
   return Promise.all(
     registry.connections.map(async connection => {
       let raw: { connection: typeof connection; error?: string; installId?: string; profiles: null | string[] }
@@ -12999,7 +13319,10 @@ async function enumerateRegistryAgentSources(registry = readDesktopConnectionsRe
             }
           }
 
-          const descriptor: any = await ensureRegistryBackend(connection.id, null)
+          const descriptor: any = await withEnumerationDeadline(
+            Promise.resolve(ensureRegistryBackend(connection.id, null))
+          )
+
           const body: any = await getJsonForBackend(descriptor, '/api/profiles', { timeoutMs: 8_000 })
 
           // Cached with a TTL, so the 5s roster poll usually pays zero extra
@@ -13085,42 +13408,59 @@ ipcMain.handle('hermes:gateway:ws-url-for', async (_event, payload) => {
 // app's own update pipeline; remote/ssh POST the backend's own
 // /api/hermes/update endpoint (the dashboard updater), which runs
 // `hermes update` on THAT machine.
-ipcMain.handle('hermes:connections:update-all', async () => {
+ipcMain.handle('hermes:connections:update-all', async (_event, payload) => {
   const registry = readDesktopConnectionsRegistry()
 
+  // Optional renderer-side exclusions: the everything-update flow dispatches
+  // the ACTIVE backend through its own detailed-progress path and chains the
+  // local client apply LAST (it relaunches the app), so it excludes those ids
+  // here to avoid double-dispatch. No payload keeps the Settings button's
+  // original all-rows behavior byte-identical.
+  const excludeIds = new Set<string>(
+    Array.isArray((payload as any)?.excludeIds) ? (payload as any).excludeIds.map((id: unknown) => String(id)) : []
+  )
+
   const results = await Promise.all(
-    registry.connections.map(async connection => {
-      const base = { connectionId: connection.id, label: connection.label, kind: connection.kind }
-      const eligibility = updateEligibility(connection)
+    registry.connections
+      .filter(connection => !excludeIds.has(connection.id))
+      .map(async connection => {
+        const base = { connectionId: connection.id, label: connection.label, kind: connection.kind }
+        const eligibility = updateEligibility(connection)
 
-      if (!eligibility.eligible) {
-        return { ...base, ok: false, skipped: true, reason: eligibility.reason }
-      }
-
-      try {
-        if (connection.kind === 'local') {
-          // The app-managed runtime updates through the same pipeline as the
-          // Settings → Updates button (marker + venv gate + relaunch flow).
-          const result: any = await applyUpdates({})
-
-          return { ...base, ok: result?.ok !== false, detail: result?.message || 'update started' }
+        if (!eligibility.eligible) {
+          return { ...base, ok: false, skipped: true, reason: eligibility.reason }
         }
 
-        const descriptor: any = await ensureRegistryBackend(connection.id, null)
+        try {
+          if (connection.kind === 'local') {
+            // The app-managed runtime updates through the same pipeline as the
+            // Settings → Updates button (marker + venv gate + relaunch flow).
+            const result: any = await applyUpdates({})
 
-        const body: any = await postJsonForBackend(descriptor, '/api/hermes/update', {}, { timeoutMs: 15_000 })
+            return { ...base, ok: result?.ok !== false, detail: result?.message || 'update started' }
+          }
 
-        if (body?.ok === false) {
-          // The backend refused (docker/nix/externally-managed installs) —
-          // surface ITS message, per-row, instead of failing the batch.
-          return { ...base, ok: false, skipped: true, reason: body?.error || 'backend-refused', detail: body?.message }
+          const descriptor: any = await ensureRegistryBackend(connection.id, null)
+
+          const body: any = await postJsonForBackend(descriptor, '/api/hermes/update', {}, { timeoutMs: 15_000 })
+
+          if (body?.ok === false) {
+            // The backend refused (docker/nix/externally-managed installs) —
+            // surface ITS message, per-row, instead of failing the batch.
+            return {
+              ...base,
+              ok: false,
+              skipped: true,
+              reason: body?.error || 'backend-refused',
+              detail: body?.message
+            }
+          }
+
+          return { ...base, ok: true, detail: body?.message || 'update started' }
+        } catch (error: any) {
+          return { ...base, ok: false, error: String(error?.message || error) }
         }
-
-        return { ...base, ok: true, detail: body?.message || 'update started' }
-      } catch (error: any) {
-        return { ...base, ok: false, error: String(error?.message || error) }
-      }
-    })
+      })
   )
 
   return { ok: true, results }
@@ -14008,7 +14348,10 @@ ipcMain.handle('hermes:selectPaths', async (_event, options: any = {}) => {
     try {
       // On a Windows host with a WSL backend the cwd may be a POSIX/WSL path;
       // bridge it to a UNC/drive form the native dialog can actually open.
-      const bridged = IS_WINDOWS ? resolvePickerDefaultPath(String(options.defaultPath)) : String(options.defaultPath)
+      const bridged = IS_WINDOWS
+        ? resolvePickerDefaultPath(String(options.defaultPath), undefined, options?.profile)
+        : String(options.defaultPath)
+
       resolvedDefaultPath = bridged ? path.resolve(bridged) : undefined
     } catch {
       resolvedDefaultPath = undefined
@@ -14529,6 +14872,8 @@ ipcMain.handle('hermes:setting:defaultProjectDir:pick', async () => {
 })
 
 ipcMain.handle('hermes:fetchLinkTitle', (_event, url) => fetchLinkTitle(url))
+
+ipcMain.handle('hermes:resolveFavicon', (_event, url) => resolveFaviconCached(url))
 
 ipcMain.handle('hermes:logs:reveal', async () => {
   try {
@@ -15099,6 +15444,12 @@ app.whenReady().then(() => {
   registerPowerResumeListeners()
   keepAwake.set(readPersistedKeepAwake())
   f12Blocked = readPersistedDisableF12()
+  // Seed this before the first window exists: a picker can open before
+  // startHermes() finishes resolving the configured backend.
+  const primaryProfile = primaryProfileKey()
+
+  setActiveGatewayProfile(primaryProfile)
+  setWslBridgeProfileState(primaryProfile, !primaryBackendIsRemote())
   // Quick Entry's global chord — registered on ready so a cold launch restores
   // it without the renderer visiting Settings. A failed registration is logged
   // here and surfaced in Settings via the IPC state (never silent).

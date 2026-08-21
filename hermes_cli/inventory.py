@@ -440,7 +440,10 @@ def _apply_capabilities(rows: list[dict]) -> None:
     Aggregators that publish per-model reasoning detail add
     `can_disable_reasoning`, False on reasoning-mandatory routes whose upstream
     answers a disable with HTTP 400. Omitted when the catalog doesn't say,
-    which the UI reads as "no restriction known".
+    which the UI reads as "no restriction known". Such a catalog also overrides
+    `reasoning` itself when it reports a route that takes no reasoning
+    parameter — a definitive negative from the provider actually serving the
+    model outranks the models.dev inference.
 
     The catalog's `supported_efforts` list is deliberately NOT forwarded: it
     under-reports. The Portal accepts and honors levels a route doesn't
@@ -480,7 +483,12 @@ def _apply_capabilities(rows: list[dict]) -> None:
                     detail = read_reasoning_catalog(model)
                 except Exception:
                     detail = None
-                if detail:
+                if detail and not detail.get("supports_reasoning"):
+                    # For a route it serves, the aggregator's own catalog beats
+                    # models.dev: no reasoning parameter means no reasoning
+                    # controls, so there is no disable to describe either.
+                    entry["reasoning"] = False
+                elif detail:
                     entry["can_disable_reasoning"] = not detail.get("mandatory")
 
             caps[model] = entry
@@ -683,9 +691,25 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
             if _raw_config_has_enabled_moa_preset():
                 kept.append(row)
             continue
+        if _provider_is_keyless(slug):
+            # Keyless providers (opencode-free) require no configuration at
+            # all — there is nothing to "explicitly configure", and hiding
+            # them would defeat their purpose (zero-setup discoverability).
+            kept.append(row)
+            continue
         if is_provider_explicitly_configured(slug):
             kept.append(row)
     return kept
+
+
+def _provider_is_keyless(slug: str) -> bool:
+    """True when the provider's Hermes overlay declares it keyless."""
+    try:
+        from hermes_cli.providers import HERMES_OVERLAYS
+        overlay = HERMES_OVERLAYS.get(slug)
+        return bool(overlay is not None and getattr(overlay, "keyless", False))
+    except Exception:
+        return False
 
 
 def _raw_config_has_enabled_moa_preset() -> bool:
