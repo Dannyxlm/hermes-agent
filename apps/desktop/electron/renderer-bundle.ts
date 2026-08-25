@@ -150,6 +150,32 @@ function rendererManifestGraph(manifest: RendererManifest, htmlRefs: string[]): 
   return { assets: [...assets], unresolvedChunks: [...unresolvedChunks] }
 }
 
+// Vite bakes each chunk's lazy-import filenames into an inline
+// `__vite__mapDeps` table — `…(m.f || (m.f = ["assets/syntax-diff-….js", …]))` —
+// and call sites reference the table by index (`__vite__mapDeps([0,1])`).
+// The quoted filenames in that table are the chunks the generation will
+// dynamically import at runtime (syntax-diff-*, shiki-*, mermaid-embed-*, …):
+// exactly the files a torn update leaves dangling AFTER index.html's own
+// preload list checks out. The index-only call sites contain no quoted
+// strings, so this scan matches only the definition's filename table.
+const MAP_DEPS_ARRAY = /__vite__mapDeps[^[\]]{0,300}\[([^\]]*)\]/g
+const QUOTED_REF = /["']([^"']+)["']/g
+
+export function parseLazyChunkRefs(js: string): string[] {
+  const refs = new Set<string>()
+
+  for (const [, body] of String(js ?? '').matchAll(MAP_DEPS_ARRAY)) {
+    for (const [, ref] of body.matchAll(QUOTED_REF)) {
+      // Absolute/CDN URLs aren't part of this bundle's generation.
+      if (!/^[a-z]+:|^\/\//i.test(ref)) {
+        refs.add(ref.replace(/^\.\//, '').split(/[?#]/)[0])
+      }
+    }
+  }
+
+  return [...refs]
+}
+
 export interface RendererBundleDeps {
   readFileSync?: (file: string, encoding: 'utf8') => string
   existsSync?: (file: string) => boolean
@@ -157,7 +183,9 @@ export interface RendererBundleDeps {
 
 /**
  * The files in `indexPath`'s active Vite entry graph that do not exist beside
- * it. This includes lazy dynamic chunks and each chunk's CSS/assets.
+ * it. This includes lazy dynamic chunks and each chunk's CSS/assets from the
+ * Vite manifest, plus lazy chunks declared by inline `__vite__mapDeps` tables.
+ * The inline graph walk keeps older or manifest-less bundles protected too.
  *
  * Bundles built before the manifest was introduced, or whose manifest cannot
  * be read/parsed/matched to the active entry, retain the HTML-only check for
@@ -190,8 +218,61 @@ export function missingRendererAssets(indexPath: string, deps: RendererBundleDep
     // Absent/unreadable manifests are expected for older renderer bundles.
   }
 
-  const refs = new Set([...htmlRefs, ...(manifestGraph?.assets ?? [])])
-  const missing = [...refs].filter(ref => !existsSync(path.join(dir, ref)))
+  const missing: string[] = []
+  const seen = new Set<string>()
+  const queue = [...new Set([...htmlRefs, ...(manifestGraph?.assets ?? [])])]
+
+  while (queue.length > 0) {
+    const ref = queue.shift()!
+
+    if (seen.has(ref)) {
+      continue
+    }
+
+    seen.add(ref)
+
+    const file = path.join(dir, ref)
+
+    if (!existsSync(file)) {
+      missing.push(ref)
+
+      continue
+    }
+
+    // A present JS chunk may still name lazy imports of its own. Read its
+    // __vite__mapDeps table and queue those refs relative to the dir that
+    // owns them (map-deps entries are emitted relative to the chunk's own
+    // directory in older Vite output, and base-relative in newer output —
+    // normalize both to index-dir-relative before the existence check).
+    if (!/\.m?js$/i.test(ref)) {
+      continue
+    }
+
+    let js: string
+
+    try {
+      js = readFileSync(file, 'utf8')
+    } catch {
+      // Unreadable-but-present is the existence gate's concern, same contract
+      // as an unreadable index.html above.
+      continue
+    }
+
+    for (const lazyRef of parseLazyChunkRefs(js)) {
+      const chunkDirRelative = path.join(path.dirname(ref), lazyRef).split(path.sep).join('/')
+
+      // Prefer whichever interpretation lands on a real file; when neither
+      // does, report the index-dir-relative spelling (matches how the
+      // boot-critical refs above are reported).
+      if (existsSync(path.join(dir, lazyRef))) {
+        queue.push(lazyRef)
+      } else if (existsSync(path.join(dir, chunkDirRelative))) {
+        queue.push(chunkDirRelative)
+      } else {
+        queue.push(lazyRef)
+      }
+    }
+  }
 
   // A dependency key with no manifest record is also an incomplete graph. It
   // has no output filename to test, so identify the broken manifest edge.
