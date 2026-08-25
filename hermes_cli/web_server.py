@@ -725,19 +725,26 @@ def should_require_auth(host: str, allow_public: bool = False) -> bool:
 def should_require_dashboard_auth(
     host: str,
     trusted_public_hosts: Optional[frozenset[str]] = None,
+    *,
+    externally_authenticated_proxy: bool = False,
 ) -> bool:
     """Return whether the dashboard auth gate must be active.
 
     The browser-facing URL is part of the exposure boundary: a non-loopback
-    ``dashboard.public_url`` requires authentication even when a reverse proxy
-    reaches a backend bound to loopback. Callers may pass the already-resolved
-    host set so startup and request validation use the same snapshot.
+    ``dashboard.public_url`` normally requires authentication even when a
+    reverse proxy reaches a backend bound to loopback. A loopback-only process
+    may explicitly delegate browser authentication to that proxy; this never
+    bypasses the gate for a non-loopback bind. Callers may pass the already-
+    resolved host set so startup and request validation use the same snapshot.
     """
     if trusted_public_hosts is None:
         trusted_public_hosts = _dashboard_public_hosts()
-    return should_require_auth(host) or any(
-        candidate not in _LOOPBACK_HOST_VALUES
-        for candidate in trusted_public_hosts
+    return should_require_auth(host) or (
+        not externally_authenticated_proxy
+        and any(
+            candidate not in _LOOPBACK_HOST_VALUES
+            for candidate in trusted_public_hosts
+        )
     )
 
 
@@ -20122,8 +20129,21 @@ def start_server(
     # WS-auth paths can branch on it consistently. It also decides whether to
     # refuse startup, log the gate-on banner, and enable uvicorn proxy_headers.
     app.state.auth_required = should_require_dashboard_auth(
-        host, app.state.trusted_public_hosts
+        host,
+        app.state.trusted_public_hosts,
+        externally_authenticated_proxy=(allow_public and host in _LOOPBACK_HOST_VALUES),
     )
+
+    if (
+        allow_public
+        and host in _LOOPBACK_HOST_VALUES
+        and app.state.trusted_public_hosts
+    ):
+        _log.warning(
+            "Loopback dashboard is delegating browser authentication to its "
+            "declared reverse proxy; Hermes Host/Origin and session-token "
+            "checks remain active."
+        )
 
     # ``--insecure`` no longer disables the auth gate (June 2026 hardening:
     # the hermes-0day MCP-persistence campaign abused unauthenticated public

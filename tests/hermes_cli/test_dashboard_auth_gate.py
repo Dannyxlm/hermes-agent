@@ -355,6 +355,37 @@ def test_loopback_public_url_fail_closed_message_is_actionable(monkeypatch):
     assert "LOCAL-ONLY" in msg
 
 
+def test_loopback_public_url_can_delegate_auth_to_explicit_proxy(monkeypatch):
+    """CloudSeed's loopback proxy owns browser auth while Hermes owns API auth."""
+    from hermes_cli.dashboard_auth import clear_providers
+
+    monkeypatch.setenv(
+        "HERMES_DASHBOARD_PUBLIC_URL",
+        "https://dashboard.example.test",
+    )
+    clear_providers()
+    _stub_uvicorn_run(monkeypatch)
+    _restore_app_state_after_test(
+        monkeypatch,
+        "auth_required",
+        "bound_host",
+        "bound_port",
+        "trusted_public_hosts",
+    )
+
+    web_server.start_server(
+        host="127.0.0.1",
+        port=9119,
+        open_browser=False,
+        allow_public=True,
+    )
+
+    assert web_server.app.state.auth_required is False
+    assert web_server.app.state.trusted_public_hosts == frozenset({
+        "dashboard.example.test"
+    })
+
+
 @pytest.mark.parametrize("host,public_url,expected", [
     # Loopback bind, no public URL → local token mode, no gate.
     ("127.0.0.1", None, False),
