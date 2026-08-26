@@ -223,6 +223,18 @@ def _make_hermes_provider_class() -> Optional[type]:
             try:
                 content = await response.aread()
                 token_response = OAuthToken.model_validate_json(content)
+
+                # RFC 6749 §6: a refresh response may omit scope (unchanged)
+                # and refresh_token (the AS does not rotate). Carry both
+                # forward so the persisted token stays self-describing and
+                # the next expiry can still refresh instead of forcing a
+                # full re-authorization. Match MCP SDK 2.0 semantics.
+                prior = self.context.current_tokens
+                if token_response.scope is None and prior is not None:
+                    token_response.scope = prior.scope
+                if token_response.refresh_token is None and prior is not None:
+                    token_response.refresh_token = prior.refresh_token
+
                 self.context.current_tokens = token_response
                 self.context.update_token_expiry(token_response)
                 await self.context.storage.set_tokens(token_response)
