@@ -278,6 +278,132 @@ class TestBuildOAuthAuth:
         assert "refresh-secret" not in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_refresh_omits_refresh_token_and_scope_preserves_prior(
+        self, tmp_path, monkeypatch
+    ):
+        """RFC 6749 §6: omitted refresh_token/scope must keep prior values."""
+        import httpx
+        from mcp.shared.auth import OAuthToken
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        _set_interactive_stdin(monkeypatch)
+        provider = build_oauth_auth("supabase", "https://mcp.supabase.com/mcp")
+        assert provider is not None
+        prior = OAuthToken(
+            access_token="old-access-token",
+            token_type="Bearer",
+            expires_in=3600,
+            scope="read write",
+            refresh_token="prior-refresh-token",
+        )
+        provider.context.current_tokens = prior
+        await provider.context.storage.set_tokens(prior)
+
+        response = httpx.Response(
+            200,
+            content=b'{"access_token":"new-access-token","token_type":"Bearer","expires_in":7200}',
+        )
+        result = await provider._handle_refresh_response(response)
+
+        assert result is True
+        tokens = provider.context.current_tokens
+        assert tokens is not None
+        assert tokens.access_token == "new-access-token"
+        assert tokens.refresh_token == "prior-refresh-token"
+        assert tokens.scope == "read write"
+
+        stored = await provider.context.storage.get_tokens()
+        assert stored is not None
+        assert stored.access_token == "new-access-token"
+        assert stored.refresh_token == "prior-refresh-token"
+        assert stored.scope == "read write"
+
+    @pytest.mark.asyncio
+    async def test_refresh_rotates_refresh_token_when_supplied(
+        self, tmp_path, monkeypatch
+    ):
+        """When the AS supplies a new refresh_token, persist the rotated value."""
+        import httpx
+        from mcp.shared.auth import OAuthToken
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        _set_interactive_stdin(monkeypatch)
+        provider = build_oauth_auth("supabase", "https://mcp.supabase.com/mcp")
+        assert provider is not None
+        prior = OAuthToken(
+            access_token="old-access-token",
+            token_type="Bearer",
+            expires_in=3600,
+            scope="read write",
+            refresh_token="prior-refresh-token",
+        )
+        provider.context.current_tokens = prior
+        await provider.context.storage.set_tokens(prior)
+
+        response = httpx.Response(
+            200,
+            content=(
+                b'{"access_token":"new-access-token","token_type":"Bearer",'
+                b'"expires_in":7200,"refresh_token":"rotated-refresh-token",'
+                b'"scope":"read"}'
+            ),
+        )
+        result = await provider._handle_refresh_response(response)
+
+        assert result is True
+        tokens = provider.context.current_tokens
+        assert tokens is not None
+        assert tokens.access_token == "new-access-token"
+        assert tokens.refresh_token == "rotated-refresh-token"
+        assert tokens.scope == "read"
+
+        stored = await provider.context.storage.get_tokens()
+        assert stored is not None
+        assert stored.refresh_token == "rotated-refresh-token"
+        assert stored.scope == "read"
+        assert stored.access_token == "new-access-token"
+
+    @pytest.mark.asyncio
+    async def test_non_2xx_refresh_does_not_overwrite_disk_tokens(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Failed refresh must not rewrite on-disk tokens or leak secrets in logs."""
+        import logging
+        import httpx
+        from mcp.shared.auth import OAuthToken
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        _set_interactive_stdin(monkeypatch)
+        provider = build_oauth_auth("supabase", "https://mcp.supabase.com/mcp")
+        assert provider is not None
+        prior = OAuthToken(
+            access_token="disk-access-token",
+            token_type="Bearer",
+            expires_in=3600,
+            scope="read write",
+            refresh_token="disk-refresh-token",
+        )
+        provider.context.current_tokens = prior
+        await provider.context.storage.set_tokens(prior)
+
+        response = httpx.Response(
+            401,
+            content=b'{"error":"invalid_grant","error_description":"disk-refresh-token"}',
+        )
+        with caplog.at_level(logging.WARNING, logger="tools.mcp_oauth"):
+            result = await provider._handle_refresh_response(response)
+
+        assert result is False
+        assert provider.context.current_tokens is None
+        stored = await provider.context.storage.get_tokens()
+        assert stored is not None
+        assert stored.access_token == "disk-access-token"
+        assert stored.refresh_token == "disk-refresh-token"
+        assert stored.scope == "read write"
+        assert "disk-access-token" not in caplog.text
+        assert "disk-refresh-token" not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_malformed_201_refresh_response_clears_tokens(
         self, tmp_path, monkeypatch, caplog
     ):
