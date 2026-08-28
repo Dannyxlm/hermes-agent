@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import threading
 from types import SimpleNamespace
 
@@ -284,3 +285,96 @@ def test_standalone_failed_connect_is_reaped_without_global_owner(monkeypatch, t
             assert "probe-only" not in mcp_tool._server_connect_errors
     finally:
         _cleanup_mcp_state(mcp_tool, created)
+
+
+@pytest.mark.parametrize(
+    ("configured_interval", "expected_interval"),
+    (
+        (17, 17.0),
+        (0.1, 5.0),
+        ("invalid", 300.0),
+    ),
+)
+def test_initial_failure_honors_bounded_per_server_parked_retry_interval(
+    monkeypatch,
+    tmp_path,
+    configured_interval,
+    expected_interval,
+):
+    """One noisy backend must not force every MCP server to wait five minutes."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+
+    observed_timeouts = []
+
+    class _FailingServerTask(mcp_tool.MCPServerTask):
+        async def _run_stdio(self, config):
+            raise ConnectionError("deterministic initial failure")
+
+        async def _wait_for_reconnect_or_shutdown(self, timeout=None):
+            observed_timeouts.append(timeout)
+            self._shutdown_event.set()
+            return "shutdown"
+
+    monkeypatch.setattr(mcp_tool, "_MAX_INITIAL_CONNECT_RETRIES", 0)
+    monkeypatch.setattr(mcp_tool, "_PARKED_RETRY_INTERVAL", 300)
+
+    task = _FailingServerTask("configured-park")
+    asyncio.run(
+        task.run(
+            {
+                "command": "unused",
+                "parked_retry_interval": configured_interval,
+            }
+        )
+    )
+
+    assert observed_timeouts == [expected_interval]
+
+
+@pytest.mark.parametrize(
+    "configured_interval",
+    (
+        None,
+        "not-a-number",
+        True,
+        False,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ),
+)
+def test_invalid_parked_retry_interval_warns_and_uses_default(
+    monkeypatch,
+    caplog,
+    configured_interval,
+):
+    from tools import mcp_tool
+
+    monkeypatch.setattr(mcp_tool, "_PARKED_RETRY_INTERVAL", 37)
+
+    with caplog.at_level(logging.WARNING, logger=mcp_tool.__name__):
+        resolved = mcp_tool._resolve_parked_retry_interval(
+            {"parked_retry_interval": configured_interval}
+        )
+
+    assert resolved == 37.0
+    assert len(caplog.records) == 1
+    assert "parked_retry_interval" in caplog.records[0].getMessage()
+    assert "using default" in caplog.records[0].getMessage()
+
+
+def test_missing_parked_retry_interval_uses_default_without_warning(
+    monkeypatch,
+    caplog,
+):
+    from tools import mcp_tool
+
+    monkeypatch.setattr(mcp_tool, "_PARKED_RETRY_INTERVAL", 41)
+
+    with caplog.at_level(logging.WARNING, logger=mcp_tool.__name__):
+        resolved = mcp_tool._resolve_parked_retry_interval({})
+
+    assert resolved == 41.0
+    assert caplog.records == []
