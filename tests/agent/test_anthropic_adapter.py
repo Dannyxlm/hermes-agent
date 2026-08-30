@@ -493,7 +493,7 @@ class TestWriteClaudeCodeCredentials:
         monkeypatch.delenv("HERMES_CLAUDE_CODE_CONFIG_DIR", raising=False)
         monkeypatch.setenv(config_env, str(claude_config_dir))
         monkeypatch.setattr(
-            "agent.anthropic_adapter._read_claude_code_credentials_from_keychain",
+            "agent.anthropic_credentials._read_claude_code_credentials_from_keychain",
             lambda: None,
         )
 
