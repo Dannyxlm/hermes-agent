@@ -330,6 +330,7 @@ import { loadRendererLoadErrorPage } from './renderer-load-error-page'
 import { attachRendererConsoleCapture, formatRendererBoundaryReport } from './renderer-log'
 import {
   classifyStoredSecret,
+  initialSecretStoragePolicy,
   readSecretStoragePolicy,
   SECRET_STORAGE_POLICY_FILE,
   type SecretStoragePolicy,
@@ -4385,8 +4386,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
       ...(IS_PACKAGED && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit)
         ? {
             HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-            HERMES_MANAGED_PUBLICATION_REPOSITORY:
-              INSTALL_STAMP.repository || 'the configured publication',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository || 'the configured publication',
             HERMES_MANAGED_PUBLICATION_BRANCH: branch,
             HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit.toLowerCase()
           }
@@ -4619,8 +4619,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
     baseEnv: process.env,
     branch,
     hermesHome: HERMES_HOME,
-    managedRepository:
-      INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication',
+    managedRepository: INSTALL_STAMP?.repository || (await getOriginUrl(updateRoot)) || 'the configured publication',
     managedTargetSha: opts.expectedTargetSha,
     packaged: IS_PACKAGED,
     pathValue: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
@@ -8986,15 +8985,42 @@ function rewriteAllStoredSecrets(shouldRewrite: (secret: any) => boolean, reenco
   return touched
 }
 
+/** Inspect every desktop-owned secret without decoding or rewriting it. */
+function hasStoredSecretMatching(matches: (secret: any) => boolean): boolean {
+  const blockMatches = (block: any) =>
+    matches(block?.token) ||
+    Object.values(block?.headers && typeof block.headers === 'object' ? block.headers : {}).some(matches)
+
+  const config = readDesktopConnectionConfig()
+
+  if (blockMatches(config.remote) || Object.values(config.profiles || {}).some(blockMatches)) {
+    return true
+  }
+
+  const registry = readDesktopConnectionsRegistry()
+
+  if (registry.connections?.some(blockMatches)) {
+    return true
+  }
+
+  try {
+    const store = JSON.parse(_nativeTokenStoreIo().readStoreText())
+
+    return Boolean(store && typeof store === 'object' && !Array.isArray(store) && Object.values(store).some(matches))
+  } catch {
+    return false
+  }
+}
+
 /**
- * One-shot legacy migration: builds before the opt-in policy wrote every
- * secret as a safeStorage blob. With encryption now defaulting OFF, decrypt
- * each stored blob once and rewrite it as plain so no future launch touches
- * the keychain. Marked `migrated` whether or not every blob decrypts — a
- * broken keychain costs at most ONE prompt (this pass), never one per
- * launch; blobs that would not decrypt are left in place and simply read as
- * absent from then on (classifyStoredSecret → 'drop'), so opting encryption
- * back ON later can still recover them on a healthy keychain.
+ * Existing installs with encrypted blobs and no policy file preserve their
+ * legacy encryption setting. The one-shot decrypt migration remains only for
+ * pre-release opt-out states that already have a policy file with migration
+ * pending. It is marked `migrated` whether or not every blob decrypts — a
+ * broken keychain costs at most ONE prompt (this pass), never one per launch;
+ * blobs that would not decrypt are left in place and simply read as absent
+ * from then on (classifyStoredSecret → 'drop'), so opting encryption back ON
+ * later can still recover them on a healthy keychain.
  *
  * Runs before createWindow() so every later read sees the final encodings.
  */
@@ -9002,6 +9028,18 @@ function migrateLegacyEncryptedSecretsOnce() {
   const policy = secretStoragePolicy()
 
   if (policy.on || policy.migrated) {
+    return
+  }
+
+  const preserved = initialSecretStoragePolicy(
+    fs.existsSync(SECRET_STORAGE_POLICY_PATH),
+    hasStoredSecretMatching(secret => secret?.encoding === SAFE_STORAGE_ENCODING)
+  )
+
+  if (preserved) {
+    setSecretStoragePolicy(preserved)
+    rememberLog('[secret-storage] preserved legacy keychain encryption for existing stored credentials')
+
     return
   }
 

@@ -51,6 +51,7 @@ Usage:
 
 import atexit
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -1447,17 +1448,20 @@ def _use_real_profile() -> bool:
     return False
 
 
-# Session name for the single shared real-profile copy-browser. All consented
-# local browsing attaches to this one agent-browser session so concurrent
-# tasks reuse the same copy-browser instead of each launching a rival Chromium
-# on the same copied user-data-dir.
+# Prefix for real-profile copy-browser sessions. The suffix is a hash of the
+# effective Hermes home, browser family and selected source profile. A gateway
+# may multiplex several Hermes profiles in one Python process; a single global
+# session name/cache would otherwise let one profile reuse another identity's
+# cookies.
 _REAL_PROFILE_SESSION = "hermes-real-profile"
 _real_profile_cdp_lock = threading.Lock()
 _real_profile_cdp_cache: dict = {}
-_real_profile_chrome_procs: list = []  # Popen handles of directly-launched real browsers
+_real_profile_chrome_procs: list = []  # (scope_key, copy_root, Popen) for directly-launched browsers
 
 
-def _terminate_real_profile_chrome() -> None:
+def _terminate_real_profile_chrome(
+    scope_key: Optional[str] = None, copy_root: Optional[str] = None
+) -> None:
     """Terminate real-browser processes launched for real-profile sessions.
 
     The real-profile path launches the user's actual browser binary on the
@@ -1465,8 +1469,15 @@ def _terminate_real_profile_chrome() -> None:
     processes are ours to reap: agent-browser only ATTACHED to them, so its
     own session cleanup never kills them. Idempotent; safe from atexit.
     """
+    remaining = []
     while _real_profile_chrome_procs:
-        proc = _real_profile_chrome_procs.pop()
+        proc_scope, proc_root, proc = _real_profile_chrome_procs.pop()
+        if (
+            (scope_key is not None and proc_scope != scope_key)
+            or (copy_root is not None and proc_root != copy_root)
+        ):
+            remaining.append((proc_scope, proc_root, proc))
+            continue
         try:
             if proc.poll() is None:
                 proc.terminate()
@@ -1476,6 +1487,107 @@ def _terminate_real_profile_chrome() -> None:
                     proc.kill()
         except Exception as e:
             logger.debug("real-profile chrome terminate failed: %s", e)
+    _real_profile_chrome_procs.extend(reversed(remaining))
+
+
+def _real_profile_scope() -> tuple:
+    """Resolve the current real-profile identity without copying any data.
+
+    Returns ``(scope, error)`` where scope carries a non-sensitive hash used
+    for cache/session isolation plus the source/copy paths used for validation.
+    """
+    from hermes_cli.browser_connect import (
+        UNSUPPORTED_CHANNEL,
+        _resolve_source_profile,
+        detect_default_chromium,
+        real_profile_copy_dir,
+        real_profile_data_dir,
+    )
+
+    browser = detect_default_chromium()
+    if browser is None:
+        return None, (
+            "browser.use_real_profile is on, but your default browser is not a "
+            "supported Chromium browser (Chrome, Edge, Brave, Brave Origin, "
+            "Chromium). Real-profile browsing requires a Chromium default; "
+            "set one or turn the toggle off."
+        )
+    if browser == UNSUPPORTED_CHANNEL:
+        return None, (
+            "browser.use_real_profile is on, but your default browser is a "
+            "pre-release Chromium channel (Beta / Dev / Canary), which "
+            "real-profile browsing does not support. Set your default to a "
+            "stable Chrome / Edge / Brave / Brave Origin / Chromium, or turn "
+            "the toggle off."
+        )
+
+    source_dir = real_profile_data_dir(browser)
+    if not source_dir:
+        return None, f"browser.use_real_profile is on, but no profile directory exists for '{browser}'."
+    source_profile, error = _resolve_source_profile(source_dir)
+    if error:
+        return None, f"browser.use_real_profile is on, but {error}"
+
+    copy_dir = real_profile_copy_dir(browser)
+    material = "\0".join(
+        (os.path.realpath(copy_dir), browser, os.path.realpath(source_dir), source_profile or "Default")
+    )
+    key = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+    return {
+        "browser": browser,
+        "copy_dir": copy_dir,
+        "copy_root": os.path.realpath(str(get_hermes_home() / "browser-profile")),
+        "key": key,
+        "session_name": f"{_REAL_PROFILE_SESSION}-{key}",
+        "source_dir": source_dir,
+        "source_profile": source_profile or "Default",
+    }, None
+
+
+def _real_profile_metadata_for_cdp(cdp_url: str) -> dict:
+    with _real_profile_cdp_lock:
+        for entry in _real_profile_cdp_cache.values():
+            if isinstance(entry, dict) and entry.get("cdp") == cdp_url:
+                return dict(entry)
+    return {}
+
+
+def _revoke_real_profile_for_current_home() -> None:
+    """Stop and forget only real-profile resources owned by this Hermes home."""
+    copy_root = os.path.realpath(str(get_hermes_home() / "browser-profile"))
+
+    with _real_profile_cdp_lock:
+        entries = [
+            entry for entry in _real_profile_cdp_cache.values()
+            if isinstance(entry, dict) and entry.get("copy_root") == copy_root
+        ]
+        for entry in entries:
+            _real_profile_cdp_cache.pop(entry.get("key"), None)
+
+    with _cleanup_lock:
+        task_sessions = []
+        for task_id, info in list(_active_sessions.items()):
+            features = info.get("features") or {}
+            if features.get("real_profile") and features.get("real_profile_copy_root") == copy_root:
+                task_sessions.append(info.get("session_name"))
+                _active_sessions.pop(task_id, None)
+                _session_last_activity.pop(task_id, None)
+
+    for session_name in filter(None, task_sessions):
+        _agent_browser_close_session(session_name)
+    for entry in entries:
+        _agent_browser_close_session(entry.get("session_name", ""))
+        _terminate_real_profile_chrome(entry.get("key"))
+    # Also catches a Chrome process whose launch failed after Popen but before
+    # its CDP endpoint could be committed to the cache.
+    _terminate_real_profile_chrome(copy_root=copy_root)
+
+    try:
+        from hermes_cli.browser_connect import cleanup_real_profile_snapshots
+
+        cleanup_real_profile_snapshots()
+    except Exception as e:
+        logger.debug("real-profile cleanup-on-consent-off failed: %s", e)
 
 
 def _agent_browser_argv(browser_cmd: str) -> list:
@@ -1578,13 +1690,7 @@ def _real_profile_cdp() -> tuple:
         # still on disk, it holds copies of the user's cookies/logins — delete
         # it so revoking consent actually removes the credential copies. Cheap
         # (one isdir check) and idempotent.
-        try:
-            from hermes_cli.browser_connect import cleanup_real_profile_snapshots
-
-            cleanup_real_profile_snapshots()
-        except Exception as e:
-            logger.debug("real-profile cleanup-on-consent-off failed: %s", e)
-        _real_profile_cdp_cache.pop("cdp", None)
+        _revoke_real_profile_for_current_home()
         return None, None
 
     # Lightpanda cannot load a Chromium profile — agent-browser rejects
@@ -1600,42 +1706,21 @@ def _real_profile_cdp() -> tuple:
             "or turn the toggle off."
         )
 
-    from hermes_cli.browser_connect import (
-        UNSUPPORTED_CHANNEL,
-        detect_default_chromium,
-        real_profile_copy_dir,
-        snapshot_real_profile,
-    )
+    from hermes_cli.browser_connect import snapshot_real_profile
+
+    scope, scope_error = _real_profile_scope()
+    if scope_error:
+        return None, scope_error
 
     with _real_profile_cdp_lock:
         # Reuse a live copy-browser from an earlier call this process made.
-        cached = _real_profile_cdp_cache.get("cdp")
+        cached_entry = _real_profile_cdp_cache.get(scope["key"])
+        cached = cached_entry.get("cdp") if isinstance(cached_entry, dict) else None
         if cached and _cdp_http_ready(cached):
             return cached, None
-        _real_profile_cdp_cache.pop("cdp", None)
+        _real_profile_cdp_cache.pop(scope["key"], None)
 
-        browser = detect_default_chromium()
-        if browser is None:
-            return None, (
-                "browser.use_real_profile is on, but your default browser is not a "
-                "supported Chromium browser (Chrome, Edge, Brave, Brave Origin, "
-                "Chromium). "
-                "Real-profile browsing requires a Chromium default; set one or turn "
-                "the toggle off."
-            )
-        if browser == UNSUPPORTED_CHANNEL:
-            # A recognized pre-release channel (Beta/Dev/Canary) is the OS
-            # default. Its profile lives in a channel-specific directory we
-            # don't resolve, and normalizing it to the stable family would
-            # drive a DIFFERENT profile/account — a wrong-principal bug. Fail
-            # closed rather than guess (#95549 invariant).
-            return None, (
-                "browser.use_real_profile is on, but your default browser is a "
-                "pre-release Chromium channel (Beta / Dev / Canary), which "
-                "real-profile browsing does not support. Set your default to a "
-                "stable Chrome / Edge / Brave / Brave Origin / Chromium, or turn "
-                "the toggle off."
-            )
+        browser = scope["browser"]
 
         # Reuse BEFORE writing anything. A shared copy-browser may already be up
         # from a previous hermes process; if it is driving OUR copy dir, hand it
@@ -1646,15 +1731,16 @@ def _real_profile_cdp() -> tuple:
         # as a PATH only (no copy), probe reuse, and return early on a hit. The
         # snapshot/overlay happens solely on the relaunch path below, when no
         # live browser owns the dir.
-        copy_dir = real_profile_copy_dir(browser)
-        existing = _agent_browser_get_cdp(_REAL_PROFILE_SESSION)
+        copy_dir = scope["copy_dir"]
+        session_name = scope["session_name"]
+        existing = _agent_browser_get_cdp(session_name)
         if existing and _cdp_http_ready(existing) and _cdp_on_data_dir(existing, copy_dir):
-            _real_profile_cdp_cache["cdp"] = existing
+            _real_profile_cdp_cache[scope["key"]] = {**scope, "cdp": existing}
             return existing, None
         if existing:
             # Stale/wrong-dir session (throwaway-temp fallback, or an old copy):
             # close it so nothing holds the dir open before we overlay + relaunch.
-            _agent_browser_close_session(_REAL_PROFILE_SESSION)
+            _agent_browser_close_session(session_name)
 
         # No live browser owns the dir now — safe to (re)snapshot + overlay.
         snap_dir, err = snapshot_real_profile(browser)
@@ -1747,7 +1833,7 @@ def _real_profile_cdp() -> tuple:
             )
         except (subprocess.SubprocessError, OSError) as e:
             return None, f"browser.use_real_profile is on, but the launch failed: {e}"
-        _real_profile_chrome_procs.append(chrome_proc)
+        _real_profile_chrome_procs.append((scope["key"], scope["copy_root"], chrome_proc))
 
         # Wait for DevToolsActivePort to appear (Chrome picks a free port).
         import time as _time
@@ -1764,14 +1850,14 @@ def _real_profile_cdp() -> tuple:
             except OSError:
                 pass
             if chrome_proc.poll() is not None:
-                _terminate_real_profile_chrome()
+                _terminate_real_profile_chrome(scope["key"])
                 return None, (
                     "browser.use_real_profile is on, but Chrome exited during "
                     "startup (another instance may hold the profile copy)."
                 )
             _time.sleep(0.25)
         if port is None:
-            _terminate_real_profile_chrome()
+            _terminate_real_profile_chrome(scope["key"])
             return None, (
                 "browser.use_real_profile is on, but the real-profile browser "
                 "did not expose a debug port in time. Retry, or turn the toggle off."
@@ -1788,7 +1874,7 @@ def _real_profile_cdp() -> tuple:
             )
         argv = [
             *_agent_browser_argv(browser_cmd),
-            "--session", _REAL_PROFILE_SESSION,
+            "--session", session_name,
             "--cdp", str(port),
             "open", "about:blank",
         ]
@@ -1813,7 +1899,7 @@ def _real_profile_cdp() -> tuple:
                 f"failed to start: {reason}"
             )
 
-        cdp = _agent_browser_get_cdp(_REAL_PROFILE_SESSION)
+        cdp = _agent_browser_get_cdp(session_name)
         # The daemon may answer with the endpoint of a
         # browser IT spawned (throwaway temp profile) instead of the real
         # Chrome we launched on the copy. The DevToolsActivePort file OUR
@@ -1833,7 +1919,7 @@ def _real_profile_cdp() -> tuple:
                 "started without exposing a devtools endpoint. Retry, or turn "
                 "the toggle off."
             )
-        _real_profile_cdp_cache["cdp"] = cdp
+        _real_profile_cdp_cache[scope["key"]] = {**scope, "cdp": cdp}
         logger.info("real-profile browser ready for %s at %s (%s)", browser, cdp, copy_dir)
         return cdp, None
 
@@ -2850,6 +2936,7 @@ def _create_local_session(task_id: str, allow_real_profile: bool = True) -> Dict
             raise RuntimeError(err)
         if cdp_url:
             session_name = f"rp_{uuid.uuid4().hex[:10]}"
+            real_profile = _real_profile_metadata_for_cdp(cdp_url)
             logger.info(
                 "Created real-profile local session %s for task %s", session_name, task_id
             )
@@ -2857,7 +2944,12 @@ def _create_local_session(task_id: str, allow_real_profile: bool = True) -> Dict
                 "session_name": session_name,
                 "bb_session_id": None,
                 "cdp_url": _resolve_cdp_override(cdp_url),
-                "features": {"local": True, "real_profile": True},
+                "features": {
+                    "local": True,
+                    "real_profile": True,
+                    "real_profile_scope": real_profile.get("key"),
+                    "real_profile_copy_root": real_profile.get("copy_root"),
+                },
             }
 
     session_name = f"h_{uuid.uuid4().hex[:10]}"
@@ -2915,6 +3007,23 @@ def _get_session_info(task_id: Optional[str] = None) -> Dict[str, Any]:
     with _cleanup_lock:
         # Check if we already have a session for this task
         existing_session = _active_sessions.get(task_id)
+
+    # Real-profile consent and identity are live, profile-scoped settings. Do
+    # not return a cached task session after consent was revoked or the pinned
+    # Chromium identity changed. Revocation drops only this Hermes home's
+    # browser resources, then this call falls through to the configured cloud
+    # backend or a fresh throwaway local browser.
+    if existing_session is not None and (existing_session.get("features") or {}).get("real_profile"):
+        revoke = not _use_real_profile()
+        if not revoke:
+            current_scope, _scope_error = _real_profile_scope()
+            revoke = not current_scope or (
+                current_scope.get("key") != (existing_session.get("features") or {}).get("real_profile_scope")
+            )
+        if revoke:
+            _revoke_real_profile_for_current_home()
+            existing_session = None
+            _update_session_activity(task_id)
 
     # Suspect-session recycle (#72205 / #85125 3b): a previous command
     # timeout marked this cached session suspect via the SuspectableBackend

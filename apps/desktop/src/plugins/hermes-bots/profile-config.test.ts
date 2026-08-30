@@ -21,7 +21,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { applyAdvancedConfig, emptyAdvancedState } from './profile-config'
+import { applyAdvancedConfig, credentialsRequiredNames, emptyAdvancedState } from './profile-config'
 import type { RosterRow } from './types'
 
 type AdvancedConfigState = ReturnType<typeof emptyAdvancedState>
@@ -227,5 +227,25 @@ describe('a guarded model switch (#95293)', () => {
     expect(routed).toHaveLength(1)
     expect(confirmMock).not.toHaveBeenCalled()
     expect(result).toMatchObject({ applied: { model: true }, ok: true })
+  })
+})
+
+describe('MCP credential follow-up', () => {
+  it('preserves the gateway credential requirement for the dialog to surface', async () => {
+    respondWith(() => ({
+      applied: { mcp_servers: true },
+      credentials_required: { ready: false, secure: true },
+      ok: true
+    }))
+
+    const result = await applyAdvancedConfig(bot, {
+      ...emptyAdvancedState(),
+      dirtyMcp: true,
+      loaded: true,
+      mcp: [{ enabled: true, name: 'secure' }]
+    })
+
+    expect(credentialsRequiredNames(result)).toEqual(['secure'])
+    expect(result.credentials_required).toEqual({ ready: false, secure: true })
   })
 })

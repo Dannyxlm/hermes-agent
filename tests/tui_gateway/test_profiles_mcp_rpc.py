@@ -148,7 +148,8 @@ def test_profile_mcp_copy_uses_raw_credential_free_projection(
     assert configured["credentials_required"] == {"secure": True}
     copied = _profile_config(profile_home)["mcp_servers"]["secure"]
 
-    assert copied["enabled"] is True
+    assert copied["enabled"] is False
+    assert "secure" not in _runtime_enabled_mcp(profile_home)
     assert "disabled" not in copied
     assert "Authorization" not in copied["headers"]
     assert copied["headers"] == {

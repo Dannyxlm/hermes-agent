@@ -452,7 +452,10 @@ export async function fetchStoredTranscriptAcrossBackends(id: string): Promise<S
     }
 
     try {
-      return await getLatestSessionMessages(id, { connectionId, profile: 'default' })
+      // Let the target connection resolve its own serving profile. Hard-coding
+      // `default` makes stored transcripts in named/non-default profiles look
+      // missing even though this recovery path is deliberately owner-agnostic.
+      return await getLatestSessionMessages(id, { connectionId })
     } catch {
       // Not on this backend (or it is unreachable); try the next.
     }

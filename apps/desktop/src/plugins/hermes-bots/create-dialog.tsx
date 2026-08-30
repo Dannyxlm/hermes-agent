@@ -63,9 +63,10 @@ import type {
   CapabilityEntry,
   McpCatalogResponse,
   ProfileConfigurePayload,
+  ProfileConfigureResult,
   ProfileDescribeResponse
 } from './profile-config'
-import { CheckList, SkillsView, skillsViewRoutesConnections } from './profile-config'
+import { CheckList, credentialsRequiredNames, SkillsView, skillsViewRoutesConnections } from './profile-config'
 import { deleteBot } from './profile-ops'
 import { botRosterMeta } from './routing'
 import { HubSkillsSection } from './skills-hub'
@@ -127,6 +128,7 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
   // button + MCP setup buttons). Distinct from createdRef on purpose:
   // createdRef must stay a slug string for its sibling consumers.
   const flightRef = useRef<Promise<null | string> | null>(null)
+  const credentialSetupRequiredRef = useRef<string[]>([])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   // Default shapes mode: deterministic blob face drawn from the agent's name
@@ -289,6 +291,7 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
     setError(null)
     createdRef.current = null
     flightRef.current = null
+    credentialSetupRequiredRef.current = []
   }
 
   // Capability catalog for the tabs: the profile doesn't exist yet, so show
@@ -334,6 +337,9 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
   }
 
   const toggleCap = (kind: 'mcp' | 'skills' | 'toolsets', name: string, enabled: boolean) => {
+    if (kind === 'mcp' && !enabled) {
+      credentialSetupRequiredRef.current = credentialSetupRequiredRef.current.filter(server => server !== name)
+    }
     setDirtyCaps(prev => ({
       ...prev,
       [kind === 'mcp' ? 'mcp' : kind]: true
@@ -430,10 +436,11 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
         }
 
         if (Object.keys(capPayload).length) {
-          await requestForTarget('profiles.configure', {
+          const configured = await requestForTarget<ProfileConfigureResult>('profiles.configure', {
             name: slug,
             ...capPayload
           })
+          credentialSetupRequiredRef.current = credentialsRequiredNames(configured)
         }
       } catch {
         /* capability application is best-effort */
@@ -506,6 +513,16 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
       if (!slugCreated) {
         setBusy(false)
         setError('Could not create the bot.')
+
+        return
+      }
+
+      if (credentialSetupRequiredRef.current.length) {
+        const servers = credentialSetupRequiredRef.current.join(', ')
+        setBusy(false)
+        setError(
+          `Agent draft created, but credentials still need setup for: ${servers}. Those servers remain disabled.`
+        )
 
         return
       }
@@ -965,6 +982,9 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
                                       ...prev,
                                       mcp: true
                                     }))
+                                    credentialSetupRequiredRef.current = credentialSetupRequiredRef.current.filter(
+                                      server => server !== m.name
+                                    )
                                   }}
                                   profile={createdRef.current}
                                 />

@@ -83,6 +83,37 @@ describe('waitForBackendRelease (#74805 first-attempt race)', () => {
     expect(deps.now()).toBe(0) // no dwell needed — everything already gone
   })
 
+  it('collects an immediate replacement before declaring the backend released', async () => {
+    const clock = fakeClock()
+    let collected = false
+    let killedAt: number | null = null
+
+    const deps = makeDeps({
+      now: clock.now,
+      sleep: clock.sleep,
+      collectStragglerPids: () => {
+        if (collected) {
+          return []
+        }
+
+        collected = true
+
+        return [7777]
+      },
+      killProcessTree: () => {
+        killedAt = clock.now()
+      },
+      isPidAlive: pid => pid === 7777 && killedAt !== null && clock.now() < killedAt + RELEASE_GATE_POLL_MS
+    })
+
+    const result = await waitForBackendRelease([], deps, 'test')
+
+    expect(result).toEqual({ unlocked: true, lingeringPids: [] })
+    expect(deps.kills).toEqual([]) // custom killProcessTree above owns the observation
+    expect(killedAt).toBe(0)
+    expect(clock.now()).toBeGreaterThanOrEqual(RELEASE_GATE_POLL_MS)
+  })
+
   it('keeps waiting while the shim is locked and fails closed at the deadline', async () => {
     const deps = makeDeps({ isShimLocked: () => true })
 

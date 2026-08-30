@@ -27,7 +27,12 @@ import { $botMeta, botSelectionKey, ROSTER_KEY, saveBotMeta } from './data'
 import { labeled } from './dialog-parts'
 import { useBots } from './i18n'
 import { displayName } from './labels'
-import { AdvancedProfileConfig, applyAdvancedConfig, emptyAdvancedState } from './profile-config'
+import {
+  AdvancedProfileConfig,
+  applyAdvancedConfig,
+  credentialsRequiredNames,
+  emptyAdvancedState
+} from './profile-config'
 import { botRosterMeta, requestForBot } from './routing'
 import type { AvatarAppearance, RosterRow } from './types'
 
@@ -148,12 +153,21 @@ export function EditProfileDialog({ bot, open, onClose }: EditProfileDialogProps
       try {
         const res = await applyAdvancedConfig(bot, adv)
         const failed = Object.entries(res?.applied || {}).filter(([, ok]) => !ok)
+        const setupRequired = credentialsRequiredNames(res)
 
         if (failed.length) {
           advancedFailed = true
           host.notify({
             kind: 'error',
             message: `Some sections failed: ${failed.map(([k]) => k).join(', ')}`
+          })
+        }
+
+        if (setupRequired.length) {
+          advancedFailed = true
+          host.notify({
+            kind: 'error',
+            message: `Credentials still need setup for: ${setupRequired.join(', ')}. Those servers were kept disabled.`
           })
         }
       } catch (err) {
@@ -172,7 +186,10 @@ export function EditProfileDialog({ bot, open, onClose }: EditProfileDialogProps
     }
 
     setBusy(false)
-    onClose()
+
+    if (!advancedFailed) {
+      onClose()
+    }
   }
 
   return (

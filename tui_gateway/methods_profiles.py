@@ -1011,7 +1011,12 @@ def _(rid, params: dict) -> dict:
                                     credential_safe_mcp_server_definition(launch_mcp[srv])
                                 )
                                 mcp_cfg[srv] = projected
-                                mcp_cfg[srv]["enabled"] = True
+                                # A credential-free projection is not runnable
+                                # until the target profile supplies the stripped
+                                # secret. Keep it disabled and tell the caller
+                                # exactly which setup remains instead of saving
+                                # an apparently enabled, guaranteed-broken MCP.
+                                mcp_cfg[srv]["enabled"] = not requires_credentials
                                 mcp_cfg[srv].pop("disabled", None)
                                 if requires_credentials:
                                     credentials_required[srv] = True

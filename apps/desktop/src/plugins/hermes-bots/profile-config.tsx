@@ -538,10 +538,18 @@ export type ProfileConfigurePayload = {
 }
 /** What `profiles.configure` answers: per-section success, plus the #95293
  *  expensive-model / data-policy confirmation gate. */
-interface ProfileConfigureResult {
+export interface ProfileConfigureResult {
   applied?: Record<string, boolean>
   confirm_message?: string
   confirm_required?: boolean
+  credentials_required?: Record<string, boolean>
+}
+
+export function credentialsRequiredNames(result: ProfileConfigureResult | null | undefined): string[] {
+  return Object.entries(result?.credentials_required || {})
+    .filter(([, required]) => required === true)
+    .map(([name]) => name)
+    .sort()
 }
 
 /** Persist only the dirty sections of the advanced editor. */

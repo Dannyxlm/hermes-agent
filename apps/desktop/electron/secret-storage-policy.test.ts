@@ -17,6 +17,7 @@ import { test } from 'vitest'
 
 import {
   classifyStoredSecret,
+  initialSecretStoragePolicy,
   readSecretStoragePolicy,
   type SecretStoragePolicyIo,
   writeSecretStoragePolicy
@@ -70,6 +71,15 @@ test('round trip preserves both fields', () => {
 
   writeSecretStoragePolicy({ on: false, migrated: true }, io)
   assert.deepEqual(readSecretStoragePolicy(io), { on: false, migrated: true })
+})
+
+test('an upgraded install with legacy encrypted blobs preserves encryption', () => {
+  assert.deepEqual(initialSecretStoragePolicy(false, true), { on: true, migrated: true })
+})
+
+test('a genuinely new install remains opt-out', () => {
+  assert.equal(initialSecretStoragePolicy(false, false), null)
+  assert.equal(initialSecretStoragePolicy(true, true), null)
 })
 
 // ── classification ──────────────────────────────────────────────────────────

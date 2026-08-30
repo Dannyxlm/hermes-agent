@@ -634,6 +634,15 @@ def _resolve_real_profile_cdp(env: dict, force_local: bool) -> Optional[str]:
     silently downgraded to a throwaway browser), else None.
     """
     if not _real_profile_consented():
+        # Consent is live, not process-lifetime state. Browser Use does not go
+        # through browser_tool._get_session_info(), so explicitly retire the
+        # shared copy-browser and delete auth snapshots on its next call too.
+        try:
+            from tools.browser_tool import _revoke_real_profile_for_current_home
+
+            _revoke_real_profile_for_current_home()
+        except Exception as e:  # pragma: no cover - best-effort cleanup seam
+            logger.debug("real-profile revocation cleanup failed: %s", e)
         return None
     if env.get("BU_CDP_WS") or env.get("BU_CDP_URL"):
         return None

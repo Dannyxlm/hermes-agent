@@ -369,6 +369,75 @@ class TestConsentConfigRead:
                    return_value={"browser": {"use_real_profile": False}}):
             assert bt._use_real_profile() is False
 
+    def test_scope_changes_with_hermes_home_and_pinned_identity(self, tmp_path):
+        import hermes_cli.browser_connect as bc
+        import tools.browser_tool as bt
+
+        source = tmp_path / "chrome-source"
+        (source / "Default").mkdir(parents=True)
+        (source / "Profile 2").mkdir()
+        first_home = tmp_path / "hermes-a"
+        second_home = tmp_path / "hermes-b"
+
+        with patch.object(bc, "detect_default_chromium", return_value="chrome"), \
+             patch.object(bc, "real_profile_data_dir", return_value=str(source)), \
+             patch.object(bc, "get_hermes_home", return_value=first_home), \
+             patch.object(bt, "get_hermes_home", return_value=first_home), \
+             patch("hermes_cli.config.read_raw_config", return_value={"browser": {"real_profile_pin": "Default"}}):
+            first, err = bt._real_profile_scope()
+
+        assert err is None
+
+        with patch.object(bc, "detect_default_chromium", return_value="chrome"), \
+             patch.object(bc, "real_profile_data_dir", return_value=str(source)), \
+             patch.object(bc, "get_hermes_home", return_value=second_home), \
+             patch.object(bt, "get_hermes_home", return_value=second_home), \
+             patch("hermes_cli.config.read_raw_config", return_value={"browser": {"real_profile_pin": "Profile 2"}}):
+            second, err = bt._real_profile_scope()
+
+        assert err is None
+        assert first["key"] != second["key"]
+        assert first["session_name"] != second["session_name"]
+
+    def test_cached_task_is_not_reused_after_consent_revocation(self, tmp_path):
+        import tools.browser_tool as bt
+
+        root = os.path.realpath(str(tmp_path / "browser-profile"))
+        old = {
+            "session_name": "rp_old",
+            "bb_session_id": None,
+            "cdp_url": "http://127.0.0.1:9999",
+            "features": {
+                "local": True,
+                "real_profile": True,
+                "real_profile_scope": "old-scope",
+                "real_profile_copy_root": root,
+            },
+        }
+        with bt._cleanup_lock:
+            bt._active_sessions["revoked-task"] = old
+
+        replacement = {
+            "session_name": "h_new",
+            "bb_session_id": None,
+            "cdp_url": None,
+            "features": {"local": True},
+        }
+        with patch.object(bt, "get_hermes_home", return_value=tmp_path), \
+             patch.object(bt, "_use_real_profile", return_value=False), \
+             patch.object(bt, "_start_browser_cleanup_thread"), \
+             patch.object(bt, "_agent_browser_close_session"), \
+             patch.object(bt, "_get_cloud_provider", return_value=None), \
+             patch.object(bt, "_create_local_session", return_value=replacement), \
+             patch("hermes_cli.browser_connect.cleanup_real_profile_snapshots"):
+            result = bt._get_session_info("revoked-task")
+
+        assert result["session_name"] == "h_new"
+        assert result is not old
+        with bt._cleanup_lock:
+            bt._active_sessions.pop("revoked-task", None)
+            bt._session_last_activity.pop("revoked-task", None)
+
 
 class TestLocalSessionRealProfile:
     def test_local_session_attaches_to_real_profile_cdp(self):
@@ -438,9 +507,11 @@ class TestBrowserExecLocalArg:
     def test_consent_off_is_inert(self):
         import tools.browser_use_cli as bu
         env = self._env()
-        with patch.object(bu, "_real_profile_consented", return_value=False):
+        with patch.object(bu, "_real_profile_consented", return_value=False), \
+             patch("tools.browser_tool._revoke_real_profile_for_current_home") as revoke:
             err = bu._resolve_real_profile_cdp(env, force_local=True)
         assert err is None and env == {}
+        revoke.assert_called_once()
 
     def test_launch_failure_fails_closed(self):
         import tools.browser_use_cli as bu

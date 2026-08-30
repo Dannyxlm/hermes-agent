@@ -20,10 +20,10 @@
  *     confirm dialog as the escape hatch.
  *
  * Legacy blobs written before the flag existed are safeStorage-encoded on
- * disk. With the setting OFF we attempt ONE migration pass (decrypt →
- * rewrite as plain). The pass is recorded in the same settings file whether
- * or not it succeeds, so a broken keychain costs at most one prompt on the
- * first post-update launch — never one per launch.
+ * disk. On an upgraded install, their presence preserves encryption ON until
+ * the user explicitly turns it off; a new default must never silently weaken
+ * an existing credential store. Pre-release installs that already wrote an
+ * explicit opt-out policy still use the one-shot migration below.
  *
  * Kept standalone (no `import 'electron'`) so it unit-tests under the
  * electron vitest project, same pattern as native-token-store.ts. main.ts
@@ -67,6 +67,24 @@ export function readSecretStoragePolicy(io: SecretStoragePolicyIo): SecretStorag
 
 export function writeSecretStoragePolicy(policy: SecretStoragePolicy, io: SecretStoragePolicyIo): void {
   io.writeText(JSON.stringify({ on: policy.on === true, migrated: policy.migrated === true }))
+}
+
+/**
+ * Resolve the first policy written by a build that introduced opt-in storage.
+ * A genuinely new install remains opt-out. An upgraded install whose policy
+ * file does not exist yet but whose stores already contain safeStorage blobs
+ * must retain the legacy encrypted behavior until the user explicitly turns
+ * it off; silently decrypting those credentials would be a security downgrade.
+ */
+export function initialSecretStoragePolicy(
+  policyFileExists: boolean,
+  hasLegacyEncryptedSecrets: boolean
+): SecretStoragePolicy | null {
+  if (!policyFileExists && hasLegacyEncryptedSecrets) {
+    return { on: true, migrated: true }
+  }
+
+  return null
 }
 
 /** One stored secret blob as it appears on disk. */
