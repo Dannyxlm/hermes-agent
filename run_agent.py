@@ -8612,6 +8612,34 @@ class AIAgent:
                 logger.debug("Conversation root lineage walk failed", exc_info=True)
         return start
 
+    def adopt_live_compression_tip(
+        self,
+        *,
+        expected_tip_id: Optional[str] = None,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Rebind every session-bound subsystem to a live compression tip."""
+        session_db = getattr(self, "_session_db", None)
+        parent_session_id = str(getattr(self, "session_id", None) or "")
+        if session_db is None or not parent_session_id:
+            return None
+        from agent.conversation_compression import _adopt_live_compression_child
+
+        recovered = _adopt_live_compression_child(
+            self,
+            session_db,
+            parent_session_id,
+        )
+        if recovered is None:
+            return None
+        if expected_tip_id and str(self.session_id) != str(expected_tip_id):
+            logger.warning(
+                "Compression tip changed during adoption: expected=%s actual=%s",
+                expected_tip_id,
+                self.session_id,
+            )
+            return None
+        return recovered
+
     def run_conversation(
         self,
         user_message: Any,
@@ -8624,6 +8652,8 @@ class AIAgent:
         persist_user_display_kind: Optional[str] = None,
         persist_user_display_metadata: Optional[Dict[str, Any]] = None,
         moa_config: Optional[dict[str, Any]] = None,
+        session_turn_lease_holder: Optional[str] = None,
+        borrowed_session_snapshot_authoritative: bool = False,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         # A review deliberately shares this agent's session_id for prompt-cache
@@ -8669,6 +8699,7 @@ class AIAgent:
         relay_lease = None
         relay_turn = None
         durable_turn_lease = None
+        durable_turn_lease_borrowed = False
         durable_turn_lease_stop = None
         durable_turn_lease_thread = None
         durable_turn_lease_activity_lock = threading.Lock()
@@ -8734,6 +8765,14 @@ class AIAgent:
                         exc_info=True,
                     )
                     _durable_session_exists = True
+            if session_turn_lease_holder and (
+                _turn_db is None
+                or not session_id
+                or getattr(self, "_persist_disabled", False)
+            ):
+                raise RuntimeError(
+                    "Pre-acquired session turn lease cannot be used for this turn"
+                )
             if (
                 _turn_db is not None
                 and session_id
@@ -8742,19 +8781,24 @@ class AIAgent:
                 # transcript to race over. More importantly, subagent/new-turn
                 # callers may intentionally supply an in-memory seed before the
                 # row exists; reloading an absent row would erase that seed.
-                and _durable_session_exists
+                and (_durable_session_exists or bool(session_turn_lease_holder))
                 # Test doubles and third-party DB shims may accept arbitrary
                 # MagicMock attributes without implementing the protocol. Check
                 # the concrete type so only real implementations opt in.
-                and callable(
-                    getattr(type(_turn_db), "acquire_session_turn_lease", None)
+                and (
+                    bool(session_turn_lease_holder)
+                    or callable(
+                        getattr(type(_turn_db), "acquire_session_turn_lease", None)
+                    )
                 )
             ):
                 # Resumed agents also defer their create check until the turn
-                # prologue. We just proved this row exists, so suppress the
-                # redundant create attempt after acquiring it.
-                self._session_db_created = True
-                _durable_holder = (
+                # prologue. Suppress the redundant create attempt only when the
+                # row already exists; a WebUI-owned lease may deliberately
+                # reserve a fresh session id before its first durable row.
+                if _durable_session_exists:
+                    self._session_db_created = True
+                _durable_holder = str(session_turn_lease_holder or "") or (
                     f"pid={os.getpid()}:turn={relay_turn_id}:platform="
                     f"{task_context['platform'] or 'unknown'}"
                 )
@@ -8775,14 +8819,24 @@ class AIAgent:
                             f"this session ({int(elapsed)}s)..."
                         )
 
-                if not _turn_db.acquire_session_turn_lease(
-                    session_id,
-                    _durable_holder,
-                    ttl_seconds=_lease_ttl,
-                    wait_seconds=1800.0,
-                    on_wait=_on_session_turn_lease_wait,
-                    should_abort=lambda: getattr(self, "_interrupt_requested", False),
-                ):
+                if session_turn_lease_holder:
+                    refresh = getattr(_turn_db, "refresh_session_turn_lease", None)
+                    admitted = callable(refresh) and refresh(
+                        session_id,
+                        _durable_holder,
+                        ttl_seconds=_lease_ttl,
+                    )
+                    durable_turn_lease_borrowed = bool(admitted)
+                else:
+                    admitted = _turn_db.acquire_session_turn_lease(
+                        session_id,
+                        _durable_holder,
+                        ttl_seconds=_lease_ttl,
+                        wait_seconds=1800.0,
+                        on_wait=_on_session_turn_lease_wait,
+                        should_abort=lambda: getattr(self, "_interrupt_requested", False),
+                    )
+                if not admitted:
                     if getattr(self, "_interrupt_requested", False):
                         logger.info(
                             "session turn lease wait aborted by interrupt: %s",
@@ -8857,16 +8911,43 @@ class AIAgent:
                         "Session is free; loading the latest transcript..."
                     )
 
-                # The holder may have compressed and rotated the session while
-                # this process waited. Resolve and reload only AFTER admission;
-                # a caller-provided in-memory snapshot is necessarily stale.
-                # Skip when acquisition was immediate — no other process held
-                # the lease, so the in-memory history is current and reloading
-                # would only cause an unnecessary prompt cache miss.
-                if _lease_waited:
+                if _durable_session_exists and not (
+                    session_turn_lease_holder
+                    and borrowed_session_snapshot_authoritative
+                ):
+                    # Admission and canonical load are one critical section. An
+                    # immediate acquire does not prove a snapshot read earlier by
+                    # the caller is current unless that caller already read it
+                    # while holding the same borrowed lease.
                     latest_session_id = _turn_db.resolve_resume_session_id(session_id)
                     if latest_session_id:
-                        self.session_id = latest_session_id
+                        compression_tip_getter = getattr(
+                            type(_turn_db),
+                            "get_compression_tip",
+                            None,
+                        )
+                        compression_tip = (
+                            compression_tip_getter(_turn_db, session_id)
+                            if callable(compression_tip_getter)
+                            else session_id
+                        )
+                        if (
+                            compression_tip
+                            and str(compression_tip) != session_id
+                            and str(self.session_id) != str(compression_tip)
+                        ):
+                            recovered = self.adopt_live_compression_tip(
+                                expected_tip_id=str(compression_tip),
+                            )
+                            if recovered is None:
+                                raise RuntimeError(
+                                    "Could not safely adopt the live compression tip"
+                                )
+                        if str(self.session_id) != str(latest_session_id):
+                            # Non-compression resume redirection retains the
+                            # established resolver behavior. Compression must
+                            # use the full subsystem-rebind path above.
+                            self.session_id = latest_session_id
                         task_context["session_id"] = latest_session_id
                     conversation_history = _turn_db.get_messages_as_conversation(
                         self.session_id,
@@ -8982,7 +9063,10 @@ class AIAgent:
             # which may be observed from another thread.
             with bind_subagent_parent(self), scoped_runtime_main({}):
                 try:
-                    if durable_turn_lease_thread is not None:
+                    if (
+                        durable_turn_lease_thread is not None
+                        and not durable_turn_lease_borrowed
+                    ):
                         with durable_turn_lease_activity_lock:
                             durable_turn_lease_turn_active = True
                         durable_turn_lease_thread.start()
@@ -9062,7 +9146,7 @@ class AIAgent:
                     # the inner stop and this join. Must run AFTER join so a
                     # late interrupt does not survive into the next turn.
                     _clear_durable_turn_lease_interrupt()
-                    if durable_turn_lease is not None:
+                    if durable_turn_lease is not None and not durable_turn_lease_borrowed:
                         try:
                             _turn_db.release_session_turn_lease(
                                 session_id, durable_turn_lease

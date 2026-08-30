@@ -7047,6 +7047,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         require_compression_lease: bool = True,
         watermark: Optional[int] = None,
         watermark_ceiling: Optional[int] = None,
+        turn_lease_holder: Optional[str] = None,
     ) -> None:
         """Atomically close a parent and publish its durable compression child.
 
@@ -7071,6 +7072,12 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         tail. ``None`` = unbounded (no internal flush happened).
         """
         def _do(conn):
+            if turn_lease_holder:
+                self._assert_session_turn_lease_holder_on_conn(
+                    conn,
+                    [parent_session_id],
+                    turn_lease_holder,
+                )
             lock_row = conn.execute(
                 "SELECT holder, expires_at FROM compression_locks WHERE session_id = ?",
                 (parent_session_id,),
@@ -7943,6 +7950,46 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             return session_id
         with self._read_ctx() as conn:
             return self._session_turn_lease_key_on_conn(conn, session_id)
+
+    def _assert_session_turn_lease_holder_on_conn(
+        self,
+        conn,
+        session_ids: List[str],
+        holder: str,
+        *,
+        ttl_seconds: float = 300.0,
+    ) -> None:
+        """Fence an explicit mutation to its still-current root lease owner."""
+        if not holder:
+            raise SessionTurnLeaseLostError("Missing session turn lease holder")
+        now = time.time()
+        checked = set()
+        for session_id in session_ids:
+            conversation_id = self._session_turn_lease_key_on_conn(
+                conn, session_id
+            )
+            if conversation_id in checked:
+                continue
+            checked.add(conversation_id)
+            lease = conn.execute(
+                "SELECT holder, expires_at FROM session_turn_leases "
+                "WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if lease is None or lease["holder"] != holder:
+                raise SessionTurnLeaseLostError(
+                    f"Session turn lease lost for {session_id!r}"
+                )
+            if float(lease["expires_at"]) <= now:
+                conn.execute(
+                    "UPDATE session_turn_leases SET expires_at = ? "
+                    "WHERE conversation_id = ? AND holder = ?",
+                    (
+                        now + max(0.1, float(ttl_seconds)),
+                        conversation_id,
+                        holder,
+                    ),
+                )
 
     def try_acquire_session_turn_lease(
         self,
@@ -10306,10 +10353,29 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         continuation exists.
         """
         current = session_id
+        current_row = self.get_session(current) if current else None
+        root_seen = {current} if current else set()
+        for _ in range(4096):
+            if not current_row:
+                break
+            parent_id = current_row.get("parent_session_id")
+            if not parent_id or self._is_explicit_fork_child_row(current_row):
+                break
+            parent = self.get_session(parent_id)
+            if not parent or parent.get("end_reason") != "compression":
+                break
+            if parent_id in root_seen:
+                raise RuntimeError("Compression lineage contains a cycle")
+            root_seen.add(parent_id)
+            current = parent_id
+            current_row = parent
+        else:
+            raise RuntimeError("Compression lineage exceeds the safe depth limit")
         seen = {current} if current else set()
-        # Bound the walk defensively — compression chains this deep are
-        # pathological and shouldn't happen in practice. 100 = plenty.
-        for _ in range(100):
+        # Real long-running chats can cross the old 100-segment ceiling. Keep
+        # a high corruption guard, but never return a partial/stale tip when it
+        # is reached.
+        for _ in range(4096):
             with self._read_ctx() as conn:
                 cursor = conn.execute(
                     f"""
@@ -10318,8 +10384,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     JOIN sessions child ON child.parent_session_id = parent.id
                     WHERE parent.id = ?
                       AND parent.end_reason = 'compression'
-                      AND json_extract(COALESCE(child.model_config, '{{}}'), '$._branched_from') IS NULL
-                      AND json_extract(COALESCE(child.model_config, '{{}}'), '$._delegate_from') IS NULL
+                      AND COALESCE(json_extract(COALESCE(child.model_config, '{{}}'), '$._branched_from'), '') != parent.id
+                      AND COALESCE(json_extract(COALESCE(child.model_config, '{{}}'), '$._delegate_from'), '') != parent.id
                       AND COALESCE(child.source, '') != 'tool'
                     ORDER BY
                       CASE
@@ -10342,7 +10408,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 return current
             seen.add(child_id)
             current = child_id
-        return current
+        raise RuntimeError("Compression lineage exceeds the safe depth limit")
 
     # Columns excluded from compact_rows projections: only the payload-heavy
     # blob no list consumer renders. Everything else — including gateway
@@ -11639,6 +11705,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         active_only: bool = False,
         archive_dropped: bool = False,
         reject_active_turn_lease: bool = False,
+        turn_lease_holder: Optional[str] = None,
+        revoke_turn_lease: bool = False,
     ) -> None:
         """Atomically replace the stored messages for a session.
 
@@ -11678,17 +11746,32 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         do not already own the cross-process turn lease. The lease check and
         transcript mutation then share one write transaction, so a second
         process cannot archive or replace a turn that is still being produced.
+
+        Pass ``revoke_turn_lease=True`` only when the current holder is being
+        cancelled. The replacement and holder removal commit atomically: a
+        late append either lands before the rollback and is removed, or runs
+        afterward and fails its holder fence instead of resurrecting the turn.
         """
+
+        if revoke_turn_lease and not turn_lease_holder:
+            raise ValueError("revoke_turn_lease requires turn_lease_holder")
 
         active_clause = " AND active = 1" if active_only else ""
 
         def _do(conn):
+            if turn_lease_holder:
+                self._assert_session_turn_lease_holder_on_conn(
+                    conn,
+                    [session_id],
+                    turn_lease_holder,
+                )
             if reject_active_turn_lease:
                 self._check_transcript_write_guards(
                     conn,
                     session_id,
                     None,
-                    reject_active_turn_lease=True,
+                    turn_lease_holder=turn_lease_holder,
+                    reject_active_turn_lease=not bool(turn_lease_holder),
                     reject_active_compression_lock=True,
                 )
             else:
@@ -11729,6 +11812,19 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 "UPDATE sessions SET message_count = ?, tool_call_count = ? WHERE id = ?",
                 (total_messages, total_tool_calls, session_id),
             )
+            if revoke_turn_lease:
+                conversation_id = self._session_turn_lease_key_on_conn(
+                    conn, session_id
+                )
+                revoked = conn.execute(
+                    "DELETE FROM session_turn_leases "
+                    "WHERE conversation_id = ? AND holder = ?",
+                    (conversation_id, turn_lease_holder),
+                )
+                if revoked.rowcount != 1:
+                    raise SessionTurnLeaseLostError(
+                        f"Session turn lease lost while cancelling {session_id!r}"
+                    )
 
         self._execute_write(_do)
 
@@ -11772,6 +11868,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         model_config_patch: Optional[Dict[str, Any]] = None,
         watermark: Optional[int] = None,
         lock_holder: Optional[str] = None,
+        turn_lease_holder: Optional[str] = None,
     ) -> int:
         """Non-destructive in-place compaction for a single durable session id.
 
@@ -11818,6 +11915,12 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         """
 
         def _do(conn):
+            if turn_lease_holder:
+                self._assert_session_turn_lease_holder_on_conn(
+                    conn,
+                    [session_id],
+                    turn_lease_holder,
+                )
             if lock_holder is not None:
                 lock_row = conn.execute(
                     "SELECT holder, expires_at FROM compression_locks "
@@ -12313,6 +12416,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         include_inactive: bool = False,
         repair_alternation: bool = False,
         include_row_ids: bool = False,
+        only_inactive: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Load messages in the OpenAI conversation format (role + content dicts).
@@ -12320,7 +12424,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         By default only active messages are returned. Pass
         ``include_inactive=True`` to load soft-deleted (rewound) rows
-        as well. See :meth:`rewind_to_message`.
+        as well, or ``only_inactive=True`` to load only those audit rows.
+        See :meth:`rewind_to_message`.
 
         ``repair_alternation=True`` runs ``repair_message_sequence`` over the
         loaded list before returning it. Callers that restore a session for
@@ -12336,7 +12441,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         if include_ancestors and not self._is_explicit_branch_session(session_id):
             session_ids = self._session_lineage_root_to_tip(session_id)
 
-        active_clause = "" if include_inactive else " AND active = 1"
+        active_clause = (
+            " AND active = 0"
+            if only_inactive
+            else ("" if include_inactive else " AND active = 1")
+        )
         with self._read_ctx() as conn:
             placeholders = ",".join("?" for _ in session_ids)
             rows = conn.execute(
@@ -13394,53 +13503,114 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         return bool(parent and parent.get("end_reason") == "compression")
 
     def get_compression_lineage(self, session_id: str) -> List[str]:
-        """Return compression ancestors through tip in chronological order."""
+        """Return the selected compression path from root through live tip."""
         session = self.get_session(session_id)
-        if not session or self._is_explicit_fork_child_row(session):
-            return [session_id] if session else []
-
+        if not session:
+            return []
         root = session
-        ancestors = {root["id"]}
-        while self._is_compression_child_row(root):
-            parent = self.get_session(root["parent_session_id"])
-            if not parent or parent["id"] in ancestors:
+        root_seen = {root["id"]}
+        for _ in range(4096):
+            parent_id = root.get("parent_session_id")
+            if not parent_id or self._is_explicit_fork_child_row(root):
                 break
+            parent = self.get_session(parent_id)
+            if not parent or parent.get("end_reason") != "compression":
+                break
+            if parent["id"] in root_seen:
+                raise RuntimeError("Compression lineage contains a cycle")
+            root_seen.add(parent["id"])
             root = parent
-            ancestors.add(root["id"])
+        else:
+            raise RuntimeError("Compression lineage exceeds the safe depth limit")
 
-        lineage = [root["id"]]
-        seen = {root["id"]}
-        current = root
-        while current.get("end_reason") == "compression":
+        # Normalize every alias—including a stale continuation sibling—to the
+        # root before selecting the live path. Starting the forward walk at the
+        # stale sibling would otherwise make that sibling look like the tip.
+        tip_id = self.get_compression_tip(root["id"]) or root["id"]
+        current = self.get_session(tip_id)
+        if not current:
+            return [root["id"]]
+
+        reverse_lineage = [current["id"]]
+        seen = {current["id"]}
+        for _ in range(4096):
+            parent_id = current.get("parent_session_id")
+            if not parent_id or self._is_explicit_fork_child_row(current):
+                break
+            parent = self.get_session(parent_id)
+            if not parent or parent.get("end_reason") != "compression":
+                break
+            if parent["id"] in seen:
+                raise RuntimeError("Compression lineage contains a cycle")
+            reverse_lineage.append(parent["id"])
+            seen.add(parent["id"])
+            current = parent
+        else:
+            raise RuntimeError("Compression lineage exceeds the safe depth limit")
+        reverse_lineage.reverse()
+        return reverse_lineage
+
+    def get_compression_family(self, session_id: str) -> List[str]:
+        """Return every compression alias, with the selected live tip last.
+
+        Races can leave stale continuation siblings. They must not become part
+        of model replay, but an explicit edit/delete must retire them with the
+        rest of the conversation so an orphaned sibling cannot resurface.
+        """
+        selected_path = self.get_compression_lineage(session_id)
+        if not selected_path:
+            return []
+        root_id = selected_path[0]
+        family = [root_id]
+        seen = {root_id}
+        frontier = [root_id]
+        frontier_index = 0
+        while frontier_index < len(frontier):
+            if len(seen) >= 4096:
+                raise RuntimeError(
+                    "Compression family exceeds the safe depth limit"
+                )
+            parent_id = frontier[frontier_index]
+            frontier_index += 1
+            parent = self.get_session(parent_id)
+            if not parent or parent.get("end_reason") != "compression":
+                continue
             with self._read_ctx() as conn:
                 rows = conn.execute(
-                    """
-                    SELECT * FROM sessions
-                    WHERE parent_session_id = ?
-                    ORDER BY started_at ASC
-                    """,
-                    (current["id"],),
+                    "SELECT * FROM sessions WHERE parent_session_id = ? "
+                    "ORDER BY started_at ASC, id ASC",
+                    (parent_id,),
                 ).fetchall()
-            next_child = None
             for row in rows:
                 candidate = dict(row)
-                if self._is_compression_child_row(candidate):
-                    next_child = candidate
-                    break
-            if not next_child or next_child["id"] in seen:
-                break
-            lineage.append(next_child["id"])
-            seen.add(next_child["id"])
-            current = next_child
-            if current["id"] == session_id:
-                # Continue to include later compression tips only when the
-                # requested session itself was compacted.
-                continue
-        return lineage if session_id in lineage else [session_id]
+                child_id = candidate.get("id")
+                if (
+                    not child_id
+                    or child_id in seen
+                    or self._is_explicit_fork_child_row(candidate)
+                ):
+                    continue
+                seen.add(child_id)
+                family.append(child_id)
+                frontier.append(child_id)
 
-    def clear_messages(self, session_id: str) -> None:
+        selected = set(selected_path)
+        extras = [sid for sid in family if sid not in selected]
+        return [selected_path[0], *extras, *selected_path[1:]]
+
+    def clear_messages(
+        self,
+        session_id: str,
+        turn_lease_holder: Optional[str] = None,
+    ) -> None:
         """Delete all messages for a session and reset its counters."""
         def _do(conn):
+            if turn_lease_holder:
+                self._assert_session_turn_lease_holder_on_conn(
+                    conn,
+                    [session_id],
+                    turn_lease_holder,
+                )
             conn.execute(
                 "DELETE FROM messages WHERE session_id = ?", (session_id,)
             )
@@ -13449,6 +13619,40 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 (session_id,),
             )
         self._execute_write(_do)
+
+    def archive_session_messages(
+        self,
+        session_ids: List[str],
+        turn_lease_holder: Optional[str] = None,
+    ) -> int:
+        """Soft-retire active messages for several compression segments."""
+        unique_ids = list(dict.fromkeys(
+            sid for sid in session_ids if isinstance(sid, str) and sid
+        ))
+        if not unique_ids:
+            return 0
+
+        def _do(conn):
+            if turn_lease_holder:
+                self._assert_session_turn_lease_holder_on_conn(
+                    conn,
+                    unique_ids,
+                    turn_lease_holder,
+                )
+            placeholders = ",".join("?" * len(unique_ids))
+            cursor = conn.execute(
+                f"UPDATE messages SET active = 0, compacted = 0 "
+                f"WHERE active = 1 AND session_id IN ({placeholders})",
+                unique_ids,
+            )
+            conn.execute(
+                f"UPDATE sessions SET message_count = 0, tool_call_count = 0 "
+                f"WHERE id IN ({placeholders})",
+                unique_ids,
+            )
+            return cursor.rowcount
+
+        return int(self._execute_write(_do) or 0)
 
     @staticmethod
     def _remove_session_files(sessions_dir: Optional[Path], session_id: str) -> None:
@@ -13601,6 +13805,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         self,
         session_ids: List[str],
         sessions_dir: Optional[Path] = None,
+        turn_lease_holder: Optional[str] = None,
     ) -> int:
         """Delete every session in *session_ids* in a single transaction.
 
@@ -13651,6 +13856,38 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 return 0
 
             existing_placeholders = ",".join("?" * len(existing))
+            delegate_ids = _collect_delegate_child_ids(conn, existing)
+            now = time.time()
+            checked_keys = set()
+            for target_id in [*existing, *delegate_ids]:
+                conversation_id = self._session_turn_lease_key_on_conn(
+                    conn, target_id
+                )
+                if conversation_id in checked_keys:
+                    continue
+                checked_keys.add(conversation_id)
+                lease = conn.execute(
+                    "SELECT holder, expires_at FROM session_turn_leases "
+                    "WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if lease is None:
+                    continue
+                holder = lease["holder"]
+                if (
+                    float(lease["expires_at"]) <= now
+                    or _compression_lock_holder_process_is_dead(holder)
+                ):
+                    conn.execute(
+                        "DELETE FROM session_turn_leases "
+                        "WHERE conversation_id = ? AND holder = ?",
+                        (conversation_id, holder),
+                    )
+                    continue
+                if not turn_lease_holder or holder != turn_lease_holder:
+                    raise SessionTurnLeaseLostError(
+                        f"Session {target_id!r} has an active delegated turn"
+                    )
             removed_delegate_ids.extend(_delete_delegate_children(conn, existing))
             # Orphan remaining children whose parent is in the kill list so the
             # FK constraint stays satisfied. Pin children whose parent

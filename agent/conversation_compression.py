@@ -4165,6 +4165,11 @@ def compress_context(
                         },
                         watermark=_commit_watermark,
                         lock_holder=_lock_holder,
+                        turn_lease_holder=getattr(
+                            agent,
+                            "_active_session_turn_lease_holder",
+                            None,
+                        ),
                     )
                     split_status = "in_place_committed"
                     # Reset the flush identity set so the next turn's appends are
@@ -4309,6 +4314,11 @@ def compress_context(
                             else None
                         ),
                         watermark_ceiling=_foreign_tail_ceiling,
+                        turn_lease_holder=getattr(
+                            agent,
+                            "_active_session_turn_lease_holder",
+                            None,
+                        ),
                     )
                     # For the `already_present` outcome the live-dict stamping is
                     # handled by the run_agent _compress_context wrapper's

@@ -372,6 +372,37 @@ class TestDelegateTask(unittest.TestCase):
             _, kwargs = MockAgent.call_args
             self.assertIsNone(kwargs["session_db"])
 
+    def test_persistence_disabled_parent_cannot_rearm_child_writer(self):
+        """Ephemeral/speculative parents propagate their no-write boundary."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _make_mock_parent(depth=0)
+            parent._session_db = SessionDB(Path(tmp) / "state.db")
+            parent._persist_disabled = True
+            try:
+                with patch("run_agent.AIAgent") as MockAgent:
+                    child = MagicMock()
+                    MockAgent.return_value = child
+                    built = _build_child_agent(
+                        task_index=0,
+                        goal="test",
+                        context=None,
+                        toolsets=None,
+                        model="test-model",
+                        max_iterations=5,
+                        parent_agent=parent,
+                        task_count=1,
+                    )
+
+                _, kwargs = MockAgent.call_args
+                self.assertIsNone(kwargs["session_db"])
+                self.assertIs(built, child)
+                self.assertIs(child._persist_disabled, True)
+            finally:
+                parent._session_db.close()
+
     def test_child_dedicated_db_follows_parents_db_path(self):
         """Per-profile parents: the child's dedicated handle must target the
         parent's database FILE, not the launch profile's default state.db.

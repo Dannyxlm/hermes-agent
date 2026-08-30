@@ -66,6 +66,45 @@ def _agent_with_db(db, *, session_id="stale-parent", platform="desktop"):
     return agent
 
 
+def test_compression_tip_adoption_rebinds_every_session_bound_subsystem(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    try:
+        db.create_session("parent", source="webui")
+        db.append_message("parent", "user", "old context")
+        db.end_session("parent", "compression")
+        db.create_session("tip", source="webui", parent_session_id="parent")
+        db.append_message("tip", "assistant", "live context")
+
+        compressor_calls = []
+        memory_calls = []
+        agent = AIAgent.__new__(AIAgent)
+        agent.session_id = "parent"
+        agent.platform = "webui"
+        agent._session_db = db
+        agent._memory_manager = SimpleNamespace(
+            on_session_switch=lambda *args, **kwargs: memory_calls.append(
+                (args, kwargs)
+            )
+        )
+        agent.context_compressor = SimpleNamespace(
+            on_session_start=lambda *args, **kwargs: compressor_calls.append(
+                (args, kwargs)
+            )
+        )
+
+        recovered = agent.adopt_live_compression_tip(expected_tip_id="tip")
+
+        assert [message["content"] for message in recovered] == ["live context"]
+        assert agent.session_id == "tip"
+        assert compressor_calls[0][0] == ("tip",)
+        assert compressor_calls[0][1]["old_session_id"] == "parent"
+        assert memory_calls[0][0] == ("tip",)
+        assert memory_calls[0][1]["parent_session_id"] == "parent"
+        assert agent._flushed_db_message_session_id == "tip"
+    finally:
+        db.close()
+
+
 def test_run_conversation_acquires_then_reloads_latest_tip(monkeypatch):
     db = _DB()
     agent = _agent_with_db(db)
@@ -125,6 +164,121 @@ def test_run_conversation_acquires_then_reloads_latest_tip(monkeypatch):
         and "loading the latest transcript" in text
         for kind, text in status_events
     )
+
+
+def test_immediate_lease_acquire_still_reloads_canonical_history(monkeypatch):
+    db = _DB()
+    agent = _agent_with_db(db)
+    observed = {}
+
+    def fake_run(_agent, _message, _system, history, *_args, **_kwargs):
+        observed["history"] = history
+        return {"final_response": "ok", "messages": history, "failed": False}
+
+    monkeypatch.setattr("agent.conversation_loop.run_conversation", fake_run)
+    result = AIAgent.run_conversation(
+        agent,
+        "new message",
+        conversation_history=[{"role": "user", "content": "stale"}],
+    )
+
+    assert result["final_response"] == "ok"
+    assert observed["history"] == [
+        {"role": "user", "content": "durable latest"}
+    ]
+    assert [event[0] for event in db.events] == [
+        "acquire",
+        "resolve",
+        "reload",
+        "release",
+    ]
+
+
+def test_borrowed_turn_lease_reloads_without_acquire_or_release(monkeypatch):
+    db = _DB()
+    agent = _agent_with_db(db)
+    observed = {}
+
+    def fake_run(_agent, _message, _system, history, *_args, **_kwargs):
+        observed["history"] = history
+        observed["holder"] = _agent._active_session_turn_lease_holder
+        return {"final_response": "ok", "messages": history, "failed": False}
+
+    monkeypatch.setattr("agent.conversation_loop.run_conversation", fake_run)
+    holder = "webui-turn:test-holder"
+    result = AIAgent.run_conversation(
+        agent,
+        "new message",
+        conversation_history=[{"role": "user", "content": "stale"}],
+        session_turn_lease_holder=holder,
+    )
+
+    assert result["final_response"] == "ok"
+    assert observed == {
+        "history": [{"role": "user", "content": "durable latest"}],
+        "holder": holder,
+    }
+    assert [event[0] for event in db.events] == ["resolve", "reload"]
+    assert agent._active_session_turn_lease_holder == holder
+
+
+def test_borrowed_authoritative_snapshot_skips_duplicate_transcript_reload(
+    monkeypatch,
+):
+    db = _DB()
+    agent = _agent_with_db(db, session_id="live-tip")
+    observed = {}
+
+    def fake_run(_agent, _message, _system, history, *_args, **_kwargs):
+        observed["history"] = history
+        observed["holder"] = _agent._active_session_turn_lease_holder
+        return {"final_response": "ok", "messages": history, "failed": False}
+
+    monkeypatch.setattr("agent.conversation_loop.run_conversation", fake_run)
+    holder = "webui-turn:authoritative-holder"
+    snapshot = [{"role": "user", "content": "authoritative latest"}]
+    result = AIAgent.run_conversation(
+        agent,
+        "new message",
+        conversation_history=snapshot,
+        session_turn_lease_holder=holder,
+        borrowed_session_snapshot_authoritative=True,
+    )
+
+    assert result["final_response"] == "ok"
+    assert observed == {"history": snapshot, "holder": holder}
+    assert db.events == []
+    assert agent._active_session_turn_lease_holder == holder
+
+
+def test_borrowed_turn_lease_reserves_fresh_session_without_erasing_seed(
+    monkeypatch,
+):
+    db = _DB(session_exists=False)
+    agent = _agent_with_db(db, session_id="fresh-webui")
+    agent._session_db_created = False
+    observed = {}
+
+    def fake_run(_agent, _message, _system, history, *_args, **_kwargs):
+        observed["history"] = history
+        observed["holder"] = _agent._active_session_turn_lease_holder
+        return {"final_response": "ok", "messages": history, "failed": False}
+
+    monkeypatch.setattr("agent.conversation_loop.run_conversation", fake_run)
+    holder = "webui-turn:fresh-holder"
+    seed = [{"role": "system", "content": "fresh seed"}]
+    result = AIAgent.run_conversation(
+        agent,
+        "first message",
+        conversation_history=seed,
+        session_turn_lease_holder=holder,
+    )
+
+    assert result["final_response"] == "ok"
+    assert observed == {"history": seed, "holder": holder}
+    assert db.events == []
+    assert agent._session_db_created is False
+    assert agent._active_session_turn_lease_holder == holder
 
 
 def test_run_conversation_acquires_lease_when_session_probe_raises(monkeypatch):

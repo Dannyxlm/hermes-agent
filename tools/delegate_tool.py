@@ -1940,8 +1940,11 @@ def _build_child_agent(
     # parent_session_id lineage and session_search. AsyncSessionDB wrappers
     # (gateway) forward .db_path via __getattr__, so this works through them.
     child_session_db = None
+    persistence_disabled = (
+        getattr(parent_agent, "_persist_disabled", False) is True
+    )
     parent_session_db = getattr(parent_agent, "_session_db", None)
-    if parent_session_db is not None:
+    if parent_session_db is not None and not persistence_disabled:
         try:
             from hermes_state import SessionDB
 
@@ -2027,6 +2030,18 @@ def _build_child_agent(
     # close it out from under a background child (#81267).
     if child_session_db is not None:
         child._owns_session_db = True
+    if persistence_disabled:
+        # Ephemeral/background/speculative parents must not leak persistence
+        # through delegation. WebUI's recall router can still give the child a
+        # separate read-only search handle via its parent session id.
+        child._persist_disabled = True
+    parent_recall_db = getattr(parent_agent, "_webui_session_search_db", None)
+    parent_recall_path = getattr(parent_recall_db, "db_path", None)
+    if isinstance(parent_recall_path, (str, os.PathLike)):
+        # A notify-on-complete child may outlive its ephemeral parent. Preserve
+        # only the path; WebUI opens a child-owned hardened read-only handle on
+        # first recall, so parent teardown cannot strand session_search.
+        child._webui_recall_db_path = parent_recall_path
     # Now the child exists, its session id can ride on every relayed event
     # (including the spawn_requested below — first emit happens after this).
     child_session_ref["session_id"] = getattr(child, "session_id", "") or ""
