@@ -10,7 +10,9 @@
   "desktop_install_mode": "managed-publication",
   "desktop_self_update_allowed": true,
   "overlay_transition": {
-    "added": [],
+    "added": [
+      "hermex-shared-state"
+    ],
     "retained": [
       "codex-ephemeral-context",
       "managed-upstream-status",

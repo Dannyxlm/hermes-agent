@@ -33,6 +33,10 @@
     {
       "id": "runtime-review-hardening",
       "summary": "CloudSeed runtime safety and integration review fixes"
+    },
+    {
+      "id": "hermex-shared-state",
+      "summary": "First-class Hermex shared-session persistence with fenced cross-surface mutations"
     }
   ]
 }
