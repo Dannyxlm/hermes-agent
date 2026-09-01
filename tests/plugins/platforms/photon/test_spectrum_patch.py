@@ -275,3 +275,42 @@ def test_spectrum_patch_rewrites_the_imessage_mapper(tmp_path: Path) -> None:
     assert chunk.read_text(encoding="utf-8") == patched
 
 
+def test_spectrum_patch_attests_upstream_native_mixed_payload_support(tmp_path: Path) -> None:
+    """Spectrum 12.x's native ordered-parts path is stamped for artifact proof."""
+    dist = tmp_path / "node_modules" / "@spectrum-ts" / "imessage" / "dist"
+    dist.mkdir(parents=True)
+    chunk = dist / "index.js"
+    original = _tabify(
+        """
+const buildUnwrappedContentMessage = async () => {};
+const rebuildFromAppleMessage = async () => {
+  const parts = toOrderedParts(message.content.text, attachments);
+};
+const toInboundMessages = async () => {};
+"""
+    )
+    chunk.write_text(original, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(_PATCHER), str(tmp_path)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    attested = chunk.read_text(encoding="utf-8")
+    assert "Preserve mixed text + attachment iMessage payloads (upstream native)" in attested
+    assert original in attested
+
+    again = subprocess.run(
+        ["node", str(_PATCHER), str(tmp_path)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert again.returncode == 0, again.stderr
+    assert chunk.read_text(encoding="utf-8") == attested
+
