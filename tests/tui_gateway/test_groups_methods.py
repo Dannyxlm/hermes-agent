@@ -168,6 +168,29 @@ def test_capabilities_open_shared_durable_run_store_without_test_injection(
         store.close()
 
 
+def test_local_persistence_is_independent_of_disabled_cross_gateway_roomlink(
+    home, monkeypatch
+):
+    from gateway.hosted_room_execution_policy import execution_policy_mapping
+
+    policy = execution_policy_mapping(
+        target_profile="default",
+        config={
+            "agent": {"max_turns": 12},
+            "approvals": {"mode": "off"},
+            "platform_toolsets": {"api_server": ["hermes-api-server"]},
+        },
+    )
+    monkeypatch.setattr(srv, "_profile_execution_policy", lambda _profile: policy)
+    monkeypatch.delenv("HERMES_DESKTOP", raising=False)
+
+    capability = _result(srv._methods["groups.capabilities"](1, {}))
+
+    assert capability["driver"] is True
+    assert capability["room_link"]["enabled"] is False
+    assert capability["persistent_process"] is True
+
+
 def test_app_managed_catalog_and_self_advertised_endpoint_are_consistent(
     home, monkeypatch
 ):

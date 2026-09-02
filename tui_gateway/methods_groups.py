@@ -244,9 +244,11 @@ def _(rid, params: dict) -> dict:
         {
             "protocol_version": PROTOCOL_VERSION,
             "driver": driver_ready,
-            "persistent_process": bool(
-                room_link.get("catalog", {}).get("persistent_process", False)
-            ),
+            # This field describes the lifecycle of the same-gateway room
+            # worker.  Cross-gateway RoomLink admission is independent: a
+            # long-running dashboard remains persistent when RoomLink fails
+            # closed (for example, when remote approvals are disabled).
+            "persistent_process": os.getenv("HERMES_DESKTOP") != "1",
             "authority_gateway_id": local_authority_gateway_id(),
             "room_link": room_link,
             "features": [
