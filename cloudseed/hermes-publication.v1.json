@@ -1,6 +1,6 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20260901-5a8e8a6",
+  "release_id": "hermes-20260902-5a8e8a6",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
   "official_revision": "5a8e8a6b87487c0e0785cd9eb561cc6a96c64f5e",
@@ -10,7 +10,9 @@
   "desktop_install_mode": "managed-publication",
   "desktop_self_update_allowed": true,
   "overlay_transition": {
-    "added": [],
+    "added": [
+      "hermex-hosted-rooms"
+    ],
     "retained": [
       "codex-ephemeral-context",
       "managed-upstream-status",

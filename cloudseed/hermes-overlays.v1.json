@@ -37,6 +37,10 @@
     {
       "id": "hermex-shared-state",
       "summary": "First-class Hermex shared-session persistence with fenced cross-surface mutations"
+    },
+    {
+      "id": "hermex-hosted-rooms",
+      "summary": "Governed persistent multi-agent room transport with safe hosted-room controls"
     }
   ]
 }
