@@ -327,7 +327,27 @@ class HostedRoomRuntime:
             try:
                 if binding is not None:
                     lease = self._ensure_lease(binding)
-                    if self._peer_stop_acknowledged(binding, stopping):
+                    local_active, local_acknowledged = (
+                        self._interrupt_active_local_task(binding, stopping)
+                    )
+                    if local_active:
+                        if local_acknowledged:
+                            stopping = state.complete_task_cancel(
+                                self.db_path,
+                                identity,
+                                cancel_id=cancel_id,
+                                expected_cancel_generation=stopping[
+                                    "cancel_generation"
+                                ],
+                                clock=self.clock,
+                            )
+                    elif self._is_current_local_attempt(binding, stopping):
+                        # The worker owns this attempt but has not installed
+                        # its unforgeable session marker yet. Do not wait
+                        # behind session creation or a history read; the
+                        # worker re-checks the fence at external admission.
+                        pass
+                    elif self._peer_stop_acknowledged(binding, stopping):
                         stopping = state.complete_task_cancel(
                             self.db_path,
                             identity,
@@ -481,6 +501,57 @@ class HostedRoomRuntime:
             self._blocked_rooms.discard(identity.room_id)
         self.wakeup()
         return retried
+
+    def _interrupt_active_local_task(
+        self,
+        binding: HostedRoomBinding,
+        task: Mapping[str, Any],
+    ) -> tuple[bool, bool]:
+        """Interrupt a live in-process attempt without a blocking history read."""
+
+        transport = self._transport_for(binding, task)
+        active_session_for = getattr(transport, "active_session_for", None)
+        if not callable(active_session_for):
+            return False, False
+        session_id = active_session_for(task["identity"])
+        if not session_id:
+            return False, False
+        profile = task["payload"]["target_profile"]
+        info = transport.info(
+            profile=profile,
+            session_id=session_id,
+            source=ROOM_SESSION_SOURCE,
+        )
+        if not _info_is_active_for(info, task["identity"], require_exact=True):
+            # The turn may have completed after the live lookup. Fall through
+            # to the durable receipt path so a completion that beat Stop is
+            # still published instead of being relabelled as cancellation.
+            return False, False
+        result = transport.interrupt(
+            profile=profile,
+            session_id=session_id,
+            source=ROOM_SESSION_SOURCE,
+            expected_task_id=task["identity"].task_id,
+        )
+        acknowledged = result is not None and (
+            result.get("interrupted") is True
+            or str(result.get("status") or "") in {"cancelled", "interrupted"}
+        )
+        return True, acknowledged
+
+    def _is_current_local_attempt(
+        self,
+        binding: HostedRoomBinding,
+        task: Mapping[str, Any],
+    ) -> bool:
+        with self._status_lock:
+            executing = self._current_tasks.get(binding.room_id)
+        return (
+            self._transport_for(binding, task) is self.rpc
+            and task.get("run_gateway_id") == binding.gateway_id
+            and task.get("run_process_generation") == self.process_generation
+            and executing == task["identity"]
+        )
 
     def _interrupt_stopping_task(
         self,
@@ -892,10 +963,6 @@ class HostedRoomRuntime:
         try:
             with self.turn_lock(profile):
                 session = self._resolve_or_create(transport, profile, binding.room_id)
-                # An in-process submit should fail before admission or return
-                # after it, but an unexpected exception at that boundary is
-                # still ambiguous. Never terminalize it as a proven failure.
-                submit_attempted = True
 
                 def on_terminal(receipt: Mapping[str, Any]) -> None:
                     status = receipt.get("status")
@@ -960,6 +1027,12 @@ class HostedRoomRuntime:
                         )
                     self.wakeup()
 
+                if self._complete_pre_admission_stop(attempt):
+                    return
+                # An in-process submit should fail before admission or return
+                # after it, but an unexpected exception at that boundary is
+                # still ambiguous. Never terminalize it as a proven failure.
+                submit_attempted = True
                 deadline_monotonic = time.monotonic() + self.turn_timeout_seconds
                 transport.submit(
                     profile=profile,
@@ -1030,6 +1103,35 @@ class HostedRoomRuntime:
                 # its slot. Schedule exactly one immediate follow-up after the
                 # thread leaves; idle room scans never set this marker.
                 self._rooms_needing_reschedule.add(binding.room_id)
+
+    def _complete_pre_admission_stop(self, attempt: state.TaskAttempt) -> bool:
+        """Acknowledge Stop before this attempt reaches an external agent."""
+
+        current = state.get_task(self.db_path, attempt.identity)
+        if (
+            current["status"] == "running"
+            and current["execution_generation"] == attempt.execution_generation
+            and current["cancel_generation"] == attempt.cancel_generation
+        ):
+            return False
+        if (
+            current["status"] == "stopping"
+            and current["execution_generation"] == attempt.execution_generation
+            and current["cancel_generation"] == attempt.cancel_generation + 1
+            and current.get("cancel_id")
+        ):
+            state.complete_task_cancel(
+                self.db_path,
+                attempt.identity,
+                cancel_id=current["cancel_id"],
+                expected_cancel_generation=current["cancel_generation"],
+                clock=self.clock,
+            )
+            self.wakeup()
+            return True
+        if current["status"] in state.TERMINAL_STATUSES:
+            return True
+        raise state.StaleTaskError("task changed before external admission")
 
     def _wait_for_terminal(
         self,

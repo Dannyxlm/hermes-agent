@@ -175,6 +175,27 @@ class HostedRoomServerRPC:
                     return candidate
         return None
 
+    def active_session_for(self, task: state.TaskIdentity) -> str | None:
+        """Return the live runtime id only for this exact hosted task."""
+
+        with self.server._sessions_lock:
+            sessions = tuple(self.server._sessions.items())
+        lock_type = type(threading.Lock())
+        for session_id, record in sessions:
+            lock = record.get("history_lock")
+            if not isinstance(lock, lock_type):
+                continue
+            with lock:
+                active = record.get("_hosted_room_task")
+                if not record.get("running") or not isinstance(active, dict):
+                    continue
+                if all(
+                    str(active.get(field) or "") == getattr(task, field)
+                    for field in ("room_id", "task_id", "thread_id", "turn_id")
+                ):
+                    return str(session_id)
+        return None
+
     def info(self, *, profile: str, session_id: str, source: str) -> Mapping[str, Any]:
         del profile, source
         record = self._session_record(session_id)

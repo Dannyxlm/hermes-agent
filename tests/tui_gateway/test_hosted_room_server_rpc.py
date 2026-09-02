@@ -150,6 +150,28 @@ def test_info_and_interrupt_are_exact_task_scoped():
     assert params["expected_hosted_task_id"] == "task-a"
 
 
+def test_active_session_lookup_requires_the_exact_hosted_task_identity():
+    server, _calls = _server()
+    server._sessions["runtime"] = {
+        "history_lock": threading.Lock(),
+        "running": True,
+        "_hosted_room_task": {
+            "room_id": "room",
+            "task_id": "task-a",
+            "thread_id": "thread",
+            "turn_id": "turn",
+        },
+    }
+    rpc = HostedRoomServerRPC(server)
+
+    assert rpc.active_session_for(
+        TaskIdentity("room", "task-a", "thread", "turn")
+    ) == "runtime"
+    assert rpc.active_session_for(
+        TaskIdentity("room", "task-b", "thread", "turn")
+    ) is None
+
+
 def test_local_approval_snapshot_and_response_use_exact_request():
     server, calls = _server()
     server._pending_approval_request_payload = lambda session_key: {

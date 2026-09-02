@@ -234,6 +234,19 @@ class FakeSessionRPC:
             self.on_info()
         return result
 
+    def active_session_for(self, task: state.TaskIdentity):
+        self.calls.append(("active_session_for", {"task": task}))
+        with self._lock:
+            return next(
+                (
+                    session_id
+                    for session_id, session_state in self.states.items()
+                    if session_state["active"]
+                    and session_state["task_id"] == task.task_id
+                ),
+                None,
+            )
+
     def interrupt(
         self,
         *,
@@ -1601,6 +1614,42 @@ def test_cancellation_is_persisted_before_interrupt_and_fences_late_result(
     assert observed_status == ["stopping"]
 
 
+def test_stop_during_session_setup_returns_before_submit_and_cancels_locally(
+    db: Path,
+):
+    identity = _identity()
+    _admit(db, identity)
+    rpc = FakeSessionRPC(auto_complete=False)
+    runtime = _runtime(db, rpc)
+    resolve_entered = threading.Event()
+    release_resolve = threading.Event()
+    original_resolve = rpc.resolve_exact
+
+    def blocking_resolve(**kwargs):
+        resolve_entered.set()
+        assert release_resolve.wait(2.0)
+        return original_resolve(**kwargs)
+
+    rpc.resolve_exact = blocking_resolve
+    runtime.start()
+    assert resolve_entered.wait(1.0)
+    stopped = []
+    stop_done = threading.Event()
+
+    def cancel():
+        stopped.append(runtime.cancel(identity, cancel_id="cancel-before-submit"))
+        stop_done.set()
+
+    threading.Thread(target=cancel, daemon=True).start()
+    assert stop_done.wait(2.0)
+    assert stopped[0]["status"] == "stopping"
+
+    release_resolve.set()
+    _wait_for(lambda: state.get_task(db, identity)["status"] == "cancelled")
+    assert not [call for call in rpc.calls if call[0] == "submit"]
+    assert runtime.stop(timeout=1.0)
+
+
 def test_transient_remote_stop_failure_stays_pending_and_retries(db: Path):
     identity = _identity()
     _admit(db, identity)
@@ -1666,6 +1715,7 @@ def test_provisional_stopping_response_does_not_acknowledge_cancellation(db: Pat
 
     assert stopping["status"] == "stopping"
     assert state.get_task(db, identity)["status"] == "stopping"
+    assert not [call for call in rpc.calls if call[0] == "history"]
 
     terminal = True
     cancelled = runtime.cancel(identity, cancel_id="cancel-peer")
