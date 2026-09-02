@@ -15,6 +15,27 @@ from types import ModuleType
 from typing import Any, Callable
 
 from gateway import hosted_room_driver as state
+from tui_gateway.transport import bind_transport, reset_transport
+
+
+class _HostedRoomTransport:
+    """A live internal sink for renderer-only session events.
+
+    Hosted room results are committed through the fenced terminal callback and
+    room log. Treating their hidden sessions as stdio clients can block a room
+    worker behind an unread renderer pipe, while returning ``False`` would mark
+    the session as disconnected. This sink deliberately accepts and discards
+    those presentation frames.
+    """
+
+    __slots__ = ()
+
+    def write(self, obj: dict) -> bool:
+        del obj
+        return True
+
+    def close(self) -> None:
+        return None
 
 
 class HostedRoomSessionError(RuntimeError):
@@ -32,21 +53,26 @@ class HostedRoomServerRPC:
     def __init__(self, server: ModuleType) -> None:
         self.server = server
         self._ids = itertools.count(1)
+        self._transport = _HostedRoomTransport()
 
     def _call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        handler = self.server._methods[method]
-        envelope = handler(f"hosted-room-{next(self._ids)}", params)
-        error = envelope.get("error") if isinstance(envelope, dict) else None
-        if isinstance(error, dict):
-            raise HostedRoomSessionError(
-                method,
-                int(error.get("code") or 5000),
-                str(error.get("message") or "gateway rejected the request"),
-            )
-        result = envelope.get("result") if isinstance(envelope, dict) else None
-        if not isinstance(result, dict):
-            raise HostedRoomSessionError(method, 5000, "gateway returned no result")
-        return result
+        token = bind_transport(self._transport)
+        try:
+            handler = self.server._methods[method]
+            envelope = handler(f"hosted-room-{next(self._ids)}", params)
+            error = envelope.get("error") if isinstance(envelope, dict) else None
+            if isinstance(error, dict):
+                raise HostedRoomSessionError(
+                    method,
+                    int(error.get("code") or 5000),
+                    str(error.get("message") or "gateway rejected the request"),
+                )
+            result = envelope.get("result") if isinstance(envelope, dict) else None
+            if not isinstance(result, dict):
+                raise HostedRoomSessionError(method, 5000, "gateway returned no result")
+            return result
+        finally:
+            reset_transport(token)
 
     def resolve_exact(
         self, *, profile: str, title: str, source: str

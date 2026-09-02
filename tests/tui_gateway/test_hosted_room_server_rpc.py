@@ -12,6 +12,19 @@ from tui_gateway.hosted_room_server_rpc import (
     HostedRoomServerRPC,
     HostedRoomSessionError,
 )
+from tui_gateway.transport import bind_transport, current_transport, reset_transport
+
+
+class _RecordingTransport:
+    def __init__(self):
+        self.frames = []
+
+    def write(self, obj):
+        self.frames.append(obj)
+        return True
+
+    def close(self):
+        return None
 
 
 def _server():
@@ -83,6 +96,34 @@ def test_routes_exact_hidden_session_and_internal_task_proof():
     rpc.resume(profile="ops", session_id="stored", source="bot_room")
     resume = next(params for method, params in calls if method == "session.resume")
     assert resume["source"] == "bot_room"
+
+
+def test_internal_calls_do_not_emit_renderer_frames_to_the_caller_transport():
+    server, _calls = _server()
+    observed = []
+
+    def list_sessions(rid, _params):
+        transport = current_transport()
+        observed.append(transport)
+        assert transport is not None
+        assert transport.write({"jsonrpc": "2.0", "method": "event"}) is True
+        return {"id": rid, "result": {"sessions": []}}
+
+    server._methods["session.list"] = list_sessions
+    caller = _RecordingTransport()
+    token = bind_transport(caller)
+    try:
+        assert HostedRoomServerRPC(server).resolve_exact(
+            profile="ops",
+            title="Group: room",
+            source="bot_room",
+        ) is None
+        assert current_transport() is caller
+    finally:
+        reset_transport(token)
+
+    assert observed and observed[0] is not caller
+    assert caller.frames == []
 
 
 def test_info_and_interrupt_are_exact_task_scoped():
