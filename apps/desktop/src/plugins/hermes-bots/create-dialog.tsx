@@ -340,6 +340,7 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
     if (kind === 'mcp' && !enabled) {
       credentialSetupRequiredRef.current = credentialSetupRequiredRef.current.filter(server => server !== name)
     }
+
     setDirtyCaps(prev => ({
       ...prev,
       [kind === 'mcp' ? 'mcp' : kind]: true
@@ -440,6 +441,7 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
             name: slug,
             ...capPayload
           })
+
           credentialSetupRequiredRef.current = credentialsRequiredNames(configured)
         }
       } catch {
