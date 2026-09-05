@@ -921,6 +921,37 @@ _SOCKET_CLIENT_TASK_ATTRS = (
 _SOCKET_TASK_CANCEL_TIMEOUT_S = 3.0
 
 
+def _track_socket_disconnect_tasks(client: Any) -> set[asyncio.Task]:
+    """Track the SDK's detached reconnect work without owning user callbacks.
+
+    process_message() schedules run_message_listeners() with ensure_future.
+    A disconnect notice reconnects inside that detached task, so the SDK's
+    message_processor/monitor/receiver attributes cannot account for it.
+    """
+    reconnect_tasks: set[asyncio.Task] = set()
+    original = getattr(client, "run_message_listeners", None)
+    if not callable(original):
+        return reconnect_tasks
+
+    async def run_message_listeners(message: dict, raw_message: str) -> None:
+        if message.get("type") != "disconnect":
+            return await original(message, raw_message)
+        # A queued listener can start after teardown took its task snapshot.
+        if client.closed:
+            return
+        task = asyncio.current_task()
+        if task is not None:
+            reconnect_tasks.add(task)
+        try:
+            await original(message, raw_message)
+        finally:
+            if task is not None:
+                reconnect_tasks.discard(task)
+
+    client.run_message_listeners = run_message_listeners
+    return reconnect_tasks
+
+
 async def _cancel_socket_tasks(tasks: Any) -> None:
     """Cancel Socket Mode tasks and wait, with a bound, for them to finish.
 
@@ -1164,6 +1195,7 @@ class SlackAdapter(BasePlatformAdapter):
         # user messages without bot_id/subtype=bot_message markers.
         self._user_is_bot_cache: Dict[Tuple[str, str], bool] = {}
         self._socket_mode_task: Optional[asyncio.Task] = None
+        self._socket_disconnect_tasks: set[asyncio.Task] = set()
         # Multi-workspace support
         self._team_clients: Dict[str, Any] = {}  # team_id → WebClient
         self._team_bot_user_ids: Dict[str, str] = {}  # team_id → bot_user_id
@@ -1446,6 +1478,7 @@ class SlackAdapter(BasePlatformAdapter):
             self._app, self._app_token, proxy=self._proxy_url
         )
         _apply_slack_proxy(self._handler.client, self._proxy_url)
+        self._socket_disconnect_tasks = _track_socket_disconnect_tasks(self._handler.client)
 
         task = asyncio.create_task(self._handler.start_async())
         self._socket_mode_task = task
@@ -1475,8 +1508,16 @@ class SlackAdapter(BasePlatformAdapter):
         self._socket_mode_task = None
 
         client = getattr(handler, "client", None)
+        disconnect_tasks = getattr(self, "_socket_disconnect_tasks", set())
+        self._socket_disconnect_tasks = set()
+        if client is not None:
+            # Close the admission gate before yielding to cancellation. This
+            # also prevents a queued disconnect notice from starting a retry.
+            client.closed = True
+            client.auto_reconnect_enabled = False
         await _cancel_socket_tasks(
-            [task] + [getattr(client, attr, None) for attr in _SOCKET_CLIENT_TASK_ATTRS]
+            [task, *disconnect_tasks]
+            + [getattr(client, attr, None) for attr in _SOCKET_CLIENT_TASK_ATTRS]
         )
 
         if handler is not None:
