@@ -1,6 +1,7 @@
 import pytest
 
-from hermes_state import SessionDB, SessionTurnLeaseLostError
+from hermes_state import SessionDB
+from hermes_state_errors import SessionTurnLeaseLostError
 
 
 def test_transcript_replace_rejects_reclaimed_webui_holder(tmp_path):

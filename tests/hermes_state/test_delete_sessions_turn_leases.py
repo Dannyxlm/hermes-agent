@@ -1,6 +1,7 @@
 import pytest
 
-from hermes_state import SessionDB, SessionTurnLeaseLostError
+from hermes_state import SessionDB
+from hermes_state_errors import SessionTurnLeaseLostError
 
 
 def test_parent_delete_waits_for_active_persistent_delegate(tmp_path):

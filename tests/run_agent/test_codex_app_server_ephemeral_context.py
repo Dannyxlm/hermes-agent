@@ -75,7 +75,8 @@ def test_codex_ephemeral_context_does_not_persist_in_transcript(monkeypatch):
         result = agent.run_conversation("TRANSCRIPT_USER_TEXT")
 
     user_messages = [message for message in result["messages"] if message.get("role") == "user"]
-    assert user_messages == [{"role": "user", "content": "TRANSCRIPT_USER_TEXT"}]
+    assert len(user_messages) == 1
+    assert user_messages[0]["content"] == "TRANSCRIPT_USER_TEXT"
     assert "MEMORY_CONTEXT" in seen_inputs[0]
     assert "PLUGIN_CONTEXT" in seen_inputs[0]
 

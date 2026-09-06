@@ -11,6 +11,9 @@ from datetime import datetime, timedelta, timezone
 import json
 
 import pytest
+import hermes_cli.config as _cfg_mod
+import hermes_cli.web_server_files as _web_server_files
+import hermes_cli.web_server_gateway as _web_server_gateway
 
 
 def _client():
@@ -354,7 +357,7 @@ class TestWebhookEndpoints:
         import hermes_cli.web_server as ws
         from hermes_cli.config import load_config
 
-        ws._ACTION_PROCS.pop("gateway-restart", None)
+        _web_server_gateway._ACTION_PROCS.pop("gateway-restart", None)
         restart_calls = []
 
         class FakeRestartProc:
@@ -364,7 +367,7 @@ class TestWebhookEndpoints:
             restart_calls.append((subcommand, name))
             return FakeRestartProc()
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fake_spawn_action)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fake_spawn_action)
 
         r = self.client.post("/api/webhooks/enable")
 
@@ -387,7 +390,7 @@ class TestWebhookEndpoints:
         import hermes_cli.web_server as ws
         from hermes_cli.config import load_config
 
-        ws._ACTION_PROCS.pop("gateway-restart", None)
+        _web_server_gateway._ACTION_PROCS.pop("gateway-restart", None)
 
         class FakeRunningProc:
             pid = 5151
@@ -395,12 +398,12 @@ class TestWebhookEndpoints:
             def poll(self):
                 return None
 
-        monkeypatch.setitem(ws._ACTION_PROCS, "gateway-restart", FakeRunningProc())
+        monkeypatch.setitem(_web_server_gateway._ACTION_PROCS, "gateway-restart", FakeRunningProc())
 
         def fail_spawn_action(subcommand, name):
             raise AssertionError("must not spawn a second concurrent restart")
 
-        monkeypatch.setattr(ws, "_spawn_hermes_action", fail_spawn_action)
+        monkeypatch.setattr(_web_server_gateway, "_spawn_hermes_action", fail_spawn_action)
 
         r = self.client.post("/api/webhooks/enable")
 
@@ -648,7 +651,7 @@ class TestSkillsHubSourcesEndpoint:
             return srcs
 
         monkeypatch.setattr(
-            "tools.skills_hub.create_source_router", _fake_router
+            "tools.skills_hub_search.create_source_router", _fake_router
         )
         r = self.client.get("/api/skills/hub/sources")
         assert r.status_code == 200
@@ -677,11 +680,11 @@ class TestOfficialSkillsCatalogEndpoint:
             _FakeMeta("official/creative/ascii-art", "builtin", "official"),
         ]
         monkeypatch.setattr(
-            "tools.skills_hub.OptionalSkillSource.list_local",
+            "tools.skills_hub_official.OptionalSkillSource.list_local",
             lambda self: metas,
         )
         monkeypatch.setattr(
-            "hermes_cli.web_server._installed_hub_identifiers",
+            "hermes_cli.web_routers.skills._installed_hub_identifiers",
             lambda profile=None: {"official/gifs/gif-search": {"name": "gif-search"}},
         )
         r = self.client.get("/api/skills/hub/official")
@@ -708,7 +711,7 @@ class TestSkillsHubPreviewEndpoint:
 
     def test_preview_returns_skill_md_text(self, monkeypatch):
         monkeypatch.setattr(
-            "tools.skills_hub.create_source_router", lambda: []
+            "tools.skills_hub_search.create_source_router", lambda: []
         )
         bundle = _FakeBundle("github/owner/repo/x")
         meta = _FakeMeta("github/owner/repo/x")
@@ -729,7 +732,7 @@ class TestSkillsHubPreviewEndpoint:
 
     def test_preview_404_when_unresolved(self, monkeypatch):
         monkeypatch.setattr(
-            "tools.skills_hub.create_source_router", lambda: []
+            "tools.skills_hub_search.create_source_router", lambda: []
         )
         monkeypatch.setattr(
             "hermes_cli.skills_hub._resolve_source_meta_and_bundle",
@@ -749,7 +752,7 @@ class TestSkillsHubScanEndpoint:
         from tools.skills_guard import ScanResult, Finding
 
         monkeypatch.setattr(
-            "tools.skills_hub.create_source_router", lambda: []
+            "tools.skills_hub_search.create_source_router", lambda: []
         )
         bundle = _FakeBundle("github/owner/repo/x", trust_level="community")
         monkeypatch.setattr(
@@ -760,7 +763,7 @@ class TestSkillsHubScanEndpoint:
         from pathlib import Path
 
         monkeypatch.setattr(
-            "tools.skills_hub.quarantine_bundle", lambda b: Path("/tmp/_fake_q")
+            "tools.skills_hub_install.quarantine_bundle", lambda b: Path("/tmp/_fake_q")
         )
 
         fake_result = ScanResult(
@@ -844,7 +847,7 @@ class TestUpdateCheckEndpoint:
     def test_git_install_reports_behind_count(self, monkeypatch):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "detect_install_method", lambda *a, **k: "git")
+        monkeypatch.setattr(_cfg_mod, "detect_install_method", lambda *a, **k: "git")
         # Stub the shared checker so the contract is deterministic (no network).
         import hermes_cli.banner as banner
 
@@ -873,12 +876,10 @@ class TestUpdateCheckEndpoint:
     def test_managed_runtime_dashboard_is_not_applyable(self, monkeypatch, tmp_path):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setattr(ws, "_dashboard_local_update_managed_externally", lambda: True)
+        monkeypatch.setattr(_web_server_files, "_dashboard_local_update_managed_externally", lambda: True)
+        monkeypatch.setattr(ws, "_MANAGED_UPDATE_STATUS_PATH", tmp_path / "missing-status.json")
         monkeypatch.setattr(
-            ws, "_MANAGED_UPDATE_STATUS_PATH", tmp_path / "missing-status.json"
-        )
-        monkeypatch.setattr(
-            ws,
+            _cfg_mod,
             "detect_install_method",
             lambda *a, **k: pytest.fail(
                 "managed runtime update check should not probe install method"
@@ -908,21 +909,21 @@ class TestUpdateCheckEndpoint:
         status_path.chmod(0o600)
         monkeypatch.setattr(ws, "_MANAGED_UPDATE_STATUS_PATH", status_path)
         monkeypatch.setattr(
-            ws,
+            _cfg_mod,
             "detect_install_method",
             lambda *a, **k: pytest.fail(
                 "CloudSeed-managed dashboard must not probe install method"
             ),
         )
         monkeypatch.setattr(
-            ws,
+            _web_server_gateway,
             "_spawn_hermes_action",
             lambda *_a, **_k: pytest.fail(
                 "CloudSeed-managed dashboard must not run hermes update"
             ),
         )
 
-        assert ws._dashboard_local_update_managed_externally() is True
+        assert _web_server_files._dashboard_local_update_managed_externally() is True
         assert self.client.get("/api/status").json()["can_update_hermes"] is False
         check = self.client.get("/api/hermes/update/check").json()
         assert check["install_method"] == "managed-runtime"
@@ -944,7 +945,7 @@ class TestUpdateCheckEndpoint:
             "HERMES_DASHBOARD_UPDATE_MANAGED_EXTERNALLY", configured_value
         )
 
-        assert ws._dashboard_local_update_managed_externally() is True
+        assert _web_server_files._dashboard_local_update_managed_externally() is True
 
     @staticmethod
     def _managed_status(*, generated_at=None, **overrides):
@@ -982,7 +983,7 @@ class TestUpdateCheckEndpoint:
         monkeypatch.setattr(ws, "_MANAGED_UPDATE_REFRESH_REQUEST_PATH", refresh)
         monkeypatch.setattr(ws, "_MANAGED_UPDATE_CANDIDATE_REQUEST_PATH", candidate)
         monkeypatch.setattr(
-            ws, "_dashboard_local_update_managed_externally", lambda: True
+            _web_server_files, "_dashboard_local_update_managed_externally", lambda: True
         )
         monkeypatch.setenv("HERMES_MANAGED_UPDATE_TRAIN_ENABLED", "1")
         return status, refresh, candidate
@@ -1316,7 +1317,7 @@ class TestUpdateCheckEndpoint:
         status_path.write_text(json.dumps(self._managed_status()), encoding="utf-8")
         status_path.chmod(0o600)
         monkeypatch.setattr(
-            ws,
+            _web_server_gateway,
             "_spawn_hermes_action",
             lambda *_a, **_k: pytest.fail("managed build must not run hermes update"),
         )
@@ -1517,11 +1518,11 @@ def test_spawn_hermes_action_scrubs_gateway_loop_guard_env(monkeypatch, tmp_path
     import hermes_cli.web_server as ws
 
     monkeypatch.setenv("_HERMES_GATEWAY", "1")
-    monkeypatch.setattr(ws, "_ACTION_LOG_DIR", tmp_path)
+    monkeypatch.setattr(_web_server_gateway, "_ACTION_LOG_DIR", tmp_path)
     # Isolate the module-global proc registry: _spawn_hermes_action stores
     # _FakeProc (no poll()) in _ACTION_PROCS, and later tests' lifespan
     # shutdown (_terminate_desktop_managed_gateway) would trip over it.
-    monkeypatch.setattr(ws, "_ACTION_PROCS", {})
+    monkeypatch.setattr(_web_server_gateway, "_ACTION_PROCS", {})
 
     captured = {}
 
@@ -1534,7 +1535,7 @@ def test_spawn_hermes_action_scrubs_gateway_loop_guard_env(monkeypatch, tmp_path
 
     monkeypatch.setattr(ws.subprocess, "Popen", _fake_popen)
 
-    ws._spawn_hermes_action(["gateway", "restart"], "gateway-restart")
+    _web_server_gateway._spawn_hermes_action(["gateway", "restart"], "gateway-restart")
 
     assert "_HERMES_GATEWAY" not in captured["env"]
     assert captured["env"]["HERMES_NONINTERACTIVE"] == "1"
@@ -1597,7 +1598,7 @@ def test_desktop_lifespan_terminates_managed_gateway_restart(monkeypatch):
     monkeypatch.setenv("HERMES_DESKTOP", "1")
     monkeypatch.setattr(ws, "_warm_gateway_module", lambda: None)
     monkeypatch.setattr(ws, "_start_desktop_cron_ticker", lambda *_args: None)
-    monkeypatch.setitem(ws._ACTION_PROCS, "gateway-restart", _FakeRunningProc())
+    monkeypatch.setitem(_web_server_gateway._ACTION_PROCS, "gateway-restart", _FakeRunningProc())
 
     client, _header = _client()
     with client:

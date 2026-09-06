@@ -151,3 +151,13 @@ def test_prefetch_does_not_implicitly_write_a_turn():
     manager.sync_all("question", "answer", session_id="session-1")
     assert manager.flush_pending(timeout=5)
     assert provider.sync_calls == [("question", "answer", "session-1")]
+
+
+def test_provider_routing_only_owned_for_advertised_tools():
+    agent = SimpleNamespace(
+        _memory_manager=SimpleNamespace(has_tool=lambda name: True),
+        _memory_provider_tool_names={"memory_extra"},
+    )
+    assert memory_provider_owns_tool(agent, "memory_extra")
+    assert not memory_provider_owns_tool(agent, "unadvertised_memory_tool")
+    assert not memory_provider_owns_tool(agent, "web_search")
