@@ -351,23 +351,26 @@ def _project_node(
 
 def _auto_buckets(
     unowned: list[dict], resolve: Optional[Resolve], junk: Callable, junk_cwd: Callable,
-    exists: Callable) -> tuple[dict[str, dict], list[dict]]:
+    exists: Callable, excluded: Callable) -> tuple[dict[str, dict], list[dict]]:
     """Group leftover sessions by auto-project root (common git root, else the session cwd
     for non-git workspaces); the rest go to the Home bucket."""
     by_auto_root: dict[str, dict] = {}
     homeless: list[dict] = []
     for session in unowned:
+        if excluded(_field(session, "cwd")):
+            homeless.append(session)
+            continue
         root = _session_repo_root(session, resolve)
         if root:
             # Stricter repo policy for real git roots; a root gone from disk is stale and
             # must not resurrect as a project (never reinterpret it as a cwd-only project).
-            if junk(root) or not exists(root):
+            if junk(root) or excluded(root) or not exists(root):
                 root = ""
         elif (cwd := _field(session, "cwd")) and not junk_cwd(cwd):
             # A path-only heuristic placement whose dir is gone from disk would mint a phantom
             # project that can only be dismissed by hand -> Home.
             placement = _place_session(session, resolve)
-            if placement and exists(placement["repo_key"]):
+            if placement and not excluded(placement["repo_key"]) and exists(placement["repo_key"]):
                 root = placement["repo_key"]
         key = _path_key(root) if root else ""
         if key:
@@ -394,17 +397,20 @@ def build_tree(
     projects: list[dict], sessions: list[dict], discovered_repos: list[dict],
     resolve: Optional[Resolve] = None, *, preview_limit: int = 3, hydrate: bool = False,
     is_junk_root: Optional[Callable[[str], bool]] = None,
+    is_excluded_path: Optional[Callable[[str], bool]] = None,
     is_junk_cwd: Optional[Callable[[str], bool]] = None, exists: Optional[Exists] = None) -> dict:
     """Build the authoritative project tree -> ``{"projects", "scoped_session_ids"}``.
 
     ``is_junk_root`` flags git roots that must never become an AUTO project; ``is_junk_cwd``
     is the narrower non-git policy (explicit projects are honored regardless); ``exists``
     keeps a DELETED workspace from becoming a phantom AUTO project (omit on remote backends).
+    ``is_excluded_path`` rejects auto-project cwd, resolved and recovered roots alike.
     ``hydrate`` False empties lane ``sessions`` but keeps counts + ``previewSessions``.
     """
     active_projects = [p for p in projects if not p.get("archived")]
     _junk = is_junk_root or (lambda _root: False)
     _junk_cwd = is_junk_cwd or (lambda _cwd: False)
+    _excluded = is_excluded_path or (lambda _path: False)
     _exists = exists or (lambda _path: True)
     folder_index = _FolderIndex(active_projects)
     by_project: dict[str, list[dict]] = {}  # explicit project id -> owned rows
@@ -435,7 +441,7 @@ def build_tree(
             color=project.get("color"), icon=project.get("icon")))
 
     # Tier 2: auto projects from leftover sessions.
-    by_auto_root, homeless = _auto_buckets(unowned, resolve, _junk, _junk_cwd, _exists)
+    by_auto_root, homeless = _auto_buckets(unowned, resolve, _junk, _junk_cwd, _exists, _excluded)
     seen: set[str] = set()
     for bucket in by_auto_root.values():
         auto_root, auto_sessions = bucket["root"], bucket["sessions"]
@@ -456,12 +462,12 @@ def build_tree(
     # Tier 3: discovered repos with no loaded sessions, folded to their common root.
     for repo in discovered_repos or []:
         raw_root = _field(repo, "root")
-        if not raw_root:
+        if not raw_root or _excluded(raw_root):
             continue
         info = resolve(raw_root) if resolve else None
         root = (info or {}).get("repo_root") or raw_root
         root_key = _path_key(root)
-        if root_key in seen or _junk(root) or folder_index.match(root)[0]:
+        if root_key in seen or _junk(root) or _excluded(root) or folder_index.match(root)[0]:
             continue
         seen.add(root_key)
         label = repo.get("label") or base_name(root) or root

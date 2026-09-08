@@ -203,6 +203,24 @@ def _repo_discovery_policy_is_default(policy: dict) -> bool:
         _repo_discovery_policy(DEFAULT_CONFIG["desktop"]))
 
 
+def _project_path_excluder(excludes: list[str]):
+    """Apply the same directory boundary to scans, cached repos and session roots."""
+    def _keys(value: str) -> tuple[str, str]:
+        path = os.path.abspath(os.path.join(os.path.expanduser("~"), os.path.expanduser(value)))
+        return os.path.normcase(path), os.path.normcase(os.path.realpath(path))
+
+    roots = tuple({key for value in excludes if value for key in _keys(value)})
+
+    def _excluded(path: str) -> bool:
+        if not roots:
+            return False
+        return any(
+            candidate == root or candidate.startswith(root.rstrip(os.sep) + os.sep)
+            for candidate in _keys(path) for root in roots)
+
+    return _excluded
+
+
 def _scan_discovered_repos_remote(conn, policy: dict) -> bool:
     """Backend-side disk scan of the policy roots into the discovery cache. Best-effort:
     failures log and leave the cache untouched. True only when the scan is authoritative
@@ -218,13 +236,11 @@ def _scan_discovered_repos_remote(conn, policy: dict) -> bool:
     from hermes_cli import projects_db as pdb
     roots = policy.get("roots") or []
     excludes = policy.get("exclude_paths") or []
+    is_excluded = _project_path_excluder(excludes)
     pairs: list[tuple[str, str | None]] = []
     seen: set[str] = set()
     authoritative = True
 
-    def _is_excluded(path: str) -> bool:
-        return any(
-            path == ex or path.startswith(ex.rstrip("/\\") + os.sep) for ex in excludes if ex)
     for root in roots:
         if not os.path.isdir(root):
             # `os.walk` on a missing root yields nothing; an unmounted volume must not wipe.
@@ -233,7 +249,7 @@ def _scan_discovered_repos_remote(conn, policy: dict) -> bool:
             continue
         try:
             for dirpath, dirnames, _filenames in os.walk(root):
-                if _is_excluded(dirpath):
+                if is_excluded(dirpath):
                     dirnames[:] = []
                 elif ".git" in dirnames:  # check BEFORE pruning hidden dirs — `.git` is hidden
                     if dirpath not in seen:
@@ -267,6 +283,7 @@ def _discover_repos_payload(
     session totals. ``backfill`` persists resolved roots onto session rows — kept OFF the
     per-turn tree path and done only on explicit refresh."""
     repos: dict[str, dict] = {}
+    is_excluded = _project_path_excluder(_repo_discovery_policy()["exclude_paths"])
 
     def _agg(root: str) -> dict:
         return repos.setdefault(
@@ -281,7 +298,7 @@ def _discover_repos_payload(
         if not root:
             continue
         cwd_to_root[cwd] = root
-        if _is_repo_junk(root):
+        if _is_repo_junk(root) or is_excluded(root) or is_excluded(cwd):
             continue
         agg = _agg(root)
         agg["sessions"] += int(row.get("sessions") or 0)
@@ -298,7 +315,7 @@ def _discover_repos_payload(
             with (contextlib.nullcontext(conn) if conn is not None else pdb.connect_closing()) as c:
                 for entry in pdb.list_discovered_repos(c):
                     root = str(entry.get("root") or "")
-                    if root and not _is_repo_junk(root):
+                    if root and not _is_repo_junk(root) and not is_excluded(root):
                         agg = _agg(root)
                         if entry.get("label"):
                             agg["label"] = entry["label"]
@@ -385,9 +402,12 @@ def _build_project_tree(
     git_probe.warm_roots(
         [str(f.get("path") or "") for p in projects for f in (p.get("folders") or [])]
         + [str(r.get("root") or "") for r in discovered])
+    is_excluded = _project_path_excluder(_repo_discovery_policy()["exclude_paths"])
     tree = project_tree.build_tree(
         projects, sessions, discovered, git_probe.resolve, preview_limit=preview_limit,
-        hydrate=hydrate, is_junk_root=_is_repo_junk, is_junk_cwd=_is_session_cwd_junk,
+        hydrate=hydrate,
+        is_junk_root=_is_repo_junk, is_junk_cwd=_is_session_cwd_junk,
+        is_excluded_path=is_excluded,
         exists=_dir_exists_cached)
     return tree, active_id
 

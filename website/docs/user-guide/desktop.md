@@ -73,7 +73,7 @@ desktop:
 
 - Set `repo_scan_enabled: false` to stop the filesystem scan completely. Existing disk-discovery cache rows for that profile are cleared; explicit projects and repositories inferred from intentional Hermes sessions remain available.
 - Set `repo_scan_roots` to a list of folders to restrict scanning. An empty list preserves the default home-directory scan.
-- Set `repo_scan_exclude_paths` to folders whose complete subtrees should be skipped.
+- Set `repo_scan_exclude_paths` to folders whose complete subtrees should be skipped. These exclusions also prevent cached repositories and session working directories from becoming automatic projects. Explicitly created projects remain visible, and conversations from excluded folders stay available under Home.
 
 Changing any of these values invalidates only that profile's disk-discovery cache and starts a policy-compliant refresh. **Hide from sidebar** remains a separate per-item curation action.
 

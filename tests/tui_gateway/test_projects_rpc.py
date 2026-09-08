@@ -209,6 +209,38 @@ def test_tree_build_warms_every_path_it_will_resolve(monkeypatch, tmp_path):
     assert str(repo) in warmed
 
 
+def test_exclusions_cover_session_projects_without_hiding_chats_or_explicit_projects(monkeypatch, tmp_path):
+    from tui_gateway.project_tree import NO_PROJECT_ID
+
+    releases = tmp_path / "releases"
+    excluded = releases / "hermes-old"
+    next_release = releases / "hermes-new"
+    allowed = tmp_path / "releases-not-runtime"
+    for folder in (excluded, next_release, allowed):
+        folder.mkdir(parents=True)
+    monkeypatch.setattr(server, "_load_cfg", lambda: {
+        "desktop": {"repo_scan_exclude_paths": [str(releases)]},
+    })
+    sessions = [
+        {"id": name, "cwd": str(folder), "source": "webui", "started_at": 1}
+        for name, folder in (("old", excluded), ("new", next_release), ("allowed", allowed))
+    ]
+    projects = []
+    monkeypatch.setattr(server, "_project_tree_inputs", lambda *a, **k: (sessions, projects, [], None))
+    tree, _ = server._build_project_tree(
+        None, preview_limit=3, hydrate=True, session_limit=5, include_discovered=True,
+    )
+    assert {p["id"] for p in tree["projects"]} == {NO_PROJECT_ID, str(allowed)}
+    assert set(tree["scoped_session_ids"]) == {"old", "new", "allowed"}
+    projects.append({"id": "explicit", "name": "Chosen by user", "primary_path": str(excluded),
+                     "folders": [{"path": str(excluded), "is_primary": True}]})
+    tree, _ = server._build_project_tree(
+        None, preview_limit=3, hydrate=True, session_limit=5, include_discovered=True,
+    )
+    assert {p["id"] for p in tree["projects"]} == {NO_PROJECT_ID, "explicit", str(allowed)}
+    assert next(p for p in tree["projects"] if p["id"] == "explicit")["sessionCount"] == 1
+
+
 def test_create_list_roundtrip(tmp_path):
     created = _call("projects.create", {"name": "Demo", "folders": [str(tmp_path)], "use": True})
     assert created["project"]["slug"] == "demo"
@@ -883,5 +915,3 @@ def test_projects_without_a_profile_stay_on_the_launch_home(monkeypatch, tmp_pat
     assert _cached_repo_labels(launch_home) == ["only"]
     assert not (coder_home / "projects.db").exists()
     assert not (Path(os.environ["HERMES_HOME"]) / "projects.db").exists()
-
-
