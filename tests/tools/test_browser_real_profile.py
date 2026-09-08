@@ -309,8 +309,9 @@ class TestRealProfileCdpLaunch:
         # #100855: the attach daemon lives in a reaper-visible socket dir claimed by this
         # process, and never self-terminates (Chrome is ours, not the daemon's).
         socket_dir = captured["env"]["AGENT_BROWSER_SOCKET_DIR"]
-        assert socket_dir == str(tmp_path / f"agent-browser-{bt._REAL_PROFILE_SESSION}")
-        assert (tmp_path / f"agent-browser-{bt._REAL_PROFILE_SESSION}" / f"{bt._REAL_PROFILE_SESSION}.owner_pid").read_text() == str(os.getpid())
+        session_name = captured["argv"][captured["argv"].index("--session") + 1]
+        assert socket_dir == str(tmp_path / f"agent-browser-{session_name}")
+        assert (tmp_path / f"agent-browser-{session_name}" / f"{session_name}.owner_pid").read_text() == str(os.getpid())
         assert "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in captured["env"]
         self._reset()
 
