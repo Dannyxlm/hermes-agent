@@ -284,11 +284,13 @@ def test_prefetch_skipped_for_trivial_user_message():
     assert ctx.ext_prefetch_cache == ""
 
 
-def test_prefetch_runs_for_substantive_user_message():
+@pytest.mark.parametrize("session_id", ["sess-1", None])
+def test_prefetch_runs_for_substantive_user_message(session_id):
     agent, mm = _agent_with_memory_manager()
+    agent.session_id = session_id
     query = "what did we decide about the deploy pipeline?"
     ctx = _build(agent, user_message=query)
-    mm.prefetch_all.assert_called_once_with(query, session_id="sess-1")
+    mm.prefetch_all.assert_called_once_with(query, session_id=session_id or "")
     assert ctx.ext_prefetch_cache == "REMEMBERED CONTEXT"
 
 
