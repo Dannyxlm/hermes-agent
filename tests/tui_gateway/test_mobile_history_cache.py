@@ -102,6 +102,12 @@ def test_cache_never_publishes_racing_uncommitted_or_replaced_data(tmp_path, mon
         writer._conn.execute("ROLLBACK")
         assert _page(tmp_path)["messages"][0]["text"] == "committed during read"
 
+        # Replace a complete SQLite generation. A live read-only watcher keeps WAL
+        # sidecars around after writer.close(); old frames must not be replayed
+        # over the replacement main file. Keep the watcher and cached page alive
+        # so the next read still has to detect and invalidate the old inode.
+        assert tuple(writer._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()) == (0, 0, 0)
+
     replacement = tmp_path / "replacement.db"
     with SessionDB(db_path=replacement) as writer:
         writer.create_session("root", "desktop")
