@@ -572,7 +572,10 @@ def test_approval_pending_replays_unresolved_requests(server, monkeypatch):
         {"id": "r1", "method": "approval.pending", "params": {"session_id": "ui-1"}}
     )
 
-    assert response["result"] == {"approvals": pending}
+    replayed = response["result"]["approvals"]
+    assert replayed[0]["request_id"] == "req-1"
+    assert replayed[0]["command"] == "danger"
+    assert {"once", "deny"}.issubset(replayed[0]["choices"])
 
 
 def test_approval_received_acknowledges_exact_request(server, monkeypatch):

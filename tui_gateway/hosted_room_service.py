@@ -487,6 +487,27 @@ class HostedRoomService:
             raise driver.InvalidTaskTransitionError("no retryable room task matches task_id")
         return self.runtime.retry_indeterminate(task["identity"])
 
+    def stop_room_task(
+        self, room_id: str, *, cancel_id: str, expected_task_id: str,
+        expected_execution_generation: int, expected_cancel_generation: int,
+        expected_authority_gateway_id: str, expected_authority_epoch: int,
+    ) -> dict[str, Any]:
+        """Exact Stop does not append the room-wide fence that supersedes sibling work."""
+        authority = self._owned_authority(room_id)
+        if authority != (expected_authority_gateway_id, expected_authority_epoch):
+            raise hosted_rooms.AuthorityConflictError("hosted room authority changed")
+        with self._policy_lock:
+            task = next((task for task in driver.list_tasks(self.db_path, room_id=room_id)
+                         if task["identity"].task_id == expected_task_id), None)
+            if task is None:
+                raise driver.TaskConflictError("exact task does not exist")
+            result = self.runtime.cancel_exact(task["identity"], cancel_id=cancel_id,
+                expected_execution_generation=expected_execution_generation,
+                expected_cancel_generation=expected_cancel_generation,
+                expected_authority_gateway_id=expected_authority_gateway_id,
+                expected_authority_epoch=expected_authority_epoch)
+        return result
+
     def approve_room_task(
         self, room_id: str, *, member_id: str, task_id: str, execution_generation: int,
         choice: str, request_id: str | None = None) -> Mapping[str, Any]:
@@ -545,6 +566,11 @@ class HostedRoomService:
             "blocked": room_id in runtime["blocked_rooms"]
             or bool(counts.get("indeterminate") or counts.get("stopping")),
             "counts": dict(counts), "pending_actions": pending_actions,
+            "stoppable_tasks": [{"task_id": task["identity"].task_id,
+                "execution_generation": task["execution_generation"], "cancel_generation": task["cancel_generation"],
+                "status": task["status"],
+                "member_id": task["payload"].get("target_member_id") or task["payload"]["target_profile"]}
+                for task in tasks if task["status"] in {"queued", "running", "indeterminate", "deferred"}],
             "peer_routes": self._route_statuses(room_id)}
 
 

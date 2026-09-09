@@ -760,6 +760,46 @@ def cancel_task(
         stale="task changed during cancellation")
 
 
+def cancel_task_exact(
+    db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any,
+    expected_execution_generation: int, expected_cancel_generation: int,
+    expected_authority_gateway_id: str, expected_authority_epoch: int, clock: Clock,
+) -> dict[str, Any]:
+    """Fence one user-selected task and room authority in the cancellation transaction.
+
+    A running attempt becomes stopping until its transport acknowledges. There is no routing retry
+    against newer coordinates: stale selection must be shown to the user, never redirected.
+    """
+    cancel_id = _identifier(cancel_id, label="cancel_id")
+    gateway_id = _identifier(expected_authority_gateway_id, label="expected_authority_gateway_id")
+    for value, label, minimum in (
+        (expected_execution_generation, "expected_execution_generation", 0),
+        (expected_cancel_generation, "expected_cancel_generation", 0),
+        (expected_authority_epoch, "expected_authority_epoch", 1),
+    ):
+        if type(value) is not int or value < minimum:
+            raise DriverValidationError(f"{label} must be an integer >= {minimum}")
+    now = _timestamp(clock)
+    with _transaction(db_path) as conn:
+        _require_room_authority(conn, identity.room_id, gateway_id, expected_authority_epoch)
+        row = _load_task(conn, identity)
+        if int(row["execution_generation"]) != expected_execution_generation:
+            raise StaleTaskError("task execution generation changed")
+        if (row["status"] in {"cancelled", "stopping"} and row["cancel_id"] == cancel_id
+                and int(row["cancel_generation"]) == expected_cancel_generation + 1):
+            return _task_from_row(row, idempotent=True)
+        _require_cancel_generation(row, expected_cancel_generation)
+        if row["status"] not in {"queued", "deferred", "running", "indeterminate"}:
+            raise InvalidTaskTransitionError(f"cannot request exact stop in state '{row['status']}'")
+        direct = row["status"] in {"queued", "deferred"}
+        sql = (_CANCEL_QUEUED_SQL if direct else _BEGIN_STOP_SQL) + " AND execution_generation=?"
+        set_params = ((expected_cancel_generation + 1, cancel_id, now, now) if direct
+                      else (expected_cancel_generation + 1, cancel_id, now))
+        fenced_update(conn, sql, (*set_params, identity.room_id, identity.task_id,
+            expected_cancel_generation, expected_execution_generation), StaleTaskError("task changed during exact stop"))
+        return _task_from_row(_load_task(conn, identity))
+
+
 def begin_task_cancel(
     db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any, expected_cancel_generation: int, clock: Clock
 ) -> dict[str, Any]:

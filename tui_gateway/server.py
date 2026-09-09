@@ -2510,7 +2510,7 @@ def _load_resume_transcript(db, stored_id: str) -> tuple[list, list, list]:
     return raw_history, raw_history, []
 
 
-def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool = False) -> None:
+def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool = False, tip_only: bool = False) -> None:
     """Load a cold resume's transcript off the JSON-RPC response path."""
 
     def _run() -> None:
@@ -2520,7 +2520,13 @@ def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool =
                 return
             _emit("session.resume_progress", sid, {"phase": "history", "status": "loading"})
             db.reopen_session(stored_id)
-            raw_history, display_history, prefix = _load_resume_transcript(db, stored_id)
+            if tip_only:
+                # Native display reads its own bounded pages. Restore only the active model segment;
+                # deferring an unbounded lineage read would still exhaust memory on a cold open.
+                raw_history = db.get_messages_as_conversation(stored_id, repair_alternation=True, include_row_ids=True)
+                display_history, prefix = raw_history, []
+            else:
+                raw_history, display_history, prefix = _load_resume_transcript(db, stored_id)
             # Display keeps the full transcript; the model-fed history drops a dangling/interrupted
             # tool-call tail so a session killed mid-loop does not replay the unanswered call forever
             # (#29086).
@@ -3015,14 +3021,20 @@ def _start_usage_ticker(sid: str, agent, interval: float = 1.0) -> tuple[threadi
 # ── Methods: respond ─────────────────────────────────────────────────
 
 
-def _respond(rid, params, key, *, allow_expired=False):
+def _respond(rid, params, key, *, allow_expired=False, expected_sid=None, expected_event=None):
     r = params.get("request_id", "")
     question_id = str(params.get("question_id") or "")
     with _prompt_lock:
         entry = _pending.get(r)
         if not entry:
             return _ok(rid, {"status": "expired"}) if allow_expired and r else _err(rid, 4009, f"no pending {key} request")
-        _, ev = entry
+        owner_sid, ev = entry
+        if expected_sid is not None:
+            event, _payload = _pending_prompt_payloads.get(r, (None, {}))
+            if owner_sid != expected_sid or event != expected_event:
+                return _err(rid, 4403, "pending request does not belong to this runtime")
+            if ev.is_set():
+                return _ok(rid, {"status": "expired"})
         batch = _batch_clarify.get(r)
         if batch is not None and question_id:
             # Per-question lock; update-in-place so an answer stays editable until every qid is locked (Confirm).
@@ -3200,7 +3212,7 @@ from . import (  # noqa: E402
     methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session,
     methods_tools as _methods_tools, prompt_turn as _prompt_turn, billing_view as _billing_view,
     methods_projects as _methods_projects, methods_session_foreign as _methods_session_foreign,
-    methods_session_control as _methods_session_control)
+    methods_session_control as _methods_session_control, methods_mobile as _methods_mobile)
 
 for _m in (
     _session_transports, _session_reaper, _session_lifecycle, _session_workdir, _compute_host_bridge, _model_switch,
@@ -3210,6 +3222,6 @@ for _m in (
     _methods_browser_control, _methods_session, _methods_prompt, _methods_config,
     _methods_config_set, _methods_complete, _methods_tools, _methods_profiles, _methods_images,
     _methods_bot_relay, _prompt_turn, _billing_view, _methods_projects, _methods_session_foreign,
-    _methods_session_control):
+    _methods_session_control, _methods_mobile):
     _m.register(sys.modules[__name__])
 del _m

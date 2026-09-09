@@ -212,6 +212,15 @@ async def auth_login(request: Request, provider: str, next: str = ""):
 
 # --- Public: RFC 8252 native-app authorization (system browser + loopback + PKCE)
 
+_MOBILE_REDIRECT_URI = "com.cloudseed.hermex:/oauth/callback"
+
+
+def _validate_native_redirect_uri(raw: str) -> str:
+    """One registered native callback, or the existing Desktop loopback contract."""
+    if raw == _MOBILE_REDIRECT_URI:
+        return raw
+    return _validate_loopback_redirect_uri(raw)
+
 def _validate_loopback_redirect_uri(raw: str) -> str:
     """Accept only ``http://127.0.0.1[:port]/…`` / ``http://[::1][:port]/…``. Security boundary:
     the route is public, so a non-loopback host would make the callback an open redirect leaking
@@ -251,7 +260,7 @@ async def auth_native_authorize(
         raise _http(400, "code_challenge_method must be S256")
     if not code_challenge:
         raise _http(400, "code_challenge required")
-    _validate_loopback_redirect_uri(redirect_uri)
+    _validate_native_redirect_uri(redirect_uri)
     p = _select_native_provider(provider)
     if p is None:
         raise _http(404, f"Unknown provider: {provider!r}")

@@ -56,6 +56,8 @@ import {
   updateGroupChat
 } from './group-chat'
 import { groupWorkspaceOwnerKey } from './group-membership'
+import { withHostedRoomsLocales } from './hosted-rooms-i18n'
+import { HostedRoomsPane } from './hosted-rooms-view'
 import { annotateOrphanedGroupChatMembers } from './hygiene'
 import { BOTS_LOCALES } from './i18n'
 import { displayName } from './labels'
@@ -100,7 +102,7 @@ export default {
     // The user's own roster sections. Read once at register; every mutation
     // writes through.
     loadBotSections()
-    const disposeLocales = ctx.i18n.register(BOTS_LOCALES)
+    const disposeLocales = ctx.i18n.register(withHostedRoomsLocales(BOTS_LOCALES))
     setGroupChatSyncDisposed(false)
     startFaceClock()
     // The cross-connection relay rides every gateway socket this Desktop
@@ -399,6 +401,14 @@ export default {
         }
       },
       render: () => <BotsPane />
+    })
+
+    ctx.register({
+      id: 'hosted-rooms',
+      area: 'panes',
+      title: ctx.i18n.t('hostedRooms.title'),
+      data: { placement: 'main', hideOnly: true, dock: { pane: 'workspace', pos: 'center' } },
+      render: () => <HostedRoomsPane />
     })
 
     // Routines — its OWN tiling pane splitting the workspace's right edge

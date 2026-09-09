@@ -540,7 +540,8 @@ def _(rid, params: dict) -> dict:
     # Off-screen sends (widget intents) type the row so no client renders a bubble;
     # whitelisted to "hidden" — this RPC must not mint kinds.
     display_kind = "hidden" if params.get("display_kind") == "hidden" else None
-    if (stopped := _typed_stop_phrase_response(rid, text)) is not None:
+    if (params.get("_mobile_expected_record") is None
+            and (stopped := _typed_stop_phrase_response(rid, text)) is not None):
         return stopped
     if params.get("interrupted"):
         # Client-side barge-in: latch so this turn's model message carries the note.
@@ -575,6 +576,13 @@ def _(rid, params: dict) -> dict:
     # Re-bind to the current transport: streaming must stay on the active websocket even
     # if a disconnect/fallback moved the session to stdio.
     with _session_resume_lock:
+        if params.get("_mobile_expected_record") is not None:
+            try:
+                mobile_session = _mobile_scope(params["_mobile_scope_params"])[3]
+                if mobile_session is not session or params["_mobile_expected_record"] is not session:
+                    raise ValueError("runtime changed")
+            except (ValueError, FileNotFoundError, KeyError):
+                return _err(rid, 4400, "mobile runtime changed; reopen canonical Bot Chat")
         if (refusal := _reattach_refusal(rid, sid, session)) is not None:
             return refusal
         if (t := current_transport()) is not None:
@@ -1111,7 +1119,22 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
     return _approval_reply(
-        rid, "approvals", lambda a: a.list_gateway_approvals(session["session_key"]))
+        rid, "approvals", lambda a: [_approval_request_payload(pending)
+                                    for pending in a.list_gateway_approvals(session["session_key"])])
+
+
+def _mobile_approval_respond(rid, session, request_id, choice):
+    """No stale-session search, oldest-request fallback, or persistent choice for native callers."""
+    from tools.approval import list_gateway_approvals, resolve_gateway_approval
+    pending = next((p for p in list_gateway_approvals(session["session_key"])
+                    if p.get("request_id") == request_id), None)
+    if pending is None:
+        return _ok(rid, {"resolved": 0})
+    offered = _approval_request_payload(pending).get("choices", [])
+    if choice not in ("once", "deny") or choice not in offered:
+        return _err(rid, 4403, "approval choice is not offered to mobile")
+    return _ok(rid, {"resolved": resolve_gateway_approval(
+        session["session_key"], choice, request_id=request_id, resolve_all=False)})
 
 
 @method("approval.received")

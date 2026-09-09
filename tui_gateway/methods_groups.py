@@ -243,7 +243,7 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
         "features": [
             "authority_epoch", "coordinator_fencing", "room_identity", "monotonic_log",
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity",
-            "log_replication", "authority_takeover"],
+            "log_replication", "authority_takeover", "exact_task_stop"],
         "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
 
 
@@ -431,6 +431,21 @@ def _(rid, params: dict, service) -> dict:
 @_room_method("groups.stop", code=5116, service_code=4115)
 def _(rid, params: dict, service) -> dict:
     """Durably cancel queued or running work for one hosted room."""
+    expected = ("expected_task_id", "expected_execution_generation", "expected_cancel_generation",
+                "expected_authority_gateway_id", "expected_authority_epoch")
+    if any(key in params for key in expected):
+        if not all(key in params for key in expected):
+            return _err(rid, 4116, "exact task Stop requires every expected task and authority coordinate")
+        for key in ("expected_task_id", "expected_authority_gateway_id", "cancel_id"):
+            if not isinstance(params.get(key), str) or not params[key].strip():
+                return _err(rid, 4116, f"{key} required for exact task Stop")
+        result = service.stop_room_task(str(params.get("room_id") or ""),
+            cancel_id=params["cancel_id"], **{key: params[key] for key in expected})
+        payload = result.get("payload") or {}
+        return _ok(rid, {"cancelled": int(result["status"] == "cancelled"), "stop_requested": True,
+            "task": {"task_id": result["identity"].task_id,
+                "execution_generation": result["execution_generation"], "cancel_generation": result["cancel_generation"],
+                "status": result["status"], "member_id": payload.get("target_member_id") or payload.get("target_profile")}})
     count = service.stop_room(
         str(params.get("room_id") or ""), cancel_id=str(params.get("cancel_id") or "desktop-stop"))
     return _ok(rid, {"cancelled": count})

@@ -220,22 +220,7 @@ class HostedRoomRuntime:
             except (state.InvalidTaskTransitionError, state.StaleTaskError):
                 continue  # lost the race with the worker (settled or re-queued); re-route
             if not direct:
-                binding = self._binding_for_room(identity.room_id)
-                try:
-                    if binding is not None:
-                        lease = self._ensure_lease(binding)
-                        local_active, acknowledged = self._interrupt_active_local_task(binding, result)
-                        if local_active:
-                            if acknowledged:
-                                self._complete_cancel(result, cancel_id=cancel_id)
-                        elif self._is_current_local_attempt(binding, result):
-                            pass  # worker checks the stop fence before external admission
-                        elif self._peer_stop_acknowledged(binding, result) or (
-                            not self._settle_stopping_completion(binding, result, lease)
-                            and self._interrupt_stopping_task(binding, result)):
-                            self._complete_cancel(result, cancel_id=cancel_id)
-                except Exception as exc:
-                    self._record_error(f"stop remains pending: {exc}")
+                self._acknowledge_cancel(result, cancel_id=cancel_id)
             self.wakeup()
             return result if direct else state.get_task(self.db_path, identity)
         # Routing retries exhausted under contention: surface the live status honestly.
@@ -245,6 +230,46 @@ class HostedRoomRuntime:
         raise state.InvalidTaskTransitionError(
             "cancel kept losing races with task transitions "
             f"(last observed state '{final['status']}')")
+
+    def cancel_exact(
+        self, identity: state.TaskIdentity, *, cancel_id: str,
+        expected_execution_generation: int, expected_cancel_generation: int,
+        expected_authority_gateway_id: str, expected_authority_epoch: int,
+    ) -> dict[str, Any]:
+        """Cancel exactly the selected attempt; never re-route to a newer execution generation."""
+        result = state.cancel_task_exact(self.db_path, identity, cancel_id=cancel_id, clock=self.clock,
+            expected_execution_generation=expected_execution_generation,
+            expected_cancel_generation=expected_cancel_generation,
+            expected_authority_gateway_id=expected_authority_gateway_id,
+            expected_authority_epoch=expected_authority_epoch)
+        if result["status"] == "stopping":
+            self._acknowledge_cancel(result, cancel_id=cancel_id,
+                expected_authority=(expected_authority_gateway_id, expected_authority_epoch))
+        self.wakeup()
+        return state.get_task(self.db_path, identity)
+
+    def _acknowledge_cancel(
+        self, task: Mapping[str, Any], *, cancel_id: str,
+        expected_authority: tuple[str, int] | None = None,
+    ) -> None:
+        binding = self._binding_for_room(task["identity"].room_id)
+        if binding is None or (expected_authority is not None
+                and (binding.gateway_id, binding.authority_epoch) != expected_authority):
+            return
+        try:
+            lease = self._ensure_lease(binding)
+            local_active, acknowledged = self._interrupt_active_local_task(binding, task)
+            if local_active:
+                if acknowledged:
+                    self._complete_cancel(task, cancel_id=cancel_id)
+            elif self._is_current_local_attempt(binding, task):
+                pass  # worker checks the stop fence before external admission
+            elif self._peer_stop_acknowledged(binding, task) or (
+                not self._settle_stopping_completion(binding, task, lease)
+                and self._interrupt_stopping_task(binding, task)):
+                self._complete_cancel(task, cancel_id=cancel_id)
+        except Exception as exc:
+            self._record_error(f"stop remains pending: {exc}")
 
     def retry_indeterminate(self, identity: state.TaskIdentity) -> dict[str, Any]:
         """Explicitly retry one uncertain attempt under the current room lease."""

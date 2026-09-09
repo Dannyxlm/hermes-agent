@@ -448,6 +448,7 @@ class _Resume:
 
     def __init__(self, rid, params: dict, target: str) -> None:
         self.rid, self.params, self.target = rid, params, target
+        self.strict_canonical_root_id = params.get("strict_canonical_root_id")
         self.db, self.owns_db, self.found, self.profile_resume_cwd = None, False, None, ""
         self.cols = _int_param(params, "cols", 80)
         # ``profile`` (app-global remote mode): resume from another local profile's state.db.
@@ -570,6 +571,15 @@ def _resume_adopt_stranded(ctx: _Resume) -> None:
 
 def _resume_locate(ctx: _Resume) -> dict | None:
     """Resolve ``ctx.target`` to a stored row (``ctx.found``); a dict is an early response."""
+    if ctx.strict_canonical_root_id is not None:
+        try:
+            if ctx.target != ctx.strict_canonical_root_id:
+                raise ValueError("exact canonical root required")
+            _root, tip, _chain = _mobile_canonical_identity(ctx.db, ctx.strict_canonical_root_id)
+            ctx.found, ctx.target = tip, tip["id"]
+            return None
+        except ValueError:
+            return _err(ctx.rid, 4400, "canonical Bot Chat unavailable or identity mismatch")
     ctx.found = ctx.db.get_session(ctx.target)
     if ctx.found:
         return None
@@ -594,7 +604,7 @@ def _resume_follow_tip(ctx: _Resume) -> None:
     """Rebind a rotated-out parent id to its compression tip (resuming the original reloads the parent
     transcript and loses the post-compression reply). Skipped for lazy watch windows (exact child); Bot Chat
     follows proven compression edges only."""
-    if not ctx.found or ctx.lazy:
+    if not ctx.found or ctx.lazy or ctx.strict_canonical_root_id is not None:
         return
     tip = ctx.target
     with contextlib.suppress(Exception):
@@ -705,7 +715,8 @@ def _resume_deferred(ctx: _Resume) -> dict:
                   resume_message_count=int(ctx.found.get("message_count") or 0))
     if (reused := ctx.claim(sid, record)) is not None:
         return reused
-    _schedule_resume_hydration(sid, ctx.target, ctx.db, close_db=ctx.owns_db)
+    _schedule_resume_hydration(sid, ctx.target, ctx.db, close_db=ctx.owns_db,
+                              **({"tip_only": True} if ctx.strict_canonical_root_id is not None else {}))
     ctx.owns_db = False  # the hydration worker now owns (and closes) the profile-scoped handle
     _schedule_session_cap_enforcement()
     return _resume_response(ctx, sid, record, info=ctx.info(cwd, overrides), messages=[],
@@ -791,6 +802,13 @@ def _resume_eager(ctx: _Resume) -> dict:
 def _(rid, params: dict) -> dict:
     if not (target := params.get("session_id", "")):
         return _err(rid, 4006, "session_id required")
+    if params.get("strict_canonical_root_id") is not None:
+        try:
+            _name, home = _mobile_profile(params)
+            if not (home / "state.db").is_file():
+                raise FileNotFoundError("state unavailable")
+        except (ValueError, FileNotFoundError):
+            return _err(rid, 4400, "canonical profile unavailable")
     ctx = _Resume(rid, params, target)
     # Profile scope: a DEDICATED handle we own until the agent takes it; else the shared launch db.
     ctx.db, ctx.owns_db = _profile_session_db(ctx.profile_home)
@@ -1938,7 +1956,15 @@ def _(rid, params: dict, session: dict) -> dict:
 # ── interrupt / steer / redirect ─────────────────────────────────────
 @method("session.interrupt")
 def _(rid, params: dict) -> dict:
-    _tts_stream_stop()  # keypress barge-in also silences streaming TTS (voice is process-global)
+    if params.get("_mobile_expected_record") is not None:
+        try:
+            scoped = _mobile_scope(params["_mobile_scope_params"])[3]
+            if scoped is not params["_mobile_expected_record"]:
+                raise ValueError("runtime changed")
+        except (ValueError, FileNotFoundError, KeyError):
+            return _err(rid, 4400, "mobile runtime changed; reopen canonical Bot Chat")
+    if params.get("_mobile_expected_record") is None:
+        _tts_stream_stop()  # Desktop keypress barge-in also silences process-global voice.
     session, err = _sess_nowait(params, rid)
     if err:
         return err
