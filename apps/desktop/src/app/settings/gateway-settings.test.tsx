@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Collect the component graph before the behavioral test deadline starts.
@@ -6,6 +6,17 @@ import { GatewaySettings } from './gateway-settings'
 
 const getConnectionConfig = vi.fn()
 const saveConnectionConfig = vi.fn()
+const applyConnectionConfig = vi.fn()
+const oauthLoginConnectionConfig = vi.fn()
+const probeConnectionConfig = vi.fn()
+const notify = vi.fn()
+const notifyError = vi.fn()
+
+vi.mock('@/store/notifications', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  notify: (...args: unknown[]) => notify(...args),
+  notifyError: (...args: unknown[]) => notifyError(...args)
+}))
 
 // This test owns the machine-level GatewaySettings contract. The managed SSH
 // update section mounted below the registry has its own focused coverage
@@ -25,11 +36,20 @@ const localConnection = {
 }
 
 beforeEach(() => {
+  applyConnectionConfig.mockReset()
+  oauthLoginConnectionConfig.mockReset()
+  probeConnectionConfig.mockReset()
   getConnectionConfig.mockResolvedValue(localConnection)
   saveConnectionConfig.mockResolvedValue(localConnection)
   Object.defineProperty(window, 'hermesDesktop', {
     configurable: true,
-    value: { getConnectionConfig, saveConnectionConfig }
+    value: {
+      applyConnectionConfig,
+      getConnectionConfig,
+      oauthLoginConnectionConfig,
+      probeConnectionConfig,
+      saveConnectionConfig
+    }
   })
 })
 
@@ -56,4 +76,93 @@ describe('GatewaySettings', () => {
     expect(screen.queryByText('All profiles')).toBeNull()
     expect(screen.queryByText('Use default gateway')).toBeNull()
   })
+
+  const remoteConnection = {
+    ...localConnection,
+    mode: 'remote',
+    remoteTokenSet: true,
+    remoteUrl: 'https://gateway.example.com/hermes'
+  }
+
+  const signedInConnection = {
+    ...remoteConnection,
+    remoteAuthMode: 'oauth',
+    remoteOauthConnected: true
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+
+    const promise = new Promise<T>(settle => {
+      resolve = settle
+    })
+
+    return { promise, resolve }
+  }
+
+  async function startSignIn() {
+    const login = deferred<{ connected: boolean }>()
+    getConnectionConfig.mockResolvedValue(remoteConnection)
+    saveConnectionConfig.mockResolvedValue({ ...remoteConnection, remoteAuthMode: 'oauth' })
+    probeConnectionConfig.mockResolvedValue({
+      authMode: 'oauth',
+      reachable: true,
+      providers: [{ name: 'basic', displayName: 'Username & Password', supportsPassword: true }]
+    })
+    oauthLoginConnectionConfig.mockReturnValue(login.promise)
+    const view = render(<GatewaySettings embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+    await waitFor(() => expect(oauthLoginConnectionConfig).toHaveBeenCalledOnce())
+
+    return { login, view }
+  }
+
+  it('applies the authenticated gateway before reporting success, without a second save action', async () => {
+    const applied = deferred<typeof signedInConnection>()
+    applyConnectionConfig.mockReturnValue(applied.promise)
+    const { login } = await startSignIn()
+
+    expect(saveConnectionConfig).not.toHaveBeenCalled()
+    expect(applyConnectionConfig).not.toHaveBeenCalled()
+    await act(async () => login.resolve({ connected: true }))
+    await waitFor(() =>
+      expect(applyConnectionConfig).toHaveBeenCalledWith({
+        mode: 'remote',
+        remoteAuthMode: 'oauth',
+        remoteUrl: remoteConnection.remoteUrl
+      })
+    )
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }))
+
+    await act(async () => applied.resolve(signedInConnection))
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeTruthy()
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }))
+  })
+
+  it.each(['cancelled', 'changed URL', 'closed settings', 'failed reconnect'])(
+    'does not claim an activated connection after %s',
+    async outcome => {
+      applyConnectionConfig.mockRejectedValue(new Error('WebSocket authentication failed'))
+      const { login, view } = await startSignIn()
+
+      if (outcome === 'changed URL') {
+        fireEvent.change(screen.getByPlaceholderText('https://gateway.example.com/hermes'), {
+          target: { value: 'https://other.example.com' }
+        })
+      } else if (outcome === 'closed settings') {
+        view.unmount()
+      }
+
+      await act(async () => login.resolve({ connected: outcome !== 'cancelled' }))
+
+      if (outcome === 'failed reconnect') {
+        await waitFor(() => expect(notifyError).toHaveBeenCalled())
+      } else {
+        expect(applyConnectionConfig).not.toHaveBeenCalled()
+      }
+
+      expect(saveConnectionConfig).not.toHaveBeenCalled()
+      expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }))
+    }
+  )
 })

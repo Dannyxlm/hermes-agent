@@ -448,8 +448,14 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
     signingSeq.current += 1
     cloudConnectSeq.current += 1
     setLastTest(null)
+    setSigningIn(false)
+
+    return () => {
+      signingSeq.current += 1
+    }
   }, [
     state.mode,
+    state.remoteUrl,
     state.sshHost,
     state.sshUser,
     state.sshPort,
@@ -579,9 +585,8 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
     await performSave(apply, false)
   }
 
-  // OAuth sign-in: persist the URL + oauth mode first (so the saved config has
-  // the URL the login window needs), then open the gateway login window and
-  // refresh the connection status from the saved config once it completes.
+  // Login receives the URL directly. Apply only after it succeeds so the active
+  // registry uses the new session, with the same REST/WS preflight as reconnect.
   const signIn = async () => {
     const seq = ++signingSeq.current
 
@@ -594,20 +599,6 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
     setSigningIn(true)
 
     try {
-      // Save (don't apply/restart) so the login window has a URL to use and the
-      // oauth mode is persisted, without yet flipping the live connection.
-      const saved = await window.hermesDesktop.saveConnectionConfig({
-        mode: state.mode,
-        remoteAuthMode: 'oauth',
-        remoteUrl: trimmedUrl
-      })
-
-      if (seq !== signingSeq.current) {
-        return
-      }
-
-      acceptSavedConfig(saved)
-
       const result = await window.hermesDesktop.oauthLoginConnectionConfig(trimmedUrl)
 
       if (seq !== signingSeq.current) {
@@ -615,8 +606,17 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
       }
 
       if (result.connected) {
-        const refreshed = await window.hermesDesktop.getConnectionConfig(null)
-        acceptSavedConfig(refreshed)
+        const applied = await window.hermesDesktop.applyConnectionConfig({
+          mode: state.mode,
+          remoteAuthMode: 'oauth',
+          remoteUrl: trimmedUrl
+        })
+
+        if (seq !== signingSeq.current) {
+          return
+        }
+
+        acceptSavedConfig(applied)
         notify({ kind: 'success', title: g.signedIn, message: g.connectedTo(providerLabel) })
       } else {
         notify({
@@ -1525,7 +1525,7 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
           ) : null}
           {embedded ? null : (
             <Button
-              disabled={state.envOverride || saving}
+              disabled={state.envOverride || saving || signingIn}
               onClick={() => void save(false)}
               size="sm"
               variant="textStrong"
@@ -1533,7 +1533,7 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
               {g.saveForRestart}
             </Button>
           )}
-          <Button disabled={state.envOverride || saving} onClick={() => void save(true)} size="sm">
+          <Button disabled={state.envOverride || saving || signingIn} onClick={() => void save(true)} size="sm">
             {saving ? <Loader2 className="animate-spin" /> : null}
             {g.saveAndReconnect}
           </Button>
