@@ -106,7 +106,10 @@ def test_cache_never_publishes_racing_uncommitted_or_replaced_data(tmp_path, mon
         # sidecars around after writer.close(); old frames must not be replayed
         # over the replacement main file. Keep the watcher and cached page alive
         # so the next read still has to detect and invalidate the old inode.
-        assert tuple(writer._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()) == (0, 0, 0)
+        checkpoint = tuple(writer._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone())
+        # SQLite returns -1 frame counts when the runtime selected rollback
+        # journaling. Both modes must have no pending WAL before replacement.
+        assert checkpoint in ((0, 0, 0), (0, -1, -1))
 
     replacement = tmp_path / "replacement.db"
     with SessionDB(db_path=replacement) as writer:
