@@ -201,7 +201,7 @@ def _mobile_push_capture(obj):
         logger.warning("mobile push event projection unavailable (%s)", type(error).__name__)
 
 
-def _mobile_push_finish(sid, session, status):
+def _mobile_push_finish(session, status):
     try:
         service = _mobile_push_service()
         scope = session.get("_mobile_push_scope")

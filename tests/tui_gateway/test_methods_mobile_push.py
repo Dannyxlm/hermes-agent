@@ -75,7 +75,7 @@ def test_activity_registration_requires_current_valid_scope_and_known_run(push_s
     run = rpc("mobile.snapshot", **scope(opened))["result"]["notification_run"]
     params["run_id"] = run["run_id"]
     assert "result" in rpc("mobile.activity.register", **params)
-    server._mobile_push_finish(opened["session_id"], server._sessions[opened["session_id"]], "interrupted")
+    server._mobile_push_finish(server._sessions[opened["session_id"]], "interrupted")
     push_service.drain_once()
     assert push_service.sender.jobs[-1]["payload"]["aps"]["event"] == "end"
     assert push_service.sender.jobs[-1]["payload"]["aps"]["content-state"]["status"] == "cancelled"

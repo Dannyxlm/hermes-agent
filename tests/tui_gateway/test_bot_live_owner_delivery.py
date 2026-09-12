@@ -34,7 +34,7 @@ def test_refused_input_commits_failed_mailbox_receipt(tmp_path):
         "_record_turn_marker": lambda *args, **kwargs: "marker",
         "_prepare_turn_input": lambda *args: None,
         "_finish_turn": noop, "_clear_inflight_turn": noop,
-        "_mobile_push_finish": lambda sid, session, status: notification_outcomes.append(status),
+        "_mobile_push_finish": lambda session, status: notification_outcomes.append(status),
         "_retire_turn_marker": lambda *args: retired.append(args),
         "_emit_settled_session_info": noop,
         "_routing_provenance_db": lambda _session: contextlib.nullcontext(None),

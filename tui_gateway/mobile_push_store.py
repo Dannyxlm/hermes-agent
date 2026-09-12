@@ -54,6 +54,10 @@ def _validate_delivery(principal, token, environment, kind, categories):
         raise ValueError("invalid notification categories")
 
 
+def _notification_category(status):
+    return "attention" if status in ATTENTION or status == "failed" else "completion"
+
+
 class PushStore:
     def __init__(self, path, clock):
         self.clock = clock
@@ -216,13 +220,15 @@ class PushStore:
             db.execute("UPDATE runs SET status=?, updated_at=? WHERE run_id=?", (status, updated, run_id))
             run = dict(run)
             run.update(status=status, updated_at=updated)
-            rows = db.execute("SELECT * FROM subscriptions WHERE scope=? AND expires_at>?", (scope.key, now)).fetchall()
+            rows = db.execute("""SELECT * FROM subscriptions WHERE scope=? AND expires_at>?
+                AND ((kind='activity' AND run_id=? AND ?) OR (kind='alert' AND ?))""",
+                (scope.key, now, run_id, changed, status in ATTENTION or status in TERMINAL)).fetchall()
             for sub in rows:
                 if (sub["kind"] == "activity" and sub["run_id"] == run_id and changed
                         and sub["expires_at"] > now + 120):
                     self._enqueue(db, sub, run, scope, event_id)
                 elif sub["kind"] == "alert":
-                    category = "attention" if status in ATTENTION or status == "failed" else "completion"
+                    category = _notification_category(status)
                     if (status in ATTENTION or status in TERMINAL) and category in json.loads(sub["categories"]):
                         self._enqueue(db, sub, run, scope, event_id)
             return True
@@ -250,7 +256,7 @@ class PushStore:
         if not activity:
             payload["event_id"] = hashlib.sha256(event_id.encode()).hexdigest()
         expires = min(sub["expires_at"], now + (3600 if urgent else 120))
-        category = "attention" if run["status"] in ATTENTION or run["status"] == "failed" else "completion"
+        category = _notification_category(run["status"])
         db.execute("""INSERT OR IGNORE INTO outbox
             (job_id, subscription_id, event_id, run_id, payload, urgent, collapse_id, expires_at, next_attempt, category)
             VALUES (?,?,?,?,?,?,?,?,?,?)""", (str(uuid.uuid4()), sub["id"], event_id, run["run_id"],

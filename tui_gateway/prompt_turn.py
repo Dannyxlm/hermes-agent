@@ -860,7 +860,7 @@ def _run_prompt_submit(
                 status = _result_status(st.result)
             else:
                 status = "error" if st.error_retained else "complete"
-            _mobile_push_finish(sid, session, status if st.result is not None else "error")
+            _mobile_push_finish(session, status if st.result is not None else "error")
             logger.info(
                 "tui turn finished: ui_session=%s session_key=%s agent_session_id=%s status=%s "
                 "error_retained=%s duration=%.1fs%s",
