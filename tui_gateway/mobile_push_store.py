@@ -43,6 +43,17 @@ def normalized_uuid(value):
     return str(uuid.UUID(value))
 
 
+def _validate_delivery(principal, token, environment, kind, categories):
+    if not isinstance(principal, str) or not principal or len(principal) > 256:
+        raise ValueError("principal required")
+    if not isinstance(token, str) or not re.fullmatch(r"[0-9a-fA-F]{32,512}", token) or len(token) % 2:
+        raise ValueError("invalid token")
+    if environment not in {"production", "sandbox"} or kind not in {"alert", "activity"}:
+        raise ValueError("invalid delivery channel")
+    if not isinstance(categories, (list, tuple)) or any(c not in {"attention", "completion"} for c in categories):
+        raise ValueError("invalid notification categories")
+
+
 class PushStore:
     def __init__(self, path, clock):
         self.clock = clock
@@ -76,14 +87,7 @@ class PushStore:
     def register(self, principal, scope, *, installation_id, connection_id, token, environment,
                  kind="alert", categories=("attention", "completion"), activity_id="", run_id=""):
         installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
-        if not isinstance(principal, str) or not principal or len(principal) > 256:
-            raise ValueError("principal required")
-        if not isinstance(token, str) or not re.fullmatch(r"[0-9a-fA-F]{32,512}", token) or len(token) % 2:
-            raise ValueError("invalid token")
-        if environment not in {"production", "sandbox"} or kind not in {"alert", "activity"}:
-            raise ValueError("invalid delivery channel")
-        if not isinstance(categories, (list, tuple)) or any(c not in {"attention", "completion"} for c in categories):
-            raise ValueError("invalid notification categories")
+        _validate_delivery(principal, token, environment, kind, categories)
         if kind == "activity" and (not isinstance(activity_id, str) or not 1 <= len(activity_id) <= 128):
             raise ValueError("activity identity required")
         if kind == "alert" and (activity_id or run_id):
@@ -117,6 +121,45 @@ class PushStore:
             if run:
                 self._enqueue(db, subscription, run, scope, f"{run_id}:registered:{subscription['version']}")
         return {"subscription_id": sid, "expires_at": expires}
+
+    def refresh(self, principal, *, installation_id, connection_id, token, environment,
+                accepts_scope, kind="alert", categories=("attention", "completion"),
+                activity_id="", run_id=""):
+        """Rotate existing leases without granting scopes or opening agent runtimes."""
+        installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
+        _validate_delivery(principal, token, environment, kind, categories)
+        if kind == "activity" and (not isinstance(activity_id, str) or not 1 <= len(activity_id) <= 128
+                                   or not isinstance(run_id, str) or not 1 <= len(run_id) <= 256):
+            raise ValueError("activity and run identity required")
+        if kind == "alert" and (activity_id or run_id):
+            raise ValueError("alert refresh cannot target an activity")
+        now = self.clock()
+        with self._lock:
+            rows = self._db.execute("""SELECT * FROM subscriptions WHERE principal=? AND installation_id=?
+                AND connection_id=? AND kind=? AND environment=? AND expires_at>?
+                AND (?='alert' OR (activity_id=? AND run_id=?))""",
+                (principal, installation_id, connection_id, kind, environment, now, kind, activity_id, run_id)).fetchall()
+        # Profile/session authorization can read another DB. Do that outside our
+        # transaction, then compare the selected version so logout always wins.
+        accepted = [(row, Scope(row["surface"], row["profile"], row["session_id"])) for row in rows]
+        accepted = [(row, scope) for row, scope in accepted if accepts_scope(scope)]
+        receipts = []
+        with self.transaction() as db:
+            for row, scope in accepted:
+                expiry = row["expires_at"] if kind == "activity" else now + 30 * 86400
+                changed = db.execute("""UPDATE subscriptions SET token=?, categories=?, expires_at=?, version=version+1
+                    WHERE id=? AND version=? AND expires_at>?""",
+                    (token.lower(), json.dumps(sorted(set(categories))) if kind == "alert" else row["categories"],
+                     expiry, row["id"], row["version"], self.clock())).rowcount
+                if not changed:
+                    continue
+                sub = db.execute("SELECT * FROM subscriptions WHERE id=?", (row["id"],)).fetchone()
+                if kind == "activity":
+                    run = db.execute("SELECT * FROM runs WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
+                    if run:
+                        self._enqueue(db, sub, run, scope, f"{run_id}:refreshed:{sub['version']}")
+                receipts.append({"subscription_id": row["id"], "expires_at": expiry})
+        return {"updated": len(receipts), "subscriptions": receipts}
 
     def unregister(self, principal, *, installation_id, connection_id, subscription_id=None, kind=None):
         args = [principal, normalized_uuid(installation_id), normalized_uuid(connection_id)]

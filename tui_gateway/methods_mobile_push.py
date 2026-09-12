@@ -7,6 +7,7 @@ method = _registry.method
 _MOBILE_PUSH_METHODS = (
     "mobile.push.status", "mobile.push.register", "mobile.push.unregister",
     "mobile.activity.register", "mobile.activity.unregister",
+    "mobile.push.refresh", "mobile.activity.refresh",
 )
 _MOBILE_PUSH_STATUSES = {
     "tool.start": "usingTool", "tool.complete": "thinking", "message.delta": "responding",
@@ -72,6 +73,42 @@ def _(rid, params, principal):
 @_mobile_push_handler("mobile.activity.register")
 def _(rid, params, principal):
     return _mobile_push_register(rid, params, principal, "activity")
+
+
+def _mobile_push_refresh(rid, params, principal, kind):
+    service = _mobile_push_service()
+    if service is None:
+        return _err(rid, 4405, "mobile notifications are not configured")
+
+    def accepts_scope(scope):
+        if scope.surface != "native":
+            return False
+        try:
+            _profile, home = _mobile_profile({"profile": scope.profile})
+            with _mobile_read_db(home) as db:
+                _mobile_canonical_identity(db, scope.session_id)
+            return True
+        except (ValueError, FileNotFoundError):
+            return False
+
+    options = {"installation_id": params.get("installation_id"), "connection_id": params.get("connection_id"),
+        "token": params.get("activity_token" if kind == "activity" else "device_token"),
+        "environment": params.get("environment"), "kind": kind, "accepts_scope": accepts_scope}
+    if kind == "activity":
+        options.update(activity_id=params.get("activity_id"), run_id=params.get("run_id"))
+    else:
+        options["categories"] = params.get("categories", ("attention", "completion"))
+    return _ok(rid, service.refresh(principal, **options))
+
+
+@_mobile_push_handler("mobile.push.refresh")
+def _(rid, params, principal):
+    return _mobile_push_refresh(rid, params, principal, "alert")
+
+
+@_mobile_push_handler("mobile.activity.refresh")
+def _(rid, params, principal):
+    return _mobile_push_refresh(rid, params, principal, "activity")
 
 
 def _mobile_push_unregister(rid, params, principal, kind=None):

@@ -91,3 +91,22 @@ def test_projection_storage_failure_does_not_drop_canonical_frame(push_service, 
     assert server.write_json(frame) is True
     assert peer.frames[-1] is frame
     assert rpc("mobile.snapshot", **scope(opened))["result"]["notification_run"] is None
+
+
+def test_refresh_needs_auth_but_no_attached_runtime(push_service, peer):
+    peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
+    opened = open_bot()
+    params = registration(opened)
+    assert "result" in rpc("mobile.push.register", **params)
+    server._sessions.clear()
+    refresh = {key: params[key] for key in ("installation_id", "connection_id", "environment")}
+    refresh.update(device_token="ef" * 32, categories=["completion"])
+    peer.auth_identity = {"user_id": "other-user", "provider": "test-auth"}
+    assert rpc("mobile.push.refresh", **refresh)["result"]["updated"] == 0
+    peer.auth_identity = None
+    assert rpc("mobile.push.refresh", **refresh)["error"]["code"] == 4403
+    peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
+    assert rpc("mobile.push.refresh", **refresh)["result"]["updated"] == 1
+    assert not server._sessions
+    assert rpc("mobile.push.unregister", **refresh)["result"]["removed"] == 1
+    assert rpc("mobile.push.refresh", **refresh)["result"]["updated"] == 0

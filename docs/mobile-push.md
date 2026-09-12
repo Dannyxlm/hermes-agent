@@ -48,6 +48,17 @@ authorize a profile. Unsupported/disabled configuration returns error 4405.
   a terminal `end` update. Re-registering rotates that activity's token.
 * `mobile.activity.unregister({installation_id, connection_id, subscription_id})`:
   `{removed}` for the owned activity only; no attached runtime required.
+* `mobile.push.refresh({installation_id, connection_id, device_token, environment,
+  categories?})` rotates existing live alert subscriptions for this authenticated
+  principal and connection without attaching runtimes. Each stored profile/root
+  must still be a valid canonical chat. No new, expired, revoked, or removed scope
+  is created. Valid alert leases renew for 30 days; categories apply to every match.
+* `mobile.activity.refresh({installation_id, connection_id, activity_id, run_id,
+  activity_token, environment})` rotates only the matching existing activity and
+  replays its latest state, including a terminal end. Its original expiry remains.
+  Both refresh methods return `{updated, subscriptions: [{subscription_id, expires_at}]}`.
+  The existing environment must match. Use these methods on cold launch/token
+  changes before reopening any chats; ActivityKit remains independent of alerts.
 
 `notification_run` is null before any observed run, otherwise contains `run_id`,
 `status`, `started_at`, `updated_at` (Unix seconds). A persisted opaque run ID is
@@ -79,6 +90,12 @@ visibility checks. The store is not an authorization bypass.
   subscription_id=None, kind=None)` returns a count.
   For logout even when the provider is disabled, import and call
   `unregister_for_home(home, principal, **same_owned_ids)`.
+* `service.refresh(principal, installation_id=..., connection_id=..., token=...,
+  environment=..., accepts_scope=..., kind="alert", categories=...,
+  activity_id="", run_id="")` updates live owned rows only. The mandatory
+  `accepts_scope(Scope)` callback validates current authorization without opening
+  a runtime. Version comparison prevents a concurrent unregister or replacement
+  from being resurrected after validation.
 * `service.start_run(scope, run_id=None, event_id=None)` persists or reuses an opaque
   run; WebUI supplies its journal run ID to retain `run_id:seq` dedupe.
 * `service.record(scope, run_id, event_id, status)` accepts only generic statuses:

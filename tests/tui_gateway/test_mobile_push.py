@@ -278,3 +278,58 @@ def test_alert_event_identity_survives_restart_and_retry(delivery):
     retried = restarted.claim()
     assert retried["payload"]["event_id"] == first
     restarted.close()
+
+
+def test_detached_refresh_rotates_only_live_owned_subscriptions(delivery):
+    service, sender, now, ids, scope = delivery
+    scopes = [scope, Scope("native", "other", "other-root")]
+    for item in scopes:
+        service.register("p", item, **ids, token="aa" * 32, environment="production")
+    expired = service.register("p", Scope("native", "expired", "old-root"), **ids,
+                               token="aa" * 32, environment="production")
+    with service.store.transaction() as db:
+        db.execute("UPDATE subscriptions SET expires_at=? WHERE id=?", (now[0] - 1, expired["subscription_id"]))
+    service.register("foreign", scope, **ids, token="cc" * 32, environment="production")
+    run = service.start_run(scope)
+    activity = service.register("p", scope, **ids, token="dd" * 32, environment="production",
+                               kind="activity", activity_id="live", run_id=run["run_id"])
+    service.record(scope, run["run_id"], "attention", "waitingForApproval")
+    old = service.store.claim()
+    refreshed = service.refresh("p", **ids, token="bb" * 32, environment="production",
+                                categories=[], accepts_scope=lambda value: value.surface == "native")
+    assert refreshed["updated"] == 2
+    service.store.finish(old, DeliveryResult("invalid"))
+    with service.store._lock:
+        rows = service.store._db.execute("SELECT * FROM subscriptions").fetchall()
+    assert len(rows) == 5
+    assert all(row["token"] == "bb" * 32 for row in rows if row["principal"] == "p" and row["profile"] in {"ops", "other"} and row["kind"] == "alert")
+    assert next(row for row in rows if row["id"] == activity["subscription_id"])["token"] == "dd" * 32
+    assert next(row for row in rows if row["principal"] == "foreign")["token"] == "cc" * 32
+    assert service.refresh("missing", **ids, token="bb" * 32, environment="production",
+                           categories=[], accepts_scope=lambda value: True)["updated"] == 0
+    assert service.refresh("p", **{**ids, "connection_id": str(uuid.uuid4())}, token="bb" * 32,
+                           environment="production", categories=[], accepts_scope=lambda value: True)["updated"] == 0
+    service.record(scope, run["run_id"], "complete", "complete")
+    service.drain_once()
+    assert not any(job["kind"] == "alert" and job["token"] == "bb" * 32 for job in sender.jobs)
+
+
+def test_detached_activity_refresh_never_recreates_and_replays_terminal(delivery):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.register("p", scope, **ids, token="aa" * 32, environment="production", categories=[])
+    receipt = service.register("p", scope, **ids, token="cc" * 32, environment="production",
+                               kind="activity", activity_id="live", run_id=run["run_id"])
+    service.record(scope, run["run_id"], "complete", "complete")
+    service.drain_once()
+    options = dict(**ids, token="dd" * 32, environment="production", kind="activity",
+                   activity_id="live", run_id=run["run_id"], accepts_scope=lambda value: value == scope)
+    assert service.refresh("p", **options)["updated"] == 1
+    now[0] += 1
+    service.drain_once()
+    assert sender.jobs[-1]["token"] == "dd" * 32
+    assert sender.jobs[-1]["payload"]["aps"]["event"] == "end"
+    assert service.refresh("p", **{**options, "activity_id": "forged"})["updated"] == 0
+    assert service.refresh("p", **{**options, "accepts_scope": lambda value: False})["updated"] == 0
+    service.unregister("p", **ids, subscription_id=receipt["subscription_id"])
+    assert service.refresh("p", **options)["updated"] == 0

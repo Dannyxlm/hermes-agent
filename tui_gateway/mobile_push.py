@@ -35,6 +35,13 @@ class PushService:
     def unregister(self, principal, **params):
         return self.store.unregister(principal, **params)
 
+    def refresh(self, principal, **params):
+        if params.get("environment") not in self.environments:
+            raise ValueError("delivery environment unavailable")
+        receipt = self.store.refresh(principal, **params)
+        self._wake.set()
+        return receipt
+
     def start_run(self, scope, run_id=None, event_id=None):
         return self.store.start_run(scope, run_id, event_id)
 
