@@ -243,15 +243,16 @@ class PushStore:
             db.execute("""DELETE FROM outbox WHERE subscription_id=? AND run_id=?
                 AND state='pending'""", (sub["id"], run["run_id"]))
         if activity:
-            # A newer state supersedes unsent progress. Leased sends retain their immutable
-            # payload; APNs timestamps prevent a late old delivery overriding a newer state.
+            # The current projection supersedes every older pending activity state,
+            # including attention awaiting retry. An already claimed send retains
+            # its immutable timestamp, but deleting its row prevents a stale retry.
             prior_due = db.execute("""SELECT MIN(next_attempt) FROM outbox WHERE subscription_id=?
                 AND run_id=? AND state='pending' AND urgent=0 AND lease_until<=?""",
                 (sub["id"], run["run_id"], now)).fetchone()[0]
             if prior_due is not None:
                 due = min(due, prior_due)
-            db.execute("""DELETE FROM outbox WHERE subscription_id=? AND run_id=? AND state='pending'
-                AND lease_until<=? AND (urgent=0 OR ?)""", (sub["id"], run["run_id"], now, run["status"] in TERMINAL))
+            db.execute("""DELETE FROM outbox WHERE subscription_id=? AND run_id=? AND state='pending'""",
+                       (sub["id"], run["run_id"]))
         payload = activity_payload(run, scope, now) if activity else alert_payload(sub, run, scope)
         if not activity:
             payload["event_id"] = hashlib.sha256(event_id.encode()).hexdigest()

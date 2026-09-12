@@ -147,6 +147,26 @@ def test_unsubscribe_removes_pending_jobs_and_categories_control_alerts(delivery
     assert len(sender.jobs) == 1
 
 
+@pytest.mark.parametrize("old_delivery", ["queued", "retry", "inflight"])
+def test_activity_resumption_supersedes_old_attention_even_across_retry(delivery, old_delivery):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.register("p", scope, **ids, token="cc" * 32, environment="production",
+                     kind="activity", activity_id="activity", run_id=run["run_id"])
+    service.record(scope, run["run_id"], "approval", "waitingForApproval")
+    old = None if old_delivery == "queued" else service.store.claim()
+    if old_delivery == "retry":
+        service.store.finish(old, DeliveryResult("retry"))
+    now[0] += 1
+    service.record(scope, run["run_id"], "resumed", "responding")
+    if old_delivery == "inflight":
+        service.store.finish(old, DeliveryResult("retry"))
+    for delay in (12, 60):
+        now[0] += delay
+        service.drain_once()
+    assert [job["payload"]["aps"]["content-state"]["status"] for job in sender.jobs] == ["responding"]
+
+
 def test_expired_activity_ends_before_token_expiry_and_devices_expire(delivery):
     service, sender, now, ids, scope = delivery
     service.register("p", scope, **ids, token="aa" * 32, environment="production")

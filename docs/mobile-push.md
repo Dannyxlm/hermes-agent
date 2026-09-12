@@ -115,4 +115,7 @@ and suspended-app activity updates need separate device evidence.
 Progress coalesces for ten seconds. Attention and terminal updates bypass that delay,
 with at most one ActivityKit dispatch per subscription per real clock second. APNs
 timestamps are stamped at dispatch rather than incremented on each model event.
+Every newer activity state supersedes older pending activity retries, so resuming
+after approval cannot restore an obsolete waiting state. Separate attention alerts
+retain their own delivery queue.
 Ending an expired ActivityKit projection does not mark the underlying agent run done.
