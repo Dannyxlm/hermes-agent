@@ -41,6 +41,10 @@
     {
       "id": "hermex-hosted-rooms",
       "summary": "Governed persistent multi-agent room transport with safe hosted-room controls"
+    },
+    {
+      "id": "private-mobile-delivery",
+      "summary": "Authenticated private iOS push and Live Activity projections from canonical Team and Chats events"
     }
   ]
 }

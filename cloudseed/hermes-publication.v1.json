@@ -1,6 +1,6 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20260911-8d79c2f",
+  "release_id": "hermes-20260912-8d79c2f",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
   "official_revision": "8d79c2ff57bba4b07e5b37ed90387b16541aef53",
@@ -11,7 +11,7 @@
   "desktop_self_update_allowed": true,
   "overlay_transition": {
     "added": [
-      "hermex-hosted-rooms"
+      "private-mobile-delivery"
     ],
     "retained": [
       "codex-ephemeral-context",
@@ -22,7 +22,8 @@
       "public-dashboard-hardening",
       "telegram-approval-cockpit",
       "runtime-review-hardening",
-      "hermex-shared-state"
+      "hermex-shared-state",
+      "hermex-hosted-rooms"
     ],
     "retired": []
   }
