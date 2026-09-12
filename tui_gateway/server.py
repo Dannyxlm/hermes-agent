@@ -577,6 +577,7 @@ def write_json(obj: dict) -> bool:
     Every event frame gets a per-session monotonic ``seq`` + replay-ring entry so ``session.events.since`` can resume."""
     from tui_gateway.event_replay import _stamp_event
     _stamp_event(obj)
+    _mobile_push_capture(obj)
     if obj.get("method") == "event":
         params = obj.get("params")
         sid = ((params or {}).get("session_id")) if isinstance(params, dict) else ""
@@ -3230,7 +3231,8 @@ from . import (  # noqa: E402
     methods_tools as _methods_tools, prompt_turn as _prompt_turn, billing_view as _billing_view,
     methods_projects as _methods_projects, methods_session_foreign as _methods_session_foreign,
     methods_session_control as _methods_session_control, methods_subagents as _methods_subagents,
-    methods_vault as _methods_vault, methods_free_tier as _methods_free_tier, methods_mobile as _methods_mobile)
+    methods_vault as _methods_vault, methods_free_tier as _methods_free_tier, methods_mobile as _methods_mobile,
+    methods_mobile_push as _methods_mobile_push)
 
 for _m in (
     _session_transports, _session_reaper, _session_lifecycle, _session_workdir, _compute_host_bridge, _model_switch,
@@ -3240,6 +3242,7 @@ for _m in (
     _methods_browser_control, _methods_session, _methods_prompt, _methods_config,
     _methods_config_set, _methods_complete, _methods_tools, _methods_profiles, _methods_images,
     _methods_bot_relay, _prompt_turn, _billing_view, _methods_projects, _methods_session_foreign,
-    _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_mobile):
+    _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_mobile,
+    _methods_mobile_push):
     _m.register(sys.modules[__name__])
 del _m

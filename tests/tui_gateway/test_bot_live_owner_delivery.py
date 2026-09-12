@@ -22,6 +22,7 @@ def test_refused_input_commits_failed_mailbox_receipt(tmp_path):
     agent = SimpleNamespace(session_id="chat")
     session = dict(agent=agent, session_key="chat", history_lock=threading.RLock(), running=True)
     retired = []
+    notification_outcomes = []
     noop = lambda *args, **kwargs: None
     submit = rebind(prompt_turn._run_prompt_submit, {
         "threading": threading, "time": time, "logger": logging.getLogger(__name__),
@@ -33,6 +34,7 @@ def test_refused_input_commits_failed_mailbox_receipt(tmp_path):
         "_record_turn_marker": lambda *args, **kwargs: "marker",
         "_prepare_turn_input": lambda *args: None,
         "_finish_turn": noop, "_clear_inflight_turn": noop,
+        "_mobile_push_finish": lambda sid, session, status: notification_outcomes.append(status),
         "_retire_turn_marker": lambda *args: retired.append(args),
         "_emit_settled_session_info": noop,
         "_routing_provenance_db": lambda _session: contextlib.nullcontext(None),
@@ -46,6 +48,7 @@ def test_refused_input_commits_failed_mailbox_receipt(tmp_path):
     assert not session["_run_thread"].is_alive()
     assert mailbox.read_delivery_result(tmp_path, queued["id"])["status"] == "failed"
     assert retired and session["running"] is False
+    assert notification_outcomes == ["error"]
 
 
 def test_imported_crash_marker_never_autocontinues(tmp_path):

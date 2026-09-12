@@ -242,7 +242,8 @@ def _mobile_snapshot(params):
             "stored_session_id": tip["id"], "history": history, "running": running,
             "status": _session_live_status(sid, session), "inflight": inflight, "queued": queued,
             "pending_approvals": _mobile_approvals(session),
-            "pending_clarify": pending_clarify}
+            "pending_clarify": pending_clarify,
+            "notification_run": _mobile_notification_run(profile, root["id"])}
 
 
 @_mobile_handler("mobile.open")
