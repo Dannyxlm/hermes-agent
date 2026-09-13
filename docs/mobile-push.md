@@ -126,3 +126,20 @@ Every newer activity state supersedes older pending activity retries, so resumin
 after approval cannot restore an obsolete waiting state. Separate attention alerts
 retain their own delivery queue.
 Ending an expired ActivityKit projection does not mark the underlying agent run done.
+
+
+## Widget delivery and limited reads
+
+The optional push store supports Chats widget subscriptions with an independent,
+hashed, thirty-day reader credential scoped to principal, installation and
+connection. Only fully authenticated callers may grant an existing Chats scope.
+The widget reader exposes latest registered run metadata and token rotation,
+never transcripts, approvals, new scopes, or full app authentication.
+
+Inbox-relevant state transitions use the same durable outbox. Pending widget
+reloads coalesce across one device connection and use the fixed APNs widgets
+topic with `aps.content-changed:true`. Invalid widget tokens disable push while
+retaining authorized snapshot reads. Whole-connection logout revokes the reader.
+The additive table preserves old-source reads/writes; rollback restores the
+previous server and existing alerts. New widget support is absent on rollback,
+and the client keeps its last valid snapshot until foreground setup resumes.

@@ -271,6 +271,13 @@ def test_provider_uses_fixed_topic_and_privacy_safe_error_classification(tmp_pat
     assert requests[0].url.host == "api.push.apple.com"
     assert requests[0].headers["apns-push-type"] == "liveactivity"
     assert json.loads(requests[0].content) == job["payload"]
+    statuses.append((200, {}))
+    widget = {**job, "kind": "widget", "urgent": False, "payload": {"aps": {"content-changed": True}}}
+    assert provider.send(widget).outcome == "accepted"
+    assert requests[-1].headers["apns-topic"] == "co.cloudseed.hermex.ava.push-type.widgets"
+    assert requests[-1].headers["apns-push-type"] == "widgets"
+    assert requests[-1].headers["apns-priority"] == "5"
+    assert json.loads(requests[-1].content) == widget["payload"]
     provider.close()
 
 
@@ -451,3 +458,75 @@ def test_preview_bounds_unicode_and_never_uses_error_as_reply():
     assert "\u202e" not in alert["title"]
     assert "🦋" not in preview.alert("failed")["body"]
     assert AlertPreview({}, {}).alert("complete")["title"] == "Hermex Ava"
+
+
+def test_widget_reads_are_scoped_monotonic_revocable_and_credential_free(delivery):
+    service, sender, now, ids, _ = delivery
+    scope = Scope("chats", "ops", "chat")
+    cap = "12" * 32
+    service.register("owner", scope, **ids, token="", environment="production", kind="widget", read_token=cap)
+    other = Scope("chats", "other", "hidden")
+    service.start_run(other)
+    first = service.start_run(scope)
+    service.record(scope, first['run_id'], "done", "complete")
+    snapshot = service.store.widget_snapshot(cap)
+    assert len(snapshot['items']) == 1 and snapshot['items'][0]['run_id'] == first['run_id']
+    assert cap not in json.dumps(snapshot)
+    # Same timestamp: latest inserted run still wins.
+    second = service.start_run(scope)
+    assert service.store.widget_snapshot(cap)['items'][0]['run_id'] == second['run_id']
+    service.drain_once()
+    assert sender.jobs == []  # no push token yet
+    with pytest.raises(PermissionError):
+        service.store.widget_snapshot("34" * 32)
+    with pytest.raises(ValueError):
+        service.register("other-owner", scope, **ids, token="", environment="production", kind="widget", read_token=cap)
+    assert service.unregister("other-owner", **ids) == 0
+    assert service.store.widget_snapshot(cap)['items']
+    service.unregister("owner", **ids)
+    with pytest.raises(PermissionError):
+        service.store.widget_snapshot(cap)
+
+
+def test_widget_push_coalesces_persisted_changes_and_rotation_preserves_other_alerts(delivery):
+    service, sender, now, ids, _ = delivery
+    cap = "12" * 32
+    scopes = [Scope("chats", "ops", sid) for sid in ("one", "two")]
+    for scope in scopes:
+        service.register("owner", scope, **ids, token="aa" * 32, environment="production", kind="widget", read_token=cap)
+    service.register("owner", scopes[0], **ids, token="bb" * 32, environment="production")
+    for scope in scopes:
+        run = service.start_run(scope)
+        service.record(scope, run['run_id'], "done", "complete")
+    service.store.update_widget_token(cap, "cc" * 32)
+    now[0] += 3
+    service.drain_once()
+    widget = [job for job in sender.jobs if job['kind'] == "widget"]
+    alerts = [job for job in sender.jobs if job['kind'] == "alert"]
+    assert len(widget) == 1 and widget[0]['token'] == "cc" * 32
+    assert widget[0]['payload'] == {"aps": {"content-changed": True}}
+    assert len(alerts) == 1 and alerts[0]['token'] == "bb" * 32
+    assert len(service.store.widget_snapshot(cap)['items']) == 2
+    next_run = service.start_run(scopes[0])
+    for index, status in enumerate(["thinking", "usingTool", "thinking", "responding"]):
+        service.record(scopes[0], next_run['run_id'], str(index), status)
+        now[0] += 3
+        service.drain_once()
+    assert len([job for job in sender.jobs if job['kind'] == 'widget']) == 2
+    service.record(scopes[0], next_run['run_id'], "question-before-removal", "waitingForApproval")
+    now[0] += 3
+    job = service.store.claim()
+    while job and job['kind'] != 'widget':
+        service.store.finish(job, DeliveryResult("accepted"))
+        job = service.store.claim()
+    assert job and job['kind'] == 'widget'
+    service.store.finish(job, DeliveryResult("invalid"))
+    assert len(service.store.widget_snapshot(cap)['items']) == 2
+    service.store.update_widget_token(cap, "")
+    service.record(scopes[0], next_run['run_id'], "question", "waitingForClarification")
+    now[0] += 3
+    service.drain_once()
+    assert len([job for job in sender.jobs if job['kind'] == 'widget']) == 2
+    now[0] += 31 * 86400
+    with pytest.raises(PermissionError):
+        service.store.widget_snapshot(cap)
