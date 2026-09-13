@@ -45,10 +45,13 @@ class APNsProvider:
             self._authorization = self._jwt.encode({"iss": self.team_id, "iat": int(now)}, self.key,
                 algorithm="ES256", headers={"kid": self.key_id})
             self._issued_at = now
-        topic = TOPIC + (".push-type.liveactivity" if job["kind"] == "activity" else "")
+        push_type = {"activity": "liveactivity", "alert": "alert", "widget": "widgets"}.get(job["kind"])
+        if push_type is None:
+            return DeliveryResult("failed", "invalid_channel")
+        topic = TOPIC + (".push-type." + push_type if push_type != "alert" else "")
         host = "api.push.apple.com" if job["environment"] == "production" else "api.sandbox.push.apple.com"
         headers = {"authorization": "bearer " + self._authorization, "apns-topic": topic,
-            "apns-push-type": "liveactivity" if job["kind"] == "activity" else "alert",
+            "apns-push-type": push_type,
             "apns-priority": "10" if job["urgent"] else "5", "apns-id": job["job_id"],
             "apns-expiration": str(int(job["expires_at"])), "apns-collapse-id": job["collapse_id"]}
         try:

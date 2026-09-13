@@ -271,6 +271,13 @@ def test_provider_uses_fixed_topic_and_privacy_safe_error_classification(tmp_pat
     assert requests[0].url.host == "api.push.apple.com"
     assert requests[0].headers["apns-push-type"] == "liveactivity"
     assert json.loads(requests[0].content) == job["payload"]
+    statuses.append((200, {}))
+    widget = {**job, "kind": "widget", "urgent": False, "payload": {"aps": {"content-changed": True}}}
+    assert provider.send(widget).outcome == "accepted"
+    assert requests[-1].headers["apns-topic"] == "co.cloudseed.hermex.ava.push-type.widgets"
+    assert requests[-1].headers["apns-push-type"] == "widgets"
+    assert requests[-1].headers["apns-priority"] == "5"
+    assert json.loads(requests[-1].content) == widget["payload"]
     provider.close()
 
 
@@ -382,3 +389,144 @@ def test_detached_activity_refresh_never_recreates_and_replays_terminal(delivery
     assert service.refresh("p", **{**options, "accepts_scope": lambda value: False})["updated"] == 0
     service.unregister("p", **ids, subscription_id=receipt["subscription_id"])
     assert service.refresh("p", **options)["updated"] == 0
+
+
+@pytest.mark.parametrize("surface", ["native", "chats"])
+def test_reply_previews_are_per_device_and_survive_delivery_restart(delivery, surface):
+    from tui_gateway.mobile_push_payloads import AlertPreview
+    service, sender, now, ids, _ = delivery
+    scope = Scope(surface, "ops", "preview-session")
+    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    preview_ids = {**ids, "installation_id": str(uuid.uuid4())}
+    service.register("p", scope, **preview_ids, token="bb" * 32, environment="production", preview_enabled=True)
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "done", "complete", preview=AlertPreview(
+        title="Weekly **briefing**", reply="# Ready\n\nThe [brief](https://example.org/private) is **ready**.\n```private tool output```"))
+    from tui_gateway.mobile_push_store import PushStore
+    restarted = PushStore(service.store.path, lambda: now[0])
+    try:
+        jobs = [restarted.claim(), restarted.claim()]
+        alerts = {j["token"]: j["payload"]["aps"]["alert"] for j in jobs}
+        assert alerts["aa" * 32]["title"] == "Hermex Ava"
+        assert alerts["bb" * 32] == {"title": "Weekly briefing", "body": "Ready The brief is ready."}
+        assert all(j["payload"]["aps"]["mutable-content"] == 1 for j in jobs)
+    finally:
+        restarted.close()
+
+
+def test_preview_opt_out_controls_already_queued_notification(delivery):
+    from tui_gateway.mobile_push_payloads import AlertPreview
+    service, sender, now, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "done", "complete", preview=AlertPreview("Private title", "Private reply"))
+    service.refresh("p", **ids, token="aa" * 32, environment="production", accepts_scope=lambda _: True, preview_enabled=False)
+    service.drain_once()
+    alert = sender.jobs[0]["payload"]["aps"]["alert"]
+    assert "Private" not in json.dumps(alert)
+    assert alert["title"] == "Hermex Ava"
+
+
+def test_preview_migration_keeps_old_subscriptions_generic(delivery):
+    from tui_gateway.mobile_push_store import PushStore
+    service, sender, now, ids, scope = delivery
+    receipt = service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    with service.store.transaction() as db:
+        db.execute("ALTER TABLE subscriptions DROP COLUMN preview_enabled")
+    migrated = PushStore(service.store.path, lambda: now[0])
+    try:
+        with migrated.transaction() as db:
+            row = db.execute("SELECT id,preview_enabled FROM subscriptions").fetchone()
+        assert row["id"] == receipt["subscription_id"]
+        assert row["preview_enabled"] == 0
+    finally:
+        migrated.close()
+
+
+@pytest.mark.parametrize("bad", ["false", "true", 1, None, {}])
+def test_preview_requires_boolean_preference(delivery, bad):
+    service, _, _, ids, scope = delivery
+    with pytest.raises(ValueError, match="boolean"):
+        service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=bad)
+
+
+def test_preview_bounds_unicode_and_never_uses_error_as_reply():
+    from tui_gateway.mobile_push_payloads import AlertPreview
+    preview = AlertPreview("A\u202e" + "🦋" * 100, "**Reply** " + "🦋" * 300)
+    alert = preview.alert("complete")
+    assert len(alert["title"]) <= 80 and len(alert["body"]) <= 240
+    assert "\u202e" not in alert["title"]
+    assert "🦋" not in preview.alert("failed")["body"]
+    assert AlertPreview({}, {}).alert("complete")["title"] == "Hermex Ava"
+
+
+def test_widget_reads_are_scoped_monotonic_revocable_and_credential_free(delivery):
+    service, sender, now, ids, _ = delivery
+    scope = Scope("chats", "ops", "chat")
+    cap = "12" * 32
+    service.register("owner", scope, **ids, token="", environment="production", kind="widget", read_token=cap)
+    other = Scope("chats", "other", "hidden")
+    service.start_run(other)
+    first = service.start_run(scope)
+    service.record(scope, first['run_id'], "done", "complete")
+    snapshot = service.store.widget_snapshot(cap)
+    assert len(snapshot['items']) == 1 and snapshot['items'][0]['run_id'] == first['run_id']
+    assert cap not in json.dumps(snapshot)
+    # Same timestamp: latest inserted run still wins.
+    second = service.start_run(scope)
+    assert service.store.widget_snapshot(cap)['items'][0]['run_id'] == second['run_id']
+    service.drain_once()
+    assert sender.jobs == []  # no push token yet
+    with pytest.raises(PermissionError):
+        service.store.widget_snapshot("34" * 32)
+    with pytest.raises(ValueError):
+        service.register("other-owner", scope, **ids, token="", environment="production", kind="widget", read_token=cap)
+    assert service.unregister("other-owner", **ids) == 0
+    assert service.store.widget_snapshot(cap)['items']
+    service.unregister("owner", **ids)
+    with pytest.raises(PermissionError):
+        service.store.widget_snapshot(cap)
+
+
+def test_widget_push_coalesces_persisted_changes_and_rotation_preserves_other_alerts(delivery):
+    service, sender, now, ids, _ = delivery
+    cap = "12" * 32
+    scopes = [Scope("chats", "ops", sid) for sid in ("one", "two")]
+    for scope in scopes:
+        service.register("owner", scope, **ids, token="aa" * 32, environment="production", kind="widget", read_token=cap)
+    service.register("owner", scopes[0], **ids, token="bb" * 32, environment="production")
+    for scope in scopes:
+        run = service.start_run(scope)
+        service.record(scope, run['run_id'], "done", "complete")
+    service.store.update_widget_token(cap, "cc" * 32)
+    now[0] += 3
+    service.drain_once()
+    widget = [job for job in sender.jobs if job['kind'] == "widget"]
+    alerts = [job for job in sender.jobs if job['kind'] == "alert"]
+    assert len(widget) == 1 and widget[0]['token'] == "cc" * 32
+    assert widget[0]['payload'] == {"aps": {"content-changed": True}}
+    assert len(alerts) == 1 and alerts[0]['token'] == "bb" * 32
+    assert len(service.store.widget_snapshot(cap)['items']) == 2
+    next_run = service.start_run(scopes[0])
+    for index, status in enumerate(["thinking", "usingTool", "thinking", "responding"]):
+        service.record(scopes[0], next_run['run_id'], str(index), status)
+        now[0] += 3
+        service.drain_once()
+    assert len([job for job in sender.jobs if job['kind'] == 'widget']) == 2
+    service.record(scopes[0], next_run['run_id'], "question-before-removal", "waitingForApproval")
+    now[0] += 3
+    job = service.store.claim()
+    while job and job['kind'] != 'widget':
+        service.store.finish(job, DeliveryResult("accepted"))
+        job = service.store.claim()
+    assert job and job['kind'] == 'widget'
+    service.store.finish(job, DeliveryResult("invalid"))
+    assert len(service.store.widget_snapshot(cap)['items']) == 2
+    service.store.update_widget_token(cap, "")
+    service.record(scopes[0], next_run['run_id'], "question", "waitingForClarification")
+    now[0] += 3
+    service.drain_once()
+    assert len([job for job in sender.jobs if job['kind'] == 'widget']) == 2
+    now[0] += 31 * 86400
+    with pytest.raises(PermissionError):
+        service.store.widget_snapshot(cap)

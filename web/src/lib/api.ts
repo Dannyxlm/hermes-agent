@@ -2256,6 +2256,7 @@ export interface ProfileInfo {
   has_env: boolean;
   skill_count: number;
   gateway_running: boolean;
+  gateway_shared?: boolean;
   description: string;
   description_auto: boolean;
   display_name?: string;

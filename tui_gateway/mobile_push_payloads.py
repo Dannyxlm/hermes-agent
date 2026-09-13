@@ -1,6 +1,8 @@
-"""Allowlisted, content-free projections shared by native Team and legacy Chats."""
+"""Scoped alert projections; reply text is included only for opted-in devices."""
 
 import hashlib
+import re
+import unicodedata
 from dataclasses import dataclass
 
 TOPIC = "co.cloudseed.hermex.ava"
@@ -33,19 +35,54 @@ class Scope:
         return hashlib.sha256("\0".join((self.surface, self.profile, self.session_id)).encode()).hexdigest()
 
 
-def alert_payload(subscription, run, scope):
-    destination = {"version": 1, "surface": scope.surface,
-        "installation_id": subscription["installation_id"], "connection_id": subscription["connection_id"],
-        "profile": scope.profile, "run_id": run["run_id"]}
-    destination["canonical_root_id" if scope.surface == "native" else "session_id"] = scope.session_id
+def preview_text(value, limit):
+    """A bounded display excerpt, never serialized objects or hidden control text."""
+    if not isinstance(value, str):
+        return ""
+    value = value[:8192]
+    value = re.sub(r"```.*?(?:```|$)", " ", value, flags=re.S)
+    value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
+    value = re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+)", "", value)
+    value = re.sub(r"(\*\*|__|~~|`)(.+?)\1", r"\2", value)
+    value = "".join(c for c in value if unicodedata.category(c) not in {"Cc", "Cf"} or c.isspace())
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
+
+
+@dataclass(frozen=True)
+class AlertPreview:
+    title: str = ""
+    reply: str = ""
+
+    def alert(self, status):
+        alert = generic_alert(status)
+        title = preview_text(self.title, 80)
+        reply = preview_text(self.reply, 240) if status == "complete" else ""
+        if title:
+            alert["title"] = title
+        if reply:
+            alert["body"] = reply
+        return alert
+
+
+def generic_alert(status):
     text = {
         "complete": "A reply is ready. Open the app to view it.",
         "failed": "A run needs attention. Open the app for details.",
         "cancelled": "The run has stopped.",
         "waitingForApproval": "A run needs your approval. Open the app to review it.",
         "waitingForClarification": "A run needs your answer. Open the app to respond.",
-    }[run["status"]]
-    return {"aps": {"alert": {"title": "Hermex Ava", "body": text}, "sound": "default", "mutable-content": 1},
+    }[status]
+    return {"title": "Hermex Ava", "body": text}
+
+
+def alert_payload(subscription, run, scope, preview=None):
+    destination = {"version": 1, "surface": scope.surface,
+        "installation_id": subscription["installation_id"], "connection_id": subscription["connection_id"],
+        "profile": scope.profile, "run_id": run["run_id"]}
+    destination["canonical_root_id" if scope.surface == "native" else "session_id"] = scope.session_id
+    alert = preview.alert(run["status"]) if subscription["preview_enabled"] and preview else generic_alert(run["status"])
+    return {"aps": {"alert": alert, "sound": "default", "mutable-content": 1},
             "hermex.destination": destination, "hermex.status": run["status"],
             "hermex.run_started_at": run["started_at"], "hermex.updated_at": run["updated_at"]}
 
