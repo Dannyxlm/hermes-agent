@@ -273,7 +273,7 @@ export default function ProfilesPage() {
       activeBadge: p.activeBadge ?? "active",
       setActive: p.setActive ?? "Set as active",
       activeSet: p.activeSet ?? "Active profile set",
-      gatewayRunning: p.gatewayRunning ?? "Gateway running",
+      gatewayRunning: p.gatewayRunning ?? "Own gateway running",
       gatewayStopped: p.gatewayStopped ?? "Gateway stopped",
       gatewayRunningWarning:
         p.gatewayRunningWarning ??
@@ -1180,7 +1180,9 @@ export default function ProfilesPage() {
                           )}
                         >
                           {p.gateway_running
-                            ? L.gatewayRunning
+                            ? p.gateway_shared
+                              ? (t.profiles.gatewayShared ?? "Served by shared gateway")
+                              : L.gatewayRunning
                             : L.gatewayStopped}
                         </span>
                       </div>

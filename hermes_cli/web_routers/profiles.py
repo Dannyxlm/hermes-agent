@@ -80,6 +80,7 @@ def _profile_to_dict(info) -> Dict[str, Any]:
         "has_env": bool(attr("has_env", False)),
         "skill_count": int(attr("skill_count", 0) or 0),
         "gateway_running": bool(attr("gateway_running", False)),
+        "gateway_shared": bool(attr("gateway_shared", False)),
         "description": attr("description", "") or "",
         "description_auto": bool(attr("description_auto", False)),
         "display_name": attr("display_name", "") or "",

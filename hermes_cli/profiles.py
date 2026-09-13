@@ -470,6 +470,7 @@ class ProfileInfo:
     description_auto: bool = False
     # Presentation-only display name; resolution/comparison/spawn always use ``name``.
     display_name: str = ""
+    gateway_shared: bool = False
 
 
 def _load_yaml_dict(path: Path) -> Optional[dict]:
@@ -678,10 +679,11 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
     if alias_path is not None and not alias_path.exists():
         alias_path = None
     gateway_running = _check_gateway_running(path)
-    if not is_default:
-        gateway_running = gateway_running or _served_by_running_multiplexer(name)
+    gateway_shared = not is_default and not gateway_running and _served_by_running_multiplexer(name)
+    gateway_running = gateway_running or gateway_shared
     return ProfileInfo(
-        name=name, path=path, is_default=is_default, gateway_running=gateway_running, model=model,
+        name=name, path=path, is_default=is_default, gateway_running=gateway_running,
+        gateway_shared=gateway_shared, model=model,
         provider=provider, has_env=(path / ".env").exists(), skill_count=_count_skills(path),
         alias_path=alias_path, alias_name=alias_name, distribution_name=dist_name,
         distribution_version=dist_version, distribution_source=dist_source,

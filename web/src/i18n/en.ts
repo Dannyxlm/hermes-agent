@@ -349,7 +349,8 @@ export const en: Translations = {
     activeBadge: "active",
     setActive: "Set as active",
     activeSet: "Active profile set",
-    gatewayRunning: "Gateway running",
+    gatewayRunning: "Own gateway running",
+    gatewayShared: "Served by shared gateway",
     gatewayStopped: "Gateway stopped",
     gatewayRunningWarning:
       "This profile's gateway is running — it will be stopped.",

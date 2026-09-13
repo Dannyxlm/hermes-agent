@@ -1005,12 +1005,16 @@ export default function SystemPage() {
             {portal?.features && portal.features.length > 0 && (
               <div className="flex flex-col gap-1 border-t border-border pt-3">
                 <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                  Tool Gateway routing
+                  Portal routing summary
                 </span>
+                <p className="text-xs text-muted-foreground">
+                  This Portal summary may not detect provider plugins configured elsewhere.
+                  Check Plugins for their activation settings.
+                </p>
                 {portal.features.map((f) => (
                   <div key={f.label} className="flex items-center justify-between text-sm">
                     <span>{f.label}</span>
-                    <span className="text-muted-foreground">{f.state}</span>
+                    <span className="text-muted-foreground">{f.state === "not configured" ? "Not detected in Portal summary" : f.state}</span>
                   </div>
                 ))}
               </div>

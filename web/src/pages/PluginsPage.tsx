@@ -1,3 +1,4 @@
+import { pluginActivationLabel } from "@/lib/plugin-activation-label";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ExternalLink, RefreshCw, Trash2, Eye, EyeOff } from "lucide-react";
 import type { Translations } from "@/i18n/types";
@@ -949,6 +950,10 @@ export default function PluginsPage() {
           <h3 className="font-mondwest text-display text-xs tracking-[0.12em] text-text-secondary">
             {t.pluginsPage.pluginListHeading}
           </h3>
+          <p className="text-xs text-text-tertiary">
+            Badges show activation settings, not connection status. Plugins using default activation
+            may load when their provider or channel is configured. Check Channels for live connections.
+          </p>
 
           {loading ? (
 
@@ -1102,7 +1107,7 @@ function PluginRowCard(props: PluginRowCardProps) {
 
             <Badge tone="outline">v{row.version || "—"}</Badge>
 
-            <Badge tone={badgeTone}>{row.runtime_status}</Badge>
+            <Badge tone={badgeTone}>{pluginActivationLabel(row.runtime_status)}</Badge>
 
             {row.auth_required ? (
               <Badge tone="destructive">{t.pluginsPage.authRequired}</Badge>
@@ -1303,7 +1308,7 @@ function CatalogEntryCard(props: CatalogEntryCardProps) {
             </Badge>
 
             {entry.installed && entry.runtime_status ? (
-              <Badge tone="outline">{entry.runtime_status}</Badge>
+              <Badge tone="outline">{pluginActivationLabel(entry.runtime_status)}</Badge>
             ) : null}
 
             {isRemoved ? (

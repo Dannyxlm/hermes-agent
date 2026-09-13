@@ -420,6 +420,7 @@ export interface Translations {
     setActive?: string;
     activeSet?: string;
     gatewayRunning?: string;
+    gatewayShared?: string;
     gatewayStopped?: string;
     gatewayRunningWarning?: string;
     aliasBadge?: string;
