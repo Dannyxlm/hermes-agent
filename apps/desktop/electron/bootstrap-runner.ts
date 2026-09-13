@@ -53,7 +53,10 @@ function isPinnedCommit(commit) {
 }
 
 function normalizeInstallRepository(value) {
-  const repository = String(value || '').trim().replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
+  const repository = String(value || '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.git$/i, '')
 
   return INSTALL_REPOSITORY_RE.test(repository) ? repository : null
 }
@@ -367,10 +370,7 @@ async function resolveInstallScript({
 
   const installRepository = installRepositoryForStamp(installStamp)
 
-  const cached = cachedScriptPath(
-    hermesHome,
-    repositoryCacheKey(installRepository, installRef.cacheKey)
-  )
+  const cached = cachedScriptPath(hermesHome, repositoryCacheKey(installRepository, installRef.cacheKey))
 
   const resolvedCommit = installRef.pinned ? installRef.ref : null
 
@@ -501,11 +501,7 @@ function resolveWindowsPowerShell() {
   return 'powershell.exe'
 }
 
-function spawnPowerShell(
-  scriptPath,
-  args,
-  { emit, stageName, abortSignal, hermesHome, installRepository }: any = {}
-) {
+function spawnPowerShell(scriptPath, args, { emit, stageName, abortSignal, hermesHome, installRepository }: any = {}) {
   return new Promise<any>((resolve, reject) => {
     const ps = process.platform === 'win32' ? resolveWindowsPowerShell() : 'pwsh'
     const fullArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args]
@@ -520,8 +516,7 @@ function spawnPowerShell(
           // Pass HERMES_HOME through so install.ps1 respects the caller's
           // choice rather than re-computing the default.
           HERMES_HOME: hermesHome || process.env.HERMES_HOME || '',
-          HERMES_INSTALL_REPOSITORY:
-            installRepository || process.env.HERMES_INSTALL_REPOSITORY || FALLBACK_REPOSITORY
+          HERMES_INSTALL_REPOSITORY: installRepository || process.env.HERMES_INSTALL_REPOSITORY || FALLBACK_REPOSITORY
         }
       })
     )
@@ -618,8 +613,7 @@ function spawnBash(scriptPath, args, { emit, stageName, abortSignal, hermesHome,
       env: {
         ...process.env,
         HERMES_HOME: hermesHome || process.env.HERMES_HOME || '',
-        HERMES_INSTALL_REPOSITORY:
-          installRepository || process.env.HERMES_INSTALL_REPOSITORY || FALLBACK_REPOSITORY
+        HERMES_INSTALL_REPOSITORY: installRepository || process.env.HERMES_INSTALL_REPOSITORY || FALLBACK_REPOSITORY
       }
     })
 
@@ -751,8 +745,10 @@ async function fetchManifest({
   activeRoot,
   installStamp,
   pinCommit,
-  installRepository
+  installRepository,
+  abortSignal
 }) {
+  abortSignal?.throwIfAborted()
   const isPosix = installerKind === 'posix'
 
   const args = isPosix
@@ -762,6 +758,7 @@ async function fetchManifest({
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
     emit,
     stageName: '__manifest__',
+    abortSignal,
     hermesHome,
     installRepository
   })
@@ -995,6 +992,8 @@ async function runBootstrap(opts) {
 
     // 1. Resolve the platform installer.
     const scriptInfo = await resolveInstallScript({ installStamp, sourceRepoRoot, hermesHome, emit })
+    abortSignal?.throwIfAborted()
+
     const installerKind = scriptInfo.kind || 'powershell'
 
     // 2. Fetch manifest
@@ -1006,8 +1005,11 @@ async function runBootstrap(opts) {
       activeRoot,
       installStamp,
       pinCommit,
-      installRepository
+      installRepository,
+      abortSignal
     })
+
+    abortSignal?.throwIfAborted()
 
     emit({
       type: 'manifest',
@@ -1077,12 +1079,18 @@ async function runBootstrap(opts) {
 
     return { ok: true, marker }
   } catch (err) {
+    if (abortSignal?.aborted) {
+      emit({ type: 'failed', error: 'bootstrap cancelled by user' })
+
+      return { ok: false, cancelled: true }
+    }
+
     emit({ type: 'failed', error: err.message || String(err) })
 
     return { ok: false, error: err.message || String(err) }
   } finally {
     try {
-      runLog.stream.end()
+      await new Promise<void>(resolve => runLog.stream.end(resolve))
     } catch {
       void 0
     }
