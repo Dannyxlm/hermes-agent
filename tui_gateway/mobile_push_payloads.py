@@ -45,8 +45,9 @@ def alert_payload(subscription, run, scope):
         "waitingForApproval": "A run needs your approval. Open the app to review it.",
         "waitingForClarification": "A run needs your answer. Open the app to respond.",
     }[run["status"]]
-    return {"aps": {"alert": {"title": "Hermex Ava", "body": text}, "sound": "default"},
-            "hermex.destination": destination}
+    return {"aps": {"alert": {"title": "Hermex Ava", "body": text}, "sound": "default", "mutable-content": 1},
+            "hermex.destination": destination, "hermex.status": run["status"],
+            "hermex.run_started_at": run["started_at"], "hermex.updated_at": run["updated_at"]}
 
 
 def activity_payload(run, scope, now):

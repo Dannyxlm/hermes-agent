@@ -22,6 +22,35 @@ class Sender:
         pass
 
 
+@pytest.mark.parametrize("surface", ["native", "chats"])
+@pytest.mark.parametrize("status", ["complete", "waitingForApproval", "waitingForClarification"])
+def test_alert_projection_reaches_notification_extension_without_private_content(tmp_path, surface, status):
+    now = [1800000000.0]
+    sender = Sender()
+    service = PushService(tmp_path / "attention.sqlite", sender, clock=lambda: now[0])
+    scope = Scope(surface, "fixture-profile", "fixture-session")
+    ids = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    try:
+        service.register("fixture-principal", scope, **ids, token="aa" * 32, environment="production")
+        run = service.start_run(scope)
+        now[0] += 5
+        service.record(scope, run["run_id"], "fixture-event", status)
+        service.drain_once()
+        assert len(sender.jobs) == 1
+        payload = sender.jobs[0]["payload"]
+        assert payload["aps"]["mutable-content"] == 1
+        assert payload["hermex.status"] == status
+        assert payload["hermex.run_started_at"] == run["started_at"]
+        assert payload["hermex.updated_at"] == now[0]
+        assert payload["hermex.destination"]["surface"] == surface
+        assert payload["hermex.destination"]["run_id"] == run["run_id"]
+        assert "fixture-session" not in json.dumps(payload["aps"])
+        assert "fixture-profile" not in json.dumps(payload["aps"])
+        assert "aa" * 32 not in json.dumps(payload)
+    finally:
+        service.close()
+
+
 def test_registered_run_completes_once_across_restart(tmp_path):
     now = [1800000000.0]
     sender = Sender()
