@@ -60,6 +60,7 @@ def _mobile_push_register(rid, params, principal, kind):
         options.update(activity_id=params.get("activity_id"), run_id=params.get("run_id"))
     else:
         options["categories"] = params.get("categories", ("attention", "completion"))
+        options["preview_enabled"] = params.get("preview_enabled", False)
     receipt = service.register(principal, push_scope, **options)
     session["_mobile_push_scope"] = push_scope
     return _ok(rid, receipt)
@@ -98,6 +99,7 @@ def _mobile_push_refresh(rid, params, principal, kind):
         options.update(activity_id=params.get("activity_id"), run_id=params.get("run_id"))
     else:
         options["categories"] = params.get("categories", ("attention", "completion"))
+        options["preview_enabled"] = params.get("preview_enabled", False)
     return _ok(rid, service.refresh(principal, **options))
 
 
@@ -144,9 +146,13 @@ def _mobile_push_scope_for_session(session, refresh=False):
         root, tip, _chain = _mobile_canonical_identity(db)
     if session.get("session_key") != tip["id"]:
         return None
-    profile = next((p.name for p in list_profiles() if Path(p.path).resolve() == home), None)
+    profile = next((p for p in list_profiles() if Path(p.path).resolve() == home), None)
     if profile is not None:
-        session["_mobile_push_scope"] = Scope("native", profile, root["id"])
+        session["_mobile_push_scope"] = Scope("native", profile.name, root["id"])
+        ui_meta = _read_profile_yaml(home).get("ui_meta", {})
+        bot_meta = ui_meta.get("hermes-bots", {}) if isinstance(ui_meta, dict) else {}
+        title = bot_meta.get("title") if isinstance(bot_meta, dict) else None
+        session["_mobile_push_title"] = title or profile.display_name or profile.name
     return session.get("_mobile_push_scope")
 
 
@@ -193,7 +199,10 @@ def _mobile_push_capture(obj):
             return
         request_id = payload.get("request_id") if isinstance(payload, dict) else None
         event_id = f"{event}:{request_id}" if request_id else f"{event}:{params.get('seq', 0)}"
-        service.record(push_scope, run_id, event_id, status)
+        from tui_gateway.mobile_push_payloads import AlertPreview
+        title = session.get("_mobile_push_title") or push_scope.profile
+        preview = AlertPreview(title=title, reply=payload.get("text", "") if status == "complete" else "")
+        service.record(push_scope, run_id, event_id, status, preview=preview)
         session["_mobile_push_status"] = status
     except Exception as error:
         # Delivery is a projection. A disk/provider problem must not terminate the turn,

@@ -382,3 +382,72 @@ def test_detached_activity_refresh_never_recreates_and_replays_terminal(delivery
     assert service.refresh("p", **{**options, "accepts_scope": lambda value: False})["updated"] == 0
     service.unregister("p", **ids, subscription_id=receipt["subscription_id"])
     assert service.refresh("p", **options)["updated"] == 0
+
+
+@pytest.mark.parametrize("surface", ["native", "chats"])
+def test_reply_previews_are_per_device_and_survive_delivery_restart(delivery, surface):
+    from tui_gateway.mobile_push_payloads import AlertPreview
+    service, sender, now, ids, _ = delivery
+    scope = Scope(surface, "ops", "preview-session")
+    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    preview_ids = {**ids, "installation_id": str(uuid.uuid4())}
+    service.register("p", scope, **preview_ids, token="bb" * 32, environment="production", preview_enabled=True)
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "done", "complete", preview=AlertPreview(
+        title="Weekly **briefing**", reply="# Ready\n\nThe [brief](https://example.org/private) is **ready**.\n```private tool output```"))
+    from tui_gateway.mobile_push_store import PushStore
+    restarted = PushStore(service.store.path, lambda: now[0])
+    try:
+        jobs = [restarted.claim(), restarted.claim()]
+        alerts = {j["token"]: j["payload"]["aps"]["alert"] for j in jobs}
+        assert alerts["aa" * 32]["title"] == "Hermex Ava"
+        assert alerts["bb" * 32] == {"title": "Weekly briefing", "body": "Ready The brief is ready."}
+        assert all(j["payload"]["aps"]["mutable-content"] == 1 for j in jobs)
+    finally:
+        restarted.close()
+
+
+def test_preview_opt_out_controls_already_queued_notification(delivery):
+    from tui_gateway.mobile_push_payloads import AlertPreview
+    service, sender, now, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "done", "complete", preview=AlertPreview("Private title", "Private reply"))
+    service.refresh("p", **ids, token="aa" * 32, environment="production", accepts_scope=lambda _: True, preview_enabled=False)
+    service.drain_once()
+    alert = sender.jobs[0]["payload"]["aps"]["alert"]
+    assert "Private" not in json.dumps(alert)
+    assert alert["title"] == "Hermex Ava"
+
+
+def test_preview_migration_keeps_old_subscriptions_generic(delivery):
+    from tui_gateway.mobile_push_store import PushStore
+    service, sender, now, ids, scope = delivery
+    receipt = service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    with service.store.transaction() as db:
+        db.execute("ALTER TABLE subscriptions DROP COLUMN preview_enabled")
+    migrated = PushStore(service.store.path, lambda: now[0])
+    try:
+        with migrated.transaction() as db:
+            row = db.execute("SELECT id,preview_enabled FROM subscriptions").fetchone()
+        assert row["id"] == receipt["subscription_id"]
+        assert row["preview_enabled"] == 0
+    finally:
+        migrated.close()
+
+
+@pytest.mark.parametrize("bad", ["false", "true", 1, None, {}])
+def test_preview_requires_boolean_preference(delivery, bad):
+    service, _, _, ids, scope = delivery
+    with pytest.raises(ValueError, match="boolean"):
+        service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=bad)
+
+
+def test_preview_bounds_unicode_and_never_uses_error_as_reply():
+    from tui_gateway.mobile_push_payloads import AlertPreview
+    preview = AlertPreview("A\u202e" + "🦋" * 100, "**Reply** " + "🦋" * 300)
+    alert = preview.alert("complete")
+    assert len(alert["title"]) <= 80 and len(alert["body"]) <= 240
+    assert "\u202e" not in alert["title"]
+    assert "🦋" not in preview.alert("failed")["body"]
+    assert AlertPreview({}, {}).alert("complete")["title"] == "Hermex Ava"

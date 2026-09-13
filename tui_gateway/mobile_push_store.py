@@ -10,7 +10,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from .mobile_push_payloads import ATTENTION, LABELS, TERMINAL, Scope, activity_payload, alert_payload
+from .mobile_push_payloads import ATTENTION, LABELS, TERMINAL, Scope, activity_payload, alert_payload, generic_alert
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
  scope TEXT NOT NULL, surface TEXT NOT NULL, profile TEXT NOT NULL, session_id TEXT NOT NULL,
  kind TEXT NOT NULL, activity_id TEXT NOT NULL, run_id TEXT NOT NULL, token TEXT NOT NULL,
  environment TEXT NOT NULL, categories TEXT NOT NULL, expires_at REAL NOT NULL, version INTEGER NOT NULL,
+ preview_enabled INTEGER NOT NULL DEFAULT 0,
  last_timestamp INTEGER NOT NULL DEFAULT 0,
  UNIQUE(principal, installation_id, connection_id, scope, kind, activity_id));
 CREATE TABLE IF NOT EXISTS runs (
@@ -73,6 +74,11 @@ class PushStore:
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(_SCHEMA)
+            # Serialize the additive migration across processes sharing this store.
+            with self.transaction() as db:
+                columns = {row["name"] for row in db.execute("PRAGMA table_info(subscriptions)")}
+                if "preview_enabled" not in columns:
+                    db.execute("ALTER TABLE subscriptions ADD COLUMN preview_enabled INTEGER NOT NULL DEFAULT 0")
         except sqlite3.Error:
             self._db.close()
             raise
@@ -89,9 +95,11 @@ class PushStore:
                 raise
 
     def register(self, principal, scope, *, installation_id, connection_id, token, environment,
-                 kind="alert", categories=("attention", "completion"), activity_id="", run_id=""):
+                 kind="alert", categories=("attention", "completion"), activity_id="", run_id="", preview_enabled=False):
         installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
         _validate_delivery(principal, token, environment, kind, categories)
+        if not isinstance(preview_enabled, bool):
+            raise ValueError("preview_enabled must be a boolean")
         if kind == "activity" and (not isinstance(activity_id, str) or not 1 <= len(activity_id) <= 128):
             raise ValueError("activity identity required")
         if kind == "alert" and (activity_id or run_id):
@@ -114,13 +122,14 @@ class PushStore:
             sid = existing["id"] if existing else str(uuid.uuid4())
             db.execute("""INSERT INTO subscriptions
                 (id, principal, installation_id, connection_id, scope, surface, profile, session_id,
-                 kind, activity_id, run_id, token, environment, categories, expires_at, version)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+                 kind, activity_id, run_id, token, environment, categories, expires_at, preview_enabled, version)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 ON CONFLICT(id) DO UPDATE SET token=excluded.token, environment=excluded.environment,
                 categories=excluded.categories, run_id=excluded.run_id, expires_at=excluded.expires_at,
+                preview_enabled=excluded.preview_enabled,
                 version=subscriptions.version+1""", (sid, principal, installation_id, connection_id,
                 scope.key, scope.surface, scope.profile, scope.session_id, kind, activity_id, run_id,
-                token.lower(), environment, json.dumps(sorted(set(categories))), expires))
+                token.lower(), environment, json.dumps(sorted(set(categories))), expires, int(preview_enabled and kind == "alert")))
             subscription = db.execute("SELECT * FROM subscriptions WHERE id=?", (sid,)).fetchone()
             if run:
                 self._enqueue(db, subscription, run, scope, f"{run_id}:registered:{subscription['version']}")
@@ -128,10 +137,12 @@ class PushStore:
 
     def refresh(self, principal, *, installation_id, connection_id, token, environment,
                 accepts_scope, kind="alert", categories=("attention", "completion"),
-                activity_id="", run_id=""):
+                activity_id="", run_id="", preview_enabled=False):
         """Rotate existing leases without granting scopes or opening agent runtimes."""
         installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
         _validate_delivery(principal, token, environment, kind, categories)
+        if not isinstance(preview_enabled, bool):
+            raise ValueError("preview_enabled must be a boolean")
         if kind == "activity" and (not isinstance(activity_id, str) or not 1 <= len(activity_id) <= 128
                                    or not isinstance(run_id, str) or not 1 <= len(run_id) <= 256):
             raise ValueError("activity and run identity required")
@@ -151,10 +162,10 @@ class PushStore:
         with self.transaction() as db:
             for row, scope in accepted:
                 expiry = row["expires_at"] if kind == "activity" else now + 30 * 86400
-                changed = db.execute("""UPDATE subscriptions SET token=?, categories=?, expires_at=?, version=version+1
+                changed = db.execute("""UPDATE subscriptions SET token=?, categories=?, expires_at=?, preview_enabled=?, version=version+1
                     WHERE id=? AND version=? AND expires_at>?""",
                     (token.lower(), json.dumps(sorted(set(categories))) if kind == "alert" else row["categories"],
-                     expiry, row["id"], row["version"], self.clock())).rowcount
+                     expiry, int(preview_enabled and kind == "alert"), row["id"], row["version"], self.clock())).rowcount
                 if not changed:
                     continue
                 sub = db.execute("SELECT * FROM subscriptions WHERE id=?", (row["id"],)).fetchone()
@@ -198,7 +209,7 @@ class PushStore:
         with self._lock:
             return dict(self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone())
 
-    def record(self, scope, run_id, event_id, status):
+    def record(self, scope, run_id, event_id, status, *, preview=None):
         if status not in LABELS or not isinstance(event_id, str) or not 1 <= len(event_id) <= 512:
             raise ValueError("invalid canonical event")
         # Namespacing means a producer cannot collide with another run's request IDs.
@@ -226,14 +237,14 @@ class PushStore:
             for sub in rows:
                 if (sub["kind"] == "activity" and sub["run_id"] == run_id and changed
                         and sub["expires_at"] > now + 120):
-                    self._enqueue(db, sub, run, scope, event_id)
+                    self._enqueue(db, sub, run, scope, event_id, preview=preview)
                 elif sub["kind"] == "alert":
                     category = _notification_category(status)
                     if (status in ATTENTION or status in TERMINAL) and category in json.loads(sub["categories"]):
-                        self._enqueue(db, sub, run, scope, event_id)
+                        self._enqueue(db, sub, run, scope, event_id, preview=preview)
             return True
 
-    def _enqueue(self, db, sub, run, scope, event_id):
+    def _enqueue(self, db, sub, run, scope, event_id, *, preview=None):
         run = dict(run)
         now = self.clock()
         urgent = run["status"] in ATTENTION or run["status"] in TERMINAL
@@ -253,9 +264,12 @@ class PushStore:
                 due = min(due, prior_due)
             db.execute("""DELETE FROM outbox WHERE subscription_id=? AND run_id=? AND state='pending'""",
                        (sub["id"], run["run_id"]))
-        payload = activity_payload(run, scope, now) if activity else alert_payload(sub, run, scope)
+        payload = activity_payload(run, scope, now) if activity else alert_payload(sub, run, scope, preview=preview)
         if not activity:
             payload["event_id"] = hashlib.sha256(event_id.encode()).hexdigest()
+            # Optional display text must never make an otherwise valid alert too large.
+            if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 4000:
+                payload["aps"]["alert"] = generic_alert(run["status"])
         expires = min(sub["expires_at"], now + (3600 if urgent else 120))
         category = _notification_category(run["status"])
         db.execute("""INSERT OR IGNORE INTO outbox
@@ -266,7 +280,7 @@ class PushStore:
     def claim(self):
         now = self.clock()
         with self.transaction() as db:
-            row = db.execute("""SELECT o.*, s.token, s.environment, s.kind, s.version AS token_version
+            row = db.execute("""SELECT o.*, s.token, s.environment, s.kind, s.preview_enabled, s.version AS token_version
                 FROM outbox o JOIN subscriptions s ON o.subscription_id=s.id
                 WHERE o.state='pending' AND o.next_attempt<=? AND o.lease_until<=?
                 AND o.expires_at>? AND s.expires_at>?
@@ -279,6 +293,9 @@ class PushStore:
             db.execute("UPDATE outbox SET lease_until=?, attempts=attempts+1 WHERE job_id=?", (now + 30, row["job_id"]))
             job = dict(row)
             job["payload"] = json.loads(job["payload"])
+            # A preference change also governs alerts that were queued earlier.
+            if job["kind"] == "alert" and not job["preview_enabled"]:
+                job["payload"]["aps"]["alert"] = generic_alert(job["payload"]["hermex.status"])
             job["attempts"] += 1
             if job["kind"] == "activity":
                 # Order published states rather than adding future seconds for token events.

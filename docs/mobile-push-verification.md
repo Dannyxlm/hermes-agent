@@ -53,3 +53,11 @@ ownership assertions remain intact.
 Pending parent work: WebUI event adapters, app integration, CE review, immutable
 backend activation, APNs credentials/capabilities, TestFlight builds, and physical
 notification-tap/background-activity verification. None is claimed by this receipt.
+
+## Reply previews — 2026-09-13
+
+Authenticated per-device preview preferences now project a canonical Bot/Chats title
+and completed assistant excerpt into the existing alert. Generic defaults, pending
+alert opt-out, Unicode bounds, additive SQLite migration, detached native delivery,
+and unchanged canonical destinations passed 72 focused and adjacent tests through
+`scripts/run_tests.sh`. No live APNs send is implied by this test receipt.

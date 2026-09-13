@@ -110,3 +110,17 @@ def test_refresh_needs_auth_but_no_attached_runtime(push_service, peer):
     assert not server._sessions
     assert rpc("mobile.push.unregister", **refresh)["result"]["removed"] == 1
     assert rpc("mobile.push.refresh", **refresh)["result"]["updated"] == 0
+
+
+def test_native_completion_preview_uses_final_text_only_when_opted_in(push_service, peer):
+    peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
+    opened = open_bot()
+    assert "result" in rpc("mobile.push.register", **registration(opened), preview_enabled=True)
+    sid = opened["session_id"]
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete", "text": "**Bot reply** is ready", "reasoning": "hidden"})
+    push_service.drain_once()
+    alert = push_service.sender.jobs[0]["payload"]["aps"]["alert"]
+    assert alert["body"] == "Bot reply is ready"
+    assert alert["title"]
+    assert "hidden" not in json.dumps(alert)
