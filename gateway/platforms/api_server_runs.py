@@ -166,6 +166,19 @@ def _make_run_event_callback(self, run_id: str, loop: "asyncio.AbstractEventLoop
         fields = _FIXED_EVENT_FIELDS.get(event_type)
         if fields is not None:
             _push(_run_event(run_id, event_type, **fields(tool_name, preview, kwargs)))
+            if event_type == "tool.completed" and tool_name in {"todo", "todo_list"} and not kwargs.get("is_error"):
+                # Publish only the completed tool's authoritative task snapshot,
+                # retaining full nested steps and empty-list clears.
+                try:
+                    result = kwargs.get("result")
+                    state = json.loads(result) if isinstance(result, str) else result
+                    if isinstance(state, dict) and isinstance(state.get("todos"), list):
+                        snapshot = {key: state[key] for key in ("todos", "revision", "summary") if key in state}
+                        safe = json.loads(redact_sensitive_text(json.dumps(snapshot), force=True))
+                        self._set_run_status(run_id, self._run_statuses.get(run_id, {}).get("status", "running"), todo_state=safe)
+                        _push(_run_event(run_id, "todo.updated", **safe))
+                except (TypeError, ValueError):
+                    logger.debug("Ignoring malformed task snapshot")
         elif event_type in {"subagent.start", "subagent.complete"}:
             event = _run_event(run_id, event_type)
             if preview is not None:

@@ -351,3 +351,15 @@ def test_blocked_mobile_read_keeps_control_frames_and_transport_context(mobile_h
     assert requests and all(transport is peer for transport in requests)
     response = next(frame for frame in peer.frames if frame.get("id") == "blocked-read")
     assert "result" in response, response
+
+
+def test_snapshot_returns_full_current_plan_and_empty_clear(mobile_home, peer):
+    opened = open_bot()
+    session = server._sessions[opened["session_id"]]
+    steps = [{"id": "parent", "content": "Build", "status": "in_progress"},
+             {"id": "child", "parent": "parent", "content": "Check", "status": "completed"}]
+    session["todo_state"] = {"todos": steps, "revision": 2}
+    result = rpc("mobile.snapshot", **scope(opened), limit=1)["result"]
+    assert result["todo_state"] == {"todos": steps, "revision": 2}
+    session["todo_state"] = {"todos": [], "revision": 3}
+    assert rpc("mobile.snapshot", **scope(opened))["result"]["todo_state"] == {"todos": [], "revision": 3}

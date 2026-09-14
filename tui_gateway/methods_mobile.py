@@ -238,12 +238,12 @@ def _mobile_snapshot(params):
     pending_clarify = _pending_clarify_request_payload(sid)
     if pending_clarify is not None and session.get("_compute_host_pending_clarify"):
         pending_clarify.update(mobile_supported=False, owning_client="desktop")
-    return {"profile": profile, "canonical_root_id": root["id"], "session_id": sid,
+    return _attach_todo_state({"profile": profile, "canonical_root_id": root["id"], "session_id": sid,
             "stored_session_id": tip["id"], "history": history, "running": running,
             "status": _session_live_status(sid, session), "inflight": inflight, "queued": queued,
             "pending_approvals": _mobile_approvals(session),
             "pending_clarify": pending_clarify,
-            "notification_run": _mobile_notification_run(profile, root["id"])}
+            "notification_run": _mobile_notification_run(profile, root["id"])}, session)
 
 
 @_mobile_handler("mobile.open")
