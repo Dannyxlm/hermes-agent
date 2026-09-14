@@ -137,10 +137,7 @@ test('fallback install stamps use an unpinned branch ref', () => {
 test('install repository provenance is validated and namespaces non-official cache entries', () => {
   assert.equal(installRepositoryForStamp({ repository: CLOUDSEED_REPOSITORY }), CLOUDSEED_REPOSITORY)
   assert.equal(installRepositoryForStamp({ repository: '../evil' }), 'NousResearch/hermes-agent')
-  assert.equal(
-    repositoryCacheKey(CLOUDSEED_REPOSITORY, 'fallback-main'),
-    'Dannyxlm_hermes-agent-fallback-main'
-  )
+  assert.equal(repositoryCacheKey(CLOUDSEED_REPOSITORY, 'fallback-main'), 'Dannyxlm_hermes-agent-fallback-main')
   assert.equal(repositoryCacheKey('NousResearch/hermes-agent', 'fallback-main'), 'fallback-main')
 })
 

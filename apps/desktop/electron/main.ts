@@ -396,6 +396,7 @@ import {
   windowOpacityFor,
   windowOpacityOptions
 } from './translucency'
+import { branchTipApiUrl, cacheIsFresh, compareApiUrl, githubRepoSlug, parseCompare } from './update-api-check'
 import {
   inspectOfficialUpstream,
   OFFICIAL_UPSTREAM_BRANCH,
@@ -407,7 +408,6 @@ import {
   resolveManagedPublicationBranch,
   resolveManagedPublicationSafety
 } from './update-count'
-import { branchTipApiUrl, cacheIsFresh, compareApiUrl, githubRepoSlug, parseCompare } from './update-api-check'
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import { terminateTimedOutProcess } from './update-process-timeout'
@@ -3464,6 +3464,7 @@ async function checkUpdates({ force = false }: { force?: boolean } = {}) {
   // Our separate official comparison is an explicit read-only action. Passive
   // publication checks use upstream's API cache and never fetch Git history.
   const cachedTracking = readUpdateCheckCache()?.status?.upstreamTracking
+
   const upstreamTracking = force
     ? await checkOfficialUpstream(updateRoot)
     : cachedTracking?.installedSha === INSTALL_STAMP?.commit
@@ -3483,12 +3484,14 @@ async function checkUpdates({ force = false }: { force?: boolean } = {}) {
 
   if (IS_PACKAGED) {
     const installedIdentity = resolveInstalledIdentity({ packaged: true, installStamp: INSTALL_STAMP })
+
     const installedPublication = {
       identityDirty: installedIdentity.dirty,
       installedBranch: installedIdentity.branch,
       installedRepository: installedIdentity.repository,
       installedSha: installedIdentity.sha
     }
+
     const mutationTarget = await checkMutationTarget(updateRoot)
     const mutationSafety = resolveManagedPublicationSafety(true, installedPublication, mutationTarget)
 
