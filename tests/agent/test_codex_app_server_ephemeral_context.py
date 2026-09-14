@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from agent.transports.codex_app_server_session import CodexAppServerSession, TurnResult
-from tests.run_agent.test_codex_app_server_integration import _make_codex_agent
+from tests.agent.test_codex_app_server_integration import _make_codex_agent
 
 
 def _turn(final_text: str = "done") -> TurnResult:
