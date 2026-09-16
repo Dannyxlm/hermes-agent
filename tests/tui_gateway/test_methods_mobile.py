@@ -26,6 +26,8 @@ class MobilePeer:
 
 @pytest.fixture
 def mobile_home(tmp_path, monkeypatch):
+    from tui_gateway import server_requests
+    server_requests.reset_for_tests()
     home = tmp_path / ".hermes"
     (home / "profiles" / "ops").mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(home))
@@ -201,7 +203,9 @@ def test_mobile_submit_always_queues_at_real_busy_dispatch(mobile_home, peer, mo
     session["running"] = True
     monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *a: None)
     monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", lambda: {})
-    response = rpc("mobile.submit", **scope(opened), text="next request", queued=False)
+    # Queue policy is server-owned; strict wire validation rejects a client override.
+    assert "error" in rpc("mobile.submit", **scope(opened), text="next request", queued=False)
+    response = rpc("mobile.submit", **scope(opened), text="next request")
     assert response["result"]["status"] == "queued"
     assert response["result"]["accepted"] is True
     assert session["queued_prompt"]["text"] == "next request"
@@ -241,18 +245,58 @@ def test_pending_redaction_and_offered_choices(mobile_home, peer, monkeypatch):
 def test_exact_clarify_owner_type_and_duplicate(mobile_home, peer, monkeypatch):
     opened = open_bot()
     sid = opened["session_id"]
-    own, foreign, secret = (threading.Event() for _ in range(3))
-    monkeypatch.setattr(server, "_pending", {"own": (sid, own), "foreign": ("another-runtime", foreign), "secret": (sid, secret)})
-    monkeypatch.setattr(server, "_pending_prompt_payloads", {"own": ("clarify.request", {}),
-        "foreign": ("clarify.request", {}), "secret": ("secret.request", {})})
-    monkeypatch.setattr(server, "_answers", {})
-    for request_id in ("foreign", "secret"):
-        assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request_id, answer="answer")
-    assert rpc("mobile.clarify.respond", **scope(opened), request_id="own", answer="answer")["result"]["status"] == "ok"
-    assert server._answers["own"] == "answer"
-    assert not foreign.is_set() and not secret.is_set()
-    assert rpc("mobile.clarify.respond", **scope(opened), request_id="own", answer="changed")["result"]["status"] == "expired"
-    assert server._answers["own"] == "answer"
+    from tui_gateway import server_requests as requests
+    own = requests.ServerRequest(sid, "clarify", {"question": "Color?"})
+    foreign = requests.ServerRequest("another-runtime", "clarify", {"question": "Color?"})
+    secret = requests.ServerRequest(sid, "secret", {"env_var": "TEST", "prompt": "Secret"})
+    for request in (own, foreign, secret):
+        requests._register(request)
+    for request in (foreign, secret):
+        assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, answer="answer")
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, answer="answer")["result"]["status"] == "ok"
+    assert own.result == {"answer": "answer"}
+    assert not foreign.event.is_set() and not secret.event.is_set()
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, answer="changed")["result"]["status"] == "expired"
+    assert own.result == {"answer": "answer"}
+
+
+def test_clarify_batch_snapshot_locks_and_cancellation(mobile_home, peer):
+    from tui_gateway import server_requests as requests
+    opened = open_bot()
+    sid = opened["session_id"]
+    request = requests.ServerRequest(sid, "clarify", {"questions": [
+        {"qid": "a", "question": "A?"}, {"qid": "b", "question": "B?"}]}, qids=["a", "b"])
+    requests._register(request)
+    snapshot = rpc("mobile.snapshot", **scope(opened))["result"]
+    assert snapshot["pending_clarify"]["request_id"] == request.id
+    assert snapshot["open_requests"][0]["id"] == request.id
+    assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, answer="no batch id")
+    assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="bad", answer="x")
+    result = rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="a", answer="one")
+    assert result["result"]["remaining"] == ["b"]
+    assert rpc("mobile.snapshot", **scope(opened))["result"]["pending_clarify"]["answers"] == {"a": "one"}
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="b", answer="two")["result"]["remaining"] == []
+    assert request.result == {"answers": {"a": "one", "b": "two"}}
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="a", answer="changed")["result"]["status"] == "expired"
+    second = requests.ServerRequest(sid, "clarify", {"question": "Cancel?"})
+    requests._register(second)
+    requests.cancel(sid)
+    assert rpc("mobile.snapshot", **scope(opened))["result"]["pending_clarify"] is None
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=second.id, answer="late")["result"]["status"] == "expired"
+
+
+@pytest.mark.parametrize("choice", ["once", "deny"])
+def test_mobile_canonical_approval_fenced_and_once(mobile_home, peer, choice):
+    from tui_gateway import server_requests as requests
+    opened = open_bot()
+    outcomes = []
+    request = requests.ServerRequest(opened["session_id"], "approval",
+        {"request_id": "queue-entry", "choices": ["once", "deny"]}, on_result=outcomes.append)
+    requests._register(request)
+    assert "error" in rpc("mobile.approval.respond", **scope(opened), request_id=request.id, choice="always")
+    assert rpc("mobile.approval.respond", **scope(opened), request_id=request.id, choice=choice)["result"]["resolved"] == 1
+    assert rpc("mobile.approval.respond", **scope(opened), request_id=request.id, choice=choice)["result"]["resolved"] == 0
+    assert outcomes == [{"choice": choice}]
 
 
 def test_legacy_title_resume_unchanged(mobile_home, peer):
@@ -317,6 +361,8 @@ def test_blocked_mobile_read_keeps_control_frames_and_transport_context(mobile_h
 
     opened = open_bot()
     params = {"limit": 1} if method == "mobile.bots" else scope(opened)
+    if method == "mobile.open":
+        params.pop("session_id")
     entered, release, control_seen, response_seen = (threading.Event() for _ in range(4))
     requests = []
     read_db = server._mobile_read_db
@@ -363,3 +409,33 @@ def test_snapshot_returns_full_current_plan_and_empty_clear(mobile_home, peer):
     assert result["todo_state"] == {"todos": steps, "revision": 2}
     session["todo_state"] = {"todos": [], "revision": 3}
     assert rpc("mobile.snapshot", **scope(opened))["result"]["todo_state"] == {"todos": [], "revision": 3}
+
+
+@pytest.mark.parametrize("canonical_id", [False, True])
+def test_canonical_approval_routes_to_real_gateway_queue(mobile_home, peer, monkeypatch, canonical_id):
+    from tui_gateway import server_requests as requests
+    import tools.approval as approvals
+    opened = open_bot()
+    entry = SimpleNamespace(data={"request_id": "approval-real", "command": "echo safe", "choices": ["once", "deny"]},
+                            event=threading.Event(), result=None)
+    monkeypatch.setattr(approvals, "_gateway_queues", {"ops-root": [entry]})
+    server._emit_approval_request(opened["session_id"], entry.data)
+    request = requests.open_requests(opened["session_id"])[0]
+    pending = rpc("mobile.snapshot", **scope(opened))["result"]["pending_approvals"]
+    assert [item["request_id"] for item in pending] == ["approval-real"]
+    rid = request["id"] if canonical_id else "approval-real"
+    assert rpc("mobile.approval.respond", **scope(opened), request_id=rid, choice="deny")["result"] == {"resolved": 1}
+    assert entry.event.is_set() and entry.result == "deny"
+    # The queue owner withdraws its server request when its wait ends.
+    entry.settle("resolved")
+    assert requests.open_requests(opened["session_id"]) == []
+
+
+def test_compute_host_clarification_stays_on_owning_client(mobile_home, peer):
+    opened = open_bot()
+    sid = opened["session_id"]
+    server._sessions[sid]["_compute_host_open_request"] = {
+        "id": "srq-child", "method": "clarify", "params": {"session_id": sid, "question": "Remote?"}}
+    snapshot = rpc("mobile.snapshot", **scope(opened))["result"]
+    assert snapshot["pending_clarify"]["mobile_supported"] is False
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id="srq-child", answer="x")["error"]["code"] == 4404

@@ -1555,6 +1555,276 @@
       }
     },
     {
+      "name": "mobile.activity.refresh",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileActivityRefreshParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileRefreshResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.activity.register",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileActivityRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileRegistrationResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.activity.unregister",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileActivityUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.approval.respond",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileApprovalParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileApprovalResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.bots",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileBotsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileBotsResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.capabilities",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileEmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileCapabilitiesResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.clarify.respond",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileClarifyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileClarifyResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.open",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileOpenParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSnapshotResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.push.refresh",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobilePushRefreshParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileRefreshResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.push.register",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobilePushRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileRegistrationResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.push.status",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileEmptyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobilePushStatusResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.push.unregister",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.snapshot",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileSnapshotParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSnapshotResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.stop",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileScopeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionInterruptResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.submit",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileSubmitParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSubmitResult"
+        }
+      }
+    },
+    {
       "name": "model.disconnect",
       "summary": "Remove every credential (env keys and OAuth state) for a provider.",
       "params": [
@@ -15164,6 +15434,1282 @@
           "text"
         ],
         "title": "MoaReferencePayload",
+        "type": "object"
+      },
+      "MobileActivityRefreshParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "activity_token": {
+            "title": "Activity Token",
+            "type": "string"
+          },
+          "activity_id": {
+            "title": "Activity Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "environment",
+          "activity_token",
+          "activity_id",
+          "run_id"
+        ],
+        "title": "MobileActivityRefreshParams",
+        "type": "object"
+      },
+      "MobileActivityRegisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "activity_token": {
+            "title": "Activity Token",
+            "type": "string"
+          },
+          "activity_id": {
+            "title": "Activity Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id",
+          "installation_id",
+          "connection_id",
+          "environment",
+          "activity_token",
+          "activity_id",
+          "run_id"
+        ],
+        "title": "MobileActivityRegisterParams",
+        "type": "object"
+      },
+      "MobileActivityUnregisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "subscription_id"
+        ],
+        "title": "MobileActivityUnregisterParams",
+        "type": "object"
+      },
+      "MobileApprovalParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "choice": {
+            "title": "Choice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id",
+          "request_id",
+          "choice"
+        ],
+        "title": "MobileApprovalParams",
+        "type": "object"
+      },
+      "MobileApprovalResult": {
+        "additionalProperties": false,
+        "properties": {
+          "resolved": {
+            "title": "Resolved",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "resolved"
+        ],
+        "title": "MobileApprovalResult",
+        "type": "object"
+      },
+      "MobileBot": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "ui_meta": {
+            "$ref": "#/components/schemas/MobileBotUIMeta"
+          },
+          "canonical_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobileCanonicalSession"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "has_avatar": {
+            "title": "Has Avatar",
+            "type": "boolean"
+          },
+          "working": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "const": "canonical_unavailable",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "profile",
+          "display_name",
+          "description",
+          "title",
+          "ui_meta",
+          "canonical_session",
+          "has_avatar",
+          "working"
+        ],
+        "title": "MobileBot",
+        "type": "object"
+      },
+      "MobileBotMeta": {
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Color"
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Shape"
+          },
+          "emoji": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Emoji"
+          }
+        },
+        "title": "MobileBotMeta",
+        "type": "object"
+      },
+      "MobileBotUIMeta": {
+        "additionalProperties": false,
+        "properties": {
+          "hermes-bots": {
+            "$ref": "#/components/schemas/MobileBotMeta"
+          }
+        },
+        "required": [
+          "hermes-bots"
+        ],
+        "title": "MobileBotUIMeta",
+        "type": "object"
+      },
+      "MobileBotsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "title": "MobileBotsParams",
+        "type": "object"
+      },
+      "MobileBotsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "bots": {
+            "items": {
+              "$ref": "#/components/schemas/MobileBot"
+            },
+            "title": "Bots",
+            "type": "array"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          }
+        },
+        "required": [
+          "bots",
+          "next_offset"
+        ],
+        "title": "MobileBotsResult",
+        "type": "object"
+      },
+      "MobileCanonicalSession": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "resolved_id": {
+            "title": "Resolved Id",
+            "type": "string"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview"
+          },
+          "last_active": {
+            "title": "Last Active",
+            "type": "number"
+          },
+          "message_count": {
+            "title": "Message Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "resolved_id",
+          "last_active",
+          "message_count"
+        ],
+        "title": "MobileCanonicalSession",
+        "type": "object"
+      },
+      "MobileCapabilitiesResult": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "max_history_limit": {
+            "title": "Max History Limit",
+            "type": "integer"
+          },
+          "max_roster_limit": {
+            "title": "Max Roster Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "methods",
+          "features",
+          "max_history_limit",
+          "max_roster_limit"
+        ],
+        "title": "MobileCapabilitiesResult",
+        "type": "object"
+      },
+      "MobileClarifyParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "question_id": {
+            "default": "",
+            "title": "Question Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id",
+          "request_id",
+          "answer"
+        ],
+        "title": "MobileClarifyParams",
+        "type": "object"
+      },
+      "MobileClarifyResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Remaining"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "MobileClarifyResult",
+        "type": "object"
+      },
+      "MobileEmptyParams": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "MobileEmptyParams",
+        "type": "object"
+      },
+      "MobileHistory": {
+        "additionalProperties": false,
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "before_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Row Id"
+          }
+        },
+        "required": [
+          "messages",
+          "has_more",
+          "before_row_id"
+        ],
+        "title": "MobileHistory",
+        "type": "object"
+      },
+      "MobileNotificationRun": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "started_at",
+          "updated_at"
+        ],
+        "title": "MobileNotificationRun",
+        "type": "object"
+      },
+      "MobileOpenParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "before_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before Row Id"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id"
+        ],
+        "title": "MobileOpenParams",
+        "type": "object"
+      },
+      "MobilePendingClarify": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question"
+          },
+          "choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Choices"
+          },
+          "multi_select": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Multi Select"
+          },
+          "questions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ClarifyQuestion"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answers"
+          },
+          "mobile_supported": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mobile Supported"
+          },
+          "owning_client": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Owning Client"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "MobilePendingClarify",
+        "type": "object"
+      },
+      "MobilePushRefreshParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "device_token": {
+            "title": "Device Token",
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "enum": [
+                "attention",
+                "completion"
+              ],
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "preview_enabled": {
+            "default": false,
+            "title": "Preview Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "environment",
+          "device_token"
+        ],
+        "title": "MobilePushRefreshParams",
+        "type": "object"
+      },
+      "MobilePushRegisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "device_token": {
+            "title": "Device Token",
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "enum": [
+                "attention",
+                "completion"
+              ],
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "preview_enabled": {
+            "default": false,
+            "title": "Preview Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id",
+          "installation_id",
+          "connection_id",
+          "environment",
+          "device_token"
+        ],
+        "title": "MobilePushRegisterParams",
+        "type": "object"
+      },
+      "MobilePushStatusResult": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "protocol_version": {
+            "title": "Protocol Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "protocol_version"
+        ],
+        "title": "MobilePushStatusResult",
+        "type": "object"
+      },
+      "MobileRefreshResult": {
+        "additionalProperties": false,
+        "properties": {
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          },
+          "subscriptions": {
+            "items": {
+              "$ref": "#/components/schemas/MobileRegistrationResult"
+            },
+            "title": "Subscriptions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "updated",
+          "subscriptions"
+        ],
+        "title": "MobileRefreshResult",
+        "type": "object"
+      },
+      "MobileRegistrationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "expires_at"
+        ],
+        "title": "MobileRegistrationResult",
+        "type": "object"
+      },
+      "MobileScopeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id"
+        ],
+        "title": "MobileScopeParams",
+        "type": "object"
+      },
+      "MobileSnapshotParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "before_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before Row Id"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id"
+        ],
+        "title": "MobileSnapshotParams",
+        "type": "object"
+      },
+      "MobileSnapshotResult": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "history": {
+            "$ref": "#/components/schemas/MobileHistory"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "inflight": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InflightTurn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queued": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueuedPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/PendingApproval"
+            },
+            "title": "Pending Approvals",
+            "type": "array"
+          },
+          "pending_clarify": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobilePendingClarify"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notification_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobileNotificationRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "open_requests": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/OpenRequestEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Open Requests"
+          },
+          "todo_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TodoState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id",
+          "stored_session_id",
+          "history",
+          "running",
+          "status",
+          "inflight",
+          "queued",
+          "pending_approvals",
+          "pending_clarify",
+          "notification_run"
+        ],
+        "title": "MobileSnapshotResult",
+        "type": "object"
+      },
+      "MobileSubmitParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "canonical_root_id",
+          "session_id",
+          "text"
+        ],
+        "title": "MobileSubmitParams",
+        "type": "object"
+      },
+      "MobileSubmitResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptSubmitStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "voice_stopped": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Voice Stopped"
+          },
+          "survivor_user_row_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Survivor User Row Ids"
+          },
+          "survivor_row_id_map": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Survivor Row Id Map"
+          },
+          "turn_isolation": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Turn Isolation"
+          },
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "MobileSubmitResult",
+        "type": "object"
+      },
+      "MobileUnregisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subscription Id"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id"
+        ],
+        "title": "MobileUnregisterParams",
+        "type": "object"
+      },
+      "MobileUnregisterResult": {
+        "additionalProperties": false,
+        "properties": {
+          "removed": {
+            "title": "Removed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "title": "MobileUnregisterResult",
         "type": "object"
       },
       "ModelCapabilities": {

@@ -56,7 +56,9 @@ def build_lab(home: Path, port: int):
     from hermes_cli.dashboard_auth import clear_providers, register_provider
     from tests.hermes_cli.conftest_dashboard_auth import StubAuthProvider
     from tests.tui_gateway.test_hosted_room_service import _FakeRPC
-    from tui_gateway import server, methods_groups
+    from tui_gateway import server, methods_groups, git_probe
+    # Fixture transcripts have no real workspace; do not run host git probes.
+    git_probe.run_git = lambda *args: ""
     from tui_gateway.hosted_room_service import HostedRoomService
 
     for profile, name, color in BOTS:
@@ -108,7 +110,7 @@ def build_lab(home: Path, port: int):
             on_terminal({"status": "settled", "text": f"[Fixture] {profile} received the room message."})
             return {"accepted": True}
 
-    service = HostedRoomService(server, db_path=home / "state.db")
+    service = HostedRoomService(server, db_path=home / "shared-state.db")
     service.rpc = FixtureRPC()
     service.runtime.rpc = service.rpc
     methods_groups._service = service
@@ -145,6 +147,27 @@ def build_lab(home: Path, port: int):
     # The Request type must resolve outside build_lab with postponed annotations.
     bootstrap.__annotations__["request"] = Request
     lab.add_api_route("/fixture/native-credentials", bootstrap, methods=["GET"])
+    # Synthetic prompt producer only. The request registry and mobile response dispatcher are real.
+    prompt_tasks = set()
+    async def clarification(request: Request):
+        if request.client is None or request.client.host != "127.0.0.1":
+            raise HTTPException(403, "loopback fixture only")
+        body = await request.json()
+        sid = body.get("session_id")
+        session = server._sessions.get(sid)
+        if not session or not str(session.get("session_key", "")).startswith("fixture-"):
+            raise HTTPException(400, "fixture session required")
+        from tui_gateway import server_requests
+        params = {"questions": [{"qid": "color", "question": "[Fixture] Which color?", "choices": ["Blue", "Green"]},
+                                {"qid": "size", "question": "[Fixture] Which size?", "choices": ["Small", "Large"]}]}
+        task = asyncio.create_task(asyncio.to_thread(server_requests.send, "clarify", sid,
+            params, timeout=60, qids=["color", "size"]))
+        prompt_tasks.add(task)
+        task.add_done_callback(prompt_tasks.discard)
+        return {"fixture": True, "accepted": True}
+    clarification.__annotations__["request"] = Request
+    lab.add_api_route("/fixture/clarification", clarification, methods=["POST"])
+
     lab.mount("/", web_server.app)
     return lab, service
 
@@ -200,7 +223,9 @@ async def verify_protocol(base_url: str) -> dict:
             assert len(bots) == 5 and all(row["canonical_session"] for row in bots)
             bot = bots[0]
             identity = {"profile": bot["profile"], "canonical_root_id": bot["canonical_session"]["id"]}
-            one = (await rpc(first, "mobile.open", **identity))["result"]
+            opened = await rpc(first, "mobile.open", **identity)
+            assert "result" in opened, opened.get("error")
+            one = opened["result"]
             two = (await rpc(second, "mobile.open", **identity))["result"]
             assert one["session_id"] == two["session_id"]
             foreign = await rpc(second, "mobile.open", profile="vox", canonical_root_id=identity["canonical_root_id"])
@@ -216,7 +241,33 @@ async def verify_protocol(base_url: str) -> dict:
                 await asyncio.sleep(0.05)
             else:
                 raise AssertionError("second peer did not read accepted canonical message")
-            state = (await rpc(first, "groups.state", room_id=ROOM_ID))["result"]
+            # Disconnect a viewer, then deliver a real upstream request to the remaining peer.
+            # A fresh authenticated socket has no runtime authority until it reattaches.
+            await first.close()
+            first = await connect()
+            stack.push_async_callback(first.close)
+            assert (await http.post("/fixture/clarification", json={"session_id": one["session_id"]})).status_code == 200
+            while True:
+                frame = json.loads(await asyncio.wait_for(second.recv(), 10))
+                if frame.get("method") == "clarify":
+                    break
+            request_id = frame["id"]
+            native_scope = {**identity, "session_id": one["session_id"]}
+            denied = await rpc(first, "mobile.clarify.respond", **native_scope, request_id=request_id, answer="Blue", question_id="color")
+            assert "error" in denied, "detached peer must not answer"
+            locked = await rpc(second, "mobile.clarify.respond", **native_scope, request_id=request_id, answer="Blue", question_id="color")
+            assert locked["result"]["remaining"] == ["size"]
+            restored = (await rpc(first, "mobile.open", **identity))["result"]
+            assert restored["pending_clarify"]["answers"] == {"color": "Blue"}
+            assert restored["open_requests"][0]["id"] == request_id
+            accepted = await rpc(first, "mobile.clarify.respond", **native_scope, request_id=request_id, answer="Small", question_id="size")
+            assert accepted["result"]["remaining"] == []
+            duplicate = await rpc(first, "mobile.clarify.respond", **native_scope, request_id=request_id, answer="Large", question_id="size")
+            assert duplicate["result"]["status"] == "expired"
+            assert (await rpc(first, "mobile.snapshot", **native_scope))["result"]["pending_clarify"] is None
+            state_reply = await rpc(first, "groups.state", room_id=ROOM_ID)
+            assert "result" in state_reply, state_reply.get("error")
+            state = state_reply["result"]
             assert state["driver_status"]["running"] is True
             event_id = "fixture-proof-" + secrets.token_hex(8)
             payload = {"text": "[Fixture] @ava two-peer room proof", "thread_id": event_id}
@@ -229,7 +280,7 @@ async def verify_protocol(base_url: str) -> dict:
             log = (await rpc(second, "groups.log", room_id=ROOM_ID))["result"]
             events = log["events"]
             assert sum(item["event_id"] == event_one["event"]["event_id"] for item in events) == 1
-            return {"fixture": True, "native_pkce": "passed", "native_code_replay": "rejected",
+            return {"fixture": True, "native_pkce": "passed", "request_protocol": "delivered; scoped reply; batch lock; reconnect; duplicate rejected", "native_code_replay": "rejected",
                 "unauthenticated_ticket": "rejected", "ws_ticket_transport": "Sec-WebSocket-Protocol",
                 "canonical_two_peers": "same runtime and persisted transcript", "foreign_root": "rejected",
                 "bots": len(bots), "room_id": ROOM_ID, "hosted_driver": "running with fake executor",

@@ -530,3 +530,23 @@ def test_widget_push_coalesces_persisted_changes_and_rotation_preserves_other_al
     now[0] += 31 * 86400
     with pytest.raises(PermissionError):
         service.store.widget_snapshot(cap)
+
+
+@pytest.mark.parametrize("old_delivery", ["queued", "retry", "inflight"])
+def test_cancelled_attention_does_not_deliver_stale_alert(delivery, old_delivery):
+    service, sender, now, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "question", "waitingForClarification")
+    old = None if old_delivery == "queued" else service.store.claim()
+    if old_delivery == "retry":
+        service.store.finish(old, DeliveryResult("retry"))
+    service.record(scope, run["run_id"], "request.cancel", "thinking")
+    if old_delivery == "inflight":
+        service.store.finish(old, DeliveryResult("retry"))
+    now[0] += 120
+    assert service.drain_once() == 0
+    assert sender.jobs == []
+    service.record(scope, run["run_id"], "new-question", "waitingForApproval")
+    assert service.drain_once() == 1
+    assert sender.jobs[0]["payload"]["hermex.status"] == "waitingForApproval"

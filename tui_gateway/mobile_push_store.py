@@ -244,6 +244,13 @@ class PushStore(WidgetPushStore):
                 return False
             # Repeated deltas keep the original generic status; no disk job per token.
             changed = status != run["status"]
+            if run["status"] in ATTENTION and status not in ATTENTION:
+                # A withdrawn/answered question must not later send an alert from a retry.
+                # Already accepted Apple deliveries cannot be recalled; drop pending retries only.
+                db.execute("""DELETE FROM outbox WHERE run_id=? AND state='pending'
+                    AND category='attention' AND subscription_id IN
+                    (SELECT id FROM subscriptions WHERE scope=? AND kind='alert')""",
+                    (run_id, scope.key))
             widget_changed = changed and (run["status"] == "starting" or run["status"] in ATTENTION
                                           or status in ATTENTION or status in TERMINAL)
             updated = max(now, run["updated_at"]) if changed else run["updated_at"]

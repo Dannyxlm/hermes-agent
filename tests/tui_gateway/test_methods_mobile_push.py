@@ -108,7 +108,7 @@ def test_refresh_needs_auth_but_no_attached_runtime(push_service, peer):
     peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
     assert rpc("mobile.push.refresh", **refresh)["result"]["updated"] == 1
     assert not server._sessions
-    assert rpc("mobile.push.unregister", **refresh)["result"]["removed"] == 1
+    assert rpc("mobile.push.unregister", **{key: refresh[key] for key in ("installation_id", "connection_id")})["result"]["removed"] == 1
     assert rpc("mobile.push.refresh", **refresh)["result"]["updated"] == 0
 
 
@@ -124,3 +124,31 @@ def test_native_completion_preview_uses_final_text_only_when_opted_in(push_servi
     assert alert["body"] == "Bot reply is ready"
     assert alert["title"]
     assert "hidden" not in json.dumps(alert)
+
+
+@pytest.mark.parametrize("method,status", [("approval", "waitingForApproval"), ("clarify", "waitingForClarification")])
+def test_server_requests_project_attention_and_cancel_from_canonical_registry(push_service, peer, method, status):
+    from tui_gateway import server_requests
+    from tui_gateway.mobile_push import Scope
+    peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
+    opened = open_bot()
+    assert "result" in rpc("mobile.push.register", **registration(opened))
+    sid = opened["session_id"]
+    server._emit("message.start", sid)
+    push_scope = Scope("native", opened["profile"], opened["canonical_root_id"])
+    # Use the real registry/write sink, including detached delivery and idempotent replay.
+    server._sessions[sid]["transport"] = server._detached_ws_transport
+    params = ({"request_id": "fixture-approval", "command": "fixture", "choices": ["once", "deny"]} if method == "approval"
+              else {"question": "Fixture choice?", "choices": ["Blue", "Green"]})
+    try:
+        server_requests.send_async(method, sid, params, lambda result: None)
+        frame = server_requests.open_requests(sid)[0]
+        assert push_service.current_run(push_scope)["status"] == status
+        server.write_json({"jsonrpc": "2.0", **frame})
+        push_service.drain_once()
+        assert len(push_service.sender.jobs) == 1
+        assert server_requests.cancel(sid, "timeout") == 1
+        assert push_service.current_run(push_scope)["status"] == "thinking"
+        assert server_requests.open_requests(sid) == []
+    finally:
+        server_requests.cancel(sid)

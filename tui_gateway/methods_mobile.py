@@ -218,13 +218,20 @@ def _mobile_history_page(db, tip_id, chain, params):
             "before_row_id": selected[0]["logical_id"] if has_more and selected else None}
 
 
-def _mobile_approvals(session):
+def _mobile_approvals(session, requests=()):
     from tools.approval import list_gateway_approvals
     out = []
     for pending in list_gateway_approvals(session["session_key"]):
         safe = _approval_request_payload(pending)
         safe["choices"] = [choice for choice in safe.get("choices", []) if choice in ("once", "deny")]
         out.append(safe)
+    queue_ids = {pending.get("request_id") for pending in out}
+    for request in requests:
+        if request["method"] == "approval" and request["params"].get("request_id") not in queue_ids:
+            safe = _approval_request_payload(request["params"])
+            safe["request_id"] = request["id"]
+            safe["choices"] = [choice for choice in safe.get("choices", []) if choice in ("once", "deny")]
+            out.append(safe)
     return out
 
 
@@ -235,14 +242,16 @@ def _mobile_snapshot(params):
     with session["history_lock"]:
         inflight, queued = _inflight_snapshot(session), _queued_prompt_snapshot(session)
         running = bool(session.get("running"))
-    pending_clarify = _pending_clarify_request_payload(sid)
-    if pending_clarify is not None and session.get("_compute_host_pending_clarify"):
+    requests = _open_requests(sid)
+    pending_clarify = next(({**request["params"], "request_id": request["id"]}
+                            for request in requests if request["method"] == "clarify"), None)
+    if pending_clarify is not None and session.get("_compute_host_open_request", {}).get("id") == pending_clarify["request_id"]:
         pending_clarify.update(mobile_supported=False, owning_client="desktop")
     return _attach_todo_state({"profile": profile, "canonical_root_id": root["id"], "session_id": sid,
             "stored_session_id": tip["id"], "history": history, "running": running,
             "status": _session_live_status(sid, session), "inflight": inflight, "queued": queued,
-            "pending_approvals": _mobile_approvals(session),
-            "pending_clarify": pending_clarify,
+            "pending_approvals": _mobile_approvals(session, requests),
+            "pending_clarify": pending_clarify, "open_requests": requests,
             "notification_run": _mobile_notification_run(profile, root["id"])}, session)
 
 
@@ -300,9 +309,18 @@ def _(rid, params):
     request_id = _mobile_string(params, "request_id")
     choice = _mobile_string(params, "choice")
     with _session_resume_lock:
-        _profile, _home, _sid, session, *_rest = _mobile_scope(params)
+        _profile, _home, sid, session, *_rest = _mobile_scope(params)
         with session["history_lock"]:
             _mobile_scope(params)
+            if request_id.startswith("srq-"):
+                from tui_gateway import server_requests
+                try:
+                    resolved = server_requests.resolve_response(
+                        {"id": request_id, "result": {"choice": choice}},
+                        expected_sid=sid, expected_method="approval", mobile=True)
+                except (PermissionError, ValueError) as exc:
+                    return _err(rid, 4403, str(exc))
+                return _ok(rid, {"resolved": int(resolved)})
             return _mobile_approval_respond(rid, session, request_id, choice)
 
 
@@ -314,7 +332,7 @@ def _(rid, params):
     with _session_resume_lock:
         _profile, _home, sid, session, *_rest = _mobile_scope(params)
         # Compute-host prompts need a separately fenced worker response; do not search other runtimes.
-        if session.get("_compute_host_pending_clarify"):
+        if session.get("_compute_host_open_request", {}).get("id") == request_id:
             return _err(rid, 4404, "this clarification must be answered on its owning client")
         with session["history_lock"]:
             _mobile_scope(params)

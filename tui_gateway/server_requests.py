@@ -114,6 +114,8 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
         timed_out = not req.event.wait(timeout)
     finally:
         with _lock:
+            # A reply can win the registry lock just as Event.wait reaches its deadline.
+            timed_out = timed_out and not req.event.is_set()
             _open.pop(req.id, None)
     if timed_out:
         _emit_cancel(req, "timeout")
@@ -139,7 +141,8 @@ def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | 
     return settle
 
 
-def resolve_response(frame: dict) -> bool:
+def resolve_response(frame: dict, *, expected_sid: str | None = None,
+                     expected_method: str | None = None, mobile: bool = False) -> bool:
     """Route one client response frame to its open request. False when nothing is waiting for that id
     (already timed out / cancelled, or owned by another process — see the compute-host bridge)."""
     rid = frame.get("id")
@@ -149,45 +152,64 @@ def resolve_response(frame: dict) -> bool:
         req = _open.get(rid)
         if req is None:
             return False
-        if req.on_result is not None:
-            _open.pop(rid, None)
-    if "error" in frame:
-        logger.debug("server request %s (%s) answered with error: %s", rid, req.method, frame.get("error"))
-        req.result, req.answered = None, False
-    else:
-        result = frame.get("result")
-        req.result = result if isinstance(result, dict) else {}
-        if req.qids and "answers" in req.result:
-            # Batch clarify: answers locked early via clarify.lock belong to the final set even when
-            # the closing response only carries the tail the user answered last.
-            answers = req.result.get("answers")
-            merged = dict(req.locked)
-            if isinstance(answers, dict):
-                merged.update(answers)
-            req.result = {**req.result, "answers": merged}
-        req.answered = True
+        _check_owner(req, expected_sid, expected_method)
+        if mobile:
+            result = frame.get("result", {})
+            if req.method == "approval":
+                choice = result.get("choice")
+                if choice not in ("once", "deny") or choice not in req.params.get("choices", []):
+                    raise PermissionError("approval choice is not offered to mobile")
+            if req.qids is not None:
+                raise ValueError("question_id required for batch clarification")
+        # Claim under the registry lock for synchronous waits too: two racing replies,
+        # timeout, and cancellation must never mutate an already accepted answer.
+        _open.pop(rid, None)
+        if "error" in frame:
+            logger.debug("server request %s (%s) answered with error: %s", rid, req.method, frame.get("error"))
+            req.result, req.answered = None, False
+        else:
+            result = frame.get("result")
+            req.result = result if isinstance(result, dict) else {}
+            if req.qids and "answers" in req.result:
+                # Batch clarify: answers locked early via clarify.lock belong to the final set even when
+                # the closing response only carries the tail the user answered last.
+                answers = req.result.get("answers")
+                merged = dict(req.locked)
+                if isinstance(answers, dict):
+                    merged.update(answers)
+                req.result = {**req.result, "answers": merged}
+            req.answered = True
+        req.event.set()
     if req.on_result is not None:
         req.on_result(req.result)
-    req.event.set()
     return True
 
 
-def lock_answer(request_id: str, question_id: str, answer: str) -> list[str] | None:
+def _check_owner(req: ServerRequest, sid: str | None, method: str | None) -> None:
+    if (sid is not None and req.sid != sid) or (method is not None and req.method != method):
+        raise PermissionError("pending request does not belong to this runtime")
+
+
+def lock_answer(request_id: str, question_id: str, answer: str, *,
+                expected_sid: str | None = None) -> list[str] | None:
     """Lock one batch-clarify answer (update-in-place). Returns the question ids still unanswered;
     the last lock resolves the request with the full ``{"answers"}`` set. ``None`` when no open
     batch has that id (expired or foreign); ``ValueError`` for an unknown question id."""
     with _lock:
         req = _open.get(request_id)
-        if req is None or req.qids is None:
+        if req is None:
             return None
+        _check_owner(req, expected_sid, "clarify")
+        if req.qids is None:
+            raise ValueError("question_id is only valid for batch clarification")
         if question_id not in req.qids:
             raise ValueError(f"unknown question_id {question_id!r}")
         req.locked[question_id] = answer
         remaining = [qid for qid in req.qids if qid not in req.locked]
         if not remaining:
+            _open.pop(request_id, None)
             req.result, req.answered = {"answers": dict(req.locked)}, True
-    if not remaining:
-        req.event.set()
+            req.event.set()
     return remaining
 
 
@@ -199,11 +221,11 @@ def cancel(sid: str | None = None, reason: str = "interrupted") -> int:
         targets = [req for req in _open.values() if sid is None or req.sid == sid]
         for req in targets:
             _open.pop(req.id, None)
+            req.result, req.answered = None, False
+            req.event.set()
     for req in targets:
-        req.result, req.answered = None, False
         if req.on_result is not None:
             req.on_result(None)
-        req.event.set()
         _emit_cancel(req, reason)
     return len(targets)
 
@@ -212,7 +234,7 @@ def open_requests(sid: str) -> list[dict]:
     """Unanswered requests for *sid*, oldest first."""
     with _lock:
         reqs = sorted((req for req in _open.values() if req.sid == sid), key=lambda r: r.created_at)
-    return [req.snapshot() for req in reqs]
+        return [req.snapshot() for req in reqs]
 
 
 def pending_kind(sid: str) -> str:

@@ -3126,31 +3126,29 @@ def _start_usage_ticker(sid: str, agent, interval: float = 1.0) -> tuple[threadi
 
 
 def _respond(rid, params, key, *, allow_expired=False, expected_sid=None, expected_event=None):
-    r = params.get("request_id", "")
+    from tui_gateway import server_requests
+    request_id = params.get("request_id", "")
     question_id = str(params.get("question_id") or "")
-    with _prompt_lock:
-        entry = _pending.get(r)
-        if not entry:
-            return _ok(rid, {"status": "expired"}) if allow_expired and r else _err(rid, 4009, f"no pending {key} request")
-        owner_sid, ev = entry
-        if expected_sid is not None:
-            event, _payload = _pending_prompt_payloads.get(r, (None, {}))
-            if owner_sid != expected_sid or event != expected_event:
-                return _err(rid, 4403, "pending request does not belong to this runtime")
-            if ev.is_set():
-                return _ok(rid, {"status": "expired"})
-        batch = _batch_clarify.get(r)
-        if batch is not None and question_id:
-            # Per-question lock; update-in-place so an answer stays editable until every qid is locked (Confirm).
-            if question_id not in batch["qids"]:
-                return _err(rid, 4002, f"unknown question_id {question_id!r}")
-            batch["answers"][question_id] = params.get(key, "")
-            if not (remaining := [qid for qid in batch["qids"] if qid not in batch["answers"]]):
-                ev.set()
-            return _ok(rid, {"status": "ok", "remaining": remaining})
-        _answers[r] = params.get(key, "")
-        ev.set()
-    return _ok(rid, {"status": "ok"})
+    expected_method = expected_event.removesuffix(".request") if expected_event else None
+    try:
+        if question_id:
+            remaining = server_requests.lock_answer(request_id, question_id, params.get(key, ""),
+                                                     expected_sid=expected_sid)
+            if remaining is not None:
+                return _ok(rid, {"status": "ok", "remaining": remaining})
+            accepted = False
+        else:
+            accepted = server_requests.resolve_response(
+                {"id": request_id, "result": {key: params.get(key, "")}},
+                expected_sid=expected_sid, expected_method=expected_method, mobile=True)
+    except PermissionError as exc:
+        return _err(rid, 4403, str(exc))
+    except ValueError as exc:
+        return _err(rid, 4002, str(exc))
+    if accepted:
+        return _ok(rid, {"status": "ok"})
+    return (_ok(rid, {"status": "expired"}) if allow_expired and request_id
+            else _err(rid, 4009, f"no pending {key} request"))
 
 
 # ── Methods: tools & system ──────────────────────────────────────────

@@ -169,10 +169,20 @@ def _mobile_notification_run(profile, root_id):
 def _mobile_push_capture(obj):
     """Persist before transport write, including detached sessions. Never await Apple here."""
     params = obj.get("params")
-    if obj.get("method") != "event" or not isinstance(params, dict):
+    if not isinstance(params, dict):
         return
-    event = params.get("type")
-    if event not in _MOBILE_PUSH_STATUSES and event not in {"message.start", "message.complete"}:
+    method = obj.get("method")
+    if method == "event":
+        event = params.get("type")
+        payload = params.get("payload") or {}
+    elif method in {"approval", "clarify"} and isinstance(obj.get("id"), str):
+        event = f"{method}.request"
+        payload = {**params, "request_id": obj["id"]}
+    else:
+        return
+    if not isinstance(payload, dict):
+        return
+    if event not in _MOBILE_PUSH_STATUSES and event not in {"message.start", "message.complete", "request.cancel"}:
         return
     try:
         service = _mobile_push_service()
@@ -190,14 +200,19 @@ def _mobile_push_capture(obj):
         run_id = session.get("_mobile_push_run_id")
         if not run_id:
             return  # do not bind an old run to an unrelated runtime after restart
-        payload = params.get("payload") or {}
-        if event == "message.complete":
+        if event == "request.cancel":
+            if payload.get("method") not in {"approval", "clarify"}:
+                return
+            from tui_gateway.server_requests import pending_kind
+            kind = pending_kind(params.get("session_id"))
+            status = {"approval": "waitingForApproval", "clarify": "waitingForClarification"}.get(kind, "thinking")
+        elif event == "message.complete":
             status = {"error": "failed", "interrupted": "cancelled"}.get(payload.get("status"), "complete")
         else:
             status = _MOBILE_PUSH_STATUSES[event]
         if status == session.get("_mobile_push_status") and event not in {"approval.request", "clarify.request"}:
             return
-        request_id = payload.get("request_id") if isinstance(payload, dict) else None
+        request_id = payload.get("id") if event == "request.cancel" else payload.get("request_id")
         event_id = f"{event}:{request_id}" if request_id else f"{event}:{params.get('seq', 0)}"
         from tui_gateway.mobile_push_payloads import AlertPreview
         title = session.get("_mobile_push_title") or push_scope.profile
