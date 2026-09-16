@@ -37,7 +37,7 @@ def mobile_home(tmp_path, monkeypatch):
             db._conn.execute("UPDATE sessions SET title = 'Bot Chat'")
     launch_db = SessionDB(db_path=home / "state.db")
     monkeypatch.setattr(server, "_get_db", lambda: launch_db)
-    def hydration(sid, key, db, *, close_db=False, tip_only=False):
+    def hydration(sid, key, db, *, close_db=False, tip_only=False, model_history_only=False):
         if close_db:
             db.close()
         server._sessions[sid]["resume_hydrating"] = False
