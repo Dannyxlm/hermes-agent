@@ -9,6 +9,7 @@ TS-only PR that edits them still runs this test.
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -31,6 +32,28 @@ def test_generated_files_are_current(gen):
     stale = [path.relative_to(REPO) for path, text in gen.render_all().items()
              if (path.read_text(encoding="utf-8") if path.exists() else None) != text]
     assert not stale, f"stale generated contract files {stale}: run scripts/gen_gateway_contracts.py"
+
+
+def test_profile_mirrored_auth_is_boolean_only(gen):
+    """Profile mirroring reports the boolean runtime result, never the retired shared union."""
+    from tui_gateway.contracts.profiles_vault_complete_foreign_subagents import ProfileMirrored
+
+    auth = ProfileMirrored.model_json_schema()["properties"]["auth"]
+    assert auth["type"] == "boolean"
+    assert "anyOf" not in auth
+    assert auth.get("const") != "shared"
+
+    rendered = gen.render_all()
+    ts = rendered[REPO / "apps/shared/src/gateway-contract.generated.ts"]
+    ts_block = ts.split("export interface ProfileMirrored", 1)[1].split("}", 1)[0]
+    assert re.search(r"\bauth\?: boolean\b", ts_block)
+    assert "'shared'" not in ts_block
+
+    openrpc = json.loads(rendered[REPO / "apps/shared/src/gateway-contract.openrpc.json"])
+    openrpc_auth = openrpc["components"]["schemas"]["ProfileMirrored"]["properties"]["auth"]
+    assert openrpc_auth["type"] == "boolean"
+    assert "anyOf" not in openrpc_auth
+    assert openrpc_auth.get("const") != "shared"
 
 
 # The emitter inventory the old gateway-events.json scan used, kept as the completeness oracle:
