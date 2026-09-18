@@ -1,18 +1,16 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20260916-2246c24",
+  "release_id": "hermes-20260918-91279b0",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
-  "official_revision": "2246c245f51e03eb6a151d19119009156e84659a",
+  "official_revision": "91279b01f32d1a206af8403cd7f8e02b5067b9a6",
   "official_release_tag": "v2026.9.7",
   "integration_repository": "Dannyxlm/hermes-agent",
   "integration_branch": "main",
   "desktop_install_mode": "managed-publication",
   "desktop_self_update_allowed": true,
   "overlay_transition": {
-    "added": [
-      "private-mobile-delivery"
-    ],
+    "added": [],
     "retained": [
       "codex-ephemeral-context",
       "managed-upstream-status",
@@ -23,7 +21,8 @@
       "telegram-approval-cockpit",
       "runtime-review-hardening",
       "hermex-shared-state",
-      "hermex-hosted-rooms"
+      "hermex-hosted-rooms",
+      "private-mobile-delivery"
     ],
     "retired": []
   }

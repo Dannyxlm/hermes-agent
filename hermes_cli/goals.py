@@ -886,6 +886,7 @@ def judge_goal(
 
     try:
         from agent.auxiliary_client import call_llm
+        from agent.auxiliary_unavailable import AuxiliaryClientUnavailable
     except Exception as exc:
         logger.debug("goal judge: auxiliary client import failed: %s", exc)
         return "continue", "auxiliary client unavailable", False, None, False
@@ -913,6 +914,11 @@ def judge_goal(
 
     try:
         raw = _call_goal_judge_llm(call_llm, JUDGE_SYSTEM_PROMPT, prompt, timeout)
+    except AuxiliaryClientUnavailable as exc:
+        # No client at all (e.g. a dead Nous refresh token): name the cause so the user is sent to
+        # re-authenticate, not to context-length / model debugging (#42177). Still fails open.
+        logger.info("goal judge: auxiliary client unavailable (%s) — falling through to continue", exc)
+        return "continue", f"goal_judge auxiliary client unavailable: {exc}", False, None, True
     except Exception as exc:
         logger.info("goal judge: API call failed (%s) — falling through to continue", exc)
         return "continue", f"judge error: {type(exc).__name__}", False, None, True
@@ -1557,7 +1563,8 @@ KANBAN_GOAL_CONTINUATION_TEMPLATE = (
     "calling one of them."
 )
 
-# Judge says done but the worker never called kanban_complete/kanban_block: one explicit nudge.
+# Judge says done but the worker never made a terminal board call
+# (kanban_complete/kanban_request_review/kanban_block): one explicit nudge.
 KANBAN_GOAL_FINALIZE_TEMPLATE = (
     "[The work looks complete, but the task is still open]\n"
     "Reason: {reason}\n\n"

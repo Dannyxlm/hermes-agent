@@ -1378,6 +1378,749 @@ export interface PingResult {
 export interface GatewayCapabilitiesResult {
   per_session_exclusive_submit: boolean
 }
+export interface ClientCapabilitiesParams {
+  server_requests?: boolean
+}
+export interface ClientCapabilitiesResult {
+  server_requests: string[]
+}
+/** ``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` / ``session_id`` pick the directory the listing resolves against. */
+export interface CompletePathParams {
+  profile?: string | null
+  word?: string | null
+  cwd?: string | null
+  session_id?: string | null
+}
+export interface CompletionItemsResult {
+  items?: CompletionItem[]
+}
+/** One popover row; ``kind`` rides only on slash completions (command vs skill). */
+export interface CompletionItem {
+  text: string
+  display?: string
+  meta?: string
+  kind?: string | null
+}
+export interface CompleteSlashParams {
+  text?: string | null
+}
+/** ``replace_from`` is the column the accepted item replaces from. */
+export interface CompleteSlashResult {
+  items?: CompletionItem[]
+  replace_from?: number | null
+}
+export interface PasteCollapseParams {
+  text?: string | null
+}
+export interface PasteCollapseResult {
+  placeholder: string
+  path: string
+  lines: number
+}
+export interface ModelSaveKeyParams {
+  slug: string
+  api_key: string
+  session_id?: string | null
+}
+export interface ModelSaveKeyResult {
+  provider: ModelOptionProvider
+}
+export interface ModelDisconnectParams {
+  slug: string
+  session_id?: string | null
+}
+export interface ModelDisconnectResult {
+  slug: string
+  name: string
+  disconnected: boolean
+}
+export interface ProfilesListParams {
+  profile?: string | null
+  include_sessions?: boolean | string | null
+}
+/** ``bot_mode_protocol`` tells clients this backend injects the teammate protocol itself. */
+export interface ProfilesListResult {
+  profiles?: ProfileRow[]
+  bot_mode_protocol?: boolean
+}
+/** One roster row; the session fields are present only with ``include_sessions``. */
+export interface ProfileRow {
+  name: string
+  path: string
+  is_default?: boolean
+  model?: string | null
+  provider?: string | null
+  description?: string
+  display_name?: string
+  skill_count?: number
+  last_session?: ProfileSessionPreview | null
+  worker_session?: ProfileWorkerSession | null
+  canonical_session?: ProfileCanonicalSession | null
+  ui_meta_revisions?: Record<string, number>
+  ui_meta?: Record<string, unknown> | null
+  has_avatar?: boolean
+}
+/** Newest human-facing session of a profile (``_latest_profile_session_rows``). */
+export interface ProfileSessionPreview {
+  id: string
+  title?: string
+  preview?: string
+  started_at?: number
+  last_active?: number
+  message_count?: number
+}
+/** Newest kanban/tool worker row, so rosters can show a profile as working. */
+export interface ProfileWorkerSession {
+  id: string
+  source?: string
+  title?: string
+  last_active?: number
+}
+/** The profile's "Bot Chat" registry row; ``resolved_id`` is the live compression tip. */
+export interface ProfileCanonicalSession {
+  id: string
+  resolved_id: string
+  root_title?: string
+  title?: string
+  preview?: string
+  started_at?: number
+  last_active?: number
+  message_count?: number
+}
+/** ``clone_from`` omitted = fresh profile + bundled skills; ``mirror_credentials`` defaults on so a headless bot has a provider. */
+export interface ProfilesCreateParams {
+  profile?: string | null
+  name: string
+  description?: string | null
+  clone_from?: string | null
+  clone_all?: boolean | string | null
+  clone_channels?: boolean | string | null
+  no_skills?: boolean | string | null
+  no_alias?: boolean | string | null
+  soul?: string | null
+  model?: string | null
+  provider?: string | null
+  share_auth?: boolean | string | null
+  mirror_credentials?: boolean | string | null
+}
+export interface ProfilesCreateResult {
+  ok?: boolean
+  name: string
+  path: string
+  soul_written?: boolean
+  model_set?: boolean
+  mirrored: ProfileMirrored
+}
+/** What was copied from the launch profile. */
+export interface ProfileMirrored {
+  env?: boolean
+  auth?: boolean
+  model_inherited?: boolean
+  voice?: boolean
+}
+export interface ProfileNameParams {
+  profile?: string | null
+  name?: string | null
+}
+/** Editor snapshot; ``toolsets_pinned`` says whether ``tools.enabled_toolsets`` is explicit. */
+export interface ProfilesDescribeResult {
+  name: string
+  description?: string
+  soul?: string
+  model: ProfileModelPin
+  skills?: CapabilityEntry[]
+  toolsets?: ToolsetEntry[]
+  toolsets_pinned?: boolean
+  mcp_servers?: McpServerEntry[]
+}
+export interface ProfileModelPin {
+  provider?: string
+  default?: string
+}
+export interface CapabilityEntry {
+  name: string
+  enabled?: boolean
+}
+export interface ToolsetEntry {
+  name: string
+  enabled?: boolean
+  label?: string
+  description?: string
+  tool_count?: number
+}
+export interface McpServerEntry {
+  name: string
+  enabled?: boolean
+  transport?: string
+}
+/** Sections are independent; ``ui_meta_expected_revisions`` is a per-key compare-and-swap. */
+export interface ProfilesConfigureParams {
+  profile?: string | null
+  name?: string | null
+  ui_meta?: Record<string, unknown> | null
+  ui_meta_expected_revisions?: Record<string, number> | null
+  soul?: string | null
+  description?: string | null
+  model?: string | null
+  provider?: string | null
+  confirm_expensive_model?: boolean | string | null
+  disabled_skills?: string[] | null
+  enabled_toolsets?: string[] | null
+  enabled_mcp_servers?: string[] | null
+}
+/** ``confirm_required`` mirrors ``config.set``: a guarded model pick wrote nothing yet. */
+export interface ProfilesConfigureResult {
+  ok: boolean
+  applied: ProfilesConfigureApplied
+  confirm_required?: boolean | null
+  confirm_message?: string | null
+}
+/** Per-section outcome; only the sections the request carried are present. */
+export interface ProfilesConfigureApplied {
+  ui_meta?: boolean | null
+  ui_meta_revisions?: Record<string, number> | null
+  ui_meta_conflicts?: Record<string, UiMetaConflict> | null
+  soul?: boolean | null
+  description?: boolean | null
+  model?: boolean | null
+  skills?: boolean | null
+  toolsets?: boolean | null
+  mcp_servers?: boolean | null
+}
+export interface UiMetaConflict {
+  expected?: unknown
+  actual?: number
+}
+/** ``data`` is a data URL or bare base64 (PNG/JPEG/WebP, sniffed); ``clear`` deletes instead. */
+export interface ProfilesSetAssetParams {
+  profile?: string | null
+  name?: string | null
+  asset?: string | null
+  data?: string | null
+  clear?: boolean | string | null
+}
+export interface ProfilesSetAssetResult {
+  ok?: boolean
+  asset: string
+  size?: number
+  removed?: number | null
+}
+export interface ProfilesGetAssetParams {
+  profile?: string | null
+  name?: string | null
+  asset?: string | null
+}
+/** Absent is ``found: false``, not an error. */
+export interface ProfilesGetAssetResult {
+  found: boolean
+  mime?: string | null
+  size?: number | null
+  data?: string | null
+}
+export interface ProfilesRememberOnboardingParams {
+  profile?: string | null
+  answers?: OnboardingAnswers | null
+}
+/** ``tui_gateway/onboarding_personalization.py`` — the facts agreed during onboarding. */
+export interface OnboardingAnswers {
+  name?: string | null
+  context?: string | null
+  theme?: string | null
+  accent?: string | null
+  layout?: string | null
+  focus?: string[] | null
+  connectors?: string[] | null
+  [key: string]: unknown
+}
+export interface ProfilesRememberOnboardingResult {
+  saved?: boolean
+  profile?: string
+  target?: string
+}
+export interface VaultListResult {
+  items?: VaultItem[]
+}
+/** Metadata-only view (``VaultItemMeta.to_dict`` + ``backend``); never a secret. */
+export interface VaultItem {
+  id: string
+  kind: string
+  label: string
+  origin?: string | null
+  created_at?: string
+  identifier?: string | null
+  identifier_type?: string | null
+  has_otp?: boolean | null
+  backend: string
+}
+export interface VaultSourcesResult {
+  sources?: VaultSource[]
+}
+export interface VaultSource {
+  name: string
+  display_name: string
+  enabled: boolean
+  needs_unlock: boolean
+  unlocked: boolean
+  installed: boolean
+}
+export interface VaultSourceSetParams {
+  profile?: string | null
+  name?: string | null
+  enabled?: boolean | null
+}
+export interface VaultSourceSetResult {
+  name: string
+  enabled: boolean
+}
+/** The master password is consumed by the manager CLI and never stored or logged. */
+export interface VaultUnlockParams {
+  profile?: string | null
+  name?: string | null
+  password?: string | null
+}
+export interface VaultUnlockResult {
+  name: string
+  unlocked?: boolean
+}
+export interface VaultLockParams {
+  profile?: string | null
+  name?: string | null
+}
+export interface VaultLockResult {
+  locked?: boolean
+}
+/** ``secret`` goes straight into the encrypted store; the result carries only the new id. */
+export interface VaultAddParams {
+  profile?: string | null
+  kind?: VaultKind | null
+  label?: string | null
+  origin?: string | null
+  secret?: Record<string, unknown> | null
+}
+export type VaultKind = 'login' | 'payment' | 'address'
+export interface VaultAddResult {
+  id: string
+}
+export interface VaultRemoveParams {
+  profile?: string | null
+  id?: string | null
+}
+export interface VaultRemoveResult {
+  removed: boolean
+}
+export interface SessionForeignListParams {
+  profile?: string | null
+  source?: ForeignSource | null
+  offset?: number | null
+  limit?: number | null
+}
+export type ForeignSource = 'claude' | 'codex'
+/** ``unreadable`` counts logs on this page that failed to parse. */
+export interface SessionForeignListResult {
+  sessions?: ForeignSessionRow[]
+  next_offset?: number | null
+  host: string
+  unreadable?: number
+}
+/** ``hermes_cli/foreign_sessions_browser.py::list_foreign_sessions`` — ``id`` is an opaque handle, never a path. */
+export interface ForeignSessionRow {
+  id: string
+  source: ForeignSource
+  label: string
+  title?: string
+  cwd?: string | null
+  mtime: number
+  turn_count?: number
+  excerpt?: string
+}
+export interface SessionForeignIdParams {
+  profile?: string | null
+  id?: string | null
+}
+/** Bounded to the last 40 turns / 8000 chars each; ``already_imported`` is the local id. */
+export interface SessionForeignPreviewResult {
+  messages?: ForeignTurn[]
+  total?: number
+  truncated?: boolean
+  already_imported?: string | null
+  cwd?: string | null
+}
+export interface ForeignTurn {
+  role: string
+  content: string
+}
+export interface SessionForeignImportResult {
+  session_id: string
+  already_imported?: boolean
+}
+/** ``delegations`` is reserved for async delegation records and is currently always empty. */
+export interface SubagentListResult {
+  subagents?: SubagentSnapshot[]
+  delegations?: Record<string, unknown>[]
+}
+/** ``methods_subagents._SUBAGENT_SNAPSHOT_FIELDS`` projection of one live child record. */
+export interface SubagentSnapshot {
+  subagent_id: string
+  parent_id?: string | null
+  depth?: number | null
+  goal?: string | null
+  delegation_id?: string | null
+  model?: string | null
+  started_at?: number | null
+  status?: SubagentStatus | null
+  tool_count?: number | null
+  last_tool?: string | null
+  accepting_steer?: boolean | null
+}
+/** Lifecycle of one delegated child (``tools/delegate_tool_child_run.py``); ``failed`` / ``error`` / ``timeout`` / ``interrupted`` / ``completed`` are terminal. */
+export type SubagentStatus = 'queued' | 'running' | 'completed' | 'failed' | 'error' | 'timeout' | 'interrupted'
+export interface SubagentIdParams {
+  session_id: string
+  profile?: string | null
+  subagent_id: string
+}
+export interface SubagentInterruptResult {
+  found: boolean
+  subagent_id: string
+}
+/** ``available`` is false while the child has no live transcript yet (or it was cleaned up). */
+export interface SubagentTailResult {
+  subagent_id: string
+  available?: boolean
+  text?: string
+  truncated?: boolean
+}
+/** ``methods_projects._projects_payload``: every project (archived included) + the active id. */
+export interface ProjectsPayload {
+  projects: ProjectInfo[]
+  active_id?: string | null
+}
+/** ``hermes_cli/projects_db.py::Project.to_dict`` — one stored project with its folders. */
+export interface ProjectInfo {
+  id: string
+  slug: string
+  name: string
+  description?: string | null
+  icon?: string | null
+  color?: string | null
+  board_slug?: string | null
+  primary_path?: string | null
+  archived?: boolean
+  created_at: number
+  folders?: ProjectFolder[]
+}
+/** ``hermes_cli/projects_db.py::ProjectFolder.to_dict``. */
+export interface ProjectFolder {
+  path: string
+  label?: string | null
+  is_primary?: boolean
+  added_at?: number | null
+}
+/** Any method addressed at one stored project (``5062`` when the id resolves to nothing). */
+export interface ProjectIdParams {
+  profile?: string | null
+  id: string
+}
+export interface ProjectResult {
+  project: ProjectInfo
+}
+/** ``use`` also activates the new project. */
+export interface ProjectsCreateParams {
+  profile?: string | null
+  name: string
+  folders?: string[] | null
+  slug?: string | null
+  primary_path?: string | null
+  description?: string | null
+  icon?: string | null
+  color?: string | null
+  board_slug?: string | null
+  use?: boolean
+}
+export interface OptionalProjectResult {
+  project?: ProjectInfo | null
+}
+/** Absent keys are left untouched; ``''`` clears ``color`` / ``icon``. */
+export interface ProjectsUpdateParams {
+  profile?: string | null
+  id: string
+  name?: string | null
+  description?: string | null
+  icon?: string | null
+  color?: string | null
+  board_slug?: string | null
+}
+export interface ProjectsAddFolderParams {
+  profile?: string | null
+  id: string
+  path: string
+  label?: string | null
+  is_primary?: boolean
+}
+export interface ProjectFolderParams {
+  profile?: string | null
+  id: string
+  path: string
+}
+export interface ProjectsArchiveParams {
+  profile?: string | null
+  id: string
+  restore?: boolean
+}
+/** No ``id`` (or null) clears the active project. */
+export interface ProjectsSetActiveParams {
+  profile?: string | null
+  id?: string | null
+}
+export interface ActiveIdResult {
+  active_id?: string | null
+}
+/** Absent ``cwd`` resolves the gateway's default completion cwd. */
+export interface ProjectsForCwdParams {
+  profile?: string | null
+  cwd?: string | null
+}
+export interface ProjectsForCwdResult {
+  project?: ProjectInfo | null
+  cwd: string
+  branch?: string
+}
+/** ``scan`` asks the host to walk the policy roots itself (remote-gateway desktop). */
+export interface ProjectsDiscoverReposParams {
+  profile?: string | null
+  scan?: boolean
+}
+export interface ProjectsDiscoverReposResult {
+  repos: DiscoveredRepo[]
+  discovery_policy?: RepoDiscoveryPolicy | null
+}
+/** ``methods_projects._discover_repos_payload`` row: a git root with session totals. */
+export interface DiscoveredRepo {
+  root: string
+  label?: string
+  sessions?: number
+  last_active?: number
+}
+/** ``methods_projects._repo_discovery_policy`` — the effective ``desktop.repo_scan_*`` config. */
+export interface RepoDiscoveryPolicy {
+  enabled: boolean
+  roots: string[]
+  exclude_paths: string[]
+}
+/** Repos as ``{root, label}`` objects or bare root strings; entries without a root are skipped. */
+export interface ProjectsRecordReposParams {
+  profile?: string | null
+  repos?: (RecordRepoItem | string)[] | null
+  discovery_policy?: RepoDiscoveryPolicyParams | null
+}
+export interface RecordRepoItem {
+  root: string
+  label?: string | null
+}
+/** The policy the desktop scanned under (short or ``repo_scan_*`` long keys both accepted). */
+export interface RepoDiscoveryPolicyParams {
+  enabled?: boolean | null
+  roots?: string[] | null
+  exclude_paths?: string[] | null
+  repo_scan_enabled?: boolean | null
+  repo_scan_roots?: string[] | null
+  repo_scan_exclude_paths?: string[] | null
+}
+export interface ProjectsRecordReposResult {
+  repos: DiscoveredRepo[]
+  discovery_policy?: RepoDiscoveryPolicy | null
+  accepted: boolean
+}
+export interface ProjectsTreeParams {
+  profile?: string | null
+  preview_limit?: number | null
+  session_limit?: number | null
+}
+export interface ProjectsTreeResult {
+  projects: ProjectTreeNode[]
+  active_id?: string | null
+  scoped_session_ids?: string[]
+}
+/** ``project_tree._project_node`` — explicit, auto (git root) or the synthetic Home bucket. */
+export interface ProjectTreeNode {
+  id: string
+  label: string
+  path?: string | null
+  color?: string | null
+  icon?: string | null
+  isAuto?: boolean
+  isNoProject?: boolean
+  sessionCount?: number
+  lastActive?: number
+  totalTokens?: number
+  totalCostUsd?: number
+  repos?: ProjectTreeRepo[]
+  previewSessions?: ProjectTreeSession[]
+}
+export interface ProjectTreeRepo {
+  id: string
+  label: string
+  path?: string | null
+  groups?: ProjectTreeLane[]
+  sessionCount?: number
+}
+/** One branch / worktree / kanban lane inside a repo; ``sessions`` is empty unless hydrated. */
+export interface ProjectTreeLane {
+  id: string
+  label: string
+  path?: string | null
+  isMain?: boolean
+  isKanban?: boolean
+  sessions?: ProjectTreeSession[]
+}
+/** ``methods_projects._project_tree_row`` + ``project_tree.stamp_profile``: the minimal row the sidebar renders, stamped with the profile it belongs to. */
+export interface ProjectTreeSession {
+  id: string
+  title?: string | null
+  preview?: string | null
+  source?: string | null
+  model?: string | null
+  started_at?: number | null
+  ended_at?: number | null
+  last_active?: number | null
+  message_count?: number
+  tool_call_count?: number
+  input_tokens?: number
+  output_tokens?: number
+  is_active?: boolean
+  cwd?: string | null
+  git_branch?: string | null
+  git_repo_root?: string | null
+  parent_session_id?: string | null
+  pinned?: boolean | null
+  unread?: boolean | null
+  archived?: boolean | null
+  actual_cost_usd?: number | null
+  estimated_cost_usd?: number | null
+  handoff_platform?: string | null
+  handoff_state?: string | null
+  _lineage_root_id?: string | null
+  _lineage_ids?: string[] | null
+  profile?: string | null
+  [key: string]: unknown
+}
+export interface ProjectsProjectSessionsParams {
+  profile?: string | null
+  project_id: string
+  session_limit?: number | null
+}
+export interface ProjectsProjectSessionsResult {
+  project?: ProjectTreeNode | null
+}
+/** ``knownRevision``: the spritesheet revision the caller already holds (send-once bytes). */
+export interface PetInfoParams {
+  profile?: string | null
+  knownRevision?: string | null
+}
+/** ``server._pet_sprite_payload`` behind ``enabled``; every sprite field is absent when the pet display is off, ``spritesheetBase64`` is elided when ``spritesheetUnchanged``. */
+export interface PetInfoResult {
+  enabled: boolean
+  slug?: string | null
+  displayName?: string | null
+  mime?: string | null
+  spritesheetBase64?: string | null
+  spritesheetRevision?: string | null
+  spritesheetUnchanged?: boolean | null
+  frameW?: number | null
+  frameH?: number | null
+  framesPerState?: number | null
+  framesByState?: Record<string, number> | null
+  framesByRow?: Record<string, number> | null
+  loopMs?: number | null
+  scale?: number | null
+  stateRows?: string[] | null
+  [key: string]: unknown
+}
+export interface PetInfoMetaResult {
+  enabled: boolean
+  slug?: string | null
+  displayName?: string | null
+  scale?: number | null
+  spritesheetRevision?: string | null
+}
+/** ``graphics`` opts into the kitty payload when the TTY speaks it; ``cols`` overrides the width. */
+export interface PetCellsParams {
+  profile?: string | null
+  state?: string | null
+  cols?: number | null
+  graphics?: boolean
+}
+/** Unicode: ``frames`` is frame → row → cell ``[tr,tg,tb,ta, br,bg,bb,ba]``; kitty (``graphics`` set): ``frames`` are transmit escapes and ``placeholder`` the text grid. */
+export interface PetCellsResult {
+  enabled: boolean
+  slug?: string | null
+  displayName?: string | null
+  state?: string | null
+  cols?: number | null
+  frameMs?: number | null
+  frames?: number[][][][] | string[] | null
+  scale?: number | null
+  graphics?: string | null
+  imageId?: number | null
+  color?: string | null
+  rows?: number | null
+  placeholder?: string[] | null
+}
+export interface PetGalleryParams {
+  profile?: string | null
+  localOnly?: boolean
+}
+export interface PetGalleryResult {
+  enabled: boolean
+  active?: string
+  pets?: PetGalleryEntry[]
+}
+export interface PetGalleryEntry {
+  slug: string
+  displayName: string
+  installed: boolean
+  spritesheetUrl?: string
+  curated?: boolean | null
+  generated?: boolean
+}
+export interface PetSlugParams {
+  profile?: string | null
+  slug: string
+}
+export interface PetSlugResult {
+  ok: boolean
+  slug: string
+  displayName?: string | null
+}
+export interface PetRenameParams {
+  profile?: string | null
+  slug: string
+  name: string
+}
+export interface PetExportResult {
+  ok: boolean
+  filename: string
+  zipBase64: string
+}
+/** ``url``: spritesheet source for a not-yet-installed pet. */
+export interface PetThumbParams {
+  profile?: string | null
+  slug: string
+  url?: string | null
+}
+export interface PetThumbResult {
+  ok: boolean
+  slug: string
+  dataUri?: string | null
+}
+export interface PetScaleParams {
+  profile?: string | null
+  scale?: unknown
+}
+export interface PetScaleResult {
+  ok: boolean
+  scale: number
+}
 /** ``text`` is normally a string; the relay / hosted paths may hand a structured (parts list) payload, and the busy path renders it. Truncation (rewind / edit / regenerate) needs explicit consent: ``confirm_truncate`` plus one durable target (``truncate_before_row_id`` preferred, ``truncate_before_message_id``, or the legacy ``truncate_before_user_ordinal``). */
 export interface PromptSubmitParams {
   session_id: string
@@ -1786,6 +2529,8 @@ export interface InflightTurn {
   assistant?: string
   streaming?: boolean
   user?: string
+  display_kind?: string | null
+  display_metadata?: Record<string, unknown> | null
   corrections?: string[] | null
   correction_offsets?: number[] | null
   error?: string | null
@@ -3886,6 +4631,7 @@ export interface AgentPluginRow {
   catalog_tier?: string | null
   installed_sha?: string | null
   catalog_sha?: string | null
+  catalog_version?: string | null
   update_available?: boolean | null
   pinned_sha?: string | null
 }
@@ -4412,6 +5158,8 @@ export interface RpcMethods {
   'clarify.lock': { params: ClarifyLockParams; result: ClarifyLockResult }
   /** Run ``hermes <argv>`` non-interactively and capture its output; ``blocked`` explains a refusal. */
   'cli.exec': { params: CliExecParams; result: CliExecResult }
+  /** What the calling client handles, sent once per connection (after gateway.ready); returns the server→client request methods this backend may send. */
+  'client.capabilities': { params: ClientCapabilitiesParams; result: ClientCapabilitiesResult }
   /** Save the host clipboard image into the session and queue it for the next turn. */
   'clipboard.paste': { params: ClipboardPasteParams; result: AttachedImageResult }
   /** Run a quick/plugin/bundle/skill/built-in slash command and answer a structured directive. */
@@ -4844,6 +5592,7 @@ export const RPC_METHODS = [
   'browser.manage',
   'clarify.lock',
   'cli.exec',
+  'client.capabilities',
   'clipboard.paste',
   'command.dispatch',
   'command.resolve',

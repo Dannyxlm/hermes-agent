@@ -29,7 +29,7 @@ import path from 'node:path'
 // `<script type="module" src>` plus `<link rel="modulepreload" href>`.
 const TAG_WITH_URL = /<(?:script|link)\b[^>]*\b(?:src|href)=["']([^"']+)["'][^>]*>/gi
 const MODULE_TAG = /\btype=["']module["']|\brel=["']modulepreload["']/i
-const RENDERER_MANIFEST = 'manifest.json'
+const RENDERER_MANIFESTS = ['renderer-manifest.json', 'manifest.json'] as const
 
 interface RendererManifestChunk {
   file?: unknown
@@ -181,6 +181,61 @@ export interface RendererBundleDeps {
   existsSync?: (file: string) => boolean
 }
 
+/** Vite's build-time graph avoids opening megabytes of lazy chunks at startup.
+ * Only trust a manifest paired with this index's entry and preload generation.
+ * Old builds, malformed manifests and interrupted replacements retain the
+ * existing JS graph walk below; a manifest is never an existence-only bypass.
+ */
+function manifestAssetRefs(
+  indexPath: string,
+  bootRefs: string[],
+  readFileSync: NonNullable<RendererBundleDeps['readFileSync']>
+): string[] | null {
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(path.dirname(indexPath), 'renderer-manifest.json'), 'utf8'))
+
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {return null}
+
+    const entry = manifest['index.html']
+    const normalize = (ref: string) => ref.replace(/^\.?\//, '')
+
+    if (!entry?.isEntry || !bootRefs.map(normalize).includes(entry.file)) {return null}
+
+    const refs = new Set<string>()
+
+    const localRef = (ref: unknown): ref is string =>
+      typeof ref === 'string' && ref.length > 0 && !/^[a-z]+:|^[/\\]/i.test(ref) && !ref.split(/[/\\]/).includes('..')
+
+    for (const chunk of Object.values(manifest) as Record<string, unknown>[]) {
+      if (!chunk || typeof chunk !== 'object' || !localRef(chunk.file)) {return null}
+
+      refs.add(chunk.file)
+
+      for (const key of ['imports', 'dynamicImports']) {
+        const imports = chunk[key] ?? []
+
+        if (!Array.isArray(imports) || !imports.every(ref => typeof ref === 'string' && Object.hasOwn(manifest, ref))) {
+          return null
+        }
+      }
+
+      for (const key of ['css', 'assets']) {
+        const assets = chunk[key] ?? []
+
+        if (!Array.isArray(assets) || !assets.every(localRef)) {return null}
+
+        for (const ref of assets) {refs.add(ref)}
+      }
+    }
+
+    if (!bootRefs.every(ref => refs.has(normalize(ref)))) {return null}
+
+    return [...refs]
+  } catch {
+    return null
+  }
+}
+
 /**
  * The files in `indexPath`'s active Vite entry graph that do not exist beside
  * it. This includes lazy dynamic chunks and each chunk's CSS/assets from the
@@ -206,14 +261,15 @@ export function missingRendererAssets(indexPath: string, deps: RendererBundleDep
   }
 
   const htmlRefs = parseModuleAssetRefs(html)
+  const manifestRefs = manifestAssetRefs(indexPath, htmlRefs, readFileSync)
+  if (manifestRefs) {
+    return manifestRefs.filter(ref => !existsSync(path.join(dir, ref)))
+  }
+
   let manifestGraph: RendererManifestGraph | null = null
-
   try {
-    const manifest = parseRendererManifest(readFileSync(path.join(dir, RENDERER_MANIFEST), 'utf8'))
-
-    if (manifest) {
-      manifestGraph = rendererManifestGraph(manifest, htmlRefs)
-    }
+    const manifest = parseRendererManifest(readFileSync(path.join(dir, 'manifest.json'), 'utf8'))
+    if (manifest) manifestGraph = rendererManifestGraph(manifest, htmlRefs)
   } catch {
     // Absent/unreadable manifests are expected for older renderer bundles.
   }

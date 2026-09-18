@@ -20,6 +20,12 @@ has to carry "a question still waiting for an answer".
 Batch clarify keeps per-question locks (``clarify.lock`` → :func:`lock_answer`): answers stay
 editable until every question is locked, locked answers survive a timeout, and the last lock
 resolves the request with the full answer set.
+
+Capability: a client says once per connection that it answers server→client requests
+(``client.capabilities {server_requests: true}`` → :func:`advertise`). A WebSocket client that never
+did is a build older than this half of the protocol — it drops the frame silently and the agent
+would wait the full deadline (clarify's 300s) for nothing — so :func:`send` / :func:`send_async`
+return the same ``None`` an error response produces without writing the frame (#112548).
 """
 
 from __future__ import annotations
@@ -73,11 +79,47 @@ _open: dict[str, ServerRequest] = {}
 # fixtures that patch ``sys.modules`` around the server import.
 _write: Callable[[dict], Any] = lambda frame: None  # noqa: E731
 _emit: Callable[[str, str, dict], Any] = lambda event, sid, payload: None  # noqa: E731
+# ``answerable(sid)``: False only when every client attached to the session is a build that never
+# advertised handling server→client requests (session_transports.py::_session_client_answers_requests).
+_answerable: Callable[[str], bool] = lambda sid: True  # noqa: E731
+
+# Client transports that sent ``client.capabilities {server_requests: true}`` (identity set: StdioTransport
+# has __slots__ and cannot be weak-referenced; ws.py forgets a peer on disconnect).
+_answering_clients: set = set()
 
 
-def bind_sinks(write_json: Callable[[dict], Any], emit: Callable[[str, str, dict], Any]) -> None:
-    global _write, _emit
-    _write, _emit = write_json, emit
+def bind_sinks(write_json: Callable[[dict], Any], emit: Callable[[str, str, dict], Any],
+               answerable: Callable[[str], bool]) -> None:
+    global _write, _emit, _answerable
+    _write, _emit, _answerable = write_json, emit, answerable
+
+
+def advertise(transport: Any, server_requests: bool) -> None:
+    """Record whether *transport*'s client answers server→client requests (``client.capabilities``)."""
+    with _lock:
+        if server_requests:
+            _answering_clients.add(transport)
+        else:
+            _answering_clients.discard(transport)
+
+
+def forget(transport: Any) -> None:
+    """Drop a disconnected transport's advertisement."""
+    with _lock:
+        _answering_clients.discard(transport)
+
+
+def answers_requests(transport: Any) -> bool:
+    with _lock:
+        return transport in _answering_clients
+
+
+def _unanswerable(method: str, sid: str) -> bool:
+    if _answerable(sid):
+        return False
+    logger.info("server request %s for %s not sent: the attached client predates server→client requests "
+                "(update the Hermes app)", method, sid)
+    return True
 
 
 def _emit_cancel(req: ServerRequest, reason: str) -> None:
@@ -107,28 +149,43 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
     cancelled, 0 → return immediately, > 0 → bounded wait. A batch (``qids``) that times out
     returns ``{"answers": <locked so far>, "timed_out": True}`` instead of None.
     """
+    if _unanswerable(method, sid):
+        return None
     req = ServerRequest(sid, method, params, qids=qids)
     _register(req)
-    timed_out = False
     try:
-        timed_out = not req.event.wait(timeout)
-    finally:
+        req.event.wait(timeout)
+    except BaseException:
+        # The wait itself died (KeyboardInterrupt, SystemExit, injected error): withdraw the request
+        # or it stays in _open forever — replayed to every reconnecting client and reported by
+        # pending_kind() as a human still being waited on.
         with _lock:
-            # A reply can win the registry lock just as Event.wait reaches its deadline.
-            timed_out = timed_out and not req.event.is_set()
-            _open.pop(req.id, None)
+            still_open = _open.pop(req.id, None) is req
+        if still_open:
+            _emit_cancel(req, "interrupted")
+        raise
+    with _lock:
+        # The verdict is the state committed under the lock, never wait()'s return value: a
+        # response frame can land after the deadline expires and before this removal, and
+        # settlement (resolve_response / lock_answer / cancel) already popped it (#112548).
+        timed_out = _open.pop(req.id, None) is req
+        answered, result, locked = req.answered, req.result, dict(req.locked)
+    if answered:
+        return result
     if timed_out:
         _emit_cancel(req, "timeout")
         if req.qids is not None:
-            return {"answers": dict(req.locked), "timed_out": True}
-        return None
-    return req.result if req.answered else None
+            return {"answers": locked, "timed_out": True}
+    return None
 
 
 def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | None], None]) -> Callable[[str], None]:
     """Send one request whose wait is owned elsewhere (the approval queue's own timeout). ``on_result``
     runs on the dispatching thread when the response lands. Returns ``settle(reason)``: call it when
     the underlying wait ends; if the request is still open it is withdrawn with ``request.cancel``."""
+    if _unanswerable(method, sid):
+        on_result(None)
+        return lambda reason: None
     req = ServerRequest(sid, method, params, on_result=on_result)
     _register(req)
 
@@ -151,6 +208,9 @@ def resolve_response(frame: dict, *, expected_sid: str | None = None,
     with _lock:
         req = _open.get(rid)
         if req is None:
+            # Already settled (timed out, cancelled, answered from another surface) or owned by
+            # another process; say so — a dropped answer used to vanish without a trace.
+            logger.debug("server request %s: response dropped, request no longer open", rid)
             return False
         _check_owner(req, expected_sid, expected_method)
         if mobile:
@@ -161,8 +221,9 @@ def resolve_response(frame: dict, *, expected_sid: str | None = None,
                     raise PermissionError("approval choice is not offered to mobile")
             if req.qids is not None:
                 raise ValueError("question_id required for batch clarification")
-        # Claim under the registry lock for synchronous waits too: two racing replies,
-        # timeout, and cancellation must never mutate an already accepted answer.
+        # Removing the request and committing its outcome are one settlement.
+        # ``cancel()`` also settles under this lock, so the first side to get
+        # here wins instead of a later cancellation overwriting a response.
         _open.pop(rid, None)
         if "error" in frame:
             logger.debug("server request %s (%s) answered with error: %s", rid, req.method, frame.get("error"))
@@ -179,7 +240,7 @@ def resolve_response(frame: dict, *, expected_sid: str | None = None,
                     merged.update(answers)
                 req.result = {**req.result, "answers": merged}
             req.answered = True
-        req.event.set()
+    req.event.set()
     if req.on_result is not None:
         req.on_result(req.result)
     return True
@@ -209,7 +270,8 @@ def lock_answer(request_id: str, question_id: str, answer: str, *,
         if not remaining:
             _open.pop(request_id, None)
             req.result, req.answered = {"answers": dict(req.locked)}, True
-            req.event.set()
+    if not remaining:
+        req.event.set()
     return remaining
 
 
@@ -222,10 +284,10 @@ def cancel(sid: str | None = None, reason: str = "interrupted") -> int:
         for req in targets:
             _open.pop(req.id, None)
             req.result, req.answered = None, False
-            req.event.set()
     for req in targets:
         if req.on_result is not None:
             req.on_result(None)
+        req.event.set()
         _emit_cancel(req, reason)
     return len(targets)
 
@@ -235,6 +297,13 @@ def open_requests(sid: str) -> list[dict]:
     with _lock:
         reqs = sorted((req for req in _open.values() if req.sid == sid), key=lambda r: r.created_at)
         return [req.snapshot() for req in reqs]
+
+
+def open_request_count() -> int:
+    """Unanswered server→client requests across every session: the process is waiting on a
+    human (clarify, approval, sudo, secret, ...) and must not be treated as idle."""
+    with _lock:
+        return len(_open)
 
 
 def pending_kind(sid: str) -> str:
@@ -252,3 +321,4 @@ def is_response_frame(obj: Any) -> bool:
 def reset_for_tests() -> None:
     with _lock:
         _open.clear()
+        _answering_clients.clear()

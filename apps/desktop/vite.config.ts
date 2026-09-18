@@ -129,11 +129,10 @@ export default defineConfig(({ command }) => ({
     postcss: { plugins: [] }
   },
   build: {
-    // Recovery validates the complete entry graph (including lazy chunks)
-    // before choosing between app.asar and app.asar.unpacked generations.
-    // Keep this beside index.html so the asar-aware loader can read it from
-    // either packaged copy; electron-builder already includes all of dist/**.
-    manifest: 'manifest.json',
+    // Validate the packaged generation with metadata checks at launch, without
+    // reading every lazy vendor chunk (and triggering on-access AV scans).
+    // renderer-bundle.ts also accepts the legacy manifest.json for older bundles.
+    manifest: 'renderer-manifest.json',
     // The renderer intentionally ships FEW chunks (not one, not thousands):
     //   · `codeSplitting: false` (the old setup) inlines every `lazy()` /
     //     dynamic import into the entry, so heavyweight lazy-only deps
