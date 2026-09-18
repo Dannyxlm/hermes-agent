@@ -9,6 +9,7 @@ histories on the serving backend; ``subagent.*`` is the session-scoped roster of
 
 from __future__ import annotations
 
+from typing import Literal
 
 from pydantic import Field
 
@@ -193,10 +194,10 @@ class ProfilesCreateParams(ProfileParams):
 
 
 class ProfileMirrored(Result):
-    """What was copied from the launch profile."""
+    """What was copied from the launch profile; auth is \"shared\" under share_auth."""
 
     env: bool = False
-    auth: bool = False
+    auth: bool | Literal["shared"] = False
     model_inherited: bool = False
     voice: bool = False
 
