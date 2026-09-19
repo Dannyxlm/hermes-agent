@@ -439,3 +439,15 @@ def test_compute_host_clarification_stays_on_owning_client(mobile_home, peer):
     snapshot = rpc("mobile.snapshot", **scope(opened))["result"]
     assert snapshot["pending_clarify"]["mobile_supported"] is False
     assert rpc("mobile.clarify.respond", **scope(opened), request_id="srq-child", answer="x")["error"]["code"] == 4404
+
+
+def test_mobile_open_registers_answer_support_only_after_valid_attachment(mobile_home, peer):
+    from tui_gateway import server_requests
+
+    assert not server_requests.answers_requests(peer)
+    assert "error" in rpc("mobile.open", profile="ops", canonical_root_id="foreign")
+    assert not server_requests.answers_requests(peer)
+    open_bot()
+    assert server_requests.answers_requests(peer)
+    server_requests.forget(peer)
+    assert not server_requests.answers_requests(peer)

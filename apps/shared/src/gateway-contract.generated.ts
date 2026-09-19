@@ -1143,9 +1143,23 @@ export interface GroupsStopParams {
   profile?: string | null
   room_id: string
   cancel_id?: string | null
+  expected_task_id?: string | null
+  expected_execution_generation?: number | null
+  expected_cancel_generation?: number | null
+  expected_authority_gateway_id?: string | null
+  expected_authority_epoch?: number | null
 }
 export interface GroupsStopResult {
   cancelled: number
+  stop_requested?: boolean | null
+  task?: StoppedRoomTask | null
+}
+export interface StoppedRoomTask {
+  task_id: string
+  execution_generation: number
+  cancel_generation: number
+  status: string
+  member_id?: string | null
 }
 export interface GroupsApproveParams {
   profile?: string | null
@@ -1394,6 +1408,7 @@ export interface PromptSubmitParams {
   queued?: boolean | null
   surface?: string | null
   voice_context?: string | null
+  title_preview?: string | null
   truncate_before_user_ordinal?: number | null
   truncate_before_row_id?: number | null
   truncate_before_message_id?: string | null
@@ -2466,8 +2481,10 @@ export interface CompletionItem {
   meta?: string
   kind?: string | null
 }
+/** ``session_id`` binds skill completions to that session's profile and workspace (project skills). */
 export interface CompleteSlashParams {
   text?: string | null
+  session_id?: string | null
 }
 /** ``replace_from`` is the column the accepted item replaces from. */
 export interface CompleteSlashResult {
@@ -3021,6 +3038,7 @@ export interface ProjectTreeNode {
   totalCostUsd?: number
   repos?: ProjectTreeRepo[]
   previewSessions?: ProjectTreeSession[]
+  sessionIds?: string[]
 }
 export interface ProjectTreeRepo {
   id: string
@@ -3614,7 +3632,10 @@ export interface SkillInspectInfo {
   skill_md_preview?: string | null
   [key: string]: unknown
 }
-export type SkillsReloadParams = Record<string, never>
+/** ``session_id`` binds the rescan to that session's profile and workspace (project skills). */
+export interface SkillsReloadParams {
+  session_id?: string | null
+}
 export interface SkillsReloadResult {
   output: string
   result: SkillsReloadDiff

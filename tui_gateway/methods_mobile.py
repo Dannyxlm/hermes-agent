@@ -270,7 +270,12 @@ def _(rid, params):
         "close_on_disconnect": False, "source": "desktop"})
     if "error" in response:
         return response
-    return _ok(rid, _mobile_snapshot({**params, "session_id": response["result"]["session_id"]}))
+    snapshot = _mobile_snapshot({**params, "session_id": response["result"]["session_id"]})
+    # Installed native clients answer via scoped mobile RPCs and snapshot replay;
+    # they predate the generic client.capabilities handshake.
+    from tui_gateway import server_requests
+    server_requests.advertise(current_transport(), True)
+    return _ok(rid, snapshot)
 
 
 @_mobile_handler("mobile.snapshot")

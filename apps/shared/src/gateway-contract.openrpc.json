@@ -7885,6 +7885,7 @@
       },
       "CompleteSlashParams": {
         "additionalProperties": false,
+        "description": "``session_id`` binds skill completions to that session's profile and workspace (project skills).",
         "properties": {
           "text": {
             "anyOf": [
@@ -7897,6 +7898,18 @@
             ],
             "default": null,
             "title": "Text"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
           }
         },
         "title": "CompleteSlashParams",
@@ -12509,6 +12522,66 @@
             ],
             "default": null,
             "title": "Cancel Id"
+          },
+          "expected_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Task Id"
+          },
+          "expected_execution_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Execution Generation"
+          },
+          "expected_cancel_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Cancel Generation"
+          },
+          "expected_authority_gateway_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Gateway Id"
+          },
+          "expected_authority_epoch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Epoch"
           }
         },
         "required": [
@@ -12523,6 +12596,29 @@
           "cancelled": {
             "title": "Cancelled",
             "type": "integer"
+          },
+          "stop_requested": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stop Requested"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoppedRoomTask"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -22303,6 +22399,13 @@
             },
             "title": "Previewsessions",
             "type": "array"
+          },
+          "sessionIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sessionids",
+            "type": "array"
           }
         },
         "required": [
@@ -23416,6 +23519,18 @@
             ],
             "default": null,
             "title": "Voice Context"
+          },
+          "title_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title Preview"
           },
           "truncate_before_user_ordinal": {
             "anyOf": [
@@ -29727,7 +29842,21 @@
       },
       "SkillsReloadParams": {
         "additionalProperties": false,
-        "properties": {},
+        "description": "``session_id`` binds the rescan to that session's profile and workspace (project skills).",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          }
+        },
         "title": "SkillsReloadParams",
         "type": "object"
       },
@@ -30301,6 +30430,47 @@
         ],
         "title": "SteerStatus",
         "type": "string"
+      },
+      "StoppedRoomTask": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          },
+          "cancel_generation": {
+            "title": "Cancel Generation",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "member_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Member Id"
+          }
+        },
+        "required": [
+          "task_id",
+          "execution_generation",
+          "cancel_generation",
+          "status"
+        ],
+        "title": "StoppedRoomTask",
+        "type": "object"
       },
       "StreamDeltaPayload": {
         "additionalProperties": false,

@@ -302,10 +302,25 @@ method("groups.disband", params=GroupsDisbandParams, result=GroupsDisbandResult,
 
 class GroupsStopParams(RoomParams):
     cancel_id: str | None = None
+    expected_task_id: str | None = None
+    expected_execution_generation: int | None = None
+    expected_cancel_generation: int | None = None
+    expected_authority_gateway_id: str | None = None
+    expected_authority_epoch: int | None = None
+
+
+class StoppedRoomTask(Result):
+    task_id: str
+    execution_generation: int
+    cancel_generation: int
+    status: str
+    member_id: str | None = None
 
 
 class GroupsStopResult(Result):
     cancelled: int
+    stop_requested: bool | None = None
+    task: StoppedRoomTask | None = None
 
 
 method("groups.stop", params=GroupsStopParams, result=GroupsStopResult,

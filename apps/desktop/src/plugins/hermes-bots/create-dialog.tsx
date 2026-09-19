@@ -67,7 +67,7 @@ import type {
   ProfileConfigureResult,
   ProfileDescribeResponse
 } from './profile-config'
-import { CheckList, credentialsRequiredNames, SkillsView, skillsViewRoutesConnections } from './profile-config'
+import { CapabilitiesView, capabilitiesViewRoutesConnections, CheckList, credentialsRequiredNames } from './profile-config'
 import { deleteBot } from './profile-ops'
 import { botRosterMeta } from './routing'
 import { HubSkillsSection } from './skills-hub'
@@ -197,7 +197,7 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
       : host.request(method, params)
 
   // Set once ensureAgentCreated() materializes the profile for the live
-  // Capabilities tab (SkillsView needs a real backend to point at). State —
+  // Capabilities tab (CapabilitiesView needs a real backend to point at). State —
   // not just createdRef — because the render must flip when it lands.
   const [createdForCaps, setCreatedForCaps] = useState<null | string>(null)
   const [caps, setCaps] = useState<CapabilityCatalog | null>(null)
@@ -738,7 +738,7 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
                   }
                 }}
                 options={
-                  SkillsView && (!remoteTarget || skillsViewRoutesConnections)
+                  CapabilitiesView && (!remoteTarget || capabilitiesViewRoutesConnections)
                     ? [
                         { id: 'general', label: 'General' },
                         { id: 'capabilities', label: 'Capabilities' }
@@ -831,9 +831,9 @@ export function CreateAgentDialog({ open, onClose, roster }: CreateAgentDialogPr
                   <div className="flex justify-center py-4">
                     <GlyphSpinner className="text-(--ui-text-tertiary)" spinner="breathe" />
                   </div>
-                ) : SkillsView ? (
+                ) : CapabilitiesView ? (
                   <ResizableFrame height={440} minHeight={280}>
-                    <SkillsView
+                    <CapabilitiesView
                       embedded
                       fixedProfile={createdForCaps}
                       {...(remoteTarget
@@ -1367,11 +1367,7 @@ export function CreateGroupChatDialog({ open, roster, onClose, onCreated }: Crea
           <Button onClick={onClose} variant="secondary">
             {t.common.cancel}
           </Button>
-          <Button
-            disabled={!canCreate}
-            onClick={create}
-            title={selected.length < 2 ? 'Pick at least 2 bots' : undefined}
-          >{`Create Group${selected.length ? ` (${selected.length})` : ''}`}</Button>
+          <Button disabled={!canCreate} onClick={create}>{`Create Group${selected.length ? ` (${selected.length})` : ''}`}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
