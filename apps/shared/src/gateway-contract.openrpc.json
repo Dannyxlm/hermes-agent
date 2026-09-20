@@ -24820,6 +24820,30 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Display Name"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
           }
         },
         "required": [
@@ -24884,6 +24908,14 @@
               "$ref": "#/components/schemas/PeerRouteStatus"
             },
             "title": "Peer Routes",
+            "type": "array"
+          },
+          "stoppable_tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RoomStoppableTask"
+            },
+            "title": "Stoppable Tasks",
             "type": "array"
           }
         },
@@ -25317,6 +25349,40 @@
           }
         },
         "title": "RoomMemberInput",
+        "type": "object"
+      },
+      "RoomStoppableTask": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          },
+          "cancel_generation": {
+            "title": "Cancel Generation",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "member_id": {
+            "title": "Member Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "execution_generation",
+          "cancel_generation",
+          "status",
+          "member_id"
+        ],
+        "title": "RoomStoppableTask",
         "type": "object"
       },
       "RoomTaskReceipt": {

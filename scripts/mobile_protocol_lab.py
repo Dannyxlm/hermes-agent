@@ -277,7 +277,9 @@ async def verify_protocol(base_url: str) -> dict:
             assert event_two["event"]["idempotent"] is True
             assert event_one["event"]["seq"] == event_two["event"]["seq"]
             assert event_one["event"]["event_id"] == event_two["event"]["event_id"]
-            log = (await rpc(second, "groups.log", room_id=ROOM_ID))["result"]
+            log_reply = await rpc(second, "groups.log", room_id=ROOM_ID)
+            assert "result" in log_reply, log_reply.get("error")
+            log = log_reply["result"]
             events = log["events"]
             assert sum(item["event_id"] == event_one["event"]["event_id"] for item in events) == 1
             return {"fixture": True, "native_pkce": "passed", "request_protocol": "delivered; scoped reply; batch lock; reconnect; duplicate rejected", "native_code_replay": "rejected",

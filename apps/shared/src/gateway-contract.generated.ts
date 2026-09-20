@@ -1042,6 +1042,8 @@ export interface RoomEvent {
 export interface RoomActor {
   kind: string
   id: string
+  display_name?: string | null
+  profile?: string | null
 }
 export interface GroupsCreateParams {
   profile?: string | null
@@ -1079,11 +1081,19 @@ export interface RoomDriverStatus {
   counts: Record<string, number>
   pending_actions: Record<string, unknown>[]
   peer_routes: PeerRouteStatus[]
+  stoppable_tasks?: RoomStoppableTask[]
 }
 export interface PeerRouteStatus {
   room_id: string
   member_id: string
   status: string
+}
+export interface RoomStoppableTask {
+  task_id: string
+  execution_generation: number
+  cancel_generation: number
+  status: string
+  member_id: string
 }
 export interface GroupsSendParams {
   profile?: string | null

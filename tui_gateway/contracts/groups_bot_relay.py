@@ -31,6 +31,8 @@ class RoomMember(OpenModel):
 class RoomActor(Result):
     kind: str
     id: str
+    display_name: str | None = None
+    profile: str | None = None
 
 
 class RoomEvent(Result):
@@ -204,6 +206,14 @@ class PeerRouteStatus(Result):
     status: str
 
 
+class RoomStoppableTask(Result):
+    task_id: str
+    execution_generation: int
+    cancel_generation: int
+    status: str
+    member_id: str
+
+
 class RoomDriverStatus(Result):
     """``HostedRoomService.status(room_id)``; ``pending_actions`` rows are ``{kind: retry, task_id}``
     or the driver's approval action (``kind: approval`` + run/session/approval context)."""
@@ -214,6 +224,7 @@ class RoomDriverStatus(Result):
     counts: dict[str, int]
     pending_actions: list[dict[str, JsonValue]]
     peer_routes: list[PeerRouteStatus]
+    stoppable_tasks: list[RoomStoppableTask] = []
 
 
 class GroupsStateResult(Result):
