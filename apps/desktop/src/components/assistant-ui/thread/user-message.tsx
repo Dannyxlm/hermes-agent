@@ -75,13 +75,15 @@ export const USER_ACTION_ICON_SIZE = '0.6875rem'
 export const StopGlyph = <StopFilled aria-hidden className="size-3.5 -translate-y-px" />
 
 // Agent-to-agent deliveries ("Message from 🤖 <sender>: …", the Bot Mode /
-// multi-profile convention; optional "(@<handle>)" carries the claimed
-// profile name for attribution parsing; legacy "[Message from agent
-// '<sender>'] …" too). They arrive on the user role because the recipient's
-// turn runs on it, but they are NOT the human speaking — render them as a
-// compact attributed timeline notice instead of a user bubble.
+// multi-profile convention; optional "(@<handle>)" carries the claimed sender's
+// profile name for avatar resolution — a relayed sender is re-stamped
+// "(@<handle>@<connection>)" so a reply reaches the right machine (#103731);
+// legacy "[Message from agent '<sender>'] …" too). They arrive on the user
+// role because the recipient's turn runs on it, but they are NOT the human
+// speaking — render them as a compact attributed timeline notice instead of
+// a user bubble.
 export const AGENT_MESSAGE_RE =
-  /^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u
+  /^(?:Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*|\[Message from agent '([^']{1,64})'\]\s*)([\s\S]*)$/u
 
 // sender handle -> avatar data URL. Module-level so a chat full of notices
 // from one bot resolves once. Hits are cached for the window's lifetime;
