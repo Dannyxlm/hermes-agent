@@ -13,7 +13,7 @@ vi.mock('./client', () => ({
   connectionScoped: vi.fn(scope => (typeof scope === 'object' && scope ? { ...scope } : {})),
   ambientOwnerConnectionId: vi.fn(() => undefined),
   getApiRequestConnection: vi.fn(() => 'prometheus'),
-  getApiRequestProfile: vi.fn(() => undefined),
+  getApiRequestProfile: vi.fn(() => null),
   hermesApi: vi.fn(),
   profileScoped: vi.fn(() => ({}))
 }))
@@ -43,6 +43,7 @@ beforeEach(() => {
     }
   })
   vi.mocked(client.getApiRequestConnection).mockReturnValue('prometheus')
+  vi.mocked(client.getApiRequestProfile).mockReturnValue(null)
 })
 
 describe('deleteSession profile scoping', () => {
@@ -142,10 +143,28 @@ describe('setSessionArchived profile scoping', () => {
     })
   })
 
-  it('omits the profile from the body when none is given', async () => {
+  it('falls back to the ACTIVE profile in the body when no owner is given', async () => {
+    // Multiplex-only: the PATCH handler resolves its state.db from
+    // `body.profile` and there is no per-profile backend whose HERMES_HOME
+    // could stand in. An unnamed owner therefore has to mean "the profile I am
+    // looking at" — otherwise the archive lands on the shared backend's own
+    // state.db and silently no-ops.
     hermesApi.mockResolvedValue({ ok: true } as never)
+    vi.mocked(client.getApiRequestProfile).mockReturnValue('beta')
 
     await setSessionArchived('sess-b', false)
+
+    expect(hermesApi.mock.calls[0][0]).toMatchObject({
+      method: 'PATCH',
+      profile: 'beta',
+      body: { archived: false, profile: 'beta' }
+    })
+  })
+
+  it('omits the profile from the body only when there is no active profile at all', async () => {
+    hermesApi.mockResolvedValue({ ok: true } as never)
+
+    await setSessionArchived('sess-b2', false)
 
     const req = hermesApi.mock.calls[0][0] as { body: Record<string, unknown> }
     expect(req).toMatchObject({ method: 'PATCH', body: { archived: false } })
@@ -180,14 +199,17 @@ describe('setSessionPinnedRemote / setSessionUnreadRemote profile scoping', () =
     })
   })
 
-  it('omits the profile from the body when none is given', async () => {
+  it('falls back to the ACTIVE profile in the body when no owner is given', async () => {
     hermesApi.mockResolvedValue({ ok: true } as never)
+    vi.mocked(client.getApiRequestProfile).mockReturnValue('beta')
 
     await setSessionPinnedRemote('sess-p2', false)
 
-    const req = hermesApi.mock.calls[0][0] as { body: Record<string, unknown> }
-    expect(req).toMatchObject({ method: 'PATCH', body: { pinned: false } })
-    expect(req.body).not.toHaveProperty('profile')
+    expect(hermesApi.mock.calls[0][0]).toMatchObject({
+      method: 'PATCH',
+      profile: 'beta',
+      body: { pinned: false, profile: 'beta' }
+    })
   })
 })
 
