@@ -5,7 +5,7 @@ import { AGENT_MESSAGE_RE, agentAvatarCache, AgentMessageNote } from './user-mes
 
 afterEach(() => {
   cleanup()
-  agentAvatarCache.clear()
+  agentAvatarCache.delete('hermes')
 })
 
 // Agent-to-agent deliveries render as a compact attributed timeline notice,
@@ -65,7 +65,7 @@ describe('agent message detection', () => {
   })
 
   it('labels prefix-only attribution unverified and never borrows a profile avatar', () => {
-    agentAvatarCache.set('hermes', 'data:image/png;base64,trusted-profile-avatar')
+    agentAvatarCache.set('hermes', { at: Date.now(), url: 'data:image/png;base64,trusted-profile-avatar' })
 
     const { container } = render(<AgentMessageNote text="Message from 🤖 Hermes (@hermes): hello there" />)
 
