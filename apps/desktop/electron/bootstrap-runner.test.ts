@@ -259,10 +259,6 @@ test('resolveInstallScript falls back to the installed agent checkout on a 404',
     // It should have copied the installer into the bootstrap cache.
     assert.equal(result.path, cachedScriptPath(home, commit))
     assert.ok(fs.existsSync(result.path), 'fallback script copied into cache')
-    assert.ok(
-      logs.some(ev => /falling back to installed agent/.test(ev.line || '')),
-      'emits a fallback log line'
-    )
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
   }

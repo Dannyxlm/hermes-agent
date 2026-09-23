@@ -11,7 +11,6 @@ the sync helper directly, freezing the loop for every user on every platform for
 the duration of the probe ladder.
 """
 
-import asyncio
 import threading
 import time
 
@@ -20,7 +19,7 @@ import pytest
 import agent.model_metadata as model_meta_mod
 from hermes_cli import model_switch
 
-PROBE_SECONDS = 0.4
+PROBE_SECONDS = 0.05
 
 RESOLVE_ARGS = dict(
     model="claude-opus-4",
