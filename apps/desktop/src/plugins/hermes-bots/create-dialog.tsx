@@ -67,7 +67,12 @@ import type {
   ProfileConfigureResult,
   ProfileDescribeResponse
 } from './profile-config'
-import { CapabilitiesView, capabilitiesViewRoutesConnections, CheckList, credentialsRequiredNames } from './profile-config'
+import {
+  CapabilitiesView,
+  capabilitiesViewRoutesConnections,
+  CheckList,
+  credentialsRequiredNames
+} from './profile-config'
 import { deleteBot } from './profile-ops'
 import { botRosterMeta } from './routing'
 import { HubSkillsSection } from './skills-hub'
@@ -347,6 +352,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
     if (kind === 'mcp' && !enabled) {
       credentialSetupRequiredRef.current = credentialSetupRequiredRef.current.filter(server => server !== name)
     }
+
     setDirtyCaps(prev => ({
       ...prev,
       [kind === 'mcp' ? 'mcp' : kind]: true
@@ -446,6 +452,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
             name: slug,
             ...capPayload
           })
+
           credentialSetupRequiredRef.current = credentialsRequiredNames(configured)
         }
       } catch {

@@ -106,10 +106,7 @@ export function looksLikeDroppedPath(text: string): boolean {
 }
 
 /** Image paths released by a local clear; submitted images belong to the gateway. */
-export function imagePathsReleasedOnClear(
-  tokens: readonly ComposerToken[],
-  reason: 'discard' | 'submit'
-): string[] {
+export function imagePathsReleasedOnClear(tokens: readonly ComposerToken[], reason: 'discard' | 'submit'): string[] {
   return reason === 'discard' ? tokens.filter(token => token.kind === 'image').map(token => token.path) : []
 }
 

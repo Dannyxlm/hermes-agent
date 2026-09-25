@@ -38,7 +38,9 @@ const hermesApi = vi.mocked(client.hermesApi)
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(client.capabilityScoped).mockImplementation(scope => {
-    if (typeof scope !== 'object' || !scope) {return {}}
+    if (typeof scope !== 'object' || !scope) {
+      return {}
+    }
 
     return {
       connectionId: scope.connectionId ?? undefined,

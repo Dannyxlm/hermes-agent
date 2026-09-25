@@ -104,14 +104,17 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
 
   function updateEnvironment(root: string): NodeJS.ProcessEnv {
     const managed = deps.managedPublication
+
     return {
       ...sourceUpdateEnvironment(root, deps.hermesHome),
-      ...(managed ? {
-        HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-        HERMES_MANAGED_PUBLICATION_REPOSITORY: managed.repository,
-        HERMES_MANAGED_PUBLICATION_BRANCH: managed.branch,
-        HERMES_MANAGED_PUBLICATION_TARGET_SHA: managed.expectedTargetSha
-      } : {})
+      ...(managed
+        ? {
+            HERMES_MANAGED_PUBLICATION_UPDATE: '1',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY: managed.repository,
+            HERMES_MANAGED_PUBLICATION_BRANCH: managed.branch,
+            HERMES_MANAGED_PUBLICATION_TARGET_SHA: managed.expectedTargetSha
+          }
+        : {})
     }
   }
 
@@ -123,10 +126,18 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     }
 
     const managed = deps.managedPublication
-    if (managed && (!/^[0-9a-f]{40}$/i.test(managed.expectedTargetSha ?? '') ||
-      status.targetSha?.toLowerCase() !== managed.expectedTargetSha?.toLowerCase() ||
-      status.branch !== managed.branch)) {
-      return { ok: false, error: 'publication-target-unproven', message: 'Check for Desktop updates again so the exact paired release can be verified.' }
+
+    if (
+      managed &&
+      (!/^[0-9a-f]{40}$/i.test(managed.expectedTargetSha ?? '') ||
+        status.targetSha?.toLowerCase() !== managed.expectedTargetSha?.toLowerCase() ||
+        status.branch !== managed.branch)
+    ) {
+      return {
+        ok: false,
+        error: 'publication-target-unproven',
+        message: 'Check for Desktop updates again so the exact paired release can be verified.'
+      }
     }
 
     const branch: string = status.branch ?? deps.defaultUpdateBranch

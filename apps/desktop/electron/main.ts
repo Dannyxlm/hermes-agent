@@ -388,10 +388,7 @@ import { createPortalSession } from './portal-session'
 import { createKeepAwake } from './power-save'
 import { readPreUpdateBackupEnabled } from './pre-update-backup-config'
 import { capturePreviewContents } from './preview-capture'
-import {
-  onPreviewWatchOwnerDestroyed,
-  sendPreviewFileChangedToOwner
-} from './preview-file-watch'
+import { onPreviewWatchOwnerDestroyed, sendPreviewFileChangedToOwner } from './preview-file-watch'
 import { PreviewReachRegistry } from './preview-reach'
 import {
   createPrimaryRemoteConnection,
@@ -3516,7 +3513,8 @@ async function checkManagedPublicationUpdates({ force = false }: { force?: boole
   // The previous release predates PM's source probe. Resolve only its stamped
   // publication branch, never a default channel or a guessed replacement.
   const tip = await runGit(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], {
-    cwd: updateRoot, timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+    cwd: updateRoot,
+    timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
   })
 
   const targetSha = tip.stdout.trim().split(/\s+/)[0]
@@ -3526,9 +3524,14 @@ async function checkManagedPublicationUpdates({ force = false }: { force?: boole
   }
 
   return {
-    supported: true, branch, targetSha, behind: null,
+    supported: true,
+    branch,
+    targetSha,
+    behind: null,
     updateAvailable: INSTALL_STAMP?.commit !== targetSha,
-    hermesRoot: updateRoot, upstreamTracking, fetchedAt: Date.now()
+    hermesRoot: updateRoot,
+    upstreamTracking,
+    fetchedAt: Date.now()
   }
 }
 
@@ -3747,16 +3750,20 @@ function resolveCheckoutUpdateStrategy(expectedTargetSha?: string): UpdaterStrat
     isMac: IS_MAC,
     defaultUpdateBranch: DEFAULT_UPDATE_BRANCH,
     updateHandoffDwellMs: UPDATE_HANDOFF_DWELL_MS,
-    managedPublication: isManagedPublication() ? { repository: INSTALL_STAMP!.repository!, branch: readEffectiveDesktopUpdateConfig().branch, expectedTargetSha } : undefined,
+    managedPublication: isManagedPublication()
+      ? { repository: INSTALL_STAMP!.repository!, branch: readEffectiveDesktopUpdateConfig().branch, expectedTargetSha }
+      : undefined,
     readSourceUpdate: async (updateRoot: string, opts: { force?: boolean }): Promise<SourceUpdate | null> =>
-      isManagedPublication() ? checkManagedPublicationUpdates(opts) : readSourceUpdate({
-        python: await findPythonForRoot(updateRoot),
-        git: resolveGitBinary(),
-        updateRoot,
-        hermesHome: HERMES_HOME,
-        branchConfigPath: DESKTOP_UPDATE_CONFIG_PATH,
-        force: opts.force
-      }),
+      isManagedPublication()
+        ? checkManagedPublicationUpdates(opts)
+        : readSourceUpdate({
+            python: await findPythonForRoot(updateRoot),
+            git: resolveGitBinary(),
+            updateRoot,
+            hermesHome: HERMES_HOME,
+            branchConfigPath: DESKTOP_UPDATE_CONFIG_PATH,
+            force: opts.force
+          }),
     resolveUpdateRoot,
     resolveUpdaterBinary,
     remoteGatewayActive: globalRemoteActive,
@@ -4531,13 +4538,16 @@ async function releaseBackendLock(updateRoot: string, tag: string): Promise<{ un
 //
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
 // only this apply action changed.
-async function applyUpdates(opts: { expectedTargetSha?: string; dirtyStrategy?: string; stopSafeBlockers?: boolean } = {}): Promise<UpdaterApplyResultWire> {
+async function applyUpdates(
+  opts: { expectedTargetSha?: string; dirtyStrategy?: string; stopSafeBlockers?: boolean } = {}
+): Promise<UpdaterApplyResultWire> {
   return updateOperation.apply(async (): Promise<UpdaterApplyResultWire> => {
     updateInFlight = true
     let handedOff: boolean = false
 
     try {
-      const strategy: UpdaterStrategy = (await resolvePackagedUpdateStrategy()) ?? resolveCheckoutUpdateStrategy(opts.expectedTargetSha)
+      const strategy: UpdaterStrategy =
+        (await resolvePackagedUpdateStrategy()) ?? resolveCheckoutUpdateStrategy(opts.expectedTargetSha)
       const result: UpdaterApplyResultWire = await strategy.apply()
       handedOff = result.handedOff === true
 
@@ -4606,12 +4616,14 @@ async function handOffWindowsBootstrapRecovery(reason) {
       ...process.env,
       HERMES_HOME,
       HERMES_INSTALL_ROOT: updateRoot,
-      ...(isManagedPublication() && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit) ? {
-        HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-        HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository!,
-        HERMES_MANAGED_PUBLICATION_BRANCH: branch,
-        HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit
-      } : {})
+      ...(isManagedPublication() && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit)
+        ? {
+            HERMES_MANAGED_PUBLICATION_UPDATE: '1',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository!,
+            HERMES_MANAGED_PUBLICATION_BRANCH: branch,
+            HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit
+          }
+        : {})
     },
     detached: true,
     stdio: 'ignore'
@@ -6333,10 +6345,7 @@ async function watchPreviewFile(owner, rawUrl) {
 
   // Proactive teardown: the watch must not outlive the window that asked for
   // it by whole quit-cycles waiting on a change event that never comes.
-  const offOwnerDestroyed = onPreviewWatchOwnerDestroyed(
-    owner,
-    () => stopPreviewFileWatch(id)
-  )
+  const offOwnerDestroyed = onPreviewWatchOwnerDestroyed(owner, () => stopPreviewFileWatch(id))
 
   const watcher = fs.watch(watchDir, (_eventType, filename) => {
     const changedName = filename ? path.basename(String(filename)) : ''
@@ -6356,10 +6365,8 @@ async function watchPreviewFile(owner, rawUrl) {
         return
       }
 
-      sendPreviewFileChangedToOwner(
-        owner,
-        { id, path: filePath, url: pathToFileURL(filePath).toString() },
-        () => stopPreviewFileWatch(id)
+      sendPreviewFileChangedToOwner(owner, { id, path: filePath, url: pathToFileURL(filePath).toString() }, () =>
+        stopPreviewFileWatch(id)
       )
     }, PREVIEW_WATCH_DEBOUNCE_MS)
   })
@@ -6426,10 +6433,7 @@ function watchDirectory(owner, rawDir) {
 
   // Same proactive teardown as a file watch: a closed window's directory
   // watch must not keep polling the disk-plugin door until quit.
-  const offOwnerDestroyed = onPreviewWatchOwnerDestroyed(
-    owner,
-    () => stopPreviewFileWatch(id)
-  )
+  const offOwnerDestroyed = onPreviewWatchOwnerDestroyed(owner, () => stopPreviewFileWatch(id))
 
   const watcher = fs.watch(watchDir, () => {
     if (timer) {
@@ -6438,10 +6442,8 @@ function watchDirectory(owner, rawDir) {
 
     timer = setTimeout(() => {
       timer = null
-      sendPreviewFileChangedToOwner(
-        owner,
-        { id, path: watchDir, url: pathToFileURL(watchDir).toString() },
-        () => stopPreviewFileWatch(id)
+      sendPreviewFileChangedToOwner(owner, { id, path: watchDir, url: pathToFileURL(watchDir).toString() }, () =>
+        stopPreviewFileWatch(id)
       )
     }, PREVIEW_WATCH_DEBOUNCE_MS)
   })
@@ -10458,7 +10460,10 @@ function persistSshConnectionToken(profile, source, token, registryConnectionId 
 //   3. global remote (connection.json `mode: 'remote'`)
 // A null/empty profile resolves the env/global remote, so legacy callers and
 // the connection test (which pass no profile) are unchanged.
-async function resolveRemoteBackend(profile, options: { forceRegistryPrimary?: boolean; poolKey?: string; primary?: boolean } = {}) {
+async function resolveRemoteBackend(
+  profile,
+  options: { forceRegistryPrimary?: boolean; poolKey?: string; primary?: boolean } = {}
+) {
   const profileKey = String(profile || '').trim() || 'default'
 
   const managedPrimary = options.primary
@@ -12988,9 +12993,7 @@ async function runHermesStart({ supervisorRecovery = false }: { supervisorRecove
   // preference instead of splitting routing identity from the launch
   // argument. (The pin below still honors a live primary — but a primary
   // being live means startHermes never got here.)
-  const { argvProfile: activeProfile, routingProfile: primaryProfile } = resolveLaunchProfile(
-    readActiveDesktopProfile
-  )
+  const { argvProfile: activeProfile, routingProfile: primaryProfile } = resolveLaunchProfile(readActiveDesktopProfile)
 
   // Pin the routing table to the profile this primary actually boots as; a
   // later hermes:profile:remember must not retarget requests mid-life.
@@ -17590,13 +17593,9 @@ ipcMain.handle('hermes:normalizePreviewTarget', (_event, target, baseDir) =>
   normalizePreviewTarget(String(target || ''), baseDir ? String(baseDir) : '')
 )
 
-ipcMain.handle('hermes:watchPreviewFile', (event, url) =>
-  watchPreviewFile(event.sender, String(url || ''))
-)
+ipcMain.handle('hermes:watchPreviewFile', (event, url) => watchPreviewFile(event.sender, String(url || '')))
 
-ipcMain.handle('hermes:watchDirectory', (event, dir) =>
-  watchDirectory(event.sender, String(dir || ''))
-)
+ipcMain.handle('hermes:watchDirectory', (event, dir) => watchDirectory(event.sender, String(dir || '')))
 
 ipcMain.handle('hermes:stopPreviewFileWatch', (_event, id) => stopPreviewFileWatch(String(id || '')))
 

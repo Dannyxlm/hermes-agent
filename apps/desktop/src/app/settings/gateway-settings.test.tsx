@@ -506,10 +506,12 @@ describe('GatewaySettings', () => {
 
       if (outcome === 'failed reconnect') {
         await screen.findByText('WebSocket authentication failed')
-        expect(notify).toHaveBeenCalledWith(expect.objectContaining({
-          kind: 'error',
-          message: 'WebSocket authentication failed'
-        }))
+        expect(notify).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: 'error',
+            message: 'WebSocket authentication failed'
+          })
+        )
       } else {
         expect(applyConnectionConfig).not.toHaveBeenCalled()
       }

@@ -266,7 +266,9 @@ function GatewayConnectionSettings({ embedded, standalone }: { embedded: boolean
       const seq = contextSeq.current
       const applied = await window.hermesDesktop.applyConnectionConfig(payload)
 
-      if (seq === contextSeq.current) {setState(normalizeGatewaySettingsState(applied))}
+      if (seq === contextSeq.current) {
+        setState(normalizeGatewaySettingsState(applied))
+      }
     },
     onNotice: notify
   })
