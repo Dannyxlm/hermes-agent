@@ -124,13 +124,20 @@ build_editable = build_wheel
 
 
 @pytest.mark.parametrize("sealed", [False, True])
-def test_public_build_installs_all_extras_at_explicit_destination(installable_project, tmp_path, monkeypatch, sealed):
+@pytest.mark.parametrize("ownership", [None, "external", "managed-immutable"])
+def test_public_build_installs_all_extras_at_explicit_destination(installable_project, tmp_path, monkeypatch, sealed, ownership):
     from pm import build_environment
     import pm.paths
     import pm.workspace
 
     source, uv, env = installable_project
-    monkeypatch.setattr(pm.paths, "repo_root", lambda: tmp_path / "unrelated-project")
+    executing_root = tmp_path / "unrelated-project"
+    executing_root.mkdir()
+    if ownership is not None:
+        for root in (executing_root, source):
+            (root / ".hermes-release.json").write_text(
+                json.dumps({"install_mode": ownership}), encoding="utf-8")
+    monkeypatch.setattr(pm.paths, "repo_root", lambda: executing_root)
     monkeypatch.setattr(pm.workspace, "enabled_member_dirs", lambda: pytest.fail("user plugins"))
     monkeypatch.setenv("UV_PYTHON", "/not-the-interpreter")
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(tmp_path / "wrong-environment"))

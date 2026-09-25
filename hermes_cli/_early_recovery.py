@@ -555,6 +555,17 @@ def recover_if_needed(project_root: Path | None = None, argv: list[str] | None =
     global _UPDATE_RETRY_RECOVERED
 
     root = _project_root() if project_root is None else Path(project_root).resolve()
+    from pm.environments import managed_immutable, require_mutable_dependencies
+
+    if managed_immutable(root):
+        if explicit:
+            from pm.package import InstallError
+
+            try:
+                require_mutable_dependencies(root)
+            except InstallError as exc:
+                print(f"hermes: {exc}", file=sys.stderr)
+        return False
     if not explicit and _pytest_owns_live_checkout(root):
         return False
     from hermes_cli._parser import command_argv

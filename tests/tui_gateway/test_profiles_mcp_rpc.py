@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-import yaml
+import hermes_yaml as yaml
 
 import tui_gateway.server as server
 from hermes_cli.config import read_user_config_raw

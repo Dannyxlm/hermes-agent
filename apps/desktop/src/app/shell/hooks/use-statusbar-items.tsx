@@ -415,7 +415,6 @@ export function useStatusbarItems({
             ? 'text-primary hover:text-primary'
             : undefined
         : undefined,
-      detail: status.detail,
       hidden: status.unknown,
       icon: applying ? <Loader2 className="size-3 animate-spin" /> : <Hash className="size-3" />,
       id: 'version-client',

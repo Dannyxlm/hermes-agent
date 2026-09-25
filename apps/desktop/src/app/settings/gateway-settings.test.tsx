@@ -57,6 +57,7 @@ const localConnection = {
 }
 
 beforeEach(() => {
+  saveConnectionConfig.mockReset()
   applyConnectionConfig.mockReset()
   oauthLoginConnectionConfig.mockReset()
   probeConnectionConfig.mockReset()
@@ -107,16 +108,20 @@ describe('GatewaySettings', () => {
     expect(screen.queryByPlaceholderText('Existing token saved')).toBeNull()
   })
 
-  it('pre-saves OAuth before login and applies the resolved auth mode without requiring a test', async () => {
-    getConnectionConfig.mockResolvedValue({ ...localConnection, mode: 'remote', remoteUrl: 'https://login.example' })
-    const pendingSave = deferred<void>()
-    saveConnectionConfig.mockReturnValueOnce(pendingSave.promise)
-    const oauthLoginConnectionConfig = vi.fn().mockResolvedValue({ connected: true })
-    const applyConnectionConfig = vi.fn().mockResolvedValue(localConnection)
+  it('activates OAuth only after login succeeds, without pre-saving or requiring a separate test', async () => {
+    const signedIn = {
+      ...localConnection,
+      mode: 'remote',
+      remoteUrl: 'https://login.example',
+      remoteAuthMode: 'oauth',
+      remoteOauthConnected: true
+    }
+    getConnectionConfig.mockResolvedValue({ ...signedIn, remoteOauthConnected: false })
+    const pendingLogin = deferred<{ connected: boolean }>()
+    oauthLoginConnectionConfig.mockReturnValue(pendingLogin.promise)
+    applyConnectionConfig.mockResolvedValue(signedIn)
     const testConnectionConfig = vi.fn()
     Object.assign(window.hermesDesktop, {
-      oauthLoginConnectionConfig,
-      applyConnectionConfig,
       testConnectionConfig,
       probeConnectionConfig: vi.fn().mockResolvedValue({
         reachable: true,
@@ -126,24 +131,18 @@ describe('GatewaySettings', () => {
     })
     render(<GatewaySettings />)
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
-    expect(saveConnectionConfig).toHaveBeenCalledExactlyOnceWith({
+    await waitFor(() => expect(oauthLoginConnectionConfig).toHaveBeenCalledExactlyOnceWith('https://login.example'))
+    expect(saveConnectionConfig).not.toHaveBeenCalled()
+    expect(applyConnectionConfig).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }))
+    await act(async (): Promise<void> => pendingLogin.resolve({ connected: true }))
+    await screen.findByText('Signed in')
+    expect(applyConnectionConfig).toHaveBeenCalledExactlyOnceWith({
       mode: 'remote',
       remoteAuthMode: 'oauth',
       remoteUrl: 'https://login.example'
     })
-    expect(oauthLoginConnectionConfig).not.toHaveBeenCalled()
-    await act(async (): Promise<void> => pendingSave.resolve())
-    await screen.findByText('Signed in')
-    expect(oauthLoginConnectionConfig).toHaveBeenCalledExactlyOnceWith('https://login.example')
-    fireEvent.click(screen.getByRole('button', { name: 'Save and reconnect' }))
-    await waitFor(() =>
-      expect(applyConnectionConfig).toHaveBeenCalledExactlyOnceWith({
-        mode: 'remote',
-        remoteAuthMode: 'oauth',
-        remoteUrl: 'https://login.example',
-        remoteToken: undefined
-      })
-    )
+    expect(saveConnectionConfig).not.toHaveBeenCalled()
     expect(testConnectionConfig).not.toHaveBeenCalled()
   })
 
@@ -507,7 +506,11 @@ describe('GatewaySettings', () => {
       await act(async () => login.resolve({ connected: outcome !== 'cancelled' }))
 
       if (outcome === 'failed reconnect') {
-        await waitFor(() => expect(notifyError).toHaveBeenCalled())
+        await screen.findByText('WebSocket authentication failed')
+        expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+          kind: 'error',
+          message: 'WebSocket authentication failed'
+        }))
       } else {
         expect(applyConnectionConfig).not.toHaveBeenCalled()
       }

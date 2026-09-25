@@ -90,7 +90,12 @@ def _raise_worker_error(error: dict):
 
 def _request(operation, arguments, *, callbacks=None, pause_event=None, project_root=None):
     from pm import receipt
-    from pm.registry import package_definitions
+    from pm.registry import get_package, package_definitions
+    from pm.environments import require_mutable_dependencies
+
+    if operation == "sync_venv" or (operation == "ensure" and
+            isinstance(get_package(arguments["name"]), StatePackage)):
+        require_mutable_dependencies(paths.repo_root() if project_root is None else Path(project_root))
 
     request_id = uuid.uuid4().hex
     update_id = receipt._ambient_update_id()

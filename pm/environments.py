@@ -14,6 +14,28 @@ from pathlib import Path
 from hermes_constants import get_default_hermes_root, project_venv_dir
 
 
+def managed_immutable(project_root: Path) -> bool:
+    """CloudSeed's release selector owns both code and Python for these artifacts."""
+    marker = Path(project_root) / ".hermes-release.json"
+    try:
+        metadata = json.loads(marker.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"cannot read release ownership: {marker}") from exc
+    if not isinstance(metadata, dict):
+        raise RuntimeError(f"invalid release ownership: {marker}")
+    return metadata.get("install_mode") == "managed-immutable"
+
+
+def require_mutable_dependencies(project_root: Path) -> None:
+    if managed_immutable(project_root):
+        from pm.package import InstallError
+
+        raise InstallError("venv", "managed-immutable release dependencies are externally owned",
+                           "build and activate a new immutable release through CloudSeed")
+
+
 def install_key(project_root: Path) -> str:
     canonical = str(Path(project_root).resolve())
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -157,6 +179,10 @@ def selected_venv(project_root: Path) -> Path:
     ``flush_before_selecting``, so the ``pyvenv.cfg`` probe below is a sanity
     check against a vanished tree, not the durability guarantee.
     """
+    if managed_immutable(project_root):
+        import sys
+
+        return Path(sys.prefix)
     return _recorded_venv(project_root) or base_venv(project_root)
 
 
@@ -167,6 +193,8 @@ def committed_venv(project_root: Path) -> Path | None:
     predates PM and is built for whichever interpreter created it, so loading it from PM's store
     Python mixes ABIs (compiled modules vanish) and PM deletes it once a generation is committed.
     """
+    if managed_immutable(project_root):
+        return None
     return _recorded_venv(project_root) or payload_venv(project_root)
 
 
@@ -299,6 +327,10 @@ def activate_dependencies(project_root: Path) -> None:
     """
     import sys
 
+    # The external launcher already chose the matching immutable Python. Even stale
+    # PM facts must not replace its imports or recover a mutable publication.
+    if managed_immutable(project_root):
+        return
     state = install_state_dir(project_root)
     if state.is_dir():
         from hermes_cli.runtime_state import runtime_lock, recover_publication, lease_generation

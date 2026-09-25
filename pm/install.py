@@ -713,6 +713,9 @@ def sync_venv(extras: Optional[list[str]] = None, *, explicit: bool = False,
     token = receipt.begin("sync")
     outcome = "failed"
     try:
+        from pm.environments import require_mutable_dependencies
+
+        require_mutable_dependencies(paths.repo_root())
         if repair and (extras is not None or plugins is not None):
             raise ValueError("repair restores the recorded environment; it cannot change features or plugins")
         if evict_incompatible_plugins and (repair or plugins is not None or not explicit):
