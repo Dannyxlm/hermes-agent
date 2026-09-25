@@ -84,7 +84,8 @@ export function useRemoteOAuth(options: RemoteOAuthOptions): RemoteOAuth {
 
       if (result.connected) {
         await afterOAuthLogin?.({ mode: 'remote', remoteAuthMode: 'oauth', remoteUrl: url })
-        if (!current()) return
+
+        if (!current()) {return}
       }
 
       setOAuthConnected(Boolean(result.connected))

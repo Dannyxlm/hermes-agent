@@ -22,6 +22,7 @@ vi.mock('./client', () => ({
 
 const client = await import('./client')
 const registryState = await import('@/store/connection-registry-state')
+
 const {
   deleteSession,
   fetchStoredTranscriptAcrossBackends,
@@ -37,7 +38,7 @@ const hermesApi = vi.mocked(client.hermesApi)
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(client.capabilityScoped).mockImplementation(scope => {
-    if (typeof scope !== 'object' || !scope) return {}
+    if (typeof scope !== 'object' || !scope) {return {}}
 
     return {
       connectionId: scope.connectionId ?? undefined,

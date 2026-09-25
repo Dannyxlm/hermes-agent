@@ -292,14 +292,17 @@ export function missingRendererAssets(indexPath: string, deps: RendererBundleDep
 
   const htmlRefs = parseModuleAssetRefs(html)
   const manifestRefs = manifestAssetRefs(indexPath, htmlRefs, readFileSync)
+
   if (manifestRefs) {
     return manifestRefs.filter(ref => !existsSync(path.join(dir, ref)))
   }
 
   let manifestGraph: RendererManifestGraph | null = null
+
   try {
     const manifest = parseRendererManifest(readFileSync(path.join(dir, 'manifest.json'), 'utf8'))
-    if (manifest) manifestGraph = rendererManifestGraph(manifest, htmlRefs)
+
+    if (manifest) {manifestGraph = rendererManifestGraph(manifest, htmlRefs)}
   } catch {
     // Absent/unreadable manifests are expected for older renderer bundles.
   }

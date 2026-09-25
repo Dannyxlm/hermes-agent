@@ -2,8 +2,6 @@ import { GatewayReauthRequiredError } from '@hermes/shared'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { deferred } from '@/test/deferred'
-
 // Collect the component graph before the behavioral test deadline starts.
 import { GatewaySettings } from './gateway-settings'
 
@@ -116,6 +114,7 @@ describe('GatewaySettings', () => {
       remoteAuthMode: 'oauth',
       remoteOauthConnected: true
     }
+
     getConnectionConfig.mockResolvedValue({ ...signedIn, remoteOauthConnected: false })
     const pendingLogin = deferred<{ connected: boolean }>()
     oauthLoginConnectionConfig.mockReturnValue(pendingLogin.promise)
