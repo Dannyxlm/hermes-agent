@@ -2119,6 +2119,8 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
             _update_fallback_context_compressor(agent)
             _reresolve_fallback_reasoning_config(agent)
             _rescope_fallback_extra_body(agent, old_model, old_provider, old_base_url)
+            from agent.fast_mode import rescope_fast_mode_after_fallback
+            rescope_fast_mode_after_fallback(agent)
             rewrite_prompt_model_identity(agent, fb_model, fb_provider)
 
             notice = (

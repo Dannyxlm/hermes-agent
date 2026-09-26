@@ -57,6 +57,47 @@ def effective_request_overrides(agent: Any) -> dict[str, Any]:
     return overrides
 
 
+# The only values a fast override ever pins (see ``hermes_cli.models.resolve_fast_mode_overrides``).
+_FAST_OVERRIDE_VALUES = {"speed": "fast", "service_tier": "priority"}
+
+
+def rescope_fast_mode_after_fallback(agent: Any) -> None:
+    """Re-resolve pinned fast overrides for the route a fallback just switched to.
+
+    Static ``/fast`` pins the PRIMARY route's override (``speed: fast`` for Anthropic,
+    ``service_tier: priority`` for OpenAI/xAI) into ``agent.request_overrides``. Carried
+    across a fallback, that key reaches a provider that rejects it outright (Codex Responses
+    "unsupported field(s): speed", OpenAI SDK "unexpected keyword argument 'speed'"), so a
+    fast-mode rate limit kills every hop instead of degrading. Drop only fast values the new
+    route does not produce; keep any other caller value of the same key (e.g. ``flex``), and
+    re-pin the new route's own override while static fast mode is on. Bounded auto/cold windows
+    need no pinning: ``effective_request_overrides`` resolves them per request.
+    ``restore_primary_runtime`` restores the primary snapshot, so no reverse step is needed.
+    """
+    overrides = dict(getattr(agent, "request_overrides", None) or {})
+    new_fast: dict[str, Any] = {}
+    try:
+        from hermes_cli.models import resolve_fast_mode_overrides
+
+        base_url = getattr(agent, "base_url", None)
+        if getattr(agent, "api_mode", None) == "anthropic_messages":
+            base_url = getattr(agent, "_anthropic_base_url", None) or base_url
+        new_fast = resolve_fast_mode_overrides(
+            getattr(agent, "model", None), provider=getattr(agent, "provider", None), base_url=base_url
+        ) or {}
+    except Exception:
+        new_fast = {}
+    had_pinned_fast = False
+    for key, fast_value in _FAST_OVERRIDE_VALUES.items():
+        if overrides.get(key) == fast_value:
+            had_pinned_fast = True
+            if new_fast.get(key) != fast_value:
+                overrides.pop(key, None)
+    if had_pinned_fast and getattr(agent, "service_tier", None) == "priority":
+        overrides.update(new_fast)
+    agent.request_overrides = overrides
+
+
 def fast_mode_unprovisioned(api_error: Any, api_kwargs: Any) -> bool:
     """True for a 429 on a ``speed: "fast"`` request whose fast-mode limit header is 0. The
     organization has no fast capacity for the model, so waiting or rotating keys cannot help."""
