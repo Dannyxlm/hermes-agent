@@ -1032,7 +1032,7 @@ def _managed_update_check_payload(*, request_refresh: bool) -> Dict[str, Any]:
 
     return {
         "install_method": "managed-runtime",
-        "current_version": __version__,
+        "current_version": get_version_info().derived_version,
         "behind": behind,
         "update_available": bool(behind and behind > 0),
         "can_apply": False,
