@@ -1264,10 +1264,13 @@ def restore_primary_runtime(agent) -> bool:
     primary_provider = str((rt or {}).get("provider") or "").strip().lower()
     primary_model = str((rt or {}).get("model") or "").strip()
     from agent.fallback_cooldown import _is_entitlement_rejected
-    if primary_model and _is_entitlement_rejected(agent, primary_provider, primary_model):
-        # The primary slug was rejected as unentitled for this account (#106475): restoring
-        # here would announce a recovery that was never verified and re-fail every turn.
-        # Stay on the fallback; the user sees the terminal entitlement error instead.
+    from hermes_cli.chat_catalog import is_known_non_chat_model
+    if primary_model and (
+        _is_entitlement_rejected(agent, primary_provider, primary_model)
+        or is_known_non_chat_model(primary_model)
+    ):
+        # Unentitled (#106475) or already known non-chat: restoring would announce a recovery
+        # that was never verified and re-fail every turn. Stay on the fallback.
         return False
     primary_runtime_base_url = str((rt or {}).get("base_url") or "")
 
@@ -3575,29 +3578,3 @@ __all__ = [
     "extract_api_error_context", "apply_pending_steer_to_tool_results", "_iter_pool_sockets",
     "force_close_tcp_sockets",
 ]
-
-
-# ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
-# Names external plugins imported from this module before the Sep 2026 decomposition.
-# Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
-# The whole block is removed by reverting the commit that added it.
-
-def agent_runtime_owns_post_tool_hook(agent: Any, function_name: str) -> bool:
-    """Return True when an agent-level tool path emits its own post hook."""
-    if function_name in AGENT_RUNTIME_POST_HOOK_TOOL_NAMES:
-        return True
-    if getattr(agent, "_context_engine_tool_names", None) and function_name in agent._context_engine_tool_names:
-        return True
-    return memory_provider_owns_tool(agent, function_name)
-
-def intent_ack_continuation_enabled(agent) -> bool:
-    """Whether intent-ack continuation should fire at all for this turn.
-
-    The ``codex_ack_continuations < 2`` per-turn cap and the
-    ``looks_like_codex_intermediate_ack`` detector are applied by the caller;
-    this only decides the on/off gate. Callers that also need to know whether
-    the workspace requirement applies should use ``intent_ack_continuation_mode``
-    directly (``"codex_only"`` ⇒ require_workspace=True, ``"all"`` ⇒ False).
-    """
-    return intent_ack_continuation_mode(agent) != "off"
-# ---- END PLUGIN-COMPAT ----

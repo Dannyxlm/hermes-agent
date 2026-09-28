@@ -13,7 +13,7 @@ import { JSON_RPC_METHOD_NOT_FOUND, type ServerRequest } from '@hermes/shared/js
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { DASHBOARD_TUI_MODE, STARTUP_RESUME_ID } from '../config/env.js'
+import { DASHBOARD_TUI_MODE, NATIVE_MODE, STARTUP_RESUME_ID } from '../config/env.js'
 import { WHEEL_SCROLL_STEP } from '../config/limits.js'
 import { RESIZE_COALESCE_MS } from '../config/timing.js'
 import { hasLeadGap, prevRenderedMsg } from '../domain/blockLayout.js'
@@ -243,7 +243,7 @@ export function useMainApp(gw: GatewayClient) {
   )
 
   const slashFlightRef = useRef(0)
-  const slashRef = useRef<(cmd: string) => boolean>(() => false)
+  const slashRef = useRef<(cmd: string, typed?: boolean) => boolean>(() => false)
   const colsRef = useRef(cols)
   const scrollRef = useRef<null | ScrollBoxHandle>(null)
   const onEventRef = useRef<(ev: AnyGatewayEvent) => void>(() => {})
@@ -462,6 +462,7 @@ export function useMainApp(gw: GatewayClient) {
     generation: historyGeneration,
     initialHeights: activeHeightCache,
     liveTailActive: turnLiveTailActive,
+    nativeMode: NATIVE_MODE,
     onHeightsChange: syncHeightCache
   })
 
@@ -1203,7 +1204,7 @@ export function useMainApp(gw: GatewayClient) {
 
   const onModelSelect = useCallback((value: string) => {
     patchOverlayState({ modelPicker: false })
-    slashRef.current(`/model ${value}`)
+    slashRef.current(`/model ${value}`, false) // the typed /model that opened the picker already counted
   }, [])
 
   const closeLiveSession = useCallback(

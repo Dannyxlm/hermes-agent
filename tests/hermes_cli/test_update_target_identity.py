@@ -55,6 +55,7 @@ def update_tree(tmp_path, monkeypatch):
     git(origin, '-c', 'commit.gpgsign=false', 'commit', '-qam', 'unreleased')
     newer = git(origin, 'rev-parse', 'HEAD')
 
+    monkeypatch.setattr('hermes_cli.update_owning_install.retarget_to_owning_install', lambda *_: None)
     monkeypatch.setattr(cli_main, 'PROJECT_ROOT', clone)
     monkeypatch.setattr(update_receipt, '_code_identity', lambda **_: {'commit': base})
     monkeypatch.setattr(cli_main, '_run_pre_update_backup', lambda *_: 'release-snapshot')

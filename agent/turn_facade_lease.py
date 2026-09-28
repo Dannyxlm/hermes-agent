@@ -78,6 +78,8 @@ class DurableTurnLease:
         # Stamp the activity clock at turn entry: `_last_activity_ts` persists across turns, so
         # without this the watchdog would measure idle from the PREVIOUS turn and abort a fresh one.
         self.agent._touch_activity("starting new turn")
+        from hermes_cli.observability.shared_metrics_process import arm_turn
+        arm_turn(self.agent)
         from agent.periodic_scheduler import schedule
 
         self.timer_handles.append(schedule(self.refresh_tick, self.refresh_interval))
@@ -223,21 +225,18 @@ class TurnLeaseAdmission:
     conversation_history: Optional[List[Dict[str, Any]]] = None
 
 
-def _durable_session_exists(db, session_id: str) -> bool:
+def _durable_session_exists(db, session_id: str) -> Optional[bool]:
+    """True / False when the row read answered; None when it failed and the state is unknown."""
     try:
         return db.get_session(session_id) is not None
     except Exception:
-        # A locked / non-WAL read is not proof the row is absent; treating probe failure as "fresh"
-        # ran fail-open at the exact contention point. Acquire, or fail closed.
+        # A locked / non-WAL read proves neither presence nor absence: get_session returns None —
+        # it does not raise — when the row is missing. See #84234.
         logger.warning(
-            # Acquire (or fail closed if acquire itself cannot) rather than start load/run/flush
-            # unsynchronized. get_session returns None — it does not raise — when the row is missing. See
-            # #84234.
-            "Could not check durable session before turn lease; "
-            "will acquire rather than run without serialization",
+            "Could not check durable session after turn lease admission; row state is unknown",
             exc_info=True,
         )
-        return True
+        return None
 
 
 def admit_durable_turn_lease(
@@ -246,7 +245,7 @@ def admit_durable_turn_lease(
     session_turn_lease_holder: Optional[str] = None,
     borrowed_session_snapshot_authoritative: bool = False,
 ) -> TurnLeaseAdmission:
-    """Acquire the session turn lease when the session is durable; build (not start) its threads.
+    """Acquire the session turn lease (the row need not exist yet); build (not start) its threads.
 
     Mutates ``task_context["session_id"]`` and ``agent.session_id`` when the wait forced a resume-id
     reload. Returns an ``early_result`` (interrupted / timed out) instead of a lease when admission
@@ -257,13 +256,13 @@ def admit_durable_turn_lease(
         if session_turn_lease_holder:
             raise RuntimeError("Pre-acquired session turn lease cannot be used for this turn")
         return admission
-    exists = _durable_session_exists(db, session_id)
-    if not session_turn_lease_holder and (
-        not exists or not callable(getattr(type(db), "acquire_session_turn_lease", None))
-    ):
+    # Check the concrete type: MagicMock-style shims accept any attribute without the protocol.
+    if not session_turn_lease_holder and not callable(getattr(type(db), "acquire_session_turn_lease", None)):
         return admission
-    if exists:
-        agent._session_db_created = True
+    # A session id without a row still takes the lease: client-addressed ids (API server
+    # X-Hermes-Session-Id, /v1/runs session_id, fingerprint-derived chat ids) are not
+    # process-unique, and the first turn creates the row mid-turn, so a second writer would
+    # otherwise find the row, take an unheld lease and interleave its turn into this one.
     holder = str(session_turn_lease_holder or "") or (
         f"pid={os.getpid()}:turn={relay_turn_id}:platform={task_context['platform'] or 'unknown'}"
     )
@@ -297,9 +296,23 @@ def admit_durable_turn_lease(
     agent._active_session_turn_lease_holder = holder
     agent._active_session_turn_lease_ttl_seconds = LEASE_TTL_SECONDS
     try:
-        if exists and not (session_turn_lease_holder and borrowed_session_snapshot_authoritative):
+        # Read the row only now: the previous holder may have created or deleted it while this
+        # turn waited, so an answer from before admission can be stale either way.
+        durable = _durable_session_exists(db, session_id)
+        if durable:
+            # Row proven to exist — suppress the redundant create attempt. A missing row leaves
+            # the flag alone: the flush heals a row deleted under a live agent (#123583). So does
+            # an unknown one: the create is an upsert that never overwrites an existing row.
+            agent._session_db_created = True
+        # Reload only a transcript that may exist: callers may seed a fresh id in memory before its
+        # row is written, and reloading an absent row would erase that seed. An unknown row still
+        # reads the transcript after a wait and adopts it only if it returns rows; that read
+        # raising ends the turn.
+        if durable is not False and not (session_turn_lease_holder and borrowed_session_snapshot_authoritative):
             if waited:
                 agent._emit_status("Session is free; loading the latest transcript...")
+            # The holder may have compressed/rotated the session while we waited: reload only
+            # AFTER admission; borrowed authoritative snapshots remain untouched.
             latest_session_id = db.resolve_resume_session_id(session_id)
             if latest_session_id:
                 tip_getter = getattr(type(db), "get_compression_tip", None)
@@ -313,15 +326,18 @@ def admit_durable_turn_lease(
             reloaded = db.get_messages_as_conversation(
                 agent.session_id, repair_alternation=True, include_row_ids=True
             )
-            # A follow-up that aborted an earlier wait carries that turn's never-persisted input
-            # only in memory (see carry_unadmitted_user_message); the reload would drop it.
-            from agent.session_persistence import _PERSIST_AFTER_ADMISSION_INTERRUPT
-            reloaded.extend(
-                m for m in (conversation_history or [])
-                if isinstance(m, dict) and m.get(_PERSIST_AFTER_ADMISSION_INTERRUPT)
-                and "_row_id" not in m
-            )
-            admission.conversation_history = reloaded
+            # Decide on the stored rows alone: an unknown row that reloads nothing keeps the
+            # caller's history, which already holds any carried input below.
+            if durable or reloaded:
+                # A follow-up that aborted an earlier wait carries that turn's never-persisted
+                # input only in memory (see carry_unadmitted_user_message); the reload drops it.
+                from agent.session_persistence import _PERSIST_AFTER_ADMISSION_INTERRUPT
+                reloaded.extend(
+                    m for m in (conversation_history or [])
+                    if isinstance(m, dict) and m.get(_PERSIST_AFTER_ADMISSION_INTERRUPT)
+                    and "_row_id" not in m
+                )
+                admission.conversation_history = reloaded
         if not lease.borrowed:
             lease.build_threads()
     except BaseException:

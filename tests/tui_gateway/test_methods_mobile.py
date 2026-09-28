@@ -31,6 +31,7 @@ def mobile_home(tmp_path, monkeypatch):
     home = tmp_path / ".hermes"
     (home / "profiles" / "ops").mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr("hermes_cli.profiles._get_wrapper_dir", lambda: tmp_path / "wrappers")
     monkeypatch.setattr(server, "_hermes_home", home)
     monkeypatch.setattr(server, "_sessions", {})
     for path in (home, home / "profiles" / "ops"):
