@@ -1160,7 +1160,6 @@ def _prepare_checkout_for_update(
     # "Already up to date!" and verified nothing). Non-fork checkouts have no upstream question: origin IS
     # the official repo, so "Already up to date!" is fully verified there.
     upstream_checked = True
-    moved_from_sha = None
     if commit_count == 0 and is_fork and branch == "main" and not release_tag and os.environ.get("HERMES_MANAGED_PUBLICATION_UPDATE") != "1":
         pre_sync_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
         upstream_checked = _m()._sync_with_upstream_if_needed(
