@@ -83,3 +83,18 @@ def test_real_blocking_cancel_is_scoped(isolated_registry, monkeypatch):
         assert requests.cancel("own") == 1
         assert waiting.result(1) is None
     assert [item["id"] for item in requests.open_requests("foreign")] == [foreign.id]
+
+
+def test_window_decline_preserves_mobile_owner_fence(isolated_registry, monkeypatch):
+    req = requests.ServerRequest("own", "preview.read", {})
+    requests._register(req)
+    transport = object()
+    monkeypatch.setattr(requests, "_clients", lambda sid: [transport])
+    frame = {"id": req.id, "error": {"code": requests.NOT_SHOWN_CODE}}
+    with pytest.raises(PermissionError):
+        requests.resolve_response(frame, transport, expected_sid="foreign")
+    assert not req.event.is_set()
+    assert not req.declined
+    assert requests.resolve_response(frame, transport, expected_sid="own")
+    assert req.answered
+    assert req.event.is_set()

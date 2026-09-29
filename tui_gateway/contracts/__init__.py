@@ -10,6 +10,7 @@ from . import (  # noqa: F401
     display,
     events,
     groups_bot_relay,
+    i18n,
     liveness,
     mobile,
     profiles_vault_complete_foreign_subagents,
