@@ -12,6 +12,7 @@ tool calls or reasoning.
 """
 
 import logging
+import os
 import time
 import weakref
 from typing import Any, Dict, List, Optional
