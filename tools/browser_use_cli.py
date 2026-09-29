@@ -332,9 +332,15 @@ def _isolate_served_profile_daemons(env: dict) -> None:
     reached the launch profile's live ``bu-default`` daemon — already attached to *that* profile's browser
     (its ``cdp_url``, proxy, real-profile Chrome) — and ignored its own backend entirely. The daemon is
     reused before the freshly resolved ``BU_CDP_*`` is ever read, so the per-profile session cache key
-    (#110032) alone cannot prevent it. Scope the runtime/tmp dirs by the served profile's home key.
+    (#110032) alone cannot prevent it. The same collision hits a standalone ``hermes -p <name>`` (subprocess
+    HOME stays the real one), so any named profile gets its own namespace; the default profile keeps the
+    legacy per-user runtime dir.
     """
     tag = _served_profile_tag()
+    if not tag:
+        from hermes_constants import get_hermes_home, hermes_home_key, profile_name_for_home
+        home = get_hermes_home()
+        tag = "" if profile_name_for_home(home) in (None, "default") else hermes_home_key(home)
     if not tag or env.get("BH_RUNTIME_DIR"):
         return
     import hashlib

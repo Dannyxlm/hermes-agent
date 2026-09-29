@@ -80,6 +80,23 @@ def test_browser_exec_harness_daemon_namespace_is_per_served_profile(two_homes):
     assert explicit["BH_RUNTIME_DIR"] == "/srv/bh" and "BH_TMP_DIR" not in explicit  # operator override wins
 
 
+def test_browser_exec_harness_daemon_namespace_for_standalone_named_profile(two_homes, monkeypatch):
+    """``hermes -p a`` (no served override) collides the same way: HERMES_HOME=<root>/profiles/a but the
+    subprocess HOME — and so the harness runtime dir — is the real, shared one."""
+    import tools.browser_use_cli as bu
+
+    a, _b = two_homes
+    monkeypatch.setenv("HERMES_HOME", str(a))
+    env = {"TMPDIR": "/tmp"}
+    bu._isolate_served_profile_daemons(env)
+    assert env.get("BH_RUNTIME_DIR", "").startswith("/tmp/bh-")
+
+    monkeypatch.setenv("HERMES_HOME", str(a.parent.parent))  # the default root itself
+    env = {"TMPDIR": "/tmp"}
+    bu._isolate_served_profile_daemons(env)
+    assert "BH_RUNTIME_DIR" not in env
+
+
 def test_computer_use_backend_not_shared_across_profiles_and_release_finds_it(two_homes, monkeypatch):
     import tools.computer_use.tool as cu
 
