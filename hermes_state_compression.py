@@ -789,7 +789,7 @@ class SessionCompressionMixin:
             if not current_row:
                 break
             parent_id = current_row.get("parent_session_id")
-            if not parent_id or self._is_explicit_fork_child_row(current_row):
+            if not parent_id or self._is_explicit_fork_child_row(current_row, include_reset=True):
                 break
             parent = self.get_session(parent_id)
             if not parent or parent.get("end_reason") != "compression":
@@ -808,30 +808,7 @@ class SessionCompressionMixin:
         # is reached.
         for _ in range(4096):
             with self._read_ctx() as conn:
-                cursor = conn.execute(
-                    f"""
-                    SELECT child.id
-                    FROM sessions parent
-                    JOIN sessions child ON child.parent_session_id = parent.id
-                    WHERE parent.id = ?
-                      AND parent.end_reason = 'compression'
-                      AND COALESCE(json_extract(COALESCE(child.model_config, '{{}}'), '$._branched_from'), '') != parent.id
-                      AND COALESCE(json_extract(COALESCE(child.model_config, '{{}}'), '$._delegate_from'), '') != parent.id
-                      AND COALESCE(child.source, '') != 'tool'
-                    ORDER BY
-                      CASE
-                        WHEN child.end_reason = 'compression' THEN 0
-                        WHEN child.ended_at IS NULL THEN 1
-                        ELSE 2
-                      END,
-                      {_sql_session_last_active("child")} DESC,
-                      child.started_at DESC,
-                      child.id DESC
-                    LIMIT 1
-                    """,
-                    (current,),
-                )
-                row = cursor.fetchone()
+                row = conn.execute(_CHAIN_STEP_SQL, (current,)).fetchone()
             if row is None:
                 return chain
             child_id = row["id"]
@@ -865,7 +842,7 @@ class SessionCompressionMixin:
         root_seen = {root["id"]}
         for _ in range(4096):
             parent_id = root.get("parent_session_id")
-            if not parent_id or self._is_explicit_fork_child_row(root):
+            if not parent_id or self._is_explicit_fork_child_row(root, include_reset=True):
                 break
             parent = self.get_session(parent_id)
             if not parent or parent.get("end_reason") != "compression":
@@ -889,7 +866,7 @@ class SessionCompressionMixin:
         seen = {current["id"]}
         for _ in range(4096):
             parent_id = current.get("parent_session_id")
-            if not parent_id or self._is_explicit_fork_child_row(current):
+            if not parent_id or self._is_explicit_fork_child_row(current, include_reset=True):
                 break
             parent = self.get_session(parent_id)
             if not parent or parent.get("end_reason") != "compression":
@@ -942,7 +919,7 @@ class SessionCompressionMixin:
                 if (
                     not child_id
                     or child_id in seen
-                    or self._is_explicit_fork_child_row(candidate)
+                    or self._is_explicit_fork_child_row(candidate, include_reset=True)
                 ):
                     continue
                 seen.add(child_id)

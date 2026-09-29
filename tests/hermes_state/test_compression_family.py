@@ -9,6 +9,8 @@ def test_compression_family_includes_stale_sibling_but_keeps_live_tip_last(tmp_p
         db.create_session("stale", source="webui", parent_session_id="root")
         db.end_session("stale", "ws_orphan_reap")
         db.create_session("live", source="webui", parent_session_id="root")
+        db.create_session("reset", source="webui", parent_session_id="root",
+                          model_config={"_reset_from": "root"})
 
         assert db.get_compression_tip("root") == "live"
         assert db.get_compression_tip("stale") == "live"
@@ -16,6 +18,7 @@ def test_compression_family_includes_stale_sibling_but_keeps_live_tip_last(tmp_p
         assert db.get_compression_lineage("stale") == ["root", "live"]
         assert db.get_compression_family("root") == ["root", "stale", "live"]
         assert db.get_compression_family("stale") == ["root", "stale", "live"]
+        assert db.get_compression_family("reset") == ["reset"]
     finally:
         db.close()
 
