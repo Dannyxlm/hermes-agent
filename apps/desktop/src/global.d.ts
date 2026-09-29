@@ -852,6 +852,8 @@ export interface DesktopManagedSourceUpdate {
 export type DesktopUpstreamTrackingState = 'error' | 'ready' | 'stale'
 
 export interface DesktopUpstreamTracking {
+  commits?: DesktopUpdateCommit[]
+  officialBaseSha?: string | null
   ahead: number | null
   behind: number | null
   branch: string

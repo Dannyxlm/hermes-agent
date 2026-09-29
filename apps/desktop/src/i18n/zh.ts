@@ -3955,6 +3955,11 @@ export const zh = defineLocale({
   },
 
   updates: {
+    codexUpdateAction: '通过 Codex 更新',
+    codexUpdateHint: '复制更新请求，供你粘贴到 Codex。此处不会发送请求或安装更新。',
+    codexUpdateCopied: '请求已复制。请粘贴到 Codex 以继续；更新尚未开始。',
+    managedTitle: 'Hermes 更新',
+    managedSubtitle: '查看新内容，然后通过 Codex 准备更新。',
     discontinuedTitle: '此版本的 Hermes 已停止支持',
     discontinuedBody: '此版本的 Hermes 已停止支持，可能无法正常运行——请卸载。您的数据仍保留在磁盘上。',
     channels: { stable: '稳定版', canary: '预览版' },
@@ -4002,8 +4007,6 @@ export const zh = defineLocale({
     desktopUpstreamInstalled: '已打包应用',
     desktopUpstreamOfficial: 'NousResearch/main',
     desktopUpstreamReadOnlyNotice: '只读检查：不会重置工作区、应用更新或删除 CloudSeed 补丁。',
-    managedTitle: '不可变更新流程',
-    managedSubtitle: 'Hermes 在只读生产版本之外监控上游源代码。',
     managedReady: '源监控状态是最新的。',
     managedStale: '源监控状态已过期。',
     managedMissing: '源监控状态不可用。',

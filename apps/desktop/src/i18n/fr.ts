@@ -4590,6 +4590,11 @@ export const frOverrides = {
     }
   },
   updates: {
+    codexUpdateAction: 'Mettre à jour via Codex',
+    codexUpdateHint: 'Copie une demande de mise à jour à coller dans Codex. Rien n’est envoyé ni installé ici.',
+    codexUpdateCopied: 'Demande copiée. Collez-la dans Codex pour continuer ; aucune mise à jour n’a démarré.',
+    managedTitle: 'Mises à jour Hermes',
+    managedSubtitle: 'Découvrez les nouveautés, puis préparez la mise à jour avec Codex.',
     discontinuedTitle: "Cette version de Hermes n'est plus prise en charge",
     discontinuedBody:
       "Cette version de Hermes n'est plus prise en charge et risque de ne plus fonctionner — désinstallez-la. Vos données restent sur le disque.",

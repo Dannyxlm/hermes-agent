@@ -2,10 +2,12 @@ import { useStore } from '@nanostores/react'
 import { type ReactElement, type ReactNode, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
+import { CodexUpdateHandoff } from '@/components/codex-update-handoff'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import type { DesktopUpdateStatus, DesktopVersionInfo } from '@/global'
 import { type Translations, useI18n } from '@/i18n'
+import { usesCodexUpdates } from '@/lib/codex-update'
 import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, RefreshCw } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { shortVersion } from '@/lib/version-label'
@@ -325,7 +327,13 @@ export function UpdateStatusCard({
             {checking ? u.checkingShort : u.checkNow}
           </Button>
 
-          <UpdateActions target={target} u={u} view={view} />
+          {status && usesCodexUpdates(status) ? (
+            <Button onClick={() => openUpdateOverlayFor(target)} size="sm" variant="textStrong">
+              {u.seeWhatsNew}
+            </Button>
+          ) : (
+            <UpdateActions target={target} u={u} view={view} />
+          )}
 
           {showReleaseNotes && (
             <Button asChild className="ml-auto" size="sm" variant="text">
@@ -345,6 +353,11 @@ export function UpdateStatusCard({
           )}
         </div>
       )}
+      {status && usesCodexUpdates(status) && !view.applying ? (
+        <div className="mt-3">
+          <CodexUpdateHandoff status={status} />
+        </div>
+      ) : null}
     </div>
   )
 }

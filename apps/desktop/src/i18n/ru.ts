@@ -3290,6 +3290,12 @@ export const ru = defineLocale({
     }
   },
   updates: {
+    codexUpdateAction: 'Обновить через Codex',
+    codexUpdateHint:
+      'Копирует запрос на обновление для вставки в Codex. Здесь ничего не отправляется и не устанавливается.',
+    codexUpdateCopied: 'Запрос скопирован. Вставьте его в Codex, чтобы продолжить. Обновление ещё не началось.',
+    managedTitle: 'Обновления Hermes',
+    managedSubtitle: 'Посмотрите, что нового, и подготовьте обновление с Codex.',
     discontinuedTitle: 'Эта сборка Hermes больше не поддерживается',
     discontinuedBody:
       'Эта сборка Hermes больше не поддерживается и может перестать работать — удалите её. Ваши данные останутся на диске.',

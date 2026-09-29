@@ -3496,6 +3496,9 @@ export interface Translations {
   }
 
   updates: {
+    codexUpdateAction: string
+    codexUpdateHint: string
+    codexUpdateCopied: string
     discontinuedTitle: string
     discontinuedBody: string
     channels: { stable: string; canary: string }

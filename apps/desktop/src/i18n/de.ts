@@ -4576,6 +4576,11 @@ export const deOverrides = {
     }
   },
   updates: {
+    codexUpdateAction: 'Über Codex aktualisieren',
+    codexUpdateHint: 'Kopiert eine Update-Anfrage zum Einfügen in Codex. Hier wird nichts gesendet oder installiert.',
+    codexUpdateCopied: 'Anfrage kopiert. Zum Fortfahren in Codex einfügen; es wurde kein Update gestartet.',
+    managedTitle: 'Hermes-Updates',
+    managedSubtitle: 'Sieh dir die Neuerungen an und bereite das Update mit Codex vor.',
     discontinuedTitle: 'Dieser Hermes-Build wird nicht mehr unterstützt',
     discontinuedBody:
       'Dieser Hermes-Build wird nicht mehr unterstützt und funktioniert möglicherweise nicht mehr — deinstallieren Sie ihn. Ihre Daten bleiben auf dem Datenträger.',

@@ -143,6 +143,8 @@ interface InspectOfficialUpstreamOptions {
 }
 
 interface OfficialUpstreamTracking {
+  commits?: { sha: string; summary: string; author: string; at: number }[]
+  officialBaseSha?: string | null
   ahead: number | null
   behind: number | null
   branch: string
@@ -424,13 +426,7 @@ async function inspectOfficialUpstream({
     }
 
     if (!officialIdentityHydration) {
-      return runGit([
-        'fetch',
-        '--quiet',
-        '--no-tags',
-        identityRepositoryUrl,
-        `+${sourceRef}:${INSTALLED_BUILD_REF}`
-      ])
+      return runGit(['fetch', '--quiet', '--no-tags', identityRepositoryUrl, `+${sourceRef}:${INSTALLED_BUILD_REF}`])
     }
 
     // Never let the mixed comparison cache negotiate directly with official
@@ -581,7 +577,32 @@ async function inspectOfficialUpstream({
     )
   }
 
+  // Notes are optional: a log failure must not erase a proven count. Use the
+  // existing isolated cache and exact checked target, never another fetch.
+  const commits: NonNullable<OfficialUpstreamTracking['commits']> = []
+
+  if (behind > 0) {
+    try {
+      const log = await runGit(['log', '-40', '--format=%H%x00%s%x00%an%x00%at', `${identity.sha}..${targetSha}`, '--'])
+
+      if (log.code === 0) {
+        for (const line of log.stdout.split('\n')) {
+          const [sha, summary, author, timestamp] = line.split('\0')
+          const at = Number(timestamp) * 1000
+
+          if (/^[a-f0-9]{40}$/i.test(sha ?? '') && summary && author && Number.isFinite(at)) {
+            commits.push({ sha, summary, author, at })
+          }
+        }
+      }
+    } catch {
+      // The UI retains the official release link when commit details are unavailable.
+    }
+  }
+
   return {
+    commits,
+    officialBaseSha: firstLine(mergeBase.stdout).trim(),
     ahead,
     behind,
     branch,
@@ -691,10 +712,7 @@ function resolveManagedPublicationSafety(
     }
   }
 
-  if (
-    installedRepository.toLowerCase() !== updateRepository.toLowerCase() ||
-    installedBranch !== updateBranch
-  ) {
+  if (installedRepository.toLowerCase() !== updateRepository.toLowerCase() || installedBranch !== updateBranch) {
     return {
       allowed: false,
       message:

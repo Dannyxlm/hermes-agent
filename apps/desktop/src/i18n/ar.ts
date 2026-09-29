@@ -2630,6 +2630,11 @@ export const ar = defineLocale({
     }
   },
   updates: {
+    codexUpdateAction: 'التحديث عبر Codex',
+    codexUpdateHint: 'ينسخ طلب تحديث للصقه في Codex. لا يتم إرسال أو تثبيت أي شيء من هنا.',
+    codexUpdateCopied: 'تم نسخ الطلب. الصقه في Codex للمتابعة؛ لم يبدأ أي تحديث.',
+    managedTitle: 'تحديثات Hermes',
+    managedSubtitle: 'اطّلع على الجديد، ثم جهّز التحديث مع Codex.',
     discontinuedTitle: 'لم يعد إصدار Hermes هذا مدعومًا',
     discontinuedBody: 'لم يعد إصدار Hermes هذا مدعومًا وقد يتوقف عن العمل — ألغِ تثبيته. ستبقى بياناتك على القرص.',
     channels: { stable: 'مستقر', canary: 'تجريبي' },
@@ -2722,8 +2727,6 @@ export const ar = defineLocale({
     desktopUpstreamOfficial: 'NousResearch/main',
     desktopUpstreamReadOnlyNotice:
       'للقراءة فقط: لا يعيد هذا الفحص ضبط المستودع أو يطبّق تحديثًا أو يزيل تعديلات CloudSeed.',
-    managedTitle: 'مسار التحديث غير القابل للتغيير',
-    managedSubtitle: 'يراقب Hermes المصدر الأعلى خارج إصدار الإنتاج للقراءة فقط.',
     managedReady: 'حالة مراقب المصدر حديثة.',
     managedStale: 'حالة مراقب المصدر قديمة.',
     managedMissing: 'حالة مراقب المصدر غير متاحة.',

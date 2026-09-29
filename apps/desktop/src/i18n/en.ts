@@ -4191,6 +4191,11 @@ export const en: Translations = {
   },
 
   updates: {
+    codexUpdateAction: 'Update through Codex',
+    codexUpdateHint: 'Copies an update request to paste into Codex. Nothing is sent or installed from here.',
+    codexUpdateCopied: 'Request copied. Paste it into Codex to continue; no update has started.',
+    managedTitle: 'Hermes updates',
+    managedSubtitle: 'See what’s new, then prepare the update with Codex.',
     discontinuedTitle: 'This build of Hermes is no longer supported',
     discontinuedBody:
       'This build of Hermes is no longer supported and may break — uninstall it. Your data stays on disk.',
@@ -4244,8 +4249,6 @@ export const en: Translations = {
     desktopUpstreamOfficial: 'NousResearch/main',
     desktopUpstreamReadOnlyNotice:
       'Read only: this check never resets a checkout, applies an update, or removes CloudSeed patches.',
-    managedTitle: 'Immutable update train',
-    managedSubtitle: 'Hermes monitors upstream source outside the read-only production release.',
     managedReady: 'Source monitor status is current.',
     managedStale: 'Source monitor status is stale.',
     managedMissing: 'Source monitor status is unavailable.',

@@ -4568,6 +4568,11 @@ export const esOverrides = {
     }
   },
   updates: {
+    codexUpdateAction: 'Actualizar con Codex',
+    codexUpdateHint: 'Copia una solicitud de actualización para pegarla en Codex. Aquí no se envía ni instala nada.',
+    codexUpdateCopied: 'Solicitud copiada. Pégala en Codex para continuar; no se ha iniciado ninguna actualización.',
+    managedTitle: 'Actualizaciones de Hermes',
+    managedSubtitle: 'Consulta las novedades y prepara la actualización con Codex.',
     discontinuedTitle: 'Esta versión de Hermes ya no tiene soporte',
     discontinuedBody:
       'Esta versión de Hermes ya no tiene soporte y podría dejar de funcionar; desinstálala. Tus datos permanecen en el disco.',

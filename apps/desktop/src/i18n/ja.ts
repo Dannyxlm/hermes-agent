@@ -3051,6 +3051,11 @@ export const ja = defineLocale({
   },
 
   updates: {
+    codexUpdateAction: 'Codex で更新',
+    codexUpdateHint: 'Codex に貼り付ける更新リクエストをコピーします。ここでは送信もインストールも行いません。',
+    codexUpdateCopied: 'リクエストをコピーしました。Codex に貼り付けて続行してください。更新はまだ開始していません。',
+    managedTitle: 'Hermes の更新',
+    managedSubtitle: '新機能を確認してから、Codex で更新を準備します。',
     discontinuedTitle: 'このHermesビルドはサポートされていません',
     discontinuedBody:
       'このHermesビルドはサポートが終了し、動作しなくなる可能性があります。アンインストールしてください。データはディスクに残ります。',
@@ -3104,8 +3109,6 @@ export const ja = defineLocale({
     desktopUpstreamOfficial: 'NousResearch/main',
     desktopUpstreamReadOnlyNotice:
       '読み取り専用：チェックアウトのリセット、更新の適用、CloudSeed パッチの削除は行いません。',
-    managedTitle: 'イミュータブル更新トレイン',
-    managedSubtitle: 'Hermes は読み取り専用の本番リリース外で上流ソースを監視します。',
     managedReady: 'ソースモニターの状態は最新です。',
     managedStale: 'ソースモニターの状態が古くなっています。',
     managedMissing: 'ソースモニターの状態を利用できません。',

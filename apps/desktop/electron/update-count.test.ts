@@ -505,11 +505,28 @@ test('dedicated official ref bypasses a stale remote.origin.fetch and cannot rep
     })
 
     assert.equal(status.state, 'ready')
+    assert.deepEqual(
+      status.commits?.map(commit => commit.summary),
+      ['upstream two', 'upstream one']
+    )
+    assert.equal(status.officialBaseSha, installedCommit)
     assert.equal(status.behind, 2)
     assert.equal(status.ahead, 0)
     assert.equal(status.installedRepository, null)
     assert.equal(status.installedSha, installedCommit)
     assert.equal(status.targetSha, officialHead)
+
+    const withoutNotes = await inspectOfficialUpstream({
+      identity: resolveInstalledIdentity({ installStamp: { commit: installedCommit }, packaged: true }),
+      repositoryUrl: official,
+      runGit: async args =>
+        args[0] === 'log' ? { code: 1, stderr: 'log unavailable', stdout: '' } : runGit(tracking, args)
+    })
+
+    assert.equal(withoutNotes.state, 'ready')
+    assert.equal(withoutNotes.behind, status.behind)
+    assert.deepEqual(withoutNotes.commits, [])
+
     assert.equal(git(installed, ['rev-parse', 'origin/main']), installedCommit)
     assert.equal(git(tracking, ['rev-parse', OFFICIAL_UPSTREAM_REF]), officialHead)
     assert.equal(runGit(tracking, ['cat-file', '-e', `${installedCommit}^{commit}`]).code, 0)

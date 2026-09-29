@@ -98,7 +98,7 @@ describe('DesktopUpstreamTrackingView', () => {
       <DesktopUpstreamTrackingView checking={false} onCheckNow={onCheckNow} onDone={onDone} status={upstreamStatus()} />
     )
 
-    expect(screen.getByText('Desktop upstream')).toBeTruthy()
+    expect(screen.getByText('New update available')).toBeTruthy()
     expect(screen.getByText('1197')).toBeTruthy()
     expect(screen.getByText('5')).toBeTruthy()
     expect(screen.getByText(/Dannyxlm\/hermes-agent@aaaaaaaaaaaa/)).toBeTruthy()
@@ -109,6 +109,29 @@ describe('DesktopUpstreamTrackingView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onCheckNow).toHaveBeenCalledOnce()
     expect(onDone).toHaveBeenCalledOnce()
+  })
+
+  it('keeps official change details and the Codex handoff available together', () => {
+    const base = 'c'.repeat(40)
+    const target = 'd'.repeat(40)
+    renderManaged(
+      <DesktopUpstreamTrackingView
+        checking={false}
+        onCheckNow={vi.fn()}
+        onDone={vi.fn()}
+        status={upstreamStatus({
+          officialBaseSha: base,
+          targetSha: target,
+          commits: [{ sha: target, summary: 'feat: Useful desktop change', author: 'Upstream', at: 1 }]
+        })}
+      />
+    )
+    expect(screen.getByText('feat: Useful desktop change')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Update through Codex' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Release notes' }).getAttribute('href')).toBe(
+      `https://github.com/NousResearch/hermes-agent/compare/${base}...${target}`
+    )
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
   })
 
   it('labels cached data stale instead of presenting its count as current', () => {
@@ -156,7 +179,7 @@ describe('DesktopUpstreamTrackingView', () => {
 
     render(<UpdatesOverlay />)
 
-    expect(screen.getByText('Desktop upstream')).toBeTruthy()
+    expect(screen.getByText('New update available')).toBeTruthy()
     expect(screen.queryByText('A prior application update failed.')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
@@ -184,7 +207,7 @@ describe('ManagedSourceUpdateView', () => {
       />
     )
 
-    expect(screen.getByText('Immutable update train')).toBeTruthy()
+    expect(screen.getByText('New update available')).toBeTruthy()
     expect(screen.getByText(/4 upstream commits/)).toBeTruthy()
     expect(screen.getByText('Candidate')).toBeTruthy()
     expect(screen.getByText('Not built')).toBeTruthy()

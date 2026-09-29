@@ -19,6 +19,7 @@ import type {
 } from '@/global'
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'
+import { usesCodexUpdates } from '@/lib/codex-update'
 import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
 import { reconnectGateway } from '@/store/gateway-reconnect'
@@ -411,6 +412,20 @@ export function openUpdatesWindow(target: UpdateTarget = activeUpdateTarget()): 
  * machine's status and must not fan out to the others.
  */
 export function startActiveUpdate(target?: UpdateTarget): void {
+  const requestedTarget = target ?? activeUpdateTarget()
+  const managedTarget = usesCodexUpdates($backendUpdateStatus.get()) ? 'backend' : 'client'
+  const requestedStatus = requestedTarget === 'backend' ? $backendUpdateStatus.get() : $updateStatus.get()
+
+  if (
+    usesCodexUpdates(requestedStatus) ||
+    (!target && usesCodexUpdates($updateStatus.get())) ||
+    (!target && usesCodexUpdates($backendUpdateStatus.get()))
+  ) {
+    openUpdateOverlayFor(target ?? managedTarget)
+
+    return
+  }
+
   if (!target && hasMultipleUpdateTargets()) {
     $updateOverlayOpen.set(true)
     void applyEverythingUpdate()

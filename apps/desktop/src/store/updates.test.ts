@@ -991,6 +991,28 @@ describe('explicit update targets', () => {
     expect($updateEverything.get().running).toBe(false)
   })
 
+  it('opens the managed handoff without applying locally or fanning out', () => {
+    $updateStatus.set(
+      status({
+        upstreamTracking: { installedRepository: 'Dannyxlm/hermes-agent' } as NonNullable<
+          DesktopUpdateStatus['upstreamTracking']
+        >
+      })
+    )
+
+    startActiveUpdate('client')
+    expect($updateOverlayTarget.get()).toBe('client')
+    expect($updateOverlayOpen.get()).toBe(true)
+    expect(applyClientMock).not.toHaveBeenCalled()
+    expect(updateHermesSpy).not.toHaveBeenCalled()
+    expect($updateEverything.get().running).toBe(false)
+
+    startActiveUpdate()
+    expect(applyClientMock).not.toHaveBeenCalled()
+    expect(updateHermesSpy).not.toHaveBeenCalled()
+    expect($updateEverything.get().running).toBe(false)
+  })
+
   it('keeps the everything-flow for the generic, target-less apply', async () => {
     $backendUpdateStatus.set(status({ behind: 3 }))
 

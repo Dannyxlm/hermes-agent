@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useState } from 'react'
 
 import { BrandMark } from '@/components/brand-mark'
+import { CodexUpdateHandoff } from '@/components/codex-update-handoff'
 import { SyncStatusCard } from '@/components/sync-status-card'
 import { Button } from '@/components/ui/button'
 import { CopyButton, writeClipboardText } from '@/components/ui/copy-button'
@@ -25,6 +26,7 @@ import type {
   UpdaterMechanismClient
 } from '@/global'
 import { useI18n } from '@/i18n'
+import { officialChangesUrl, usesCodexUpdates } from '@/lib/codex-update'
 import { buildCommitChangelog, type CommitGroup, formatFullChangelogText } from '@/lib/commit-changelog'
 import { AlertCircle, Check, Copy, Terminal } from '@/lib/icons'
 import { resolveUpdateCopy } from '@/lib/update-copy'
@@ -134,7 +136,7 @@ export function UpdatesOverlay() {
       {/* This dialog has no inputs, so Radix's default autofocus would land on
           the close button and trigger its tooltip immediately on open. */}
       <DialogContent
-        bodyClassName="overflow-hidden p-0 gap-0"
+        bodyClassName="overflow-y-auto p-0 gap-0"
         className="max-w-sm"
         onOpenAutoFocus={preventCloseButtonAutoFocus}
         showCloseButton={phase !== 'applying'}
@@ -378,9 +380,13 @@ function IdleView({
       </div>
 
       <div className="grid gap-2">
-        <Button className="font-semibold" onClick={onInstall} size="lg">
-          {u.updateNow}
-        </Button>
+        {usesCodexUpdates(status) ? (
+          <CodexUpdateHandoff status={status} />
+        ) : (
+          <Button className="font-semibold" onClick={onInstall} size="lg">
+            {u.updateNow}
+          </Button>
+        )}
         <Button className="font-medium" onClick={onLater} type="button" variant="text">
           {u.maybeLater}
         </Button>
@@ -390,6 +396,47 @@ function IdleView({
 
       <SyncStatusCard />
     </div>
+  )
+}
+
+function OfficialUpdateDetails({
+  base,
+  commits,
+  target
+}: {
+  base?: string | null
+  commits: readonly DesktopUpdateCommit[]
+  target?: string | null
+}) {
+  const { t } = useI18n()
+  const url = officialChangesUrl(base, target)
+
+  return (
+    <section className="grid gap-2">
+      <p className="text-sm font-medium">{t.updates.seeWhatsNew}</p>
+      {commits.length > 0 ? (
+        <ul className="grid max-h-48 gap-2 overflow-y-auto text-xs">
+          {commits.map(commit => (
+            <li key={commit.sha}>{commit.summary}</li>
+          ))}
+        </ul>
+      ) : null}
+      <Button asChild size="sm" variant="textStrong">
+        <a
+          href={url}
+          onClick={event => {
+            if (window.hermesDesktop?.openExternal) {
+              event.preventDefault()
+              void window.hermesDesktop.openExternal(url)
+            }
+          }}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {t.updates.releaseNotes}
+        </a>
+      </Button>
+    </section>
   )
 }
 
@@ -442,9 +489,11 @@ export function DesktopUpstreamTrackingView({
     <div className="grid gap-5 px-6 pb-6 pt-7 pr-8">
       <div className="flex flex-col items-center gap-3 text-center">
         <BrandMark className="size-14" />
-        <DialogTitle className="text-center text-xl">{u.desktopUpstreamTitle}</DialogTitle>
+        <DialogTitle className="text-center text-xl">
+          {!degraded && (source.behind ?? 0) > 0 ? u.availableTitle : u.desktopUpstreamTitle}
+        </DialogTitle>
         <DialogDescription className="max-w-prose text-center text-sm leading-5">
-          {u.desktopUpstreamSubtitle}
+          {usesCodexUpdates(status) ? u.managedSubtitle : u.desktopUpstreamSubtitle}
         </DialogDescription>
       </div>
 
@@ -456,31 +505,42 @@ export function DesktopUpstreamTrackingView({
             <Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />
           )}
           <div className="min-w-0">
-            <p className="text-sm font-medium">{stateCopy}</p>
+            <p className="text-sm font-medium">
+              {!degraded && (source.behind ?? 0) > 0 ? u.managedCommitsBehind(source.behind!) : stateCopy}
+            </p>
             {source.message ? <p className="mt-1 text-xs text-muted-foreground">{source.message}</p> : null}
             {source.identityDirty ? <p className="mt-1 text-xs text-amber-600">{u.desktopUpstreamDirty}</p> : null}
           </div>
         </div>
       </div>
 
-      <dl className="grid grid-cols-2 gap-2 text-xs">
-        <div className="rounded-md border border-border/70 px-3 py-2">
-          <dt className="text-muted-foreground">{u.desktopUpstreamBehind}</dt>
-          <dd className="mt-1 font-semibold">{source.behind === null ? u.managedUnknown : source.behind}</dd>
+      <OfficialUpdateDetails base={source.officialBaseSha} commits={source.commits ?? []} target={source.targetSha} />
+      {usesCodexUpdates(status) ? <CodexUpdateHandoff status={status} /> : null}
+
+      <details className="text-xs">
+        <summary className="cursor-pointer text-muted-foreground">{u.technicalDetails}</summary>
+        <div className="mt-3">
+          <dl className="grid grid-cols-2 gap-2 text-xs">
+            <div className="rounded-md border border-border/70 px-3 py-2">
+              <dt className="text-muted-foreground">{u.desktopUpstreamBehind}</dt>
+              <dd className="mt-1 font-semibold">{source.behind === null ? u.managedUnknown : source.behind}</dd>
+            </div>
+            <div className="rounded-md border border-border/70 px-3 py-2">
+              <dt className="text-muted-foreground">{u.desktopUpstreamAhead}</dt>
+              <dd className="mt-1 font-semibold">{source.ahead === null ? u.managedUnknown : source.ahead}</dd>
+            </div>
+            <div className="rounded-md border border-border/70 px-3 py-2">
+              <dt className="text-muted-foreground">{u.desktopUpstreamInstalled}</dt>
+              <dd className="mt-1 truncate font-mono text-[11px] font-semibold">{installedIdentity}</dd>
+            </div>
+            <div className="rounded-md border border-border/70 px-3 py-2">
+              <dt className="text-muted-foreground">{u.desktopUpstreamOfficial}</dt>
+              <dd className="mt-1 truncate font-mono text-[11px] font-semibold">{officialIdentity}</dd>
+            </div>
+          </dl>
         </div>
-        <div className="rounded-md border border-border/70 px-3 py-2">
-          <dt className="text-muted-foreground">{u.desktopUpstreamAhead}</dt>
-          <dd className="mt-1 font-semibold">{source.ahead === null ? u.managedUnknown : source.ahead}</dd>
-        </div>
-        <div className="rounded-md border border-border/70 px-3 py-2">
-          <dt className="text-muted-foreground">{u.desktopUpstreamInstalled}</dt>
-          <dd className="mt-1 truncate font-mono text-[11px] font-semibold">{installedIdentity}</dd>
-        </div>
-        <div className="rounded-md border border-border/70 px-3 py-2">
-          <dt className="text-muted-foreground">{u.desktopUpstreamOfficial}</dt>
-          <dd className="mt-1 truncate font-mono text-[11px] font-semibold">{officialIdentity}</dd>
-        </div>
-      </dl>
+        <p className="mt-3 text-muted-foreground">{u.desktopUpstreamReadOnlyNotice}</p>
+      </details>
 
       <div className="grid grid-cols-2 gap-2">
         <Button disabled={checking} onClick={onCheckNow} variant="secondary">
@@ -488,8 +548,6 @@ export function DesktopUpstreamTrackingView({
         </Button>
         <Button onClick={onDone}>{u.done}</Button>
       </div>
-
-      <p className="text-center text-[11px] leading-4 text-muted-foreground">{u.desktopUpstreamReadOnlyNotice}</p>
     </div>
   )
 }
@@ -536,7 +594,9 @@ export function ManagedSourceUpdateView({
     <div className="grid gap-5 px-6 pb-6 pt-7 pr-8">
       <div className="flex flex-col items-center gap-3 text-center">
         <BrandMark className="size-14" />
-        <DialogTitle className="text-center text-xl">{u.managedTitle}</DialogTitle>
+        <DialogTitle className="text-center text-xl">
+          {behind !== null && behind > 0 ? u.availableTitle : u.managedTitle}
+        </DialogTitle>
         <DialogDescription className="max-w-prose text-center text-sm leading-5">{u.managedSubtitle}</DialogDescription>
       </div>
 
@@ -557,6 +617,13 @@ export function ManagedSourceUpdateView({
           </div>
         </div>
       </div>
+
+      <OfficialUpdateDetails
+        base={source.runningUpstreamBase}
+        commits={status.commits ?? []}
+        target={source.upstreamHead}
+      />
+      <CodexUpdateHandoff status={status} />
 
       <dl className="grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-md border border-border/70 px-3 py-2">
