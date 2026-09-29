@@ -324,6 +324,36 @@ def _served_profile_tag() -> str:
     return "" if get_hermes_home_override() is None else hermes_home_key()
 
 
+def _isolate_served_profile_daemons(env: dict) -> None:
+    """Give a served profile its own harness daemon namespace.
+
+    browser-harness keys its daemon (pid/socket/log) by ``BU_NAME`` under a per-user runtime dir. Under
+    multiplex every profile runs as the same OS user, so a served profile's unnamed ``browser_exec``
+    reached the launch profile's live ``bu-default`` daemon — already attached to *that* profile's browser
+    (its ``cdp_url``, proxy, real-profile Chrome) — and ignored its own backend entirely. The daemon is
+    reused before the freshly resolved ``BU_CDP_*`` is ever read, so the per-profile session cache key
+    (#110032) alone cannot prevent it. The same collision hits a standalone ``hermes -p <name>`` (subprocess
+    HOME stays the real one), so any named profile gets its own namespace; the default profile keeps the
+    legacy per-user runtime dir.
+    """
+    tag = _served_profile_tag()
+    if not tag:
+        from hermes_constants import get_hermes_home, hermes_home_key, profile_name_for_home
+        home = get_hermes_home()
+        tag = "" if profile_name_for_home(home) in (None, "default") else hermes_home_key(home)
+    if not tag or env.get("BH_RUNTIME_DIR"):
+        return
+    import hashlib
+    import tempfile
+    digest = hashlib.sha256(tag.encode("utf-8")).hexdigest()[:12]
+    # Short root: the daemon's AF_UNIX socket path is capped at ~108 bytes (``TMPDIR`` is socket-safe here).
+    root = os.path.join(env.get("TMPDIR") or tempfile.gettempdir(), f"bh-{digest}")
+    env["BH_RUNTIME_DIR"] = root
+    env["BH_RUNTIME_DIR_SHARED"] = "1"  # still many BU_NAMEs per profile: keep the name in each filename
+    env["BH_TMP_DIR"] = root
+    env["BH_TMP_DIR_SHARED"] = "1"
+
+
 def _backend_cache_key(task_id: Optional[str], session_name: str = "") -> str:
     """Session-cache key for a backend browser: named sessions get their own; served profiles get their own."""
     key = f"bu-named-{session_name}" if session_name else (task_id or "browser-exec-default")
@@ -620,6 +650,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             return tool_error(f"Invalid session name {session!r}: use 1-64 letters, digits, "
                               "dashes, or underscores (e.g. 'r7k2').")
         env["BU_NAME"] = session
+    _isolate_served_profile_daemons(env)
     route_err = _route_backend(env, session, task_id, bool(local))
     if route_err:
         return tool_error(route_err)

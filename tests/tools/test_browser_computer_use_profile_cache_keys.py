@@ -46,6 +46,57 @@ def test_browser_exec_cache_key_differs_per_served_profile_and_is_legacy_when_un
     assert key_a.startswith("bu-named-work") and key_b.startswith("bu-named-work")
 
 
+def test_browser_exec_harness_daemon_namespace_is_per_served_profile(two_homes):
+    """The harness daemon (``bu-<BU_NAME>`` pid/socket) is reused BEFORE the resolved CDP is read, so a
+    shared runtime dir handed a served profile the launch profile's live ``bu-default`` daemon — its
+    browser, proxy and real-profile Chrome — no matter what backend the served profile resolved."""
+    import tools.browser_use_cli as bu
+
+    a, b = two_homes
+    unscoped = {"TMPDIR": "/tmp"}
+    bu._isolate_served_profile_daemons(unscoped)
+    assert unscoped == {"TMPDIR": "/tmp"}  # launch profile keeps the legacy per-user runtime dir
+
+    dirs = []
+    for home in (a, b, a):
+        env = {"TMPDIR": "/tmp"}
+        tok = _under(home)
+        try:
+            bu._isolate_served_profile_daemons(env)
+        finally:
+            reset_hermes_home_override(tok)
+        assert env["BH_RUNTIME_DIR"] == env["BH_TMP_DIR"] and env["BH_RUNTIME_DIR"].startswith("/tmp/bh-")
+        assert env["BH_RUNTIME_DIR_SHARED"] == "1"  # named sessions still get distinct filenames
+        assert len(env["BH_RUNTIME_DIR"]) + len("/bu-" + "x" * 64 + ".sock") < 108
+        dirs.append(env["BH_RUNTIME_DIR"])
+    assert dirs[0] != dirs[1] and dirs[0] == dirs[2]
+
+    explicit = {"TMPDIR": "/tmp", "BH_RUNTIME_DIR": "/srv/bh"}
+    tok = _under(a)
+    try:
+        bu._isolate_served_profile_daemons(explicit)
+    finally:
+        reset_hermes_home_override(tok)
+    assert explicit["BH_RUNTIME_DIR"] == "/srv/bh" and "BH_TMP_DIR" not in explicit  # operator override wins
+
+
+def test_browser_exec_harness_daemon_namespace_for_standalone_named_profile(two_homes, monkeypatch):
+    """``hermes -p a`` (no served override) collides the same way: HERMES_HOME=<root>/profiles/a but the
+    subprocess HOME — and so the harness runtime dir — is the real, shared one."""
+    import tools.browser_use_cli as bu
+
+    a, _b = two_homes
+    monkeypatch.setenv("HERMES_HOME", str(a))
+    env = {"TMPDIR": "/tmp"}
+    bu._isolate_served_profile_daemons(env)
+    assert env.get("BH_RUNTIME_DIR", "").startswith("/tmp/bh-")
+
+    monkeypatch.setenv("HERMES_HOME", str(a.parent.parent))  # the default root itself
+    env = {"TMPDIR": "/tmp"}
+    bu._isolate_served_profile_daemons(env)
+    assert "BH_RUNTIME_DIR" not in env
+
+
 def test_computer_use_backend_not_shared_across_profiles_and_release_finds_it(two_homes, monkeypatch):
     import tools.computer_use.tool as cu
 
