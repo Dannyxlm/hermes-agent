@@ -11,6 +11,7 @@ the sync helper directly, freezing the loop for every user on every platform for
 the duration of the probe ladder.
 """
 
+import asyncio
 import threading
 import time
 

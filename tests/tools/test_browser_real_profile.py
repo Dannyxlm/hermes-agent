@@ -11,6 +11,7 @@ import os
 from unittest.mock import Mock, patch
 
 import pytest
+from tools import browser_tool as bt
 from tools import browser_tool_cdp as bt_cdp
 from tools import browser_tool_cloud as bt_cloud
 from tools import browser_tool_lightpanda_fallback as bt_lightpanda_fallback
