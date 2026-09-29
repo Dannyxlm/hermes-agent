@@ -980,7 +980,12 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
     if alias_path is not None and not alias_path.exists():
         alias_path = None
     gateway_running = _check_gateway_running(path)
-    gateway_shared = not is_default and not gateway_running and _served_by_running_multiplexer(name)
+    # Liveness reports a served profile as running on the multiplexer's PID (#97120), so it cannot
+    # tell "shared" from "own"; only a separate (``--force``-started) gateway counts as owned.
+    gateway_shared = False
+    if not is_default and _served_by_running_multiplexer(name):
+        from hermes_cli.web_server_gateway import _has_own_gateway
+        gateway_shared = not _has_own_gateway(path)
     gateway_running = gateway_running or gateway_shared
     skill_count = _cached_skill_count(path) if lazy_skill_count else _count_skills(path)
     return ProfileInfo(
