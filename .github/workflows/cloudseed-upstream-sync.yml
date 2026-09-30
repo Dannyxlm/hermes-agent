@@ -1,0 +1,172 @@
+name: CloudSeed Upstream Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * 1,4"
+  push:
+    branches: [main]
+    paths:
+      - ".github/upstream-sync-trigger"
+      - ".github/workflows/cloudseed-upstream-sync.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: cloudseed-hermes-upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/NousResearch/hermes-agent.git
+  UPSTREAM_BRANCH: main
+  PUBLICATION_BRANCH: main
+  SYNC_BRANCH: automation/upstream-sync
+
+jobs:
+  sync:
+    if: github.repository == 'Dannyxlm/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out publication fork
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "cloudseed-upstream-sync[bot]"
+          git config user.email "cloudseed-upstream-sync[bot]@users.noreply.github.com"
+
+      - name: Fetch official upstream and calculate overlay
+        id: lineage
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+          upstream_ref="upstream/$UPSTREAM_BRANCH"
+          publication_ref="origin/$PUBLICATION_BRANCH"
+          merge_base="$(git merge-base "$publication_ref" "$upstream_ref")"
+          upstream_head="$(git rev-parse "$upstream_ref")"
+          publication_head="$(git rev-parse "$publication_ref")"
+          upstream_commits="$(git rev-list --count "$merge_base..$upstream_ref")"
+          overlay_commits="$(git rev-list --count "$merge_base..$publication_ref")"
+
+          git diff --binary --full-index "$merge_base..$publication_ref" > /tmp/cloudseed-overlay.patch
+
+          {
+            echo "merge_base=$merge_base"
+            echo "upstream_head=$upstream_head"
+            echo "publication_head=$publication_head"
+            echo "upstream_commits=$upstream_commits"
+            echo "overlay_commits=$overlay_commits"
+          } >> "$GITHUB_OUTPUT"
+
+          printf '%s\n' \
+            "merge_base=$merge_base" \
+            "upstream_head=$upstream_head" \
+            "publication_head=$publication_head" \
+            "upstream_commits=$upstream_commits" \
+            "overlay_commits=$overlay_commits"
+
+      - name: Reapply CloudSeed overlay on pinned upstream
+        id: reapply
+        run: |
+          set -euo pipefail
+          upstream_ref="upstream/$UPSTREAM_BRANCH"
+          git checkout -B "$SYNC_BRANCH" "$upstream_ref"
+
+          if [[ -s /tmp/cloudseed-overlay.patch ]]; then
+            set +e
+            git apply --3way --index /tmp/cloudseed-overlay.patch
+            apply_rc=$?
+            set -e
+            if [[ $apply_rc -ne 0 ]]; then
+              git diff --name-only --diff-filter=U | sort -u | tee upstream-sync-conflicts.txt
+              echo "CloudSeed overlay did not apply cleanly. No branch was pushed." >&2
+              exit 1
+            fi
+          fi
+
+          if git diff --cached --quiet; then
+            echo "overlay_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore: reapply CloudSeed overlay on upstream ${{ steps.lineage.outputs.upstream_head }}"
+            echo "overlay_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload conflict report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-upstream-sync-conflicts
+          path: upstream-sync-conflicts.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Validate rebased overlay
+        run: |
+          set -euo pipefail
+          git diff --check "upstream/$UPSTREAM_BRANCH...HEAD"
+          python -m compileall -q \
+            agent/codex_runtime.py \
+            agent/conversation_loop.py \
+            hermes_cli/web_server.py \
+            run_agent.py
+
+      - name: Validate Desktop update surfaces
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm --workspace apps/desktop run typecheck
+          npm --workspace apps/desktop exec -- \
+            vitest run \
+              src/app/updates-overlay.test.tsx \
+              src/store/updates.test.ts
+
+      - name: Publish one review branch
+        run: |
+          set -euo pipefail
+          git fetch origin "$SYNC_BRANCH" 2>/dev/null || true
+          git push --force-with-lease origin "HEAD:refs/heads/$SYNC_BRANCH"
+
+      - name: Open or refresh upstream sync pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body_file="$(mktemp)"
+          cat > "$body_file" <<EOF
+          ## Automated upstream reconciliation
+
+          Reapplies the CloudSeed Hermes overlay onto pinned official upstream
+          `${{ steps.lineage.outputs.upstream_head }}`.
+
+          - official upstream commits since merge base: `${{ steps.lineage.outputs.upstream_commits }}`
+          - publication-fork commits since merge base: `${{ steps.lineage.outputs.overlay_commits }}`
+          - exact merge base: `${{ steps.lineage.outputs.merge_base }}`
+          - validation: overlay three-way apply, diff integrity, Python compilation, Desktop typecheck, and focused update tests
+
+          This PR changes source only. It does not deploy or restart Hermes.
+
+          **Merge with a merge commit. Do not squash.** Preserving upstream ancestry is required for accurate future distance calculations.
+          EOF
+
+          number="$(gh pr list --state open --base "$PUBLICATION_BRANCH" --head "$SYNC_BRANCH" --json number --jq '.[0].number // empty')"
+          if [[ -z "$number" ]]; then
+            gh pr create \
+              --base "$PUBLICATION_BRANCH" \
+              --head "$SYNC_BRANCH" \
+              --title "chore: sync CloudSeed Hermes fork with upstream" \
+              --body-file "$body_file"
+          else
+            gh pr edit "$number" \
+              --title "chore: sync CloudSeed Hermes fork with upstream" \
+              --body-file "$body_file"
+          fi
