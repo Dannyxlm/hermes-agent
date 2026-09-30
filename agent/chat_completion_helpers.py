@@ -2181,6 +2181,15 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
             agent._provider_fallback_active = True
             agent._provider_fallback_route = (str(fb_model), str(fb_provider))
             _log_fallback_activated(agent, reason, old_model, old_provider, fb_model, fb_provider)
+            with contextlib.suppress(Exception):
+                from agent.serving_events import emit_provider_switched, reset_serving_dedupe
+                reset_serving_dedupe(agent)
+                emit_provider_switched(
+                    agent, reason=reason, old_model=old_model, old_provider=old_provider,
+                    new_model=fb_model, new_provider=fb_provider,
+                    retry_eligible_in=(max(0, math.ceil(agent._rate_limited_until - time.monotonic()))
+                                       if cooldown_seconds is not None else None),
+                )
             from hermes_cli.observability.shared_metrics_events import record_fallback
             record_fallback(from_provider=old_provider, to_provider=fb_provider, reason=reason)
             # The stale-call streak measured the OLD provider; carrying it over would

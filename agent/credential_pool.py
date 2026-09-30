@@ -916,6 +916,7 @@ def persist_pool_entries(
     removed_ids: Optional[Iterable[str]] = None,
     status_cleared_ids: Optional[Iterable[str]] = None,
     token_bases: Optional[Dict[str, Tuple[Any, Any]]] = None,
+    order: Optional["auth_mod.PoolOrderState"] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """Persist a provider's pool rows to the store that OWNS them.
 
@@ -945,10 +946,14 @@ def persist_pool_entries(
                     provider, exc,
                 )
             return None
-    return write_credential_pool(
-        provider, payloads, removed_ids=removed_ids, status_cleared_ids=status_cleared_ids,
-        token_bases=token_bases,
+    kwargs: Dict[str, Any] = dict(
+        removed_ids=removed_ids, status_cleared_ids=status_cleared_ids, token_bases=token_bases,
     )
+    if order is not None:
+        # Only widen the call when arbitration is requested: tests/wrappers that fake
+        # ``write_credential_pool`` with the legacy signature keep working.
+        kwargs["order"] = order
+    return write_credential_pool(provider, payloads, **kwargs)
 
 
 # --- Per-provider singleton refresh plumbing -------------------------------
@@ -1006,6 +1011,10 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         # providers only); set by load_pool(), consumed by add_entry().
         self._borrowed_root_ids: Set[str] = set()
         self._persisted_token_pairs: Dict[str, Tuple[Any, Any]] = {}
+        # Ordering generation this pool's priorities were loaded from (see
+        # ``hermes_cli.auth._arbitrate_pool_order``). Routine flushes carry it so a
+        # deliberate reorder by another process is never overwritten by our stale order.
+        self._order_generation: int = 0
         self._strategy = get_pool_strategy(provider)
         # RLock: _replace_entry/_persist self-acquire it so the DEFERRED
         # single-use-token refresh path (network I/O outside the lock by
@@ -1096,6 +1105,27 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         with self._lock:
             return self._current_unlocked()
 
+    def set_current(self, credential_id: Optional[str]) -> bool:
+        """Point the shared cursor at *credential_id* (must be a pool entry). Used when a caller
+        adopted a pooled key outside ``select()`` (e.g. the Anthropic pre-request resolver) so
+        ``current()`` and failure attribution agree with the key actually on the wire."""
+        with self._lock:
+            if credential_id is None:
+                self._current_id = None
+                return True
+            if self._find(lambda e: e.id == credential_id) is None:
+                return False
+            self._current_id = credential_id
+            return True
+
+    def label_for_id(self, credential_id: Optional[str]) -> Optional[str]:
+        """Human label for a pool entry id (never the secret); None when unknown."""
+        if not credential_id:
+            return None
+        with self._lock:
+            entry = self._find(lambda e: e.id == credential_id)
+        return (entry.label or entry.id[:8]) if entry is not None else None
+
     def entry_id_for_api_key(self, api_key_hint: Any = None) -> Optional[str]:
         """Stable id for the runtime credential in use.
 
@@ -1131,18 +1161,30 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         *,
         removed_ids: Optional[List[str]] = None,
         status_cleared_ids: Optional[List[str]] = None,
+        reorder: bool = False,
     ) -> None:
         # Self-locking: snapshotting self._entries must not race a rotation.
         with self._lock:
             payloads = [entry.to_dict() for entry in self._entries]
+            # No arbitration needed until someone has deliberately reordered (generation 0 and
+            # this is a routine flush): keep the legacy call shape for that path.
+            generation = int(getattr(self, "_order_generation", 0) or 0)  # __new__-built pools in tests
+            order = (
+                auth_mod.PoolOrderState(generation, bump=reorder)
+                if reorder or generation > 0 or auth_mod.read_pool_order_generation(self.provider) > 0
+                else None
+            )
             written = persist_pool_entries(
                 self.provider, payloads,
                 removed_ids=removed_ids,
                 status_cleared_ids=status_cleared_ids,
                 token_bases=self._persisted_token_pairs,
+                order=order,
             )
             if written is None:
                 return
+            if order is not None:
+                self._order_generation = order.generation
             rows = auth_mod._entry_ids(written)
             self._persisted_token_pairs = auth_mod._token_pairs_by_id(written)
             for entry in self._entries:
@@ -1157,6 +1199,15 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 # merged into the written row) on every ordinary flush.
                 if pair != (entry.access_token, entry.refresh_token):
                     self._replace_entry(entry, PooledCredential.from_dict(self.provider, row))
+            if order is not None and order.adopted_disk_order:
+                # A newer deliberate reorder won on disk: mirror it in memory so selection
+                # (``fill_first`` walks ``_entries`` in priority order) follows the operator.
+                for entry in list(self._entries):
+                    row = rows.get(entry.id)
+                    if isinstance(row, dict) and "priority" in row and row["priority"] != entry.priority:
+                        self._replace_entry(entry, replace(entry, priority=row["priority"]))
+                self._entries.sort(key=lambda e: e.priority)
+                logger.info("%s pool: adopted newer credential order from disk", self.provider)
 
     def _adopt(self, entry: PooledCredential, *, persist: bool = True, **updates: Any) -> PooledCredential:
         """``replace(entry, **updates)``, swap it into the pool, optionally persist."""
@@ -3097,6 +3148,7 @@ def load_pool(provider: str) -> CredentialPool:
 
     pool = CredentialPool(provider, entries)
     pool._persisted_token_pairs = auth_mod._token_pairs_by_id(raw_entries)
+    pool._order_generation = auth_mod.read_pool_order_generation(provider)
     if changed:
         pool._persist(removed_ids=sorted(disk_ids - {entry.id for entry in entries}))
     # Remember the root's borrowed rows so a later ``add_entry`` in this

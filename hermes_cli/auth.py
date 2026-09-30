@@ -1028,11 +1028,75 @@ def _entry_ids(entries: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
     return {e.get("id"): e for e in entries if isinstance(e, dict) and e.get("id")}
 
 
+_POOL_ORDER_SECTION = "credential_pool_order"
+
+
+def read_pool_order_generation(provider_id: str, auth_store: Optional[Dict[str, Any]] = None) -> int:
+    """Monotonic per-provider ordering generation (0 when never reordered deliberately)."""
+    store = auth_store if auth_store is not None else _load_auth_store()
+    section = store.get(_POOL_ORDER_SECTION)
+    value = section.get(provider_id) if isinstance(section, dict) else None
+    if value is None:
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+class PoolOrderState:
+    """In/out cursor for ``write_credential_pool``'s priority arbitration.
+
+    ``base`` is the ordering generation the writer loaded its snapshot from. On return,
+    ``generation`` is the generation now on disk and ``adopted_disk_order`` tells the caller
+    its own priorities were discarded in favour of a newer deliberate reorder on disk."""
+
+    __slots__ = ("base", "bump", "generation", "adopted_disk_order")
+
+    def __init__(self, base: int = 0, *, bump: bool = False):
+        self.base, self.bump = max(0, int(base or 0)), bool(bump)
+        self.generation, self.adopted_disk_order = self.base, False
+
+
+def _arbitrate_pool_order(
+    provider_id: str, auth_store: Dict[str, Any], merged: List[Dict[str, Any]],
+    existing_by_id: Dict[str, Dict[str, Any]], order: Optional[PoolOrderState],
+) -> None:
+    """Keep a newer deliberate ``hermes auth priority`` ordering over a stale routine flush.
+
+    Routine flushes (rotation, cooldown, token refresh) snapshot ``priority`` from memory. A
+    process that loaded the pool before an operator reordered it would otherwise write the
+    old order straight back over the new one. Deliberate reorders bump the generation; a
+    writer whose ``base`` is behind adopts the on-disk priorities for rows that exist there."""
+    if order is None:
+        return
+    disk_generation = read_pool_order_generation(provider_id, auth_store)
+    section = _store_section(auth_store, _POOL_ORDER_SECTION)
+    if order.bump:
+        order.generation = disk_generation + 1
+        section[provider_id] = order.generation
+        return
+    order.generation = disk_generation
+    if disk_generation <= order.base:
+        return
+    changed = False
+    for row in merged:
+        if not isinstance(row, dict):
+            continue
+        row_id = row.get("id")
+        disk_row = existing_by_id.get(row_id) if isinstance(row_id, str) else None
+        if isinstance(disk_row, dict) and "priority" in disk_row and row.get("priority") != disk_row["priority"]:
+            row["priority"] = disk_row["priority"]
+            changed = True
+    order.adopted_disk_order = changed
+
+
 def write_credential_pool(
     provider_id: str, entries: List[Dict[str, Any]], *,
     removed_ids: Optional[Iterable[str]] = None,
     status_cleared_ids: Optional[Iterable[str]] = None,
     token_bases: Optional[Dict[str, Tuple[Any, Any]]] = None,
+    order: Optional[PoolOrderState] = None,
 ) -> List[Dict[str, Any]]:
     """Persist one provider's credential pool under auth.json.
 
@@ -1041,7 +1105,9 @@ def write_credential_pool(
     so a rotation/exhaustion rewrite never drops a concurrent credential. Entries in
     *status_cleared_ids* were cleared deliberately (``hermes auth reset``) and skip the
     recency merge, which would otherwise read their cleared ``last_status_at`` (None ->
-    epoch 0) as a stale snapshot and copy a still-binding cooldown back."""
+    epoch 0) as a stale snapshot and copy a still-binding cooldown back. *order* arbitrates
+    ``priority`` between a deliberate reorder and a stale routine flush (see
+    ``_arbitrate_pool_order``); ``None`` keeps the legacy last-writer-wins behaviour."""
     removed = {rid for rid in (removed_ids or ()) if rid}
     bases = token_bases or {}
     with _auth_store_lock():
@@ -1067,6 +1133,7 @@ def write_credential_pool(
             disk_id = disk_entry.get("id") if isinstance(disk_entry, dict) else None
             if disk_id and disk_id not in new_ids and disk_id not in removed:
                 merged.append(sanitize_borrowed_credential_payload(disk_entry, provider_id))
+        _arbitrate_pool_order(provider_id, auth_store, merged, existing_by_id, order)
         pool[provider_id] = merged
         _save_auth_store(auth_store)
         return merged
