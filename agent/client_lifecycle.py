@@ -910,7 +910,40 @@ class ClientLifecycleMixin:
             logger.warning("Failed to rebuild Anthropic client after credential refresh: %s", exc)
             return False
         self._anthropic_api_key, self._is_anthropic_oauth = new_token, self._anthropic_oauth_flag(new_token)
+        # The resolver may have handed us ANOTHER pooled account (priority edit, cooldown on the old
+        # one). Failure attribution reads ``api_key`` + ``_credential_pool_entry_id``; leaving them on
+        # the old grant blames (and benches) the wrong account for the next 4xx.
+        self.api_key = new_token
+        self._sync_credential_pool_entry_after_refresh(new_token)
         return True
+
+    def _sync_credential_pool_entry_after_refresh(self, new_token: str) -> None:
+        """Rebind the pool cursor + ``_credential_pool_entry_id`` to the entry whose key we now send."""
+        pool = getattr(self, "_credential_pool", None)
+        if pool is None:
+            return
+        try:
+            previous_id = getattr(self, "_credential_pool_entry_id", None)
+            new_id = pool.entry_id_for_api_key(new_token)
+            self._credential_pool_entry_id = new_id
+            if new_id and new_id != previous_id:
+                # Move the shared cursor too so ``pool.current()`` agrees with the key on the wire.
+                with suppress(Exception):
+                    pool.set_current(new_id)
+                prev_label = pool.label_for_id(previous_id) if previous_id else None
+                logger.info(
+                    "Anthropic credential refresh switched account: %s -> %s",
+                    prev_label or previous_id or "?", pool.label_for_id(new_id) or new_id,
+                )
+                with suppress(Exception):
+                    from agent.serving_events import emit_account_switched, reset_serving_dedupe
+                    reset_serving_dedupe(self)
+                    emit_account_switched(
+                        self, from_account=prev_label, to_account=pool.label_for_id(new_id), cause="refresh",
+                    )
+        except Exception:
+            logger.debug("credential pool rebind after Anthropic refresh failed", exc_info=True)
+            self._credential_pool_entry_id = None
 
     # ------------------------------------------------------------------ route-derived client config
     def _apply_client_headers_for_base_url(self, base_url: str, *, apply_user_headers: bool = True) -> None:

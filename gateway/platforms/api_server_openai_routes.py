@@ -614,7 +614,13 @@ class OpenAICompatRoutesMixin:
         def _on_status(kind, message=None):
             # Lifecycle/warning status (provider wait, auto-recovery countdown, fallback switch) as a
             # ``hermes.status`` event, so a client sees why the stream is silent instead of a dead socket.
+            # ``routing`` is typed JSON (agent.serving_events): forward verbatim under its own kind so
+            # OpenAI-compat clients can read the serving model without regexing prose.
             from gateway.platforms.api_server import _redact_api_error_text
+            if str(kind) == "routing":
+                if message:
+                    stream_q.put_threadsafe(("__status__", {"kind": "routing", "text": str(message)}))
+                return
             text = _redact_api_error_text(message if message is not None else kind or "").strip()
             if text:
                 stream_q.put_threadsafe(("__status__", {"kind": str(kind), "text": text}))

@@ -207,6 +207,11 @@ def record_response_usage(
         prompt_tokens, completion_tokens, total_tokens,
         api_duration, _cache_pct, _ident,
     )
+    # Typed "now serving" snapshot for clients (Hermex / iOS picker). Deduped: emitted on the
+    # first call and whenever model/provider/account/effective-reasoning changed since.
+    with suppress(Exception):
+        from agent.serving_events import emit_serving_if_changed
+        emit_serving_if_changed(agent)
     # nous.anthropic_wire=auto: the session's wire is decided once, from this first response.
     if agent.session_api_calls == 1 and (agent.provider or "") == "nous":
         with suppress(Exception):

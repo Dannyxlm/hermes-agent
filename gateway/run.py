@@ -729,7 +729,11 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
 def _prepare_gateway_status_message(platform: Any, event_type: str, message: str) -> Optional[str]:
     """Filter/sanitize agent status callbacks before platform delivery.
 
-    Local/CLI keep the raw diagnostic stream; messaging surfaces drop transient aux/compression noise."""
+    Local/CLI keep the raw diagnostic stream; messaging surfaces drop transient aux/compression noise.
+    ``routing`` is a machine-only typed JSON event (see ``agent.serving_events``) consumed by
+    Hermex/native clients; messaging surfaces already receive the prose lifecycle notice."""
+    if event_type == "routing":
+        return None
     text = str(message or "").strip()
     if not text:
         return None

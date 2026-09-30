@@ -951,7 +951,17 @@ def recover_with_credential_pool(
             "Credential %s (%s) — rotated to pool entry %s",
             rotate_status, label, getattr(next_entry, "id", "?"),
         )
+        prior_entry_id = getattr(agent, "_credential_pool_entry_id", None)
         swapped = agent._swap_credential(next_entry) is not False
+        if swapped:
+            with contextlib.suppress(Exception):
+                from agent.serving_events import account_label, emit_account_switched, reset_serving_dedupe
+                reset_serving_dedupe(agent)
+                emit_account_switched(
+                    agent, from_account=account_label(agent, prior_entry_id or credential_id),
+                    to_account=account_label(agent, getattr(next_entry, "id", None)),
+                    reason=effective_reason, cause="rotation",
+                )
         benched = next((e for e in pool.entries() if e.id == credential_id), None) if credential_id else None
         if (
             swapped
@@ -1254,11 +1264,19 @@ def _revert_credential_rotation(agent) -> None:
         return
     if entry is None:
         return  # still cooling down; check again next turn
+    prior_entry_id = getattr(agent, "_credential_pool_entry_id", None)
     if agent._swap_credential(entry) is not False:
         logger.info(
             "Credential %s (%s) available again — reverted pool rotation",
             getattr(entry, "id", "?"), getattr(entry, "label", "?"),
         )
+        with contextlib.suppress(Exception):
+            from agent.serving_events import account_label, emit_account_switched, reset_serving_dedupe
+            reset_serving_dedupe(agent)
+            emit_account_switched(
+                agent, from_account=account_label(agent, prior_entry_id),
+                to_account=account_label(agent, getattr(entry, "id", None)), cause="revert",
+            )
     agent._credential_pool_revert_id = None
 
 
@@ -1361,6 +1379,10 @@ def restore_primary_runtime(agent) -> bool:
                     f"✅ Primary model restored: {agent.model} via {agent.provider}; "
                     f"fallback {previous_model} via {previous_provider} is no longer active."
                 )
+            with contextlib.suppress(Exception):
+                from agent.serving_events import emit_primary_restored, reset_serving_dedupe
+                reset_serving_dedupe(agent)
+                emit_primary_restored(agent, previous_model=str(previous_model), previous_provider=str(previous_provider))
         return True
     except Exception as e:
         logger.warning("Failed to restore primary runtime: %s", e)
