@@ -136,8 +136,9 @@ def test_find_live_child_returns_continuation_with_foreign_markers(
     assert child["id"] == "inherited-continuation"
 
 
+@pytest.mark.parametrize("marker", ["_delegate_from", "_branched_from"])
 def test_compression_lineage_includes_continuation_with_foreign_markers(
-    db: SessionDB,
+    db: SessionDB, marker: str,
 ) -> None:
     """Lineage walk uses the same parent-bound marker rule as orphan recovery."""
     _compression_parent(db, "delegate-session-3")
@@ -145,7 +146,7 @@ def test_compression_lineage_includes_continuation_with_foreign_markers(
         "inherited-tip",
         source="subagent",
         parent_session_id="delegate-session-3",
-        model_config={"_delegate_from": "some-original-parent"},
+        model_config={marker: "some-original-parent"},
     )
 
     assert db.get_compression_lineage("inherited-tip") == [

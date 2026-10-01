@@ -62,6 +62,7 @@ def test_managed_route_returns_version_and_monitor_count(managed_status, behind,
             datetime.now(timezone.utc) - timedelta(seconds=age)
         ).isoformat()
     status_path.write_text(json.dumps(receipt))
+    status_path.chmod(0o600)
 
     response = client.get("/api/hermes/update/check")
 
@@ -82,6 +83,7 @@ def test_missing_or_invalid_receipt_is_visible_without_inventing_zero(managed_st
     client, status_path, _receipt = managed_status
     if invalid:
         status_path.write_text("not JSON")
+        status_path.chmod(0o600)
 
     response = client.get("/api/hermes/update/check")
 
