@@ -192,8 +192,8 @@ export const zhHant = defineLocale({
     managedBuildCandidate: '建置候選版本',
     managedRequestingCandidate: '正在請求…',
     managedRequestOnlyNotice: '這些按鈕只會送出外部請求，不會變更或重新啟動生產環境。',
-    backend: {
-      ...zhHantBoot.updates.backend,
+    applyStatus: {
+      ...zhHantBoot.updates.applyStatus,
       candidateRequested: '已請求建置不可變候選版本。生產環境未變更。'
     }
   },

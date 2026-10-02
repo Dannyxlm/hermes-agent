@@ -88,8 +88,8 @@ export const ar = defineLocale({
     managedBuildCandidate: 'بناء مرشح',
     managedRequestingCandidate: 'جار الطلب…',
     managedRequestOnlyNotice: 'هذه الأزرار ترسل طلبات فقط. لا يتم تغيير الإنتاج أو إعادة تشغيله.',
-    backend: {
-      ...arBoot.updates.backend,
+    applyStatus: {
+      ...arBoot.updates.applyStatus,
       candidateRequested: 'طُلب بناء مرشح غير قابل للتغيير. لم يتغير الإنتاج.'
     }
   },
