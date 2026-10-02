@@ -76,6 +76,12 @@ def _claim_lease_row(conn, table: str, key_col: str, key: str, holder: str, now:
     return owner is not None and owner["holder"] == holder, reclaimed_holder
 
 
+# Defensive bound on the forward compression-chain walk; ``seen`` guards cycles.
+# 100 truncated real compression lineages (~180 deep), stranding root→tip walks
+# on a stale mid id (#125041). Named so tests can simulate the REAL walk.
+_CHAIN_CAP = 4096
+
+
 class SessionCompressionMixin:
     """Compression lineage, cooldown/streak counters, locks and turn leases."""
 
@@ -785,7 +791,7 @@ class SessionCompressionMixin:
         current = session_id
         current_row = self.get_session(current) if current else None
         root_seen = {current} if current else set()
-        for _ in range(4096):
+        for _ in range(_CHAIN_CAP):
             if not current_row:
                 break
             parent_id = current_row.get("parent_session_id")
@@ -802,11 +808,9 @@ class SessionCompressionMixin:
         else:
             raise RuntimeError("Compression lineage exceeds the safe depth limit")
         chain = [current] if current else []
-        seen = {current} if current else set()
-        # Real long-running chats can cross the old 100-segment ceiling. Keep
-        # a high corruption guard, but never return a partial/stale tip when it
-        # is reached.
-        for _ in range(4096):
+        seen = set(chain)
+        # Keep the upstream depth guard and reject a truncated lineage.
+        for _ in range(_CHAIN_CAP):
             with self._read_ctx() as conn:
                 row = conn.execute(_CHAIN_STEP_SQL, (current,)).fetchone()
             if row is None:
@@ -840,7 +844,7 @@ class SessionCompressionMixin:
             return []
         root = session
         root_seen = {root["id"]}
-        for _ in range(4096):
+        for _ in range(_CHAIN_CAP):
             parent_id = root.get("parent_session_id")
             if not parent_id or self._is_explicit_fork_child_row(root, include_reset=True):
                 break
@@ -864,7 +868,7 @@ class SessionCompressionMixin:
 
         reverse_lineage = [current["id"]]
         seen = {current["id"]}
-        for _ in range(4096):
+        for _ in range(_CHAIN_CAP):
             parent_id = current.get("parent_session_id")
             if not parent_id or self._is_explicit_fork_child_row(current, include_reset=True):
                 break
