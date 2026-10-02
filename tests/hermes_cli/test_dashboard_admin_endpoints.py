@@ -856,7 +856,9 @@ class TestUpdateCheckEndpoint:
     ):
         import hermes_cli.web_server as ws
 
-        monkeypatch.setenv("HERMES_HOME", "/home/ubuntu/.hermes")
+        profile_home = tmp_path / "managed-profile"
+        profile_home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(profile_home))
         monkeypatch.setenv("HERMES_DASHBOARD_UPDATE_MANAGED_EXTERNALLY", "1")
         status_path = tmp_path / "hermes-update-status.json"
         status_path.write_text(

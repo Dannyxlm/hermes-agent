@@ -255,10 +255,10 @@ def test_exact_clarify_owner_type_and_duplicate(mobile_home, peer, monkeypatch):
     for request in (foreign, secret):
         assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, answer="answer")
     assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, answer="answer")["result"]["status"] == "ok"
-    assert own.result == {"answer": "answer"}
+    assert own.result == {"answer": "answer", "outcome": "submitted"}
     assert not foreign.event.is_set() and not secret.event.is_set()
     assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, answer="changed")["result"]["status"] == "expired"
-    assert own.result == {"answer": "answer"}
+    assert own.result == {"answer": "answer", "outcome": "submitted"}
 
 
 def test_clarify_batch_snapshot_locks_and_cancellation(mobile_home, peer):
@@ -277,7 +277,7 @@ def test_clarify_batch_snapshot_locks_and_cancellation(mobile_home, peer):
     assert result["result"]["remaining"] == ["b"]
     assert rpc("mobile.snapshot", **scope(opened))["result"]["pending_clarify"]["answers"] == {"a": "one"}
     assert rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="b", answer="two")["result"]["remaining"] == []
-    assert request.result == {"answers": {"a": "one", "b": "two"}}
+    assert request.result == {"answers": {"a": "one", "b": "two"}, "outcome": "submitted"}
     assert rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="a", answer="changed")["result"]["status"] == "expired"
     second = requests.ServerRequest(sid, "clarify", {"question": "Cancel?"})
     requests._register(second)
