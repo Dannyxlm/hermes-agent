@@ -597,8 +597,8 @@ import {
 } from './update-count'
 import { updateGateReason, waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
-import { hasGitCheckoutMetadata, resolveGitCheckoutCandidate } from './update-root'
 import { updateConnectionsBeforeLocal } from './update-order'
+import { hasGitCheckoutMetadata, resolveGitCheckoutCandidate } from './update-root'
 import {
   resolveUpdaterMechanism,
   type UpdaterApplyResultWire,
@@ -4017,7 +4017,8 @@ async function checkManagedPublicationUpdates({ force = false }: { force?: boole
   // The previous release predates PM's source probe. Resolve only its stamped
   // publication branch, never a default channel or a guessed replacement.
   const tip = await runGit(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], {
-    cwd: updateRoot, timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
+    cwd: updateRoot,
+    timeoutMs: OFFICIAL_UPSTREAM_CHECK_TIMEOUT_MS
   })
 
   const targetSha = tip.stdout.trim().split(/\s+/)[0]
@@ -4027,9 +4028,14 @@ async function checkManagedPublicationUpdates({ force = false }: { force?: boole
   }
 
   return {
-    supported: true, branch, targetSha, behind: null,
+    supported: true,
+    branch,
+    targetSha,
+    behind: null,
     updateAvailable: INSTALL_STAMP?.commit !== targetSha,
-    hermesRoot: updateRoot, upstreamTracking, fetchedAt: Date.now()
+    hermesRoot: updateRoot,
+    upstreamTracking,
+    fetchedAt: Date.now()
   }
 }
 
@@ -4250,16 +4256,20 @@ function resolveCheckoutUpdateStrategy(expectedTargetSha?: string): UpdaterStrat
     isMac: IS_MAC,
     defaultUpdateBranch: DEFAULT_UPDATE_BRANCH,
     updateHandoffDwellMs: UPDATE_HANDOFF_DWELL_MS,
-    managedPublication: isManagedPublication() ? { repository: INSTALL_STAMP!.repository!, branch: readEffectiveDesktopUpdateConfig().branch, expectedTargetSha } : undefined,
+    managedPublication: isManagedPublication()
+      ? { repository: INSTALL_STAMP!.repository!, branch: readEffectiveDesktopUpdateConfig().branch, expectedTargetSha }
+      : undefined,
     readSourceUpdate: async (updateRoot: string, opts: { force?: boolean }): Promise<SourceUpdate | null> =>
-      isManagedPublication() ? checkManagedPublicationUpdates(opts) : readSourceUpdate({
-        python: await findPythonForRoot(updateRoot),
-        git: resolveGitBinary(),
-        updateRoot,
-        hermesHome: HERMES_HOME,
-        branchConfigPath: DESKTOP_UPDATE_CONFIG_PATH,
-        force: opts.force
-      }),
+      isManagedPublication()
+        ? checkManagedPublicationUpdates(opts)
+        : readSourceUpdate({
+            python: await findPythonForRoot(updateRoot),
+            git: resolveGitBinary(),
+            updateRoot,
+            hermesHome: HERMES_HOME,
+            branchConfigPath: DESKTOP_UPDATE_CONFIG_PATH,
+            force: opts.force
+          }),
     resolveUpdateRoot,
     resolveUpdaterBinary,
     remoteGatewayActive: globalRemoteActive,
@@ -5112,7 +5122,9 @@ async function releaseBackendLock(updateRoot: string, tag: string): Promise<{ un
 //
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
 // only this apply action changed.
-async function applyUpdates(opts: { expectedTargetSha?: string; dirtyStrategy?: string; stopSafeBlockers?: boolean } = {}): Promise<UpdaterApplyResultWire> {
+async function applyUpdates(
+  opts: { expectedTargetSha?: string; dirtyStrategy?: string; stopSafeBlockers?: boolean } = {}
+): Promise<UpdaterApplyResultWire> {
   return updateOperation.apply(async (): Promise<UpdaterApplyResultWire> => {
     updateInFlight = true
     let handedOff: boolean = false
@@ -5197,12 +5209,14 @@ async function handOffWindowsBootstrapRecovery(reason) {
       ...process.env,
       HERMES_HOME,
       HERMES_INSTALL_ROOT: updateRoot,
-      ...(isManagedPublication() && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit) ? {
-        HERMES_MANAGED_PUBLICATION_UPDATE: '1',
-        HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository!,
-        HERMES_MANAGED_PUBLICATION_BRANCH: branch,
-        HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit
-      } : {})
+      ...(isManagedPublication() && INSTALL_STAMP?.commit && MANAGED_TARGET_SHA_RE.test(INSTALL_STAMP.commit)
+        ? {
+            HERMES_MANAGED_PUBLICATION_UPDATE: '1',
+            HERMES_MANAGED_PUBLICATION_REPOSITORY: INSTALL_STAMP.repository!,
+            HERMES_MANAGED_PUBLICATION_BRANCH: branch,
+            HERMES_MANAGED_PUBLICATION_TARGET_SHA: INSTALL_STAMP.commit
+          }
+        : {})
     },
     detached: true,
     stdio: 'ignore'

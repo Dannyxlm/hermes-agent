@@ -302,7 +302,9 @@ export function missingRendererAssets(indexPath: string, deps: RendererBundleDep
   try {
     const manifest = parseRendererManifest(readFileSync(path.join(dir, 'manifest.json'), 'utf8'))
 
-    if (manifest) {manifestGraph = rendererManifestGraph(manifest, htmlRefs)}
+    if (manifest) {
+      manifestGraph = rendererManifestGraph(manifest, htmlRefs)
+    }
   } catch {
     // Absent/unreadable manifests are expected for older renderer bundles.
   }

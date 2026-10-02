@@ -384,7 +384,13 @@ async function resolveInstallScript({
   await _download(installRef.ref, cached, installRepository)
   emit({ type: 'log', line: `[bootstrap] saved to ${cached}` })
 
-  return { path: cached, source: 'download', commit: resolvedCommit, repository: installRepository, kind: installScriptKind() }
+  return {
+    path: cached,
+    source: 'download',
+    commit: resolvedCommit,
+    repository: installRepository,
+    kind: installScriptKind()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +463,11 @@ function cleanInstallerLogLine(raw: string): string {
 // when it is new enough), so store dirs already on PATH stay ahead of the
 // login-shell entries shell-path.ts merged in front of them.
 function installerEnv(hermesHome, installRepository) {
-  const env = { ...process.env, HERMES_HOME: hermesHome || process.env.HERMES_HOME || '', HERMES_INSTALL_REPOSITORY: installRepository || process.env.HERMES_INSTALL_REPOSITORY || FALLBACK_REPOSITORY }
+  const env = {
+    ...process.env,
+    HERMES_HOME: hermesHome || process.env.HERMES_HOME || '',
+    HERMES_INSTALL_REPOSITORY: installRepository || process.env.HERMES_INSTALL_REPOSITORY || FALLBACK_REPOSITORY
+  }
   const key = pathEnvKey(env)
 
   env[key] = storeFirstPath(env[key] || '', { currentEnv: env })
