@@ -247,18 +247,18 @@ def test_exact_clarify_owner_type_and_duplicate(mobile_home, peer, monkeypatch):
     opened = open_bot()
     sid = opened["session_id"]
     from tui_gateway import server_requests as requests
-    own = requests.ServerRequest(sid, "clarify", {"question": "Color?"})
-    foreign = requests.ServerRequest("another-runtime", "clarify", {"question": "Color?"})
+    own = requests.ServerRequest(sid, "clarify", {"questions": [{"qid": "q", "question": "Color?"}]}, qids=["q"])
+    foreign = requests.ServerRequest("another-runtime", "clarify", {"questions": [{"qid": "q", "question": "Color?"}]}, qids=["q"])
     secret = requests.ServerRequest(sid, "secret", {"env_var": "TEST", "prompt": "Secret"})
     for request in (own, foreign, secret):
         requests._register(request)
     for request in (foreign, secret):
-        assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, answer="answer")
-    assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, answer="answer")["result"]["status"] == "ok"
-    assert own.result == {"answer": "answer", "outcome": "submitted"}
+        assert "error" in rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="q", answer="answer")
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, question_id="q", answer="answer")["result"]["status"] == "ok"
+    assert own.result == {"answers": {"q": "answer"}, "outcome": "submitted"}
     assert not foreign.event.is_set() and not secret.event.is_set()
-    assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, answer="changed")["result"]["status"] == "expired"
-    assert own.result == {"answer": "answer", "outcome": "submitted"}
+    assert rpc("mobile.clarify.respond", **scope(opened), request_id=own.id, question_id="q", answer="changed")["result"]["status"] == "expired"
+    assert own.result == {"answers": {"q": "answer"}, "outcome": "submitted"}
 
 
 def test_clarify_batch_snapshot_locks_and_cancellation(mobile_home, peer):
@@ -279,7 +279,7 @@ def test_clarify_batch_snapshot_locks_and_cancellation(mobile_home, peer):
     assert rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="b", answer="two")["result"]["remaining"] == []
     assert request.result == {"answers": {"a": "one", "b": "two"}, "outcome": "submitted"}
     assert rpc("mobile.clarify.respond", **scope(opened), request_id=request.id, question_id="a", answer="changed")["result"]["status"] == "expired"
-    second = requests.ServerRequest(sid, "clarify", {"question": "Cancel?"})
+    second = requests.ServerRequest(sid, "clarify", {"questions": [{"qid": "q", "question": "Cancel?"}]}, qids=["q"])
     requests._register(second)
     requests.cancel(sid)
     assert rpc("mobile.snapshot", **scope(opened))["result"]["pending_clarify"] is None
