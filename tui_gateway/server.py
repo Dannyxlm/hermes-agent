@@ -669,6 +669,18 @@ def _default_session_cwd() -> str:
 
 
 def write_json(obj: dict) -> bool:
+    from tui_gateway.session_stream_cut import publication_lock, project_event
+    params = obj.get("params")
+    session = _sessions.get(params.get("session_id")) if isinstance(params, dict) else None
+    if obj.get("method") == "event" and session is not None:
+        # One order for replay stamping, projection and transport delivery; detached
+        # frames still advance the cut. No history/DB locks are acquired here.
+        with publication_lock(session):
+            return _write_json_published(obj, project_session=session)
+    return _write_json_published(obj)
+
+
+def _write_json_published(obj: dict, project_session=None) -> bool:
     """Emit one JSON frame via the most-specific transport: (1) event frames with a session id → that
     session's transport (async events reach the owner even from threads with no contextvar binding);
     (2) the context-bound transport (:func:`dispatch`); (3) module stdio (tests monkey-patch ``_real_stdout``).
@@ -676,6 +688,9 @@ def write_json(obj: dict) -> bool:
     from tui_gateway.event_replay import _stamp_event
     from tui_gateway.hosted_room_member_activity import project_room_member_activity
     _stamp_event(obj)
+    if project_session is not None:
+        from tui_gateway.session_stream_cut import project_event
+        project_event(project_session, obj)
     _mobile_push_capture(obj)
     params = obj.get("params")
     if obj.get("method") == "event" or (isinstance(obj.get("id"), str) and "method" in obj):

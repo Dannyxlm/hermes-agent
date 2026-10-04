@@ -8,6 +8,9 @@ _MOBILE_PUSH_METHODS = (
     "mobile.push.status", "mobile.push.register", "mobile.push.unregister",
     "mobile.activity.register", "mobile.activity.unregister",
     "mobile.push.refresh", "mobile.activity.refresh",
+    "mobile.session_push.register", "mobile.session_push.refresh", "mobile.session_push.unregister",
+    "mobile.session_activity.register", "mobile.session_activity.refresh", "mobile.session_activity.unregister",
+    "mobile.widget.register", "mobile.widget.unregister",
 )
 _MOBILE_PUSH_STATUSES = {
     "tool.start": "usingTool", "tool.complete": "thinking", "message.delta": "responding",
@@ -135,6 +138,112 @@ def _(rid, params, principal):
     return _mobile_push_unregister(rid, params, principal, "activity")
 
 
+def _mobile_session_destination(params):
+    from tui_gateway.mobile_session_scope import resolve_destination
+    profile, home = _mobile_profile(params)
+    return resolve_destination(profile, home, _mobile_string(params, "stored_session_id"))
+
+
+def _mobile_session_register(rid, params, principal, kind):
+    service = _mobile_push_service()
+    if service is None:
+        return _err(rid, 4405, "mobile notifications are not configured")
+    destination, tip, _title = _mobile_session_destination(params)
+    token_key = {"alert": "device_token", "activity": "activity_token", "widget": "widget_token"}[kind]
+    options = dict(installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
+                   token=params.get(token_key), environment=params.get("environment"), kind=kind)
+    if kind == "activity":
+        options.update(activity_id=params.get("activity_id"), run_id=params.get("run_id"))
+    elif kind == "widget":
+        options.update(read_token=params.get("read_token"))
+    else:
+        options.update(categories=params.get("categories", ("attention", "completion")),
+                       preview_enabled=params.get("preview_enabled", False))
+    receipt = service.register(principal, destination, **options)
+    receipt.update(destination={"surface": destination.surface, "profile": destination.profile,
+                                "session_id": destination.session_id}, resolved_session_id=tip,
+                   notification_run=service.current_run(destination))
+    if kind == "widget":
+        from tui_gateway.mobile_widget_http import SNAPSHOT_PATH
+        receipt["snapshot_path"] = SNAPSHOT_PATH
+    return _ok(rid, receipt)
+
+
+@_mobile_push_handler("mobile.session_push.register")
+def _(rid, params, principal):
+    return _mobile_session_register(rid, params, principal, "alert")
+
+
+@_mobile_push_handler("mobile.session_activity.register")
+def _(rid, params, principal):
+    return _mobile_session_register(rid, params, principal, "activity")
+
+
+@_mobile_push_handler("mobile.widget.register")
+def _(rid, params, principal):
+    return _mobile_session_register(rid, params, principal, "widget")
+
+
+def _mobile_session_refresh(rid, params, principal, kind):
+    service = _mobile_push_service()
+    if service is None:
+        return _err(rid, 4405, "mobile notifications are not configured")
+    def accepts_scope(scope):
+        if scope.surface != "native_session":
+            return False
+        try:
+            destination, _tip, _title = _mobile_session_destination(
+                {"profile": scope.profile, "stored_session_id": scope.session_id})
+            return destination == scope
+        except (ValueError, FileNotFoundError):
+            return False
+    options = dict(installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
+                   token=params.get("activity_token" if kind == "activity" else "device_token"),
+                   environment=params.get("environment"), kind=kind, accepts_scope=accepts_scope)
+    if kind == "activity":
+        options.update(activity_id=params.get("activity_id"), run_id=params.get("run_id"))
+    else:
+        options.update(categories=params.get("categories", ("attention", "completion")),
+                       preview_enabled=params.get("preview_enabled", False))
+    return _ok(rid, service.refresh(principal, **options))
+
+
+@_mobile_push_handler("mobile.session_push.refresh")
+def _(rid, params, principal):
+    return _mobile_session_refresh(rid, params, principal, "alert")
+
+
+@_mobile_push_handler("mobile.session_activity.refresh")
+def _(rid, params, principal):
+    return _mobile_session_refresh(rid, params, principal, "activity")
+
+
+def _mobile_session_unregister(rid, params, principal, kind):
+    from tui_gateway.mobile_push import unregister_for_home
+    options = dict(installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
+                   subscription_id=params.get("subscription_id"), kind=kind, surface="native_session")
+    service = _mobile_push_service()
+    removed = service.unregister(principal, **options) if service else unregister_for_home(_hermes_home, principal, **options)
+    return _ok(rid, {"removed": removed})
+
+
+@_mobile_push_handler("mobile.session_push.unregister")
+def _(rid, params, principal):
+    return _mobile_session_unregister(rid, params, principal, "alert")
+
+
+@_mobile_push_handler("mobile.session_activity.unregister")
+def _(rid, params, principal):
+    if not params.get("subscription_id"):
+        raise ValueError("subscription_id required")
+    return _mobile_session_unregister(rid, params, principal, "activity")
+
+
+@_mobile_push_handler("mobile.widget.unregister")
+def _(rid, params, principal):
+    return _mobile_session_unregister(rid, params, principal, "widget")
+
+
 def _mobile_push_scope_for_session(session, refresh=False):
     from hermes_cli.profiles import list_profiles
     from tui_gateway.mobile_push import Scope
@@ -142,10 +251,13 @@ def _mobile_push_scope_for_session(session, refresh=False):
         return session["_mobile_push_scope"]
     session.pop("_mobile_push_scope", None)
     home = Path(session.get("profile_home") or _hermes_home).resolve()
-    with _mobile_read_db(home) as db:
-        root, tip, _chain = _mobile_canonical_identity(db)
+    try:
+        with _mobile_read_db(home) as db:
+            root, tip, _chain = _mobile_canonical_identity(db)
+    except ValueError:
+        return _mobile_ordinary_push_scope(session, home)
     if session.get("session_key") != tip["id"]:
-        return None
+        return _mobile_ordinary_push_scope(session, home)
     profile = next((p for p in list_profiles() if Path(p.path).resolve() == home), None)
     if profile is not None:
         session["_mobile_push_scope"] = Scope("native", profile.name, root["id"])
@@ -154,6 +266,20 @@ def _mobile_push_scope_for_session(session, refresh=False):
         title = bot_meta.get("title") if isinstance(bot_meta, dict) else None
         session["_mobile_push_title"] = title or profile.display_name or profile.name
     return session.get("_mobile_push_scope")
+
+
+def _mobile_ordinary_push_scope(session, home):
+    from hermes_cli.profiles import list_profiles
+    from tui_gateway.mobile_session_scope import resolve_destination
+    profile = next((p for p in list_profiles() if Path(p.path).resolve() == home), None)
+    if profile is None:
+        return None
+    destination, tip, title = resolve_destination(profile.name, home, session.get("session_key"))
+    if session.get("session_key") != tip:
+        return None
+    session["_mobile_push_scope"] = destination
+    session["_mobile_push_title"] = title
+    return destination
 
 
 def _mobile_notification_run(profile, root_id):
@@ -239,6 +365,6 @@ def _mobile_push_finish(session, status):
 
 def register(server):
     bind_module(globals(), server, skip=("_",))
-    server._MOBILE_METHODS += _MOBILE_PUSH_METHODS
+    server._MOBILE_METHODS += _MOBILE_PUSH_METHODS + ("session.stream.snapshot",)
     # Resume a persisted outbox when this existing backend starts, before any new events.
     server._mobile_push_service()

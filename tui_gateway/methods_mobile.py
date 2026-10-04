@@ -112,7 +112,9 @@ def _mobile_scope(params):
 def _(rid, params):
     return _ok(rid, {"protocol_version": 1, "methods": list(_MOBILE_METHODS),
         "features": ["strict_canonical_open", "bounded_history", "scoped_interactions",
-                     "queued_submit", "snapshot_reconciliation"],
+                     "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
+                     "ordinary_session_live_activity", "native_widget_snapshot_capability",
+                     "atomic_stream_snapshot"],
         "max_history_limit": 100, "max_roster_limit": 100})
 
 

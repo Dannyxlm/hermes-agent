@@ -1058,6 +1058,20 @@ def _resume_eager(ctx: _Resume) -> dict:
         auto_continue=_maybe_schedule_auto_continue(sid, session, ctx.target) if session else None)
 
 
+@method("session.stream.snapshot")
+def _(rid, params):
+    from tui_gateway.session_stream_cut import stream_cut
+    sid = params.get("session_id")
+    session = _sessions.get(sid)
+    if not session or not _session_transport_contains(session, current_transport()):
+        return _err(rid, 4400, "session must be attached to this connection")
+    if params.get("profile") is not None:
+        from hermes_cli.profiles import get_profile_dir
+        if Path(get_profile_dir(params["profile"])).resolve() != Path(session.get("profile_home") or _hermes_home).resolve():
+            return _err(rid, 4400, "runtime profile mismatch")
+    return _ok(rid, stream_cut(sid, session))
+
+
 @method("session.resume")
 def _(rid, params: dict) -> dict:
     if not (target := params.get("session_id", "")):

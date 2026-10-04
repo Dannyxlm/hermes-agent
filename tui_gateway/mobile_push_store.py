@@ -106,8 +106,8 @@ class PushStore(WidgetPushStore):
                  kind="alert", categories=("attention", "completion"), activity_id="", run_id="", preview_enabled=False, read_token=None):
         if kind == "widget":
             reader_digest(read_token)
-            if scope.surface != "chats":
-                raise ValueError("widget requires Chats")
+            if scope.surface not in {"chats", "native_session"}:
+                raise ValueError("widget requires ordinary session")
         installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
         _validate_delivery(principal, token, environment, kind, categories)
         if not isinstance(preview_enabled, bool):
@@ -190,7 +190,7 @@ class PushStore(WidgetPushStore):
                 receipts.append({"subscription_id": row["id"], "expires_at": expiry})
         return {"updated": len(receipts), "subscriptions": receipts}
 
-    def unregister(self, principal, *, installation_id, connection_id, subscription_id=None, kind=None):
+    def unregister(self, principal, *, installation_id, connection_id, subscription_id=None, kind=None, surface=None):
         args = [principal, normalized_uuid(installation_id), normalized_uuid(connection_id)]
         query = "DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?"
         if subscription_id is not None:
@@ -199,10 +199,18 @@ class PushStore(WidgetPushStore):
         if kind is not None:
             query += " AND kind=?"
             args.append(kind)
+        if surface is not None:
+            query += " AND surface=?"
+            args.append(surface)
         with self.transaction() as db:
             count = db.execute(query, args).rowcount
-            if subscription_id is None and kind is None:
+            if subscription_id is None and kind is None and surface is None:
                 db.execute("DELETE FROM widget_readers WHERE principal=? AND installation_id=? AND connection_id=?", args)
+            elif kind == "widget":
+                db.execute("""DELETE FROM widget_readers WHERE principal=? AND installation_id=? AND connection_id=?
+                    AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.principal=widget_readers.principal
+                    AND s.installation_id=widget_readers.installation_id AND s.connection_id=widget_readers.connection_id
+                    AND s.kind='widget' AND s.expires_at>?)""", (*args[:3], self.clock()))
             return count
 
     def current_run(self, scope):

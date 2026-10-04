@@ -1388,6 +1388,10 @@ async def _token_auth_seam(request: Request, call_next):
     + ``token_authenticated`` so downstream gates skip enforcement. Non-token
     routes pass through untouched.
     """
+    from tui_gateway.mobile_widget_http import widget_snapshot_response
+    response = await widget_snapshot_response(request)
+    if response is not None:
+        return response
     from hermes_cli.dashboard_auth.token_auth import token_auth_middleware
     return await token_auth_middleware(request, call_next)
 
