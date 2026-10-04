@@ -1,6 +1,5 @@
 """Synthetic mobile contracts; never open the production integration stores."""
 import base64
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -15,22 +14,23 @@ from plugins.cloudseed_mobile.dashboard import plugin_api as api
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     # --basetemp places fixtures in scratch; shared home guards remain enabled.
-    with nullcontext(str(tmp_path)) as d:
-        home = Path(d)
-        monkeypatch.setenv('HERMES_HOME', d)
-        import hermes_constants
-        monkeypatch.setattr(hermes_constants, '_get_platform_default_hermes_home', lambda: home)
-        monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'owner', 'owner_provider': 'basic'})
-        app = FastAPI()
-        @app.middleware('http')
-        async def session(request, call_next):
-            if request.headers.get('authorization') == 'Bearer fixture':
-                request.state.session = SimpleNamespace(user_id='owner', provider='basic')
-            return await call_next(request)
-        app.include_router(api.router, prefix='/api/plugins/cloudseed_mobile')
-        with TestClient(app) as c:
-            c.headers['Authorization'] = 'Bearer fixture'
-            yield c, home
+    home = tmp_path
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    import hermes_constants
+    monkeypatch.setattr(hermes_constants, '_get_platform_default_hermes_home', lambda: home)
+    monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'owner', 'owner_provider': 'basic'})
+    app = FastAPI()
+    @app.middleware('http')
+    async def session(request, call_next):
+        if request.headers.get('authorization') == 'Bearer fixture' or request.cookies.get('fixture_session') == 'owner':
+            request.state.session = SimpleNamespace(user_id='owner', provider='basic')
+        return await call_next(request)
+    from hermes_cli.web_server_dashboard import _plugin_route_secret_scope
+    from fastapi import Depends
+    app.include_router(api.router, prefix='/api/plugins/cloudseed_mobile', dependencies=[Depends(_plugin_route_secret_scope)])
+    with TestClient(app) as c:
+        c.headers['Authorization'] = 'Bearer fixture'
+        yield c, home
 
 
 P = '/api/plugins/cloudseed_mobile'
@@ -43,7 +43,13 @@ def post(c, domain, op, **extra):
 
 def test_catalog_cycle_search_tombstone(client, monkeypatch):
     c, home = client
-    monkeypatch.setattr(api, 'photo_store', lambda: api.PhotoCatalog(home / 'webui/photo-catalog/catalog.sqlite3', free_bytes=lambda: 10 * 1024**3))
+    import asyncio
+    def store():
+        # Exercise actual SQLite while guarding the HTTP threadpool boundary.
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        return api.PhotoCatalog(home / 'webui/photo-catalog/catalog.sqlite3', free_bytes=lambda: 10 * 1024**3)
+    monkeypatch.setattr(api, 'photo_store', store)
     assert post(c, 'photo-catalog', 'register').status_code == 200
     epoch = post(c, 'photo-catalog', 'begin', count=1).json()['epoch']
     item = {'id': 'b'*64, 'fingerprint': 'c'*64, 'created': 1, 'albums': ['Fixture'], 'text': 'synthetic cat', 'favorite': False, 'screenshot': False, 'preview': base64.b64encode(b'\xff\xd8\xff\xd9').decode()}
@@ -139,6 +145,18 @@ def test_account_primary_cas_uses_native_store(client):
     assert c.post(P+'/provider/accounts/primary', json=body).status_code == 409
     saved = json.loads(path.read_text())
     assert next(r for r in saved['credential_pool']['openai-codex'] if r['id'] == 'second')['priority'] == 0
+    b = home/'profiles'/'b'
+    b.mkdir(parents=True)
+    (b/'config.yaml').write_text('{}')
+    borrowed = c.get(P+'/provider/accounts?profile=b')
+    borrowed_section = next(p for p in borrowed.json()['providers'] if p['id'] == 'openai-codex')
+    assert borrowed_section['scope'] == 'shared_root'
+    assert not borrowed_section['can_set_primary']
+    denied = c.post(P+'/provider/accounts/primary?profile=b', json={
+        'provider': 'openai-codex', 'account_id': 'first', 'profile_id': 'b', 'revision': borrowed_section['revision']})
+    assert denied.status_code == 403
+    assert json.loads(path.read_text()) == saved
+    assert not (b/'auth.json').exists()  # no borrowed credential copy
 
 
 def test_owner_profile_payload_boundaries(client, monkeypatch):
@@ -151,6 +169,17 @@ def test_owner_profile_payload_boundaries(client, monkeypatch):
     monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'owner', 'owner_provider': 'basic'})
     assert c.post(P+'/memory/write', content=b'x'*(api.MAX_BODY+1)).status_code == 413
     assert c.post(P+'/memory/write', content='{"section":"soul","content":NaN}').status_code == 400
+
+
+def test_owner_cookie_origin(client):
+    c, _ = client
+    c.headers.pop('authorization')
+    c.cookies.set('fixture_session', 'owner')
+    body = {'section': 'soul', 'content': 'fixture'}
+    assert c.post(P+'/memory/write', json=body).status_code == 403
+    assert c.post(P+'/memory/write', json=body, headers={'Origin': 'https://attacker.invalid'}).status_code == 403
+    assert c.post(P+'/memory/write', json=body, headers={'Origin': 'http://testserver'}).status_code == 200
+    assert c.get(P+'/memory').json()['soul'] == 'fixture'
 
 
 def test_memory_directory_symlink_refused(client):
@@ -229,20 +258,21 @@ def test_reminder_processing_expiry_and_rebind_retains_stable_ids(client):
 
 
 def test_memory_profiles_a_b_a(client):
-    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
     c, home = client
     b = home/'profiles'/'b'
     b.mkdir(parents=True)
+    (b/'config.yaml').write_text('{}')
     assert c.post(P+'/memory/write', json={'section': 'soul', 'content': 'A'}).status_code == 200
-    token = set_hermes_home_override(b)
-    try:
-        assert api.profile_id() == 'b'
-        assert api.state_dir() == home/'webui'
-        api.write_memory('soul', 'B')
-        assert api.read_memory()['soul'] == 'B'
-    finally:
-        reset_hermes_home_override(token)
+    assert c.post(P+'/memory/write?profile=b', json={'section': 'soul', 'content': 'B'}).status_code == 200
+    assert c.get(P+'/memory?profile=b').json()['soul'] == 'B'
+    assert (b/'SOUL.md').read_text() == 'B'
     assert c.get(P+'/memory').json()['soul'] == 'A'
+    assert post(c, 'photo-catalog', 'register', profile='b').status_code == 403
+    response = c.post(P+'/photo-catalog/register?profile=b', json={'profile': 'b', 'device_id': DEVICE, 'secret': SECRET})
+    assert response.status_code == 200
+    # Integrations are root-scoped, memories are profile-scoped.
+    assert (home/'webui/photo-catalog/catalog.sqlite3').is_file()
+    assert not (b/'webui').exists()
 
 
 def test_relocated_clis_use_retained_stores(client, monkeypatch):

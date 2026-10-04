@@ -32,9 +32,11 @@ def main():
         if args.command == 'devices':
             result = {'devices': store.devices(args.profile)}
         elif args.command == 'request':
-            if args.json_file.stat().st_size > 20000:
+            with args.json_file.open('rb') as source:
+                payload = source.read(20001)
+            if len(payload) > 20000:
                 raise ReminderError('Request file too large')
-            result = store.enqueue(args.device, args.id, args.operation, json.loads(args.json_file.read_text()), args.profile)
+            result = store.enqueue(args.device, args.id, args.operation, json.loads(payload), args.profile)
         else:
             result = store.status(args.device, args.id, args.profile)
         print(json.dumps(result))

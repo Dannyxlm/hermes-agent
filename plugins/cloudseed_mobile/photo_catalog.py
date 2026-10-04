@@ -400,4 +400,3 @@ class PhotoCatalog:
             db.execute("DELETE FROM photos WHERE device=?", (device,))
             db.execute("DELETE FROM manifest WHERE device=?", (device,))
         return {"ok": True, "protocol_version": 1}
-

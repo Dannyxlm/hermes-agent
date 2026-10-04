@@ -185,4 +185,3 @@ class ReminderOutbox:
             db.execute("UPDATE devices SET enabled=0 WHERE id=?", (identifier(device),))
             db.execute("UPDATE commands SET state=CASE WHEN state='queued' THEN 'cancelled' ELSE 'unconfirmed' END,payload='{}' WHERE device=? AND state IN ('queued','processing')", (identifier(device),))
         return {"ok": True, "protocol_version": 1}
-

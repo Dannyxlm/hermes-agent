@@ -25,7 +25,7 @@ def owner_config():
     return load_config().get('cloudseed_mobile', {})
 
 
-async def owner(request: Request):
+def owner(request: Request):
     session = getattr(request.state, 'session', None)
     if session is None:
         # Explicitly reject local no-auth dashboard and service token exemptions.

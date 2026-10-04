@@ -210,5 +210,12 @@ PYTHONDONTWRITEBYTECODE=1 \
 
 The scratch venv prefix is recognized by the existing home-I/O guard as interpreter
 installation; the guard remains enabled. Synthetic HERMES_HOME and every integration
-fixture are under that scratch prefix. Native mounting/auth/real phone acceptance
-must still be verified on the sealed candidate before cutover.
+fixture are under that scratch prefix. Verification: **21 passed** with this
+command, including native discovery/import/mount and real native request-profile
+scope, root-borrowed account write denial, owner/cookie fences and CLI subprocesses.
+Removing the reminder secret guard made all four device-route regressions fail
+(200 instead of 400); restored guard is green. Source AST comparison confirmed both
+SQLite schema strings and every retained domain method are unchanged; only `rebind`
+was added. Skill patches applied to scratch copies match the complete replacement
+files. Native authentication middleware, real subscription usage and real phone
+acceptance still require verification on the sealed candidate before cutover.
