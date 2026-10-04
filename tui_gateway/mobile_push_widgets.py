@@ -42,7 +42,7 @@ class WidgetPushStore:
                 raise PermissionError("widget credential expired")
             rows = db.execute("""SELECT r.* FROM runs r JOIN subscriptions s ON r.scope=s.scope
                 WHERE s.principal=? AND s.installation_id=? AND s.connection_id=?
-                AND s.kind='widget' AND s.surface='chats' AND s.expires_at>?
+                AND s.kind='widget' AND s.surface IN ('chats', 'native_session') AND s.expires_at>?
                 AND NOT EXISTS (SELECT 1 FROM runs newer WHERE newer.scope=r.scope
                   AND (newer.started_at>r.started_at OR (newer.started_at=r.started_at AND newer.rowid>r.rowid)))
                 ORDER BY r.updated_at DESC LIMIT 1000""",

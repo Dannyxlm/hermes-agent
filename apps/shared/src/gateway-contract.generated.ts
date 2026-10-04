@@ -2279,6 +2279,7 @@ export interface SessionResumeResult {
   message_count: number
   messages: TranscriptMessage[]
   info: SessionLiveInfo
+  stream_snapshot?: SessionStreamSnapshotResult | null
   stored_session_id?: string | null
   resumed?: string | null
   session_key?: string | null
@@ -2295,6 +2296,24 @@ export interface SessionResumeResult {
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   auto_continue?: AutoContinue | null
+}
+export interface SessionStreamSnapshotResult {
+  session_id: string
+  stored_session_id?: string | null
+  epoch: string
+  baseline_seq: number
+  stream: SessionStreamProjection | null
+}
+/** Only event-published current-turn text; producer inflight/DB state is not a stream cut. */
+export interface SessionStreamProjection {
+  start_seq: number
+  segments: string[]
+  assistant: string
+  status: string
+  start: Record<string, unknown>
+  terminal?: Record<string, unknown> | null
+  reasoning?: string | null
+  todo_state?: Record<string, unknown> | null
 }
 /** ``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting client rebuilds its bubbles from. */
 export interface InflightTurn {
@@ -2349,6 +2368,7 @@ export interface SessionActivateResult {
   message_count: number
   messages: TranscriptMessage[]
   info: SessionLiveInfo
+  stream_snapshot?: SessionStreamSnapshotResult | null
   stored_session_id?: string | null
   resumed?: string | null
   session_key?: string | null
@@ -2785,6 +2805,102 @@ export interface LlmOneshotParams {
 export interface LlmOneshotResult {
   text: string
 }
+export interface MobileSessionPushRegisterParams {
+  profile: string
+  stored_session_id: string
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  device_token: string
+  categories?: ('attention' | 'completion')[]
+  preview_enabled?: boolean
+}
+export interface MobileSessionRegistrationResult {
+  subscription_id: string
+  expires_at: number
+  destination: MobileSessionDestination
+  resolved_session_id: string
+  notification_run: MobileNotificationRun | null
+  snapshot_path?: string | null
+}
+export interface MobileSessionDestination {
+  surface: 'native_session'
+  profile: string
+  session_id: string
+}
+export interface MobileNotificationRun {
+  run_id: string
+  status: string
+  started_at: number
+  updated_at: number
+}
+export interface MobilePushRefreshParams {
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  device_token: string
+  categories?: ('attention' | 'completion')[]
+  preview_enabled?: boolean
+}
+export interface MobileRefreshResult {
+  updated: number
+  subscriptions: MobileRegistrationResult[]
+}
+export interface MobileRegistrationResult {
+  subscription_id: string
+  expires_at: number
+}
+export interface MobileUnregisterParams {
+  installation_id: string
+  connection_id: string
+  subscription_id?: string | null
+}
+export interface MobileUnregisterResult {
+  removed: number
+}
+export interface MobileSessionPresenceParams {
+  profile: string
+  stored_session_id: string
+  installation_id: string
+  connection_id: string
+  foreground: boolean
+}
+export interface MobileSessionPresenceResult {
+  foreground: boolean
+  expires_at: number
+}
+export interface MobileSessionActivityRegisterParams {
+  profile: string
+  stored_session_id: string
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  activity_token: string
+  activity_id: string
+  run_id: string
+}
+export interface MobileActivityRefreshParams {
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  activity_token: string
+  activity_id: string
+  run_id: string
+}
+export interface MobileActivityUnregisterParams {
+  installation_id: string
+  connection_id: string
+  subscription_id: string
+}
+export interface MobileWidgetRegisterParams {
+  profile: string
+  stored_session_id: string
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  read_token: string
+  widget_token?: string
+}
 export type MobileEmptyParams = Record<string, never>
 export interface MobileCapabilitiesResult {
   protocol_version: number
@@ -2873,12 +2989,6 @@ export interface ClarifyQuestion {
   choices?: string[] | null
   multi_select?: boolean
 }
-export interface MobileNotificationRun {
-  run_id: string
-  status: string
-  started_at: number
-  updated_at: number
-}
 export interface MobileSnapshotParams {
   profile: string
   canonical_root_id: string
@@ -2943,30 +3053,6 @@ export interface MobilePushRegisterParams {
   categories?: ('attention' | 'completion')[]
   preview_enabled?: boolean
 }
-export interface MobileRegistrationResult {
-  subscription_id: string
-  expires_at: number
-}
-export interface MobilePushRefreshParams {
-  installation_id: string
-  connection_id: string
-  environment: 'production' | 'sandbox'
-  device_token: string
-  categories?: ('attention' | 'completion')[]
-  preview_enabled?: boolean
-}
-export interface MobileRefreshResult {
-  updated: number
-  subscriptions: MobileRegistrationResult[]
-}
-export interface MobileUnregisterParams {
-  installation_id: string
-  connection_id: string
-  subscription_id?: string | null
-}
-export interface MobileUnregisterResult {
-  removed: number
-}
 export interface MobileActivityRegisterParams {
   profile: string
   canonical_root_id: string
@@ -2977,19 +3063,6 @@ export interface MobileActivityRegisterParams {
   activity_token: string
   activity_id: string
   run_id: string
-}
-export interface MobileActivityRefreshParams {
-  installation_id: string
-  connection_id: string
-  environment: 'production' | 'sandbox'
-  activity_token: string
-  activity_id: string
-  run_id: string
-}
-export interface MobileActivityUnregisterParams {
-  installation_id: string
-  connection_id: string
-  subscription_id: string
 }
 /** ``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` / ``session_id`` pick the directory the listing resolves against. */
 export interface CompletePathParams {
@@ -5321,9 +5394,20 @@ export interface RpcMethods {
   'mobile.push.register': { params: MobilePushRegisterParams; result: MobileRegistrationResult }
   'mobile.push.status': { params: MobileEmptyParams; result: MobilePushStatusResult }
   'mobile.push.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
+  'mobile.session_activity.refresh': { params: MobileActivityRefreshParams; result: MobileRefreshResult }
+  'mobile.session_activity.register': { params: MobileSessionActivityRegisterParams; result: MobileSessionRegistrationResult }
+  'mobile.session_activity.unregister': { params: MobileActivityUnregisterParams; result: MobileUnregisterResult }
+  /** Renew a 60-second foreground lease for a registered ordinary destination; affects alerts only. */
+  'mobile.session_push.presence': { params: MobileSessionPresenceParams; result: MobileSessionPresenceResult }
+  'mobile.session_push.refresh': { params: MobilePushRefreshParams; result: MobileRefreshResult }
+  'mobile.session_push.register': { params: MobileSessionPushRegisterParams; result: MobileSessionRegistrationResult }
+  'mobile.session_push.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
   'mobile.snapshot': { params: MobileSnapshotParams; result: MobileSnapshotResult }
   'mobile.stop': { params: MobileScopeParams; result: SessionInterruptResult }
   'mobile.submit': { params: MobileSubmitParams; result: MobileSubmitResult }
+  /** Register or rotate an ordinary-session widget lease and exact GET snapshot capability. */
+  'mobile.widget.register': { params: MobileWidgetRegisterParams; result: MobileSessionRegistrationResult }
+  'mobile.widget.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
   /** Remove every credential (env keys and OAuth state) for a provider. */
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult }
   /** Provider/model inventory for the picker, layered over the session's live provider when given. */
@@ -5504,6 +5588,8 @@ export interface RpcMethods {
   'session.status': { params: SessionStatusParams; result: SessionStatusResult }
   /** Inject text into the next tool result without interrupting the turn. */
   'session.steer': { params: SessionCorrectionParams; result: SessionCorrectionResult }
+  /** Atomic event-published stream cut. Buffer live frames, replace stream from this cut, then replay session.events.since(last_seen=baseline_seq). Admit only newer seq in this runtime/epoch; on truncation or epoch change rebuild. No durable-history watermark implied. */
+  'session.stream.snapshot': { params: SessionParams; result: SessionStreamSnapshotResult }
   /** Read or set a live session's title; a title set before the row exists is queued. */
   'session.title': { params: SessionTitleParams; result: SessionTitleResult }
   /** Drop the last user turn (and everything after it) from an idle session. */
@@ -5736,9 +5822,18 @@ export const RPC_METHODS = [
   'mobile.push.register',
   'mobile.push.status',
   'mobile.push.unregister',
+  'mobile.session_activity.refresh',
+  'mobile.session_activity.register',
+  'mobile.session_activity.unregister',
+  'mobile.session_push.presence',
+  'mobile.session_push.refresh',
+  'mobile.session_push.register',
+  'mobile.session_push.unregister',
   'mobile.snapshot',
   'mobile.stop',
   'mobile.submit',
+  'mobile.widget.register',
+  'mobile.widget.unregister',
   'model.disconnect',
   'model.options',
   'model.save_key',
@@ -5829,6 +5924,7 @@ export const RPC_METHODS = [
   'session.set_hidden',
   'session.status',
   'session.steer',
+  'session.stream.snapshot',
   'session.title',
   'session.undo',
   'session.usage',

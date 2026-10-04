@@ -139,7 +139,7 @@ def test_server_requests_project_attention_and_cancel_from_canonical_registry(pu
     # Use the real registry/write sink, including detached delivery and idempotent replay.
     server._sessions[sid]["transport"] = server._detached_ws_transport
     params = ({"request_id": "fixture-approval", "command": "fixture", "choices": ["once", "deny"]} if method == "approval"
-              else {"question": "Fixture choice?", "choices": ["Blue", "Green"]})
+              else {"questions": [{"qid": "fixture-choice", "question": "Fixture choice?", "choices": ["Blue", "Green"]}]})
     try:
         server_requests.send_async(method, sid, params, lambda result: None)
         frame = server_requests.open_requests(sid)[0]

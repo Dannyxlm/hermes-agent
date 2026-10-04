@@ -24,7 +24,7 @@ class Scope:
     session_id: str
 
     def __post_init__(self):
-        if self.surface not in {"native", "chats"}:
+        if self.surface not in {"native", "chats", "native_session"}:
             raise ValueError("invalid surface")
         for value in (self.profile, self.session_id):
             if not isinstance(value, str) or not value or len(value) > 256 or any(ord(c) < 32 for c in value):

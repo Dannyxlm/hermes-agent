@@ -44,7 +44,7 @@
     },
     {
       "id": "private-mobile-delivery",
-      "summary": "Authenticated private iOS push and Live Activity projections from canonical Team and Chats events"
+      "summary": "Authenticated private iOS push and Live Activity projections for canonical Team and ordinary native sessions, least-privilege widget reads, and event-published reconnect cuts"
     },
     {
       "id": "cloudseed-mobile-plugin",
