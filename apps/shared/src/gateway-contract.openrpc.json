@@ -16723,6 +16723,97 @@
         "title": "ImageGenerateResult",
         "type": "object"
       },
+      "InboxLatestRun": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "starting",
+              "thinking",
+              "usingTool",
+              "responding",
+              "waitingForApproval",
+              "waitingForClarification",
+              "complete",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "at"
+        ],
+        "title": "InboxLatestRun",
+        "type": "object"
+      },
+      "InboxSummaryScope": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "pending_scope": {
+            "const": "process",
+            "title": "Pending Scope",
+            "type": "string"
+          },
+          "pending_complete": {
+            "title": "Pending Complete",
+            "type": "boolean"
+          },
+          "pending_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Epoch"
+          },
+          "replies_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Replies Complete"
+          }
+        },
+        "required": [
+          "pending_scope",
+          "pending_complete"
+        ],
+        "title": "InboxSummaryScope",
+        "type": "object"
+      },
       "InflightTurn": {
         "additionalProperties": false,
         "description": "``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting\nclient rebuilds its bubbles from.",
@@ -30650,6 +30741,59 @@
             "default": null,
             "title": "Profile"
           },
+          "pending_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "approval",
+                  "clarify",
+                  "input"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Kind"
+          },
+          "pending_count": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Count"
+          },
+          "pending_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Revision"
+          },
+          "latest_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxLatestRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "current": {
             "title": "Current",
             "type": "boolean"
@@ -30745,6 +30889,17 @@
             },
             "title": "Sessions",
             "type": "array"
+          },
+          "inbox_summary_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxSummaryScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [

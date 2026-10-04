@@ -369,6 +369,39 @@ def open_request_count() -> int:
         return len(_open)
 
 
+_INBOX_KINDS = {
+    "approval": "approval", "clarify": "clarify", "sudo": "input", "secret": "input",
+    "vault.unlock_prompt": "input", "vault.save_login": "input", "vault.code": "input",
+    "display.install.sudo": "input",
+}
+_INBOX_EPOCH = uuid.uuid4().hex
+
+
+def inbox_epoch() -> str:
+    return _INBOX_EPOCH
+
+
+def attention_summaries(sids: list[str]) -> dict[str, dict]:
+    """Atomic metadata-only cut. GUI reads/tours are not human-input evidence.
+
+    Revision is an opaque equality token for the supported request set, not an
+    ordering watermark. Request ids keep it distinct across process restarts.
+    """
+    import hashlib
+    admitted = set(sids)
+    with _lock:
+        grouped: dict[str, list] = {}
+        for req in _open.values():
+            if req.sid in admitted and req.method in _INBOX_KINDS:
+                grouped.setdefault(req.sid, []).append((req.id, _INBOX_KINDS[req.method]))
+    priority = {"approval": 0, "clarify": 1, "input": 2}
+    return {sid: {
+        "kind": min((kind for _, kind in reqs), key=priority.__getitem__),
+        "count": len(reqs),
+        "revision": hashlib.sha256(json.dumps(sorted(reqs)).encode()).hexdigest(),
+    } for sid, reqs in grouped.items()}
+
+
 def pending_kind(sid: str) -> str:
     """Method of the oldest open request for *sid* ("" when none) — the session is waiting on a human."""
     with _lock:

@@ -3052,7 +3052,15 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
     elif inflight:
         preview = " ".join(str(inflight.get("assistant") or inflight.get("user") or preview).split())[:160]
     now = time.time()
+    from tui_gateway.server_requests import attention_summaries
+    attention = attention_summaries([sid]).get(sid)
+    pending = {"pending_kind": attention["kind"], "pending_count": attention["count"],
+               "pending_revision": attention["revision"]} if attention else {}
+    from tui_gateway.inbox_summaries import latest_run
+    run = latest_run(session, _hermes_home, key)
     return {
+        **({"latest_run": run} if run else {}),
+        **pending,
         "current": sid == current_sid, "id": sid,
         "profile": profile_name_for_home(session.get("profile_home") or _hermes_home),
         "last_active": float(session.get("last_active") or session.get("created_at") or now),

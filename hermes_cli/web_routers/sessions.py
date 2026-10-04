@@ -224,7 +224,16 @@ def get_sessions(
             total = db.session_count(exclude_children=True, **scope)
             now = time.time()
             row_profile = profile_name or _cron_default_profile()
+            archived_count = db.session_count(exclude_children=True, **{
+                **scope, "include_archived": False, "archived_only": True})
+            from tui_gateway.inbox_summaries import page_attention, page_replies, summary_scope
+            attention = page_attention(sessions, Path(db.db_path).parent)
+            replies = page_replies(db, sessions)
             for s in sessions:
+                if s["id"] in replies:
+                    s["last_assistant_reply"] = replies[s["id"]]
+                if s["id"] in attention:
+                    s["attention"] = attention[s["id"]]
                 s["is_active"] = _is_active(s, now)
                 s["profile"] = row_profile
                 s["is_default_profile"] = row_profile == "default"
@@ -237,7 +246,8 @@ def get_sessions(
             # ``{profile: "corrupt"}`` shape as the /api/profiles/sessions* lists.
             storage = {row_profile: STORAGE_CORRUPT} if storage_state(db.db_path) == STORAGE_CORRUPT else {}
             return {"sessions": sessions, "total": total, "limit": limit, "offset": offset,
-                    "storage": storage}
+                    "archived_count": archived_count, "storage": storage,
+                    "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage)}
         finally:
             db.close()
     except HTTPException:

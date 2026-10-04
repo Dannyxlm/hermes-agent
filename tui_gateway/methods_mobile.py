@@ -115,7 +115,7 @@ def _(rid, params):
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
                      "atomic_stream_snapshot", "rich_stream_snapshot"],
-        "feature_versions": {"rich_stream_snapshot": 1},
+        "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 1},
         "max_history_limit": 100, "max_roster_limit": 100})
 
 

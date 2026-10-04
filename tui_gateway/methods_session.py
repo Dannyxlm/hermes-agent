@@ -1199,7 +1199,8 @@ def _(rid, params: dict) -> dict:
     # Keep insertion order (focused must not jump).
     rows = [_session_live_item(sid, session, current) for sid, session in snapshot
             if not session.get("_finalized") and _live_profile_matches(session, profile_home)]
-    return _ok(rid, {"sessions": rows})
+    from tui_gateway.inbox_summaries import summary_scope
+    return _ok(rid, {"sessions": rows, "inbox_summary_scope": summary_scope(profile or None)})
 
 
 @_session_method("session.activate")
