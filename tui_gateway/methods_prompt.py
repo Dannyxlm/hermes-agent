@@ -1271,12 +1271,18 @@ def _spawn_side_agent(
     doesn't propagate across threads) and cwd; its text — or ``error: <exc>`` — lands on
     ``parent`` as ``event`` with ``task_id`` (+ ``extra``).  Replies ``{task_id}``."""
     extra = extra or {}
+    from hermes_constants import get_hermes_home
+    from tui_gateway.side_task_activity import registry
+    kind = {"background.complete": "background", "btw.complete": "btw"}.get(event)
+    # Capture the durable parent before compression or live-session retirement.
+    activity_key = (registry.register(
+        session.get("profile_home") or get_hermes_home(), session["session_key"], task_id, kind)
+        if kind and session.get("session_key") else None)
 
     def run():
         # ``parent`` is the caller's live sid (``_sess`` admitted it): bind it as the UI owner so
         # prompts this worker raises (skill secrets) reach the session whose profile it runs under.
-        session_tokens = _set_session_context(
-            task_id, cwd=(cwd or _session_cwd(session)), ui_session_id=parent)
+        session_tokens = None
         # Bug #50233: ephemeral agent threads don't inherit the session's ContextVar scopes (set on the
         # session-create thread), so a side turn under a non-default profile ran against the wrong home.
         # Bind the profile's home + secrets + terminal policy for the whole body, exactly as a prompt turn
@@ -1286,17 +1292,31 @@ def _spawn_side_agent(
         # background server running under this task_id, and AIAgent.close() would kill every process for
         # the task_id and tear down the very server the restart just started.
         try:
+            session_tokens = _set_session_context(
+                task_id, cwd=(cwd or _session_cwd(session)), ui_session_id=parent)
             with _session_profile_runtime_scope(session):
                 text = body()
+            if activity_key is not None:
+                registry.finish(activity_key, "completed")
             _emit(event, parent, {"task_id": task_id, **extra, "text": text})
         except Exception as e:
+            if activity_key is not None:
+                registry.finish(activity_key, "failed")
             _emit(event, parent, {"task_id": task_id, **extra, "text": f"error: {e}"})
         finally:
             if cleanup is not None:
                 cleanup()
             _clear_session_context(session_tokens)
 
-    if _start_session_work(run, name=f"side-agent-{task_id}") is None:
+    try:
+        worker = _start_session_work(run, name=f"side-agent-{task_id}")
+    except Exception:
+        if activity_key is not None:
+            registry.finish(activity_key, "failed_start")
+        return _err(rid, 5035, "side task could not start")
+    if worker is None:
+        if activity_key is not None:
+            registry.finish(activity_key, "failed_start")
         return _err(rid, 5035, "backend is retiring; reconnect to continue")
     return _ok(rid, {"task_id": task_id})
 

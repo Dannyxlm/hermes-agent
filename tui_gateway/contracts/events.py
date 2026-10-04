@@ -500,6 +500,8 @@ class SubagentEventPayload(Payload):
     status: SubagentStatus | None = None
     summary: str | None = None
     duration_seconds: float | None = None
+    cost_usd: float | None = None
+    failure_reason: str | None = None
     tool_preview: str | None = None
 
 

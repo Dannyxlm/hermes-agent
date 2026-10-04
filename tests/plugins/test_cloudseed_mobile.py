@@ -41,6 +41,97 @@ def post(c, domain, op, **extra):
     return c.post(f'{P}/{domain}/{op}', json={'profile': 'default', 'device_id': DEVICE, 'secret': SECRET, **extra})
 
 
+def test_session_activity_profile_scope_and_metadata_only(client):
+    from tui_gateway.side_task_activity import registry
+    c, home = client
+    b = home/'profiles'/'b'
+    b.mkdir(parents=True)
+    (b/'config.yaml').write_text('{}')
+    key = registry.register(home, 'stored', 'bg', 'background')
+    registry.finish(key, 'completed')
+    registry.register(b, 'stored', 'btw', 'btw')
+    url = P+'/session-activity?profile=default&stored_session_id=stored'
+    response = c.get(url)
+    assert response.status_code == 200
+    assert response.json() == {'version': 1, 'profile': 'default', 'stored_session_id': 'stored',
+                               'epoch': registry.epoch, 'complete': True,
+                               'tasks': registry.snapshot(home, ['stored'])}
+    assert c.get(P+'/session-activity?profile=b&stored_session_id=stored').json()['tasks'][0]['task_id'] == 'btw'
+    assert c.get(url).json()['tasks'][0]['task_id'] == 'bg'
+    assert not (home/'state.db').exists() and not (b/'state.db').exists()
+    assert c.get(P+'/session-activity?profile=missing&stored_session_id=stored').status_code == 404
+    assert not (home/'profiles'/'missing').exists()
+    assert c.get(P+'/session-activity?profile=default&stored_session_id=').status_code == 400
+    c.headers.pop('Authorization')
+    assert c.get(url).status_code == 401
+
+
+def test_session_activity_fences_and_unavailable_store(client, monkeypatch):
+    c, home = client
+    url = P+'/session-activity?profile=default&stored_session_id=stored'
+    assert c.get(P+'/session-activity?stored_session_id=stored').status_code == 422
+    assert c.get(P+'/session-activity?profile=../escape&stored_session_id=stored').status_code == 400
+    (home/'state.db').write_bytes(b'not a database')
+    response = c.get(url)
+    assert response.status_code == 503
+    assert response.json() == {'error': 'Mobile storage unavailable'}
+    monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'another', 'owner_provider': 'basic'})
+    assert c.get(url).status_code == 403
+
+
+def test_session_activity_observes_detached_worker_after_parent_retirement(client, monkeypatch):
+    import threading
+    from tui_gateway import server
+    c, home = client
+    entered, release, completed = (threading.Event() for _ in range(3))
+    def body():
+        entered.set()
+        assert release.wait(10)
+        return 'private result'
+    monkeypatch.setattr(server, '_emit', lambda *a: completed.set())
+    session = {'profile_home': str(home), 'session_key': 'stored', 'cwd': str(home)}
+    server._sessions['activity-test'] = session
+    url = P+'/session-activity?profile=default&stored_session_id=stored'
+    try:
+        result = server._spawn_side_agent('r', session, 'detached', 'activity-test', 'background.complete', body)
+        assert 'result' in result
+        assert entered.wait(10)
+        server._sessions.pop('activity-test')
+        session['session_key'] = 'rotated'
+        assert c.get(url).json()['tasks'][0]['status'] == 'running'
+        release.set()
+        assert completed.wait(10)
+        response = c.get(url)
+        assert response.json()['tasks'][0]['status'] == 'completed'
+        assert 'private result' not in response.text
+    finally:
+        release.set()
+        server._sessions.pop('activity-test', None)
+        for thread in threading.enumerate():
+            if thread.name == 'side-agent-detached':
+                thread.join(10)
+
+
+def test_session_activity_compression_lineage_read_only(client):
+    import sqlite3
+    from tui_gateway.side_task_activity import registry
+    c, home = client
+    db_path = home/'state.db'
+    with sqlite3.connect(db_path) as db:
+        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY, parent_session_id TEXT, end_reason TEXT)')
+        db.executemany('INSERT INTO sessions VALUES(?,?,?)', [
+            ('root', None, 'compression'), ('tip', 'root', None), ('branch', 'tip', None)])
+    before = db_path.read_bytes()
+    registry.register(home, 'root', 'bg', 'background')
+    registry.register(home, 'tip', 'btw', 'btw')
+    registry.register(home, 'branch', 'foreign', 'background')
+    for sid in ['root', 'tip']:
+        response = c.get(P+f'/session-activity?profile=default&stored_session_id={sid}')
+        assert response.status_code == 200
+        assert {t['task_id'] for t in response.json()['tasks']} == {'bg', 'btw'}
+    assert db_path.read_bytes() == before
+
+
 def test_catalog_cycle_search_tombstone(client, monkeypatch):
     c, home = client
     import asyncio
