@@ -1,6 +1,6 @@
 """Synthetic mobile contracts; never open the production integration stores."""
 import base64
-import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -15,7 +15,7 @@ from plugins.cloudseed_mobile.dashboard import plugin_api as api
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     # --basetemp places fixtures in scratch; shared home guards remain enabled.
-    with __import__('contextlib').nullcontext(str(tmp_path)) as d:
+    with nullcontext(str(tmp_path)) as d:
         home = Path(d)
         monkeypatch.setenv('HERMES_HOME', d)
         import hermes_constants
@@ -173,3 +173,167 @@ def test_catalog_limits_low_space_and_cursor(client, monkeypatch):
     assert post(c, 'photo-catalog', 'put', epoch=epoch, item=item).status_code == 507
     oversized = {**item, 'preview': base64.b64encode(b'\xff\xd8\xff'+b'x'*262144+b'\xff\xd9').decode()}
     assert post(c, 'photo-catalog', 'put', epoch=epoch, item=oversized).status_code == 400
+
+
+def test_reminder_pre_pair_status_is_capability_only(client):
+    c, _ = client
+    response = c.post(P+'/iphone-reminders/status', json={'profile': 'default'})
+    assert response.status_code == 200
+    assert response.json() == {'ok': True, 'protocol_version': 1}
+    assert post(c, 'iphone-reminders', 'status').status_code == 400
+
+
+def test_catalog_pagination_epoch_fence_and_foreign_device(client, monkeypatch):
+    c, home = client
+    monkeypatch.setattr(api, 'photo_store', lambda: api.PhotoCatalog(home/'webui/photo-catalog/catalog.sqlite3', free_bytes=lambda: 10 * 1024**3))
+    assert post(c, 'photo-catalog', 'register').status_code == 200
+    epoch = post(c, 'photo-catalog', 'begin', count=2).json()['epoch']
+    items = [{'id': digit*64, 'fingerprint': 'c'*64, 'created': 1, 'albums': [], 'text': 'fixture', 'favorite': False, 'screenshot': False, 'preview': base64.b64encode(b'\xff\xd8\xff\xd9').decode()} for digit in ['a', 'b']]
+    assert post(c, 'photo-catalog', 'manifest', epoch=epoch, items=items).status_code == 200
+    assert post(c, 'photo-catalog', 'manifest', epoch=epoch, items=items).status_code == 200
+    for item in items:
+        assert post(c, 'photo-catalog', 'put', epoch=epoch, item=item).status_code == 200
+    assert post(c, 'photo-catalog', 'finish', epoch=epoch).json()['complete']
+    page = post(c, 'photo-catalog', 'search', query={'limit': 1}).json()
+    next_page = post(c, 'photo-catalog', 'search', query={'limit': 1, 'cursor': page['next_cursor']}).json()
+    assert [page['items'][0]['id'], next_page['items'][0]['id']] == ['a'*64, 'b'*64]
+    assert next_page['next_cursor'] is None
+    assert post(c, 'photo-catalog', 'search', query={'limit': 2, 'cursor': page['next_cursor']}).status_code == 400
+    with api.photo_store().connection() as db:
+        db.execute('UPDATE devices SET principal=? WHERE id=?', ('foreign', DEVICE))
+    for op, extra in [('status', {}), ('search', {}), ('preview', {'asset_id': 'a'*64})]:
+        assert post(c, 'photo-catalog', op, **extra).status_code == 400
+    assert post(c, 'photo-catalog', 'register', rebind=True).status_code == 200
+    assert post(c, 'photo-catalog', 'begin', count=0).status_code == 200
+    assert post(c, 'photo-catalog', 'search', query={'limit': 1, 'cursor': page['next_cursor']}).status_code == 400
+
+
+def test_reminder_processing_expiry_and_rebind_retains_stable_ids(client):
+    c, _ = client
+    assert post(c, 'iphone-reminders', 'register').status_code == 200
+    store = api.reminder_store()
+    rid = str(uuid.uuid4())
+    store.enqueue(DEVICE, rid, 'create', {'title': 'fixture'}, 'default')
+    assert post(c, 'iphone-reminders', 'poll').json()['command']['id'] == rid
+    with store.connection() as db:
+        db.execute('UPDATE devices SET principal=? WHERE id=?', ('legacy', DEVICE))
+    assert post(c, 'iphone-reminders', 'register', rebind=True).status_code == 200
+    assert post(c, 'iphone-reminders', 'poll').json()['command']['id'] == rid
+    with store.connection() as db:
+        db.execute('UPDATE commands SET expires=0 WHERE id=?', (rid,))
+    assert store.status(DEVICE, rid, 'default')['state'] == 'unconfirmed'
+    assert post(c, 'iphone-reminders', 'poll').json()['command'] is None
+    # Late device-confirmed result may settle uncertainty, never resend a write.
+    assert post(c, 'iphone-reminders', 'ack', request_id=rid, state='completed', result={}).status_code == 200
+    assert store.status(DEVICE, rid, 'default')['state'] == 'completed'
+
+
+def test_memory_profiles_a_b_a(client):
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    c, home = client
+    b = home/'profiles'/'b'
+    b.mkdir(parents=True)
+    assert c.post(P+'/memory/write', json={'section': 'soul', 'content': 'A'}).status_code == 200
+    token = set_hermes_home_override(b)
+    try:
+        assert api.profile_id() == 'b'
+        assert api.state_dir() == home/'webui'
+        api.write_memory('soul', 'B')
+        assert api.read_memory()['soul'] == 'B'
+    finally:
+        reset_hermes_home_override(token)
+    assert c.get(P+'/memory').json()['soul'] == 'A'
+
+
+def test_relocated_clis_use_retained_stores(client, monkeypatch):
+    import json
+    import os
+    import subprocess
+    import sys
+    c, home = client
+    assert post(c, 'photo-catalog', 'register').status_code == 200
+    assert post(c, 'iphone-reminders', 'register').status_code == 200
+    root = Path(__file__).resolve().parents[2]
+    env = {**os.environ, 'HERMES_HOME': str(home), 'TMPDIR': str(home)}
+    def run(name, *args):
+        command = [sys.executable, str(root/'plugins/cloudseed_mobile/scripts'/name), '--state-dir', str(home/'webui'), '--profile', 'default', *args]
+        result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+    assert run('photo-catalog', 'devices')['devices'][0]['id'] == DEVICE
+    assert run('iphone-reminders', 'devices')['devices'][0]['id'] == DEVICE
+    query = home/'request.json'
+    query.write_text(json.dumps({'title': 'CLI synthetic'}))
+    rid = str(uuid.uuid4())
+    assert run('iphone-reminders', 'request', '--device', DEVICE, '--id', rid, '--operation', 'create', '--json-file', str(query))['state'] == 'queued'
+    assert post(c, 'iphone-reminders', 'poll').json()['command']['id'] == rid
+    assert run('iphone-reminders', 'status', '--device', DEVICE, '--id', rid)['state'] == 'processing'
+
+
+@pytest.mark.parametrize('op', ['poll', 'ack', 'disconnect', 'status'])
+def test_reminder_device_routes_require_secret(client, op):
+    c, _ = client
+    assert post(c, 'iphone-reminders', 'register').status_code == 200
+    rid = str(uuid.uuid4())
+    api.reminder_store().enqueue(DEVICE, rid, 'create', {'title': 'fixture'}, 'default')
+    assert post(c, 'iphone-reminders', 'poll').status_code == 200
+    response = c.post(P+'/iphone-reminders/'+op, json={'profile': 'default', 'device_id': DEVICE,
+                      'request_id': rid, 'state': 'completed', 'result': {}})
+    assert response.status_code == 400
+
+
+def test_usage_identity_bound_and_no_exception_leak(client, monkeypatch):
+    import json
+    from agent import account_usage
+    c, home = client
+    (home/'auth.json').write_text(json.dumps({'credential_pool': {'anthropic': [
+        {'id': 'usage-a', 'source': 'manual', 'priority': 0, 'auth_type': 'oauth', 'access_token': 'sk-ant-oat01-fixture-a'},
+        {'id': 'usage-b', 'source': 'manual', 'priority': 1, 'auth_type': 'oauth', 'access_token': 'sk-ant-oat01-fixture-b'},
+    ]}}))
+    original = (home/'auth.json').read_bytes()
+    seen = []
+    def probe(url, headers, timeout):
+        token = headers['Authorization']
+        seen.append(token)
+        if token.endswith('fixture-b'):
+            raise RuntimeError('sk-ant-oat01-fixture-b PRIVATE RESPONSE')
+        return {'five_hour': {'utilization': 25, 'resets_at': '2030-01-01T00:00:00Z'}}
+    monkeypatch.setattr(account_usage, '_get_json', probe)
+    result = c.get(P+'/provider/accounts/usage?provider=anthropic&refresh=1')
+    assert result.status_code == 200
+    section = next(p for p in result.json()['providers'] if p['id'] == 'anthropic')
+    by_id = {a['id']: a['usage'] for a in section['accounts']}
+    assert by_id['usage-a']['windows'][0]['used_percent'] == 25
+    assert by_id['usage-b']['status'] == 'unavailable'
+    assert set(seen) == {'Bearer sk-ant-oat01-fixture-a', 'Bearer sk-ant-oat01-fixture-b'}
+    assert 'sk-ant-' not in result.text and 'PRIVATE RESPONSE' not in result.text
+    assert (home/'auth.json').read_bytes() == original
+    c.get(P+'/provider/accounts/usage?provider=anthropic&refresh=1')
+    assert len(seen) == 2  # explicit refresh retry fence
+
+
+def test_native_dashboard_discovery_mount_and_disable(client, monkeypatch):
+    import sys
+    from hermes_cli import web_server_dashboard as dashboard
+    c, _ = client
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.setattr(dashboard, '_dashboard_plugin_search_dirs', lambda: [(root/'plugins', 'bundled')])
+    entries = [p for p in dashboard._discover_dashboard_plugins() if p['name'] == 'cloudseed_mobile']
+    assert len(entries) == 1
+    # Native importer/mount path, with server shell isolated (not a runtime boot).
+    app = FastAPI()
+    monkeypatch.setitem(sys.modules, 'hermes_cli.web_server', SimpleNamespace(app=app, _get_dashboard_plugins=lambda: entries))
+    monkeypatch.setitem(sys.modules, 'hermes_cli.plugins_cmd', SimpleNamespace(_get_enabled_set=lambda: set(), _get_disabled_set=lambda: set()))
+    async def scope():
+        yield
+    monkeypatch.setattr(dashboard, '_plugin_route_secret_scope', scope)
+    dashboard._mount_plugin_api_routes()
+    with TestClient(app) as mounted:
+        assert mounted.get(P+'/memory').status_code == 401  # plugin auth, not 404
+    # Explicit disable must prevent backend mounting even though it is bundled.
+    disabled_app = FastAPI()
+    monkeypatch.setitem(sys.modules, 'hermes_cli.web_server', SimpleNamespace(app=disabled_app, _get_dashboard_plugins=lambda: entries))
+    monkeypatch.setitem(sys.modules, 'hermes_cli.plugins_cmd', SimpleNamespace(_get_enabled_set=lambda: set(), _get_disabled_set=lambda: {'cloudseed_mobile'}))
+    dashboard._mount_plugin_api_routes()
+    with TestClient(disabled_app) as disabled:
+        assert disabled.get(P+'/memory').status_code == 404

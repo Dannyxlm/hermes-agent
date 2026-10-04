@@ -126,7 +126,14 @@ def photo_call(op, principal, body):
 
 def reminder_call(op, principal, body):
     args = device_args(principal, body)
+    # This is the phone's pre-pair capability probe. Supplied IDs are never
+    # silently accepted; only an absent device ID is capability-only.
+    if op == 'status' and 'device_id' not in body and 'secret' not in body:
+        return {'ok': True, 'protocol_version': 1}
     store = reminder_store()
+    # `_device` also serves owner-local CLI callers that do not have a secret;
+    # HTTP device operations must never take that optional-secret branch.
+    store._digest(args[3])
     if op == 'register':
         if 'rebind' in body and type(body['rebind']) is not bool:
             raise ReminderError('Invalid rebind')
