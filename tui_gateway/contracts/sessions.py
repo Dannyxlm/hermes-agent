@@ -268,6 +268,8 @@ class SessionActiveListParams(ProfileParams):
 class SessionActiveItem(Result):
     """``server._session_live_item``."""
 
+    profile: str | None = None
+
     current: bool
     id: str
     last_active: float
@@ -285,7 +287,8 @@ class SessionActiveListResult(Result):
 
 
 method("session.active_list", params=SessionActiveListParams, result=SessionActiveListResult,
-       doc="Live sessions in this process, insertion order (not a DB browser).")
+       doc="Live sessions in this process, insertion order (not a DB browser). Nonempty profile "
+           "filters by existing profile; unknown profiles error. Omitted/empty profile lists all profiles.")
 
 
 # ── stored-row mutation ───────────────────────────────────────────────────────────────────────

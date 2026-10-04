@@ -17768,6 +17768,7 @@ def test_session_active_list_reports_live_sessions(monkeypatch):
 
     rows = {row["id"]: row for row in session_rows}
     assert rows["sid-a"] == {
+        "profile": server.profile_name_for_home(server._hermes_home),
         "current": False,
         "id": "sid-a",
         "last_active": 20.0,
