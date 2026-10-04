@@ -446,7 +446,8 @@ _SUBAGENT_FIELDS = (
     ("reasoning_tokens", _not_none, _int_or_skip), ("api_calls", _not_none, _int_or_skip),
     ("files_read", bool, _str_list), ("files_written", bool, _str_list), ("output_tail", bool, list),
     ("tool_name", bool, str), ("text", bool, str), ("status", bool, str), ("summary", bool, str),
-    ("duration_seconds", _not_none, float),
+    ("duration_seconds", _not_none, float), ("cost_usd", _not_none, float),
+    ("failure_reason", bool, str),
 )
 
 

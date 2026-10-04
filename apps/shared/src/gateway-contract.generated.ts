@@ -2304,8 +2304,11 @@ export interface SessionStreamSnapshotResult {
   baseline_seq: number
   stream: SessionStreamProjection | null
 }
-/** Only event-published current-turn text; producer inflight/DB state is not a stream cut. */
+/** Event-published turn only; rich parts are additive, bounded and publication ordered. */
 export interface SessionStreamProjection {
+  parts?: (StreamTextPart | StreamReasoningPart | StreamToolPart)[] | null
+  thinking?: string | null
+  parts_incomplete?: boolean | null
   start_seq: number
   segments: string[]
   assistant: string
@@ -2314,6 +2317,30 @@ export interface SessionStreamProjection {
   terminal?: Record<string, unknown> | null
   reasoning?: string | null
   todo_state?: Record<string, unknown> | null
+}
+export interface StreamTextPart {
+  kind: 'text'
+  text: string
+}
+export interface StreamReasoningPart {
+  kind: 'reasoning'
+  text: string
+  complete?: boolean | null
+}
+export interface StreamToolPart {
+  kind: 'tool'
+  tool_id: string
+  name: string
+  status: 'running' | 'complete'
+  context?: string | null
+  preview?: string | null
+  args_text?: string | null
+  labels?: unknown[] | null
+  duration_s?: number | null
+  summary?: string | null
+  error?: boolean | null
+  inline_diff?: string | null
+  todos?: unknown[] | null
 }
 /** ``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting client rebuilds its bubbles from. */
 export interface InflightTurn {
@@ -2424,6 +2451,7 @@ export interface SessionActiveListResult {
 }
 /** ``server._session_live_item``. */
 export interface SessionActiveItem {
+  profile?: string | null
   current: boolean
   id: string
   last_active: number
@@ -2906,6 +2934,7 @@ export interface MobileCapabilitiesResult {
   protocol_version: number
   methods: string[]
   features: string[]
+  feature_versions?: Record<string, number> | null
   max_history_limit: number
   max_roster_limit: number
 }
@@ -5042,6 +5071,8 @@ export interface SubagentEventPayload {
   status?: SubagentStatus | null
   summary?: string | null
   duration_seconds?: number | null
+  cost_usd?: number | null
+  failure_reason?: string | null
   tool_preview?: string | null
 }
 /** ``tools/delegate_tool_results.py::_extract_output_tail`` row. */
@@ -5532,7 +5563,7 @@ export interface RpcMethods {
   'rollback.restore': { params: RollbackRestoreParams; result: RollbackRestoreResult }
   /** Attach the frontend to a live session without closing the previously focused one. */
   'session.activate': { params: SessionActivateParams; result: SessionActivateResult }
-  /** Live sessions in this process, insertion order (not a DB browser). */
+  /** Live sessions in this process, insertion order (not a DB browser). Nonempty profile filters by existing profile; unknown profiles error. Omitted/empty profile lists all profiles. */
   'session.active_list': { params: SessionActiveListParams; result: SessionActiveListResult }
   /** Set/clear archived (soft-hide, messages kept) on a session + lineage; Desktop PATCH parity. */
   'session.archive': { params: SessionArchiveParams; result: SessionArchiveResult }

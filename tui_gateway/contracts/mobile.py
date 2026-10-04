@@ -21,6 +21,7 @@ class MobileCapabilitiesResult(Result):
     protocol_version: int
     methods: list[str]
     features: list[str]
+    feature_versions: dict[str, int] | None = None
     max_history_limit: int
     max_roster_limit: int
 

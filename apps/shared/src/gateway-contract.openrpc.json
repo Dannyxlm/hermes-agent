@@ -3446,7 +3446,7 @@
     },
     {
       "name": "session.active_list",
-      "summary": "Live sessions in this process, insertion order (not a DB browser).",
+      "summary": "Live sessions in this process, insertion order (not a DB browser). Nonempty profile filters by existing profile; unknown profiles error. Omitted/empty profile lists all profiles.",
       "params": [
         {
           "name": "params",
@@ -19815,6 +19815,21 @@
             "title": "Features",
             "type": "array"
           },
+          "feature_versions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Feature Versions"
+          },
           "max_history_limit": {
             "title": "Max History Limit",
             "type": "integer"
@@ -30623,6 +30638,18 @@
         "additionalProperties": false,
         "description": "``server._session_live_item``.",
         "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
           "current": {
             "title": "Current",
             "type": "boolean"
@@ -33775,8 +33802,57 @@
       },
       "SessionStreamProjection": {
         "additionalProperties": false,
-        "description": "Only event-published current-turn text; producer inflight/DB state is not a stream cut.",
+        "description": "Event-published turn only; rich parts are additive, bounded and publication ordered.",
         "properties": {
+          "parts": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/StreamTextPart"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StreamReasoningPart"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StreamToolPart"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parts"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thinking"
+          },
+          "parts_incomplete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parts Incomplete"
+          },
           "start_seq": {
             "title": "Start Seq",
             "type": "integer"
@@ -36495,6 +36571,202 @@
         "title": "StreamDeltaPayload",
         "type": "object"
       },
+      "StreamReasoningPart": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "reasoning",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Complete"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "title": "StreamReasoningPart",
+        "type": "object"
+      },
+      "StreamTextPart": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "text",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "title": "StreamTextPart",
+        "type": "object"
+      },
+      "StreamToolPart": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "tool",
+            "title": "Kind",
+            "type": "string"
+          },
+          "tool_id": {
+            "title": "Tool Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "complete"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview"
+          },
+          "args_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Args Text"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "duration_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Duration S"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "inline_diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inline Diff"
+          },
+          "todos": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Todos"
+          }
+        },
+        "required": [
+          "kind",
+          "tool_id",
+          "name",
+          "status"
+        ],
+        "title": "StreamToolPart",
+        "type": "object"
+      },
       "SubagentEventPayload": {
         "additionalProperties": false,
         "description": "``tool_progress._progress_subagent`` \u2014 every ``subagent.*`` frame; identity fields are optional\nbecause older emitters omit them and the TUI spawn tree falls back to flat rendering.",
@@ -36761,6 +37033,30 @@
             ],
             "default": null,
             "title": "Duration Seconds"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cost Usd"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Failure Reason"
           },
           "tool_preview": {
             "anyOf": [

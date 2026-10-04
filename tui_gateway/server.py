@@ -3054,6 +3054,7 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
     now = time.time()
     return {
         "current": sid == current_sid, "id": sid,
+        "profile": profile_name_for_home(session.get("profile_home") or _hermes_home),
         "last_active": float(session.get("last_active") or session.get("created_at") or now),
         "message_count": len(history),
         "model": str(getattr(agent, "model", "") or _resolve_model()), "preview": preview,

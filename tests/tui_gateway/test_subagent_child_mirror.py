@@ -70,6 +70,25 @@ def _relay(server, event_type, **payload):
     )
 
 
+@pytest.mark.parametrize('cost', [0.0, 0.125])
+def test_complete_forwards_optional_cost_and_failure_reason(server, emits, cost):
+    from tui_gateway.contracts.events import SubagentEventPayload
+    _relay(server, 'subagent.complete', status='failed', cost_usd=cost, failure_reason='max_turns')
+    payload = next(p for e, s, p in emits if e == 'subagent.complete' and s == 'parent-sid')
+    assert payload['cost_usd'] == cost
+    assert payload['failure_reason'] == 'max_turns'
+    typed = SubagentEventPayload.model_validate(payload)
+    assert typed.cost_usd == cost
+    assert typed.failure_reason == 'max_turns'
+
+
+def test_complete_does_not_invent_absent_cost_or_failure(server, emits):
+    _relay(server, 'subagent.complete', status='completed')
+    payload = next(p for e, s, p in emits if e == 'subagent.complete' and s == 'parent-sid')
+    assert 'cost_usd' not in payload
+    assert 'failure_reason' not in payload
+
+
 def test_no_live_child_session_no_mirror(server, emits):
     _relay(server, "subagent.tool", tool_name="terminal", child_session_id="child-1")
 
