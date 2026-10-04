@@ -191,6 +191,35 @@ no HTTP service is needed. Activate new discovery/runtime routes for consumers b
 retiring WebUI. `skills-patch/*.patch` and complete `*.SKILL.md` contain the proposed
 owner skill changes; **not applied** to `~/.hermes/skills` by this commit.
 
+## Session side-task activity
+
+`GET /api/plugins/cloudseed_mobile/session-activity?profile=<name>&stored_session_id=<id>`
+requires both query fields and the existing configured owner login. Native mounting
+validates an existing profile and binds its request scope; no profile or session DB
+is created. Response:
+
+```json
+{"version":1,"profile":"default","stored_session_id":"stored-id","epoch":"opaque-replay-epoch","complete":true,"tasks":[{"task_id":"bg_example","kind":"background","status":"running","started_at":1791130000.0}]}
+```
+
+Kinds are `background|btw`; preview restart is excluded. Status is
+`running|completed|failed|failed_start`; terminal rows add `finished_at` (Unix
+seconds). The registry captures profile home and durable parent at admission and
+survives retirement/remint of the live parent. Reads follow compression-only
+ancestors/continuations using the existing lineage SQL against `state.db` opened
+`mode=ro`; absent DB means exact-ID lookup. Branch ancestry is not ownership.
+No task prompts, questions, result/exception text, cwd, paths or secrets are sent.
+
+Coverage is this dashboard process's current replay epoch, not external processes
+or historical tasks. Terminal retention is 50 per exact admitted parent, six-hour
+TTL, pruned on registry operations. Running tasks are never age/count-pruned.
+`complete:true` means a complete snapshot of that retained registry scope, not
+complete history. Epoch change or missing/expired evidence must read as unknown,
+never successful completion. Metadata grants no attach/close/steer authority.
+Existing completion events still carry their original result text to their owner.
+Errors: 401/403 owner/scope, 400 malformed query/profile, 404 missing profile,
+422 absent required query fields, 503 unreadable/corrupt existing session store.
+
 ## Tests
 
 Fixture-only tests protect API lifecycle, rebind/tombstones, pagination, provider CAS,

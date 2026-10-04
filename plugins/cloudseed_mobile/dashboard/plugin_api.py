@@ -17,6 +17,7 @@ from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, Pho
 from plugins.cloudseed_mobile.iphone_reminders import ReminderOutbox, ReminderError
 from plugins.cloudseed_mobile import provider_accounts as accounts
 from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write_memory
+from plugins.cloudseed_mobile.session_activity import session_activity
 
 MAX_BODY = 1024 * 1024
 
@@ -167,6 +168,11 @@ for operation in PHOTO_OPS:
     router.add_api_route('/photo-catalog/'+operation, photo_endpoint(operation), methods=['POST'], name='photo_'+operation)
 for operation in REMINDER_OPS:
     router.add_api_route('/iphone-reminders/'+operation, reminder_endpoint(operation), methods=['POST'], name='reminder_'+operation)
+
+
+@router.get('/session-activity')
+def activity(profile: str, stored_session_id: str):
+    return guarded(lambda: session_activity(profile, stored_session_id))
 
 
 @router.get('/provider/accounts')
