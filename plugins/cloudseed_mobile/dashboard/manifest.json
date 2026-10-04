@@ -1,0 +1,9 @@
+{
+  "name": "cloudseed_mobile",
+  "label": "CloudSeed Mobile",
+  "description": "Owner-only Hermex integrations; backend only",
+  "version": "1.0.0",
+  "tab": {"hidden": true},
+  "entry": "empty.js",
+  "api": "plugin_api.py"
+}

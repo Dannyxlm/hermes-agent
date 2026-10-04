@@ -45,6 +45,10 @@
     {
       "id": "private-mobile-delivery",
       "summary": "Authenticated private iOS push and Live Activity projections from canonical Team and Chats events"
+    },
+    {
+      "id": "cloudseed-mobile-plugin",
+      "summary": "Owner-authenticated mobile photos, reminders, account preferences and profile memory with retained integration stores"
     }
   ]
 }
