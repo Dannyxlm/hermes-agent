@@ -194,3 +194,51 @@ def test_recovery_retries_at_standard_speed_before_classification():
     assert (retry, prompt) == (True, "sys")
     assert agent._fast_mode_unavailable_models == {"claude-opus-5"}
     assert any("standard speed" in line for line in printed)
+
+
+class _FastCreditsRequiredError(Exception):
+    """The live subscription-OAuth refusal: a plain 429 rate_limit_error, no fast-limit headers."""
+
+    def __init__(self, message="Usage credits are required for fast mode."):
+        super().__init__(f"HTTP 429: {message}")
+        self.status_code = 429
+        self.body = {"type": "error", "error": {"type": "rate_limit_error", "message": message}}
+        self.response = SimpleNamespace(headers={"retry-after": "0"})
+
+
+def test_credits_required_refusal_is_detected_from_the_message_alone():
+    assert fast_mode.fast_mode_requires_credits(_FastCreditsRequiredError(), _FAST_KWARGS) is True
+    # Claude Code's wording of the same entitlement refusal.
+    assert fast_mode.fast_mode_requires_credits(
+        _FastCreditsRequiredError("Fast mode requires usage credits"), _FAST_KWARGS) is True
+    # Only a request that actually asked for fast speed.
+    assert fast_mode.fast_mode_requires_credits(_FastCreditsRequiredError(), {"model": "claude-opus-5"}) is False
+    # An ordinary rate limit stays on the normal retry/cooldown path.
+    assert fast_mode.fast_mode_requires_credits(
+        _FastCreditsRequiredError("Number of request tokens has exceeded your per-minute rate limit"), _FAST_KWARGS,
+    ) is False
+    assert fast_mode.fast_mode_requires_credits(RuntimeError("boom"), _FAST_KWARGS) is False
+
+
+def test_credits_required_refusal_retries_at_standard_speed_without_benching_the_key():
+    from agent.turn_recovery import recover_before_classification
+
+    printed, warnings = [], []
+    agent = SimpleNamespace(
+        model="claude-opus-5-5", provider="anthropic", log_prefix="", _fast_mode_unavailable_models=set(),
+        _vprint=lambda *a, **k: printed.append(" ".join(str(x) for x in a)),
+        _emit_warning=warnings.append,
+    )
+    kwargs = {"model": "claude-opus-5-5", "extra_body": {"speed": "fast"}}
+    retry, prompt = recover_before_classification(
+        agent, _FastCreditsRequiredError(), messages=[], api_messages=[], api_kwargs=kwargs, active_system_prompt="sys",
+    )
+    # Retried immediately, before classify_api_error/credential rotation can record a cooldown.
+    assert (retry, prompt) == (True, "sys")
+    assert agent._fast_mode_unavailable_models == {"claude-opus-5-5"}
+    # The user is told why, on the warning rail clients render.
+    assert len(warnings) == 1
+    assert "usage credits" in warnings[0] and "standard speed" in warnings[0]
+    # And the next request no longer asks for fast speed.
+    agent.service_tier, agent.request_overrides = "priority", {"speed": "fast"}
+    assert fast_mode.effective_request_overrides(agent) == {}
