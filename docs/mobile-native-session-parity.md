@@ -6,7 +6,8 @@ authority. These existing methods still require the exact canonical Bot Chat
 root/profile/runtime and attached connection. Ordinary sessions use a separate
 `native_session` destination. `mobile.capabilities` advertises all new methods and
 `ordinary_session_push`, `ordinary_session_live_activity`,
-`native_widget_snapshot_capability`, and `atomic_stream_snapshot`.
+`native_widget_snapshot_capability`, `atomic_stream_snapshot`, and
+`rich_stream_snapshot` (version 1).
 
 ## Authenticated registration RPCs
 
@@ -170,10 +171,73 @@ Client ordering:
    truncation, gap or overflow requires a fresh resume/history reconciliation and
    fresh cut, not continued replay against the old baseline.
 
-This is a **stream-text publication boundary**, not a transactional watermark for
-REST history, pending request registries, tool cards, or provider-side writes.
-Those retain their existing snapshot/reconciliation paths. Durable history can be
-ahead of event publication; clients must replace the active streamed turn from the
-cut rather than treating an arbitrary REST transcript fetch as stream evidence.
-The typed Python, generated TypeScript, and OpenRPC contracts describe the new
-optional field and RPC.
+This is a **stream publication boundary**, not a transactional watermark for
+REST history, pending request registries, or provider-side writes. Subagent and
+process rosters retain their independent reconciliation paths. Durable history
+can be ahead of event publication; do not treat a REST fetch as stream evidence.
+
+### Rich stream snapshot v1
+
+`mobile.capabilities.features` includes `rich_stream_snapshot`, with
+`feature_versions: {"rich_stream_snapshot": 1}`. `atomic_stream_snapshot` remains
+advertised; old scalar fields and their meanings are unchanged. In particular,
+legacy `reasoning` still accumulates `thinking.delta`, not model reasoning.
+
+The additive `stream.parts` array is ordered by first publication, with these
+three typed shapes (optional fields are omitted when unavailable):
+
+```json
+[
+  {"kind":"text","text":"Published answer"},
+  {"kind":"reasoning","text":"Model reasoning","complete":true},
+  {"kind":"tool","tool_id":"call-1","name":"terminal","status":"complete",
+   "context":"pwd","preview":"pwd","args_text":"{\"command\": \"pwd\"}",
+   "labels":[],"duration_s":0.5,"summary":"done","error":false,
+   "inline_diff":"short display excerpt","todos":[]}
+]
+```
+
+Text deltas append to the open contiguous text part. Reasoning or a tool event
+starts a new text boundary. `message.interim` seals text; an already-streamed
+interim never appends its duplicate text. A nonstreaming interim supplies its
+text directly. Reasoning deltas append to the open contiguous reasoning part;
+`reasoning.available` replaces that open block and sets `complete:true`, or
+creates a completed block when no block is open. Text/interim/tool events seal
+an open reasoning boundary without claiming it complete.
+
+Tools upsert in place by exact `tool_id`; completion without a start creates a
+completed part. Repeated starts merge display metadata without resurrecting
+completed tools. Full result objects are not copied. A bounded `args_text`
+summary is supplied from `args` if explicit args text is absent. `error` derives
+from the existing tool failure display predicate (false `success`/`ok`, nonempty
+error string, nonzero integer exit code). `todos`/`labels` copy only the fields
+published on the event, never fetch producer state or infer task completion.
+
+`stream.thinking` is the latest thinking delta text or generating tool name,
+not model reasoning and not a rich part. Terminal completion retains parts;
+`terminal`/`status` and authoritative scalar final `assistant` govern settlement,
+not a concatenation of partial parts. `todo_state` remains the separate latest
+published plan. `message.start` resets the whole projection and its trim flag.
+Detached sessions keep projecting through the same publication lock.
+
+Limits apply to the **additive rich projection**, not the legacy scalar fields:
+200 parts, 64 KiB UTF-8 per text/reasoning part, 512 KiB serialized UTF-8 for the
+parts array (`json.dumps(..., ensure_ascii=False)`). Oldest parts are evicted;
+text/reasoning retains its newest UTF-8 suffix. Each display string (including
+args summary and inline diff) retains at most 4 KiB; labels/todos lists retain
+at most 64 KiB serialized each. Thinking retains at most 4 KiB. Rich-part
+trimming sets `parts_incomplete:true` until the next message start. The total
+snapshot can exceed 512 KiB because compatible scalar fields are not truncated.
+Clients must mark incomplete rich reconstruction honestly, not invent cards.
+
+### Profile-scoped display-only live roster
+
+`session.active_list({profile:"ops"})` resolves an existing profile and filters
+this dashboard process's live records. An unknown profile returns 4064, never
+creates a home or falls back. Omitted/empty profile preserves all-profile
+behavior. Rows add optional `profile` (name, never path), derived from the
+record's effective home, including a named launch profile. Custom homes not
+recognized by the existing name mapper may report null. Finalized records are
+excluded; detached records remain visible. Status precedence remains waiting,
+starting, working, idle. Enumeration neither attaches nor focuses sessions;
+it grants no control authority and says nothing about workers in other processes.

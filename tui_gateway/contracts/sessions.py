@@ -5,6 +5,8 @@ listing/browsing stored rows, spawn-tree snapshots, event replay and the statele
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
@@ -717,8 +719,38 @@ method("terminal.resize", params=TerminalResizeParams, result=TerminalResizeResu
        doc="Record the client's column width for server-side rendering.")
 
 
+class StreamTextPart(Result):
+    kind: Literal["text"]
+    text: str
+
+
+class StreamReasoningPart(Result):
+    kind: Literal["reasoning"]
+    text: str
+    complete: bool | None = None
+
+
+class StreamToolPart(Result):
+    kind: Literal["tool"]
+    tool_id: str
+    name: str
+    status: Literal["running", "complete"]
+    context: str | None = None
+    preview: str | None = None
+    args_text: str | None = None
+    labels: list[JsonValue] | None = None
+    duration_s: float | None = None
+    summary: str | None = None
+    error: bool | None = None
+    inline_diff: str | None = None
+    todos: list[JsonValue] | None = None
+
+
 class SessionStreamProjection(Result):
-    """Only event-published current-turn text; producer inflight/DB state is not a stream cut."""
+    """Event-published turn only; rich parts are additive, bounded and publication ordered."""
+    parts: list[StreamTextPart | StreamReasoningPart | StreamToolPart] | None = None
+    thinking: str | None = None
+    parts_incomplete: bool | None = None
     start_seq: int
     segments: list[str]
     assistant: str
