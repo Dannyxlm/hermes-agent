@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Search the paired phone's private photo catalog; originals remain in Photos."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument("--profile", required=True)
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("devices")
+    for name in ("status", "search", "preview"):
+        command = sub.add_parser(name)
+        command.add_argument("--device", required=True)
+        if name == "search":
+            command.add_argument(
+                "--json-file", type=Path, required=True, help="Private JSON query file"
+            )
+        if name == "preview":
+            command.add_argument("--asset", required=True)
+    args = parser.parse_args()
+    path = args.state_dir / "photo-catalog" / "catalog.sqlite3"
+    if not path.is_file():
+        parser.error("Connect Photos in Hermex and complete a sync first")
+    try:
+        store = PhotoCatalog(path)
+        if args.command == "devices":
+            result = {"devices": store.devices(args.profile)}
+        elif args.command == "status":
+            result = store.status(args.profile, args.device)
+        elif args.command == "search":
+            with args.json_file.open("rb") as source:
+                payload = source.read(8193)
+            if len(payload) > 8192:
+                raise PhotoError("Query too large")
+            result = store.search(args.profile, args.device, json.loads(payload))
+        else:
+            data = store.preview(args.profile, args.device, args.asset)
+            # Unique private temporary export: no caller-chosen path or symlink overwrite.
+            directory = tempfile.mkdtemp(prefix="hermex-photo-")
+            name = Path(directory) / "preview.jpg"
+            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(data)
+            result = {"preview_path": str(name), "original": False, "temporary": True}
+        print(json.dumps(result))
+    except (PhotoError, OSError, ValueError) as error:
+        print(
+            json.dumps(
+                {"error": "Photo request rejected", "type": type(error).__name__}
+            )
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
