@@ -210,6 +210,62 @@ class MobileUnregisterResult(Result):
     removed: int
 
 
+class MobileStoredSessionParams(Params):
+    """Separate authority from canonical Bot Chat; exact stored ID, not title or runtime ID."""
+    profile: str
+    stored_session_id: str
+
+
+class MobileSessionPushRegisterParams(MobilePushRefreshParams, MobileStoredSessionParams):
+    pass
+
+
+class MobileSessionActivityRegisterParams(MobileActivityRefreshParams, MobileStoredSessionParams):
+    pass
+
+
+class MobileWidgetRegisterParams(MobileRegistrationParams, MobileStoredSessionParams):
+    read_token: str  # client-generated 32 random bytes as lowercase hex; never a general bearer
+    widget_token: str = ""
+
+
+class MobileSessionDestination(Result):
+    surface: Literal["native_session"]
+    profile: str
+    session_id: str  # compression lineage root
+
+
+class MobileSessionRegistrationResult(MobileRegistrationResult):
+    destination: MobileSessionDestination
+    resolved_session_id: str
+    notification_run: MobileNotificationRun | None
+    snapshot_path: str | None = None
+
+
+class MobileSessionPresenceParams(MobileStoredSessionParams):
+    installation_id: str
+    connection_id: str
+    foreground: bool
+
+
+class MobileSessionPresenceResult(Result):
+    foreground: bool
+    expires_at: float
+
+
+method("mobile.session_push.register", params=MobileSessionPushRegisterParams, result=MobileSessionRegistrationResult)
+method("mobile.session_push.refresh", params=MobilePushRefreshParams, result=MobileRefreshResult)
+method("mobile.session_push.unregister", params=MobileUnregisterParams, result=MobileUnregisterResult)
+method("mobile.session_push.presence", params=MobileSessionPresenceParams, result=MobileSessionPresenceResult,
+       doc="Renew a 60-second foreground lease for a registered ordinary destination; affects alerts only.")
+method("mobile.session_activity.register", params=MobileSessionActivityRegisterParams, result=MobileSessionRegistrationResult)
+method("mobile.session_activity.refresh", params=MobileActivityRefreshParams, result=MobileRefreshResult)
+method("mobile.session_activity.unregister", params=MobileActivityUnregisterParams, result=MobileUnregisterResult)
+method("mobile.widget.register", params=MobileWidgetRegisterParams, result=MobileSessionRegistrationResult,
+       doc="Register or rotate an ordinary-session widget lease and exact GET snapshot capability.")
+method("mobile.widget.unregister", params=MobileUnregisterParams, result=MobileUnregisterResult)
+
+
 method("mobile.capabilities", params=MobileEmptyParams, result=MobileCapabilitiesResult)
 method("mobile.bots", params=MobileBotsParams, result=MobileBotsResult)
 method("mobile.open", params=MobileOpenParams, result=MobileSnapshotResult)

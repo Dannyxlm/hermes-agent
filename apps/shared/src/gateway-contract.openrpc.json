@@ -2113,6 +2113,132 @@
       }
     },
     {
+      "name": "mobile.session_activity.refresh",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileActivityRefreshParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileRefreshResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_activity.register",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileSessionActivityRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSessionRegistrationResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_activity.unregister",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileActivityUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_push.presence",
+      "summary": "Renew a 60-second foreground lease for a registered ordinary destination; affects alerts only.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileSessionPresenceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSessionPresenceResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_push.refresh",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobilePushRefreshParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileRefreshResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_push.register",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileSessionPushRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSessionRegistrationResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_push.unregister",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
       "name": "mobile.snapshot",
       "summary": "",
       "params": [
@@ -2163,6 +2289,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/MobileSubmitResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.widget.register",
+      "summary": "Register or rotate an ordinary-session widget lease and exact GET snapshot capability.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileWidgetRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSessionRegistrationResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.widget.unregister",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
         }
       }
     },
@@ -3783,6 +3945,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionCorrectionResult"
+        }
+      }
+    },
+    {
+      "name": "session.stream.snapshot",
+      "summary": "Atomic event-published stream cut. Buffer live frames, replace stream from this cut, then replay session.events.since(last_seen=baseline_seq). Admit only newer seq in this runtime/epoch; on truncation or epoch change rebuild. No durable-history watermark implied.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionStreamSnapshotResult"
         }
       }
     },
@@ -20147,6 +20327,247 @@
         "title": "MobileScopeParams",
         "type": "object"
       },
+      "MobileSessionActivityRegisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "activity_token": {
+            "title": "Activity Token",
+            "type": "string"
+          },
+          "activity_id": {
+            "title": "Activity Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id",
+          "installation_id",
+          "connection_id",
+          "environment",
+          "activity_token",
+          "activity_id",
+          "run_id"
+        ],
+        "title": "MobileSessionActivityRegisterParams",
+        "type": "object"
+      },
+      "MobileSessionDestination": {
+        "additionalProperties": false,
+        "properties": {
+          "surface": {
+            "const": "native_session",
+            "title": "Surface",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface",
+          "profile",
+          "session_id"
+        ],
+        "title": "MobileSessionDestination",
+        "type": "object"
+      },
+      "MobileSessionPresenceParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "foreground": {
+            "title": "Foreground",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id",
+          "installation_id",
+          "connection_id",
+          "foreground"
+        ],
+        "title": "MobileSessionPresenceParams",
+        "type": "object"
+      },
+      "MobileSessionPresenceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "foreground": {
+            "title": "Foreground",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "foreground",
+          "expires_at"
+        ],
+        "title": "MobileSessionPresenceResult",
+        "type": "object"
+      },
+      "MobileSessionPushRegisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "device_token": {
+            "title": "Device Token",
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "enum": [
+                "attention",
+                "completion"
+              ],
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "preview_enabled": {
+            "default": false,
+            "title": "Preview Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id",
+          "installation_id",
+          "connection_id",
+          "environment",
+          "device_token"
+        ],
+        "title": "MobileSessionPushRegisterParams",
+        "type": "object"
+      },
+      "MobileSessionRegistrationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/MobileSessionDestination"
+          },
+          "resolved_session_id": {
+            "title": "Resolved Session Id",
+            "type": "string"
+          },
+          "notification_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobileNotificationRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Path"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "expires_at",
+          "destination",
+          "resolved_session_id",
+          "notification_run"
+        ],
+        "title": "MobileSessionRegistrationResult",
+        "type": "object"
+      },
       "MobileSnapshotParams": {
         "additionalProperties": false,
         "properties": {
@@ -20486,6 +20907,54 @@
           "removed"
         ],
         "title": "MobileUnregisterResult",
+        "type": "object"
+      },
+      "MobileWidgetRegisterParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "read_token": {
+            "title": "Read Token",
+            "type": "string"
+          },
+          "widget_token": {
+            "default": "",
+            "title": "Widget Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id",
+          "installation_id",
+          "connection_id",
+          "environment",
+          "read_token"
+        ],
+        "title": "MobileWidgetRegisterParams",
         "type": "object"
       },
       "ModelCapabilities": {
@@ -29940,6 +30409,17 @@
           "info": {
             "$ref": "#/components/schemas/SessionLiveInfo"
           },
+          "stream_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStreamSnapshotResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "stored_session_id": {
             "anyOf": [
               {
@@ -32946,6 +33426,17 @@
           "info": {
             "$ref": "#/components/schemas/SessionLiveInfo"
           },
+          "stream_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStreamSnapshotResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "stored_session_id": {
             "anyOf": [
               {
@@ -33280,6 +33771,130 @@
           "output"
         ],
         "title": "SessionStatusResult",
+        "type": "object"
+      },
+      "SessionStreamProjection": {
+        "additionalProperties": false,
+        "description": "Only event-published current-turn text; producer inflight/DB state is not a stream cut.",
+        "properties": {
+          "start_seq": {
+            "title": "Start Seq",
+            "type": "integer"
+          },
+          "segments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Segments",
+            "type": "array"
+          },
+          "assistant": {
+            "title": "Assistant",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "start": {
+            "additionalProperties": true,
+            "title": "Start",
+            "type": "object"
+          },
+          "terminal": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Terminal"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning"
+          },
+          "todo_state": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Todo State"
+          }
+        },
+        "required": [
+          "start_seq",
+          "segments",
+          "assistant",
+          "status",
+          "start"
+        ],
+        "title": "SessionStreamProjection",
+        "type": "object"
+      },
+      "SessionStreamSnapshotResult": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stored Session Id"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "string"
+          },
+          "baseline_seq": {
+            "title": "Baseline Seq",
+            "type": "integer"
+          },
+          "stream": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStreamProjection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "epoch",
+          "baseline_seq",
+          "stream"
+        ],
+        "title": "SessionStreamSnapshotResult",
         "type": "object"
       },
       "SessionTitleParams": {
