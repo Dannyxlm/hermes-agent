@@ -151,7 +151,7 @@ def _mobile_session_register(rid, params, principal, kind):
     destination, tip, _title = _mobile_session_destination(params)
     token_key = {"alert": "device_token", "activity": "activity_token", "widget": "widget_token"}[kind]
     options = dict(installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
-                   token=params.get(token_key), environment=params.get("environment"), kind=kind)
+                   token=params.get(token_key, "" if kind == "widget" else None), environment=params.get("environment"), kind=kind)
     if kind == "activity":
         options.update(activity_id=params.get("activity_id"), run_id=params.get("run_id"))
     elif kind == "widget":

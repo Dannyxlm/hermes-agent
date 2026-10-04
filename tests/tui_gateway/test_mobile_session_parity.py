@@ -127,6 +127,24 @@ def test_widget_exact_path_never_grants_general_access(push_service, ordinary):
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_widget_http_seam_is_read_only(push_service, ordinary, monkeypatch):
+    from fastapi.testclient import TestClient
+    from hermes_cli import web_server
+    assert "result" in rpc("mobile.widget.register", **{k: v for k, v in ordinary.items() if k != "device_token"},
+                           read_token="12" * 32)
+    monkeypatch.setattr(web_server.app.state, "auth_required", False, raising=False)
+    client = TestClient(web_server.app)
+    headers = {"Authorization": "Bearer " + "12" * 32}
+    response = client.get("/api/mobile/widgets/snapshot", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert response.headers["cache-control"] == "no-store"
+    for path in ("/api/sessions", "/api/config", "/api/mobile/widgets/snapshot/extra"):
+        assert client.get(path, headers=headers).status_code == 401
+    assert client.post("/api/mobile/widgets/snapshot", headers=headers).status_code == 401
+    assert client.get("/api/mobile/widgets/snapshot", headers={"Authorization": "Bearer " + "34" * 32}).status_code == 401
+
+
 def test_presence_suppresses_only_registered_foreground_device(push_service, ordinary, mobile_home, peer):
     assert "result" in rpc("mobile.session_push.register", **ordinary)
     presence = {k: ordinary[k] for k in ("profile", "stored_session_id", "installation_id", "connection_id")}
