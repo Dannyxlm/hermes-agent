@@ -10,7 +10,7 @@ _MOBILE_PUSH_METHODS = (
     "mobile.push.refresh", "mobile.activity.refresh",
     "mobile.session_push.register", "mobile.session_push.refresh", "mobile.session_push.unregister",
     "mobile.session_activity.register", "mobile.session_activity.refresh", "mobile.session_activity.unregister",
-    "mobile.widget.register", "mobile.widget.unregister",
+    "mobile.widget.register", "mobile.widget.unregister", "mobile.session_push.presence",
 )
 _MOBILE_PUSH_STATUSES = {
     "tool.start": "usingTool", "tool.complete": "thinking", "message.delta": "responding",
@@ -182,6 +182,17 @@ def _(rid, params, principal):
 @_mobile_push_handler("mobile.widget.register")
 def _(rid, params, principal):
     return _mobile_session_register(rid, params, principal, "widget")
+
+
+@_mobile_push_handler("mobile.session_push.presence")
+def _(rid, params, principal):
+    service = _mobile_push_service()
+    if service is None:
+        return _err(rid, 4405, "mobile notifications are not configured")
+    destination, _tip, _title = _mobile_session_destination(params)
+    return _ok(rid, service.store.presence(principal, destination,
+        installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
+        foreground=params.get("foreground")))
 
 
 def _mobile_session_refresh(rid, params, principal, kind):

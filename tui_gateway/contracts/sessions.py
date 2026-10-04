@@ -713,6 +713,32 @@ method("terminal.resize", params=TerminalResizeParams, result=TerminalResizeResu
        doc="Record the client's column width for server-side rendering.")
 
 
+class SessionStreamProjection(Result):
+    """Only event-published current-turn text; producer inflight/DB state is not a stream cut."""
+    start_seq: int
+    segments: list[str]
+    assistant: str
+    status: str
+    start: dict[str, JsonValue]
+    terminal: dict[str, JsonValue] | None = None
+    reasoning: str | None = None
+    todo_state: dict[str, JsonValue] | None = None
+
+
+class SessionStreamSnapshotResult(Result):
+    session_id: str  # runtime ID attached to this connection
+    stored_session_id: str | None = None
+    epoch: str
+    baseline_seq: int
+    stream: SessionStreamProjection | None
+
+
+method("session.stream.snapshot", params=SessionParams, result=SessionStreamSnapshotResult,
+       doc="Atomic event-published stream cut. Buffer live frames, replace stream from this cut, "
+           "then replay session.events.since(last_seen=baseline_seq). Admit only newer seq in this "
+           "runtime/epoch; on truncation or epoch change rebuild. No durable-history watermark implied.")
+
+
 class SessionEventsSinceParams(SessionParams):
     last_seen: int | None = None
 

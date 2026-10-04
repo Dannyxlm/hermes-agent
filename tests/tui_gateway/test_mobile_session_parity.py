@@ -39,7 +39,8 @@ def test_ordinary_registration_resolves_tip_and_rejects_cross_profile(push_servi
         assert rpc("mobile.session_push.register", **{**ordinary, **override})["error"]["code"] == 4400
     refresh = {k: ordinary[k] for k in ("installation_id", "connection_id", "device_token", "environment")}
     assert rpc("mobile.session_push.refresh", **refresh)["result"]["updated"] == 1
-    assert rpc("mobile.session_push.unregister", **refresh)["result"]["removed"] == 1
+    identity = {k: ordinary[k] for k in ("installation_id", "connection_id")}
+    assert rpc("mobile.session_push.unregister", **identity)["result"]["removed"] == 1
 
 
 @pytest.mark.parametrize("event,status", [("message.complete", "complete"), ("message.complete", "error"),
@@ -50,7 +51,7 @@ def test_ordinary_detached_projection(push_service, ordinary, mobile_home, peer,
     server._emit("message.start", sid)
     session = server._sessions[sid]
     run_id = session["_mobile_push_run_id"]
-    activity = {**ordinary, "activity_token": "cd" * 32, "activity_id": "fixture-activity", "run_id": run_id}
+    activity = {**{k: v for k, v in ordinary.items() if k != "device_token"}, "activity_token": "cd" * 32, "activity_id": "fixture-activity", "run_id": run_id}
     assert "result" in rpc("mobile.session_activity.register", **activity)
     session["transport"] = server._detached_ws_transport
     if event in {"approval", "clarify"}:
@@ -67,12 +68,12 @@ def test_ordinary_detached_projection(push_service, ordinary, mobile_home, peer,
 
 
 def test_widget_native_scope_and_capability(push_service, ordinary, mobile_home, peer):
-    result = rpc("mobile.widget.register", **ordinary, read_token="12" * 32, widget_token="")["result"]
+    result = rpc("mobile.widget.register", **{k: v for k, v in ordinary.items() if k != "device_token"}, read_token="12" * 32, widget_token="")["result"]
     assert result["snapshot_path"] == "/api/mobile/widgets/snapshot"
     sid = live(mobile_home, peer)
     server._emit("message.start", sid)
     assert push_service.store.widget_snapshot("12" * 32)["items"][0]["session_id"] == "ordinary-root"
-    assert rpc("mobile.widget.unregister", **ordinary)["result"]["removed"] == 1
+    assert rpc("mobile.widget.unregister", **{k: ordinary[k] for k in ("installation_id", "connection_id")})["result"]["removed"] == 1
     with pytest.raises(PermissionError):
         push_service.store.widget_snapshot("12" * 32)
 
@@ -113,7 +114,7 @@ def test_widget_exact_path_never_grants_general_access(push_service, ordinary):
     import asyncio
     from starlette.requests import Request
     from tui_gateway.mobile_widget_http import widget_snapshot_response
-    rpc("mobile.widget.register", **ordinary, read_token="12" * 32, widget_token="")
+    assert "result" in rpc("mobile.widget.register", **{k: v for k, v in ordinary.items() if k != "device_token"}, read_token="12" * 32, widget_token="")
     for path, method in [("/api/sessions", "GET"), ("/api/ws", "GET"),
                          ("/api/mobile/widgets/snapshot/extra", "GET"), ("/api/mobile/widgets/snapshot", "POST")]:
         request = Request({"type": "http", "path": path, "method": method,
@@ -124,3 +125,77 @@ def test_widget_exact_path_never_grants_general_access(push_service, ordinary):
     response = asyncio.run(widget_snapshot_response(request, service=push_service))
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_presence_suppresses_only_registered_foreground_device(push_service, ordinary, mobile_home, peer):
+    assert "result" in rpc("mobile.session_push.register", **ordinary)
+    presence = {k: ordinary[k] for k in ("profile", "stored_session_id", "installation_id", "connection_id")}
+    assert rpc("mobile.session_push.presence", **presence, foreground=True)["result"]["foreground"] is True
+    sid = live(mobile_home, peer)
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete", "text": "fixture"})
+    push_service.drain_once()
+    assert push_service.sender.jobs == []
+    assert rpc("mobile.session_push.presence", **presence, foreground=False)["result"]["foreground"] is False
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete"})
+    push_service.drain_once()
+    assert len(push_service.sender.jobs) == 1
+
+
+def test_presence_lease_expiry_and_pending_retry_suppression(push_service, ordinary, mobile_home, peer):
+    now = [1000.0]
+    push_service.store.clock = lambda: now[0]
+    rpc("mobile.session_push.register", **ordinary)
+    sid = live(mobile_home, peer)
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete"})
+    presence = {k: ordinary[k] for k in ("profile", "stored_session_id", "installation_id", "connection_id")}
+    assert "result" in rpc("mobile.session_push.presence", **presence, foreground=True)
+    push_service.drain_once()
+    assert push_service.sender.jobs == []
+    now[0] += 61
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete"})
+    push_service.drain_once()
+    assert len(push_service.sender.jobs) == 1
+
+
+def test_snapshot_blocks_between_stamp_and_projection(mobile_home, peer, ordinary, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from tui_gateway import session_stream_cut
+    sid = live(mobile_home, peer)
+    server._emit("message.start", sid)
+    stamped, release, snapshot_entered = threading.Event(), threading.Event(), threading.Event()
+    original = session_stream_cut.project_event
+    def pause(session, frame):
+        stamped.set()
+        assert release.wait(5)
+        original(session, frame)
+    monkeypatch.setattr(session_stream_cut, "project_event", pause)
+    def snapshot():
+        snapshot_entered.set()
+        return session_stream_cut.stream_cut(sid, server._sessions[sid])
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        producer = executor.submit(server._emit, "message.delta", sid, {"text": "atomic"})
+        assert stamped.wait(5)
+        reader = executor.submit(snapshot)
+        assert snapshot_entered.wait(5)
+        assert not reader.done()
+        release.set()
+        producer.result(5)
+        cut = reader.result(5)
+    assert cut["stream"]["assistant"] == "atomic"
+    assert event_replay.events_since(sid, cut["baseline_seq"]) == []
+
+
+def test_snapshot_rejects_other_connection_and_profile(mobile_home, peer, ordinary):
+    from tui_gateway.transport import bind_transport, reset_transport
+    from tests.tui_gateway.test_methods_mobile import MobilePeer
+    sid = live(mobile_home, peer)
+    assert "error" in rpc("session.stream.snapshot", session_id=sid, profile="default")
+    token = bind_transport(MobilePeer())
+    try:
+        assert "error" in rpc("session.stream.snapshot", session_id=sid)
+    finally:
+        reset_transport(token)

@@ -15,6 +15,10 @@ from .mobile_push_widgets import WidgetPushStore, reader_digest
 from .mobile_push_payloads import ATTENTION, LABELS, TERMINAL, Scope, activity_payload, alert_payload, generic_alert
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS mobile_presence (
+ principal TEXT NOT NULL, installation_id TEXT NOT NULL, connection_id TEXT NOT NULL,
+ scope TEXT NOT NULL, expires_at REAL NOT NULL,
+ PRIMARY KEY(principal, installation_id, connection_id, scope));
 CREATE TABLE IF NOT EXISTS widget_readers (
  token_hash TEXT PRIMARY KEY, principal TEXT NOT NULL, installation_id TEXT NOT NULL,
  connection_id TEXT NOT NULL, expires_at REAL NOT NULL,
@@ -211,7 +215,31 @@ class PushStore(WidgetPushStore):
                     AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.principal=widget_readers.principal
                     AND s.installation_id=widget_readers.installation_id AND s.connection_id=widget_readers.connection_id
                     AND s.kind='widget' AND s.expires_at>?)""", (*args[:3], self.clock()))
+            db.execute("""DELETE FROM mobile_presence WHERE principal=? AND installation_id=? AND connection_id=?
+                AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.principal=mobile_presence.principal
+                  AND s.installation_id=mobile_presence.installation_id AND s.connection_id=mobile_presence.connection_id
+                  AND s.scope=mobile_presence.scope AND s.kind='alert' AND s.expires_at>?)""", (*args[:3], self.clock()))
             return count
+
+    def presence(self, principal, scope, *, installation_id, connection_id, foreground):
+        """A short, exact destination lease. Connection attachment is not app presence."""
+        if scope.surface != "native_session" or not isinstance(foreground, bool):
+            raise ValueError("invalid presence scope")
+        identity = (principal, normalized_uuid(installation_id), normalized_uuid(connection_id), scope.key)
+        now = self.clock()
+        with self.transaction() as db:
+            if not db.execute("""SELECT 1 FROM subscriptions WHERE principal=? AND installation_id=?
+                AND connection_id=? AND scope=? AND kind='alert' AND expires_at>?""", (*identity, now)).fetchone():
+                raise ValueError("registered destination required")
+            db.execute("DELETE FROM mobile_presence WHERE principal=? AND installation_id=? AND connection_id=? AND scope=?", identity)
+            if foreground:
+                db.execute("INSERT INTO mobile_presence VALUES (?,?,?,?,?)", (*identity, now + 60))
+        return {"foreground": foreground, "expires_at": now + 60 if foreground else now}
+
+    def _foreground(self, db, sub):
+        return db.execute("""SELECT 1 FROM mobile_presence WHERE principal=? AND installation_id=?
+            AND connection_id=? AND scope=? AND expires_at>?""",
+            (sub["principal"], sub["installation_id"], sub["connection_id"], sub["scope"], self.clock())).fetchone() is not None
 
     def current_run(self, scope):
         with self._lock:
@@ -281,6 +309,8 @@ class PushStore(WidgetPushStore):
             return True
 
     def _enqueue(self, db, sub, run, scope, event_id, *, preview=None):
+        if sub["kind"] == "alert" and self._foreground(db, sub):
+            return  # this device is already displaying the destination
         run = dict(run)
         now = self.clock()
         urgent = run["status"] in ATTENTION or run["status"] in TERMINAL
@@ -316,6 +346,13 @@ class PushStore(WidgetPushStore):
     def claim(self):
         now = self.clock()
         with self.transaction() as db:
+            # Presence can arrive after enqueue or between retries. Drop only
+            # unclaimed alerts; an APNs send already in flight cannot be recalled.
+            db.execute("""DELETE FROM outbox WHERE state='pending' AND lease_until<=?
+                AND subscription_id IN (SELECT s.id FROM subscriptions s JOIN mobile_presence p
+                  ON p.principal=s.principal AND p.installation_id=s.installation_id
+                  AND p.connection_id=s.connection_id AND p.scope=s.scope
+                  WHERE s.kind='alert' AND p.expires_at>?)""", (now, now))
             row = db.execute("""SELECT o.*, s.token, s.environment, s.kind, s.preview_enabled, s.version AS token_version
                 FROM outbox o JOIN subscriptions s ON o.subscription_id=s.id
                 WHERE o.state='pending' AND o.next_attempt<=? AND o.lease_until<=?
@@ -384,6 +421,7 @@ class PushStore(WidgetPushStore):
                                  "activity_expired": True}
                     self._enqueue(db, sub, projected, Scope(sub["surface"], sub["profile"], sub["session_id"]), event_id)
         with self.transaction() as db:
+            db.execute("DELETE FROM mobile_presence WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM widget_readers WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM subscriptions WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM outbox WHERE expires_at<=?", (now,))

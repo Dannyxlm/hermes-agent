@@ -669,7 +669,7 @@ def _default_session_cwd() -> str:
 
 
 def write_json(obj: dict) -> bool:
-    from tui_gateway.session_stream_cut import publication_lock, project_event
+    from tui_gateway.session_stream_cut import publication_lock
     params = obj.get("params")
     session = _sessions.get(params.get("session_id")) if isinstance(params, dict) else None
     if obj.get("method") == "event" and session is not None:
