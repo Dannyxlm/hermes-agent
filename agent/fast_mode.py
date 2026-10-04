@@ -132,6 +132,40 @@ def fast_mode_unprovisioned(api_error: Any, api_kwargs: Any) -> bool:
     return any(str(headers.get(name, "")).strip() == "0" for name in _FAST_LIMIT_HEADERS)
 
 
+# Anthropic bills fast mode only from usage credits, never from a Pro/Max plan's included
+# allowance, and refuses an uncredited account with a plain 429 ``rate_limit_error`` that
+# carries no fast-limit headers. Wordings: Messages API, then Claude Code's.
+_FAST_CREDITS_REQUIRED_MARKERS = (
+    "usage credits are required for fast mode",
+    "fast mode requires usage credits",
+)
+
+
+def _api_error_text(api_error: Any) -> str:
+    parts = [str(api_error)]
+    body = getattr(api_error, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        parts.append(str(error.get("message", "")) if isinstance(error, dict) else str(body.get("message", "")))
+    elif body is not None:
+        parts.append(str(body))
+    parts.append(str(getattr(api_error, "message", "") or ""))
+    return " ".join(parts).lower()
+
+
+def fast_mode_requires_credits(api_error: Any, api_kwargs: Any) -> bool:
+    """True when a ``speed: "fast"`` request was refused because the account has no usage
+    credits. An entitlement refusal, not a rate limit: retrying, waiting or benching the key
+    cannot help, while the same request at standard speed is covered by the plan."""
+    if not isinstance(api_kwargs, dict) or (api_kwargs.get("extra_body") or {}).get("speed") != "fast":
+        return False
+    status = getattr(api_error, "status_code", None)
+    if status is not None and not 400 <= int(status) < 500:
+        return False
+    text = _api_error_text(api_error)
+    return any(marker in text for marker in _FAST_CREDITS_REQUIRED_MARKERS)
+
+
 def mark_fast_mode_unavailable(agent: Any) -> bool:
     """Stop sending ``speed`` for the current model for the rest of the session. False when the
     model was already marked, so the caller retries at most once per model."""

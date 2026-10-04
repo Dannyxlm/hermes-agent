@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.conversation_compression import COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE
-from agent.fast_mode import fast_mode_unprovisioned, mark_fast_mode_unavailable
+from agent.fast_mode import fast_mode_requires_credits, fast_mode_unprovisioned, mark_fast_mode_unavailable
 from agent.model_metadata import is_output_cap_error, parse_available_output_tokens_from_error
 from agent.retry_utils import is_zai_coding_overload_error, zai_coding_overload_retry_ceiling
 from agent.error_classifier import FailoverReason, classify_api_error
@@ -255,6 +255,21 @@ def recover_before_classification(
     if fast_mode_unprovisioned(api_error, api_kwargs) and mark_fast_mode_unavailable(agent):
         _vlines(agent, f"⚠️  Fast mode isn't available for {agent.model} on this Anthropic organization — using standard speed for this session, retrying...")
         logger.warning("%sFast mode: %s has a fast-mode limit of 0; standard speed for this session", agent.log_prefix, agent.model)
+        return True, active_system_prompt
+
+    # Fast mode refused for lack of usage credits: an entitlement, not a rate limit. Without this
+    # branch it classifies as a generic 429, benches the model on every pooled credential and
+    # fails over to another provider — even though standard speed is covered by the plan.
+    if fast_mode_requires_credits(api_error, api_kwargs) and mark_fast_mode_unavailable(agent):
+        notice = (f"⚠️  Fast mode for {agent.model} needs usage credits (a Claude plan's included usage "
+                  "doesn't cover Fast) — continuing at standard speed for this session.")
+        emit_warning = getattr(agent, "_emit_warning", None)
+        if callable(emit_warning):
+            emit_warning(notice)
+        else:
+            _vlines(agent, notice)
+        logger.warning("%sFast mode: %s refused without usage credits; standard speed for this session",
+                       agent.log_prefix, agent.model)
         return True, active_system_prompt
 
     # Some providers 4xx on image_url content: record the (provider, model) and retry;
