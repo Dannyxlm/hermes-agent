@@ -1388,7 +1388,14 @@ async def _token_auth_seam(request: Request, call_next):
     + ``token_authenticated`` so downstream gates skip enforcement. Non-token
     routes pass through untouched.
     """
-    from tui_gateway.mobile_widget_http import widget_snapshot_response
+    from tui_gateway.mobile_widget_http import SNAPSHOT_PATH, widget_snapshot_response
+    # This exact capability response terminates the middleware chain; retain the
+    # dashboard's Host gate even though no general authentication is granted.
+    bound_host = getattr(app.state, "bound_host", None)
+    if (request.method == "GET" and request.url.path == SNAPSHOT_PATH and bound_host
+            and not _is_accepted_host(request.headers.get("host", ""), bound_host,
+                                     getattr(app.state, "trusted_public_hosts", frozenset()))):
+        return JSONResponse(status_code=400, content={"detail": "Invalid Host header"})
     response = await widget_snapshot_response(request)
     if response is not None:
         return response

@@ -52,7 +52,9 @@ def test_ordinary_detached_projection(push_service, ordinary, mobile_home, peer,
     session = server._sessions[sid]
     run_id = session["_mobile_push_run_id"]
     activity = {**{k: v for k, v in ordinary.items() if k != "device_token"}, "activity_token": "cd" * 32, "activity_id": "fixture-activity", "run_id": run_id}
-    assert "result" in rpc("mobile.session_activity.register", **activity)
+    receipt = rpc("mobile.session_activity.register", **activity)["result"]
+    refresh = {k: v for k, v in activity.items() if k not in {"profile", "stored_session_id"}}
+    assert rpc("mobile.session_activity.refresh", **refresh)["result"]["updated"] == 1
     session["transport"] = server._detached_ws_transport
     if event in {"approval", "clarify"}:
         server.write_json({"method": event, "id": "fixture-request", "params": {"session_id": sid}})
@@ -65,6 +67,8 @@ def test_ordinary_detached_projection(push_service, ordinary, mobile_home, peer,
     assert alerts[0]["payload"]["hermex.destination"]["session_id"] == "ordinary-root"
     assert alerts[0]["payload"]["hermex.status"] == ("failed" if status == "error" else status)
     assert any(j["kind"] == "activity" for j in push_service.sender.jobs)
+    identity = {k: ordinary[k] for k in ("installation_id", "connection_id")}
+    assert rpc("mobile.session_activity.unregister", **identity, subscription_id=receipt["subscription_id"])["result"]["removed"] == 1
 
 
 def test_widget_native_scope_and_capability(push_service, ordinary, mobile_home, peer):
@@ -143,6 +147,9 @@ def test_widget_http_seam_is_read_only(push_service, ordinary, monkeypatch):
         assert client.get(path, headers=headers).status_code == 401
     assert client.post("/api/mobile/widgets/snapshot", headers=headers).status_code == 401
     assert client.get("/api/mobile/widgets/snapshot", headers={"Authorization": "Bearer " + "34" * 32}).status_code == 401
+    monkeypatch.setattr(web_server.app.state, "bound_host", "127.0.0.1", raising=False)
+    assert client.get("/api/mobile/widgets/snapshot", headers={**headers, "Host": "untrusted.invalid"}).status_code == 400
+    assert client.get("/api/mobile/widgets/snapshot", headers={**headers, "Host": "127.0.0.1"}).status_code == 200
 
 
 def test_presence_suppresses_only_registered_foreground_device(push_service, ordinary, mobile_home, peer):
@@ -177,6 +184,39 @@ def test_presence_lease_expiry_and_pending_retry_suppression(push_service, ordin
     server._emit("message.complete", sid, {"status": "complete"})
     push_service.drain_once()
     assert len(push_service.sender.jobs) == 1
+
+
+def test_ordinary_authority_does_not_adopt_bot_chat_or_foreign_devices(push_service, ordinary, peer):
+    identity = peer.auth_identity
+    peer.auth_identity = None
+    assert rpc("mobile.session_push.register", **ordinary)["error"]["code"] == 4403
+    peer.auth_identity = identity
+    assert "result" in rpc("mobile.session_push.register", **ordinary)
+    opened = open_bot()
+    # Neither destination shape can be used to bypass the other's authority.
+    from tests.tui_gateway.test_methods_mobile_push import registration
+    assert rpc("mobile.push.register", **{**registration(opened), "session_id": "ordinary-runtime"})["error"]["code"] == 4400
+    presence = {k: ordinary[k] for k in ("profile", "stored_session_id", "installation_id", "connection_id")}
+    peer.auth_identity = {"user_id": "other-owner", "provider": "fixture-auth"}
+    assert rpc("mobile.session_push.presence", **presence, foreground=True)["error"]["code"] == 4400
+    assert rpc("mobile.session_push.unregister", **{k: ordinary[k] for k in ("installation_id", "connection_id")})["result"]["removed"] == 0
+    peer.auth_identity = identity
+
+
+def test_foreground_lease_does_not_suppress_another_device(push_service, ordinary, mobile_home, peer):
+    assert "result" in rpc("mobile.session_push.register", **ordinary)
+    second = {**ordinary, "installation_id": str(uuid.uuid4())}
+    assert "result" in rpc("mobile.session_push.register", **second)
+    presence = {k: ordinary[k] for k in ("profile", "stored_session_id", "installation_id", "connection_id")}
+    assert "result" in rpc("mobile.session_push.presence", **presence, foreground=True)
+    sid = live(mobile_home, peer)
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete"})
+    # A repeated terminal projection cannot create a second producer/job.
+    server._mobile_push_finish(server._sessions[sid], "complete")
+    push_service.drain_once()
+    assert len(push_service.sender.jobs) == 1
+    assert push_service.sender.jobs[0]["payload"]["hermex.destination"]["installation_id"] == second["installation_id"]
 
 
 def test_snapshot_blocks_between_stamp_and_projection(mobile_home, peer, ordinary, monkeypatch):

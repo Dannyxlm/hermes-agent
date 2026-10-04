@@ -1,4 +1,6 @@
 """An exact GET capability handler, not an authentication bypass or token provider."""
+import sqlite3
+
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
@@ -21,6 +23,6 @@ async def widget_snapshot_response(request, *, service=None):
         snapshot = await run_in_threadpool(service.store.widget_snapshot, token)
     except PermissionError:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401, headers=headers)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, sqlite3.Error):
         return JSONResponse({"detail": "Unavailable"}, status_code=503, headers=headers)
     return JSONResponse(snapshot, headers=headers)
