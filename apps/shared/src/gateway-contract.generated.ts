@@ -2279,6 +2279,7 @@ export interface SessionResumeResult {
   message_count: number
   messages: TranscriptMessage[]
   info: SessionLiveInfo
+  stream_snapshot?: SessionStreamSnapshotResult | null
   stored_session_id?: string | null
   resumed?: string | null
   session_key?: string | null
@@ -2295,6 +2296,24 @@ export interface SessionResumeResult {
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
   auto_continue?: AutoContinue | null
+}
+export interface SessionStreamSnapshotResult {
+  session_id: string
+  stored_session_id?: string | null
+  epoch: string
+  baseline_seq: number
+  stream: SessionStreamProjection | null
+}
+/** Only event-published current-turn text; producer inflight/DB state is not a stream cut. */
+export interface SessionStreamProjection {
+  start_seq: number
+  segments: string[]
+  assistant: string
+  status: string
+  start: Record<string, unknown>
+  terminal?: Record<string, unknown> | null
+  reasoning?: string | null
+  todo_state?: Record<string, unknown> | null
 }
 /** ``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting client rebuilds its bubbles from. */
 export interface InflightTurn {
@@ -2349,6 +2368,7 @@ export interface SessionActivateResult {
   message_count: number
   messages: TranscriptMessage[]
   info: SessionLiveInfo
+  stream_snapshot?: SessionStreamSnapshotResult | null
   stored_session_id?: string | null
   resumed?: string | null
   session_key?: string | null
@@ -2744,24 +2764,6 @@ export interface TerminalResizeParams {
 }
 export interface TerminalResizeResult {
   cols: number
-}
-export interface SessionStreamSnapshotResult {
-  session_id: string
-  stored_session_id?: string | null
-  epoch: string
-  baseline_seq: number
-  stream: SessionStreamProjection | null
-}
-/** Only event-published current-turn text; producer inflight/DB state is not a stream cut. */
-export interface SessionStreamProjection {
-  start_seq: number
-  segments: string[]
-  assistant: string
-  status: string
-  start: Record<string, unknown>
-  terminal?: Record<string, unknown> | null
-  reasoning?: string | null
-  todo_state?: Record<string, unknown> | null
 }
 export interface SessionEventsSinceParams {
   session_id: string

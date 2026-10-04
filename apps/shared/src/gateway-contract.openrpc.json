@@ -30409,6 +30409,17 @@
           "info": {
             "$ref": "#/components/schemas/SessionLiveInfo"
           },
+          "stream_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStreamSnapshotResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "stored_session_id": {
             "anyOf": [
               {
@@ -33414,6 +33425,17 @@
           },
           "info": {
             "$ref": "#/components/schemas/SessionLiveInfo"
+          },
+          "stream_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStreamSnapshotResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "stored_session_id": {
             "anyOf": [

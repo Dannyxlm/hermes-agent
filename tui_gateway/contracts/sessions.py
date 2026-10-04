@@ -78,6 +78,7 @@ class LiveSessionSnapshot(Result):
     message_count: int
     messages: list[TranscriptMessage]
     info: SessionLiveInfo
+    stream_snapshot: SessionStreamSnapshotResult | None = None
     stored_session_id: str | None = None
     resumed: str | None = None
     session_key: str | None = None

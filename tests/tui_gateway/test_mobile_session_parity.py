@@ -207,6 +207,26 @@ def test_snapshot_blocks_between_stamp_and_projection(mobile_home, peer, ordinar
     assert event_replay.events_since(sid, cut["baseline_seq"]) == []
 
 
+def test_resume_exposes_optional_published_cut(mobile_home, peer, ordinary):
+    resumed = rpc("session.resume", profile="ops", session_id="ordinary-root",
+                  defer_history=True, omit_messages=True)["result"]
+    sid = resumed["session_id"]
+    assert resumed["stream_snapshot"]["session_id"] == sid
+    assert resumed["stream_snapshot"]["stream"] is None
+    server._emit("message.start", sid)
+    server._emit("message.delta", sid, {"text": "published"})
+    server._sessions[sid]["inflight_turn"] = {"assistant": "publishedNOT-YET-PUBLISHED"}
+    resumed = rpc("session.resume", profile="ops", session_id="ordinary-root",
+                  defer_history=True, omit_messages=True)["result"]
+    cut = resumed["stream_snapshot"]
+    assert cut["session_id"] == sid
+    assert cut["stream"]["assistant"] == "published"
+    assert cut["epoch"] == event_replay.replay_epoch()
+    server._emit("message.delta", sid, {"text": "-later"})
+    replay = rpc("session.events.since", session_id=sid, last_seen=cut["baseline_seq"])["result"]
+    assert [e["payload"]["text"] for e in replay["events"]] == ["-later"]
+
+
 def test_snapshot_rejects_other_connection_and_profile(mobile_home, peer, ordinary):
     from tui_gateway.transport import bind_transport, reset_transport
     from tests.tui_gateway.test_methods_mobile import MobilePeer

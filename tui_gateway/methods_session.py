@@ -1074,6 +1074,20 @@ def _(rid, params):
 
 @method("session.resume")
 def _(rid, params: dict) -> dict:
+    response = _resume_session(rid, params)
+    result = response.get("result")
+    if isinstance(result, dict):
+        sid = result.get("session_id")
+        session = _sessions.get(sid)
+        if session is not None:
+            from tui_gateway.session_stream_cut import stream_cut
+            # The legacy transcript/inflight fields keep their old semantics.
+            # This optional field is the event-published replacement and watermark.
+            result["stream_snapshot"] = stream_cut(sid, session)
+    return response
+
+
+def _resume_session(rid, params: dict) -> dict:
     if not (target := params.get("session_id", "")):
         return _err(rid, 4006, "session_id required")
     if params.get("strict_canonical_root_id") is not None:
