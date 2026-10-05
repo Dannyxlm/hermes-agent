@@ -7,7 +7,63 @@ root/profile/runtime and attached connection. Ordinary sessions use a separate
 `native_session` destination. `mobile.capabilities` advertises all new methods and
 `ordinary_session_push`, `ordinary_session_live_activity`,
 `native_widget_snapshot_capability`, `atomic_stream_snapshot`, and
-`rich_stream_snapshot` (version 1).
+`rich_stream_snapshot` (version 1). `feature_versions.inbox_summaries = 1`
+adds the read-only Inbox projections below.
+
+## Inbox summaries v1
+
+`GET /api/sessions?profile=<existing-profile>` retains its old fields and adds:
+
+- Row `attention?: {kind: "approval" | "clarify" | "input", count: positive integer,
+  revision: string}` from the loaded native supervisor's open request registry,
+  bound to the exact stored ID and profile home. No runtime is resumed/attached.
+- Row `last_assistant_reply?: {row_id: integer, at: Unix seconds}` from the selected
+  profile's state.db. The newest assistant row ID with non-whitespace content and
+  `finish_reason != "tool_calls"` (including a missing finish reason) wins. One
+  page-level message query includes already-resolved compression ancestors;
+  branches remain separate. The timestamp is persisted, not request time.
+- Envelope `archived_count`: scoped root count with the same source/cwd/message
+  filters, independent of the page/archive selector, using a count query rather
+  than fetching archived pages. Existing `total` semantics are unchanged.
+- Envelope `inbox_summary_scope: {profile, pending_scope: "process",
+  pending_complete: boolean, pending_epoch?: string, replies_complete: boolean}`.
+  Reply coverage is **returned rows only**, not every page/profile. Corrupt storage
+  does not advertise complete replies. Pending completeness is only this loaded
+  supervisor's supported request plane; without that supervisor it is false and
+  the epoch is omitted. It never promises unrelated CLI/gateway process coverage.
+
+`session.active_list` retains profile filtering and all existing live fields. Rows
+add `pending_kind?`, `pending_count?`, `pending_revision?` with identical attention
+semantics and `latest_run?: {run_id, status, at}` for an existing persisted ordinary
+`native_session` run. `at` is its `updated_at`; statuses are `starting`, `thinking`,
+`usingTool`, `responding`, `waitingForApproval`, `waitingForClarification`, `complete`,
+`failed`, `cancelled`. Exact profile + compression root scope is used, never a
+branch's parent or canonical Bot Chat scope. The run reader opens the existing
+push projection read-only, without delivery configuration, APNs/widget enrollment,
+worker startup or mutation. Only live roster rows are covered; this is not a
+complete historical run feed. The envelope has `inbox_summary_scope` with the same
+process fields, but no `replies_complete`; `profile: null` means unfiltered roster.
+
+`count` counts requests, not clarify questions. Kind priority for mixed supported
+requests is approval → clarify → input. `input` covers sudo/secret/vault prompts
+(and display-install sudo); it does not assert that the phone can answer them.
+GUI reads/actions/tours and unknown methods can retain generic live `waiting`
+without any typed attention. No prompt, command, secret, answer or request ID is
+included in these summaries. Obtain details/response authority through existing
+native chat recovery, and revalidate ownership there.
+
+`revision` is an opaque equality token for the set of supported open requests,
+not a monotonic sequence/timestamp/run ID. Answers/cancellations change that set;
+new requests get new revisions. `pending_epoch` changes on process restart and
+fences process-local reconciliation. These are independent observations, not an
+atomic transcript + roster + run cut; a newer event must not be cleared by an
+older list response. Omitted attention means no typed request observed in this
+process cut (or unavailable runtime plane), **not global "done"**. Omitted reply
+means no qualifying durable row observed on this page; omitted latest run means
+absent/unavailable projection, never success. Epoch changes, missing runtimes,
+failed reads and unvisited pages must preserve unknown/last-good client state.
+Authenticated REST/WS access is unchanged; widget bearer tokens still grant only
+the exact widget GET path, never these summaries.
 
 ## Authenticated registration RPCs
 
