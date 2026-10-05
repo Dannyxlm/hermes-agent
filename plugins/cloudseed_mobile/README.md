@@ -220,7 +220,169 @@ Existing completion events still carry their original result text to their owner
 Errors: 401/403 owner/scope, 400 malformed query/profile, 404 missing profile,
 422 absent required query fields, 503 unreadable/corrupt existing session store.
 
+## Files & deliverables (Hermex R3)
+
+All endpoints below are read-only capabilities on the same owner-guarded router.
+`profile` is required and must equal the native request scope. `profile=all` is
+unsupported; the native mounting layer rejects invalid/nonexistent profiles.
+There is no capability advertisement in mobile RPC: probe this route, and treat
+404 as unsupported. No source DB, project, folder or chat is created by discovery.
+
+### Workspace grants and policy
+
+Grants come from the selected profile's `projects.db` active project folders,
+including secondary folders. The registry is opened with the native `mode=ro`
+URI helper, never its initializing connection factory. Also discover immediate
+(non-symlink) subfolders of `cloudseed_mobile.workspace_root`. If absent, derive
+that root from registered folders whose parent is named `hermes-workspaces`, or
+from the configured `default_cwd` / `terminal.cwd` when its parent is named
+`hermes-workspaces`. Otherwise only that configured cwd itself is granted, never
+unrelated sibling folders. No host path is hardcoded.
+Optional `cloudseed_mobile.generation_roots: [absolute_path, ...]` grants approved
+external producer roots to deliverable-ID reads only (not workspace browsing).
+Grant configuration is deployment/owner policy, never a client-provided root.
+
+Workspace IDs are opaque SHA256 handles bound to profile home, profile and exact
+absolute root. They are not bearer credentials. Favourites never create grants.
+Reject absolute client paths, NUL, backslashes, dot/parent components and encoded
+paths (including double-encoding). Preserve exact Linux path spelling. Every path
+component, including the granted root, is opened using directory descriptors and
+`O_NOFOLLOW`; final descriptors must be regular files. Symlinks are deliberately
+unsupported even inside a root. Download/stream retain that descriptor rather than
+reopening a checked pathname. FIFO/device/directory bytes cannot be exported.
+
+One shared case-insensitive policy covers index references, listing/search and all
+byte routes: `.ssh`, credentials, `.env*`, auth stores, config/service-secret trees,
+session/state/project DBs, other-profile homes, native managed-file credential
+basenames and token/pairing subtrees are denied. Dependency/build/cache trees are
+excluded. Sensitive credentials remain denied even with `reveal=1`. Profile-store
+symlinks are denied. `outputs/private` / `evidence/private` are excluded from
+aggregate/search/list/reads unless explicitly revealed with `reveal=1`. No file
+body, thumbnail or background remote-media download is performed during search.
+Remote references are metadata only; local/private literal hosts are rejected.
+There is no remote proxy/fetch/redirect path. Remote IDs cannot use byte routes;
+client explicit remote open must not forward the native bearer off-origin.
+
+### Exact route contracts
+
+Paths append to `/api/plugins/cloudseed_mobile`; query defaults are listed here.
+
+| Method/path | Query | Success |
+|---|---|---|
+| GET `/workspaces` | `profile` | `{items:[{id,name,root_path,quick_folders:{outputs,plans,reports}}],partial}`; quick-folder values are booleans |
+| GET `/deliverables` | `profile, workspace_id?, session_id?, kind?, q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,coverage,index_revision,updated_at,partial,refresh_status}` |
+| GET `/deliverables/content` | `profile, id, reveal=0` | `{id,profile,content,version_hash,display_type,not_saved_to_workspace:true}`; inline content only |
+| GET `/workspace-files` | `profile, workspace_id, path="", q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,partial,workspace_id,path}` |
+| GET `/workspace-files/read` | `profile, workspace_id + path` **or** `profile + id`; `reveal=0` | `{path,text,binary,truncated,byteSize,mime}`; `text:null` for binary/invalid UTF-8 |
+| GET `/workspace-files/download` | same target as read | original streamed attachment bytes, MIME, Content-Length, `Cache-Control:no-store` |
+| GET/HEAD `/workspace-files/stream` | same target as read; optional `Range` header | original audio/video bytes; full 200, single-range 206, unsatisfiable/malformed/multiple-range 416; HEAD has identical headers and no body |
+
+Supplying both target forms is 400. Generation-root handles are not independently
+browseable. File-ID lookup is profile/cache-authorized and then re-applies current
+grant, containment and sensitive/private checks at actual open. Deleted/moved
+source IDs are tombstones (404); direct workspace browsing shows current files.
+No generated revision or filesystem mtime is represented as a delivery timestamp.
+
+Deliverable items carry `schema_version:1`, opaque `id`, `profile`, `kind`
+(`file|remote_media|inline_content`), `workspace_id` and `relative_path` (nullable),
+`display_name`, `display_type` (MIME), `stored_session_id`, `message_id`,
+`source_chat_title`, nullable `observed_at` (saved message Unix seconds), `action`,
+`outcome`, `provenance`, `occurrences`, `occurrences_partial`. File items carry
+`private` and optionally `availability:"deleted"`; remote items carry `url`;
+inline items carry `version_hash` but **never content in metadata lists**.
+Occurrences carry `id,stored_session_id,message_id,observed_at,action,outcome,
+provenance,source_chat_title`. Actions/outcomes are
+`delivered|created|edited|read|referenced|write_failed|pending`. Unknown timestamps
+are null, never request-time or filesystem timestamps. Unknown types stay visible.
+
+Write/patch/edit/move/delete/read intent is joined to tool results by tool_call_id;
+missing/unrecognized success stays pending and explicit errors never become
+production. Native untrusted-result wrappers are bounded. Assistant MEDIA,
+markdown local links, producer structured output and qualifying finished HTML/SVG/
+code fences are recognized. User imports, reasoning fields/blocks and terminal
+prose are excluded. File identities fold cross-chat rows but retain occurrences;
+last successful production/delivery drives recency. Default Recent includes explicit
+deliveries plus successful production under `outputs`, `docs/plans`, `docs/reports`,
+`evidence/summaries`; `session_id` adds touched/read/failed/pending references and
+follows native compression-only ancestry/continuations, not arbitrary branch ancestry.
+
+### Cache, bounds and partial semantics
+
+Rebuildable cache: selected profile `<home>/plugin_data/cloudseed_mobile/deliverables.sqlite3`.
+`GET /deliverables` reads derived metadata and schedules a bounded FastAPI background
+refresh; first cold response is partial, and the next explicit refresh observes
+progress. Source `state.db` uses the native read-only helper, never SessionDB.
+Source DB/WAL inode/size/mtime fence publication immediately after edits/deletions;
+changed segments compare session/message fingerprints and unchanged ones reuse their
+projection. Canonical source bytes are never modified. Archived/hidden sessions and
+inactive rewound messages are excluded. Original stored IDs and durable message UIDs
+preserve provenance/dedup across native lineage.
+
+- Metadata pages: default 50, range 1–200. Query text <=256 characters;
+  relative paths <=4096; cursors <=8192. Cursors bind profile/home, filters/private
+  reveal and index revision (or listing metadata snapshot), and use keyset ordering.
+- Cold backfill: at most 1000 recent stored sessions; 20 segments per HTTP-triggered
+  refresh; at most 2000 messages / 4 Mi characters per segment; 1 Mi characters per
+  saved content/tool-call string; 500 reference occurrences per segment; parser depth
+  6 and 512 nodes. Refresh/query SQLite budget 0.75 seconds with progress interruption;
+  worker refresh additionally accepts a cancellation event. Finished unchanged
+  snapshots require no further source scan.
+- Occurrence history: <=20 contributing session rows and <=100 occurrences per file;
+  any clipping is explicitly `occurrences_partial:true`.
+- Workspace listing/search: <=5000 visited entries, depth 6, 0.25-second scan budget;
+  workspace discovery caps registry/immediate-root entries at 1000 and generation roots
+  at 100. Names/path/type/size/mtime only; `q` searches descendants of `path`.
+- Preview: 512 KiB prefix only, preserving binary/truncation/MIME/total-byte-size.
+  Original byte responses use 64 KiB chunks without a whole-file/base64 allocation.
+  Audio/video stream permits one closed/open/suffix byte range; 416 includes
+  `Content-Range: bytes */<size>`. Unsupported stream type is 415.
+
+Coverage is `{indexed_sessions,total_sessions,session_cap:1000}`. The total is
+nullable when unknown or capped, not a fabricated full-history count. `updated_at`
+is nullable cache-refresh Unix time, not deliverable time; `index_revision` is
+opaque/nullable. `refresh_status` is `cold|refresh_pending|partial|ready|source_missing|
+source_unavailable|query_budget_exceeded`. Missing/corrupt source yields HTTP 200
+with `partial:true`, not an authoritative empty library. Metadata scanner partial
+also means incomplete scope, never “No files”.
+
+Errors use HTTP codes and native `{detail:string}` for policy failures:
+401 missing owner login; 403 wrong owner/profile, sensitive/private/symlink/nonregular
+access; 400 malformed query/path/target or out-of-range limit; 404 unknown handle/ID,
+missing file/profile or deleted source; 409 invalid/cross-scope/stale cursor; 415
+unsupported stream MIME; 416 invalid Range (empty body plus Content-Range); 422 native
+missing/ill-typed query fields; 503 storage/project-registry unavailable, with existing
+sanitized `{error:"Mobile storage unavailable"}`. Preserve last client snapshot on
+errors. There are no write, archive extraction, execution or arbitrary URL routes.
+
 ## Tests
+
+R3 Files & Deliverables verification uses the requested immutable interpreter and
+scratch FastAPI dependency path, with safety guards enabled:
+
+```sh
+HERMES_HOME=/home/ubuntu/.hermes/cache/scratch/u8-test-venv/hxr3-files-home \
+TMPDIR=/home/ubuntu/.hermes/cache/scratch \
+PYTHONPATH="$PWD:/home/ubuntu/.hermes/cache/scratch/u8-test-venv/lib/python3.14/site-packages" \
+PYTHONDONTWRITEBYTECODE=1 \
+/opt/cloudseed-immutable/hermes-venv/current/bin/python -m pytest -q \
+-p no:cacheprovider \
+--basetemp=/home/ubuntu/.hermes/cache/scratch/u8-test-venv/hxr3-files-pytest \
+tests/plugins/cloudseed_mobile tests/plugins/test_cloudseed_mobile.py
+```
+
+Verified **36 new server tests + 25 existing plugin tests**; combined **61 passed**.
+The repository harness intentionally relocates basetemp from inside the operator's
+Hermes home to a disposable `/var/tmp/hermes-pytest` root and removes it afterward.
+Do not disable that protection to force the nominal scratch path. The tests prove
+owner/profile/handle/cursor fences, credential/private exclusions, actual descriptor
+replacement races, original bytes, Range/HEAD, truthful tool outcomes, read-only
+source stores, message-edit/deletion invalidation and bounded cold/query coverage.
+A 40-session fixture with 300,000-character inline HTML in every session measured
+metadata-page Python peak allocation **15,765 bytes**, query **0.002514 seconds**;
+inline bodies are not hydrated by metadata pagination. HTTP contract examples in
+the handoff are captured from TestClient fixtures, not live calls or codec evidence.
+
+The earlier U8 migration baseline follows (its test count is historical).
 
 Fixture-only tests protect API lifecycle, rebind/tombstones, pagination, provider CAS,
 symlinks/size bounds, profile isolation and the relocated CLIs. No production store

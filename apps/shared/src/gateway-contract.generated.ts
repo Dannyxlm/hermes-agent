@@ -2448,10 +2448,15 @@ export interface SessionActiveListParams {
 }
 export interface SessionActiveListResult {
   sessions: SessionActiveItem[]
+  inbox_summary_scope?: InboxSummaryScope | null
 }
 /** ``server._session_live_item``. */
 export interface SessionActiveItem {
   profile?: string | null
+  pending_kind?: 'approval' | 'clarify' | 'input' | null
+  pending_count?: number | null
+  pending_revision?: string | null
+  latest_run?: InboxLatestRun | null
   current: boolean
   id: string
   last_active: number
@@ -2463,7 +2468,19 @@ export interface SessionActiveItem {
   status: LiveSessionStatus
   title: string
 }
+export interface InboxLatestRun {
+  run_id: string
+  status: 'starting' | 'thinking' | 'usingTool' | 'responding' | 'waitingForApproval' | 'waitingForClarification' | 'complete' | 'failed' | 'cancelled'
+  at: number
+}
 export type LiveSessionStatus = 'idle' | 'starting' | 'waiting' | 'working' | 'streaming' | 'resuming'
+export interface InboxSummaryScope {
+  profile?: string | null
+  pending_scope: 'process'
+  pending_complete: boolean
+  pending_epoch?: string | null
+  replies_complete?: boolean | null
+}
 /** ``session_id`` is the STORED id. */
 export interface SessionDeleteParams {
   session_id: string

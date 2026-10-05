@@ -267,10 +267,21 @@ class SessionActiveListParams(ProfileParams):
     current_session_id: str | None = None
 
 
+class InboxLatestRun(Result):
+    run_id: str
+    status: Literal["starting", "thinking", "usingTool", "responding", "waitingForApproval",
+                    "waitingForClarification", "complete", "failed", "cancelled"]
+    at: float  # persisted updated_at, Unix seconds
+
+
 class SessionActiveItem(Result):
     """``server._session_live_item``."""
 
     profile: str | None = None
+    pending_kind: Literal["approval", "clarify", "input"] | None = None
+    pending_count: int | None = Field(default=None, ge=1)
+    pending_revision: str | None = None
+    latest_run: InboxLatestRun | None = None
 
     current: bool
     id: str
@@ -284,8 +295,17 @@ class SessionActiveItem(Result):
     title: str
 
 
+class InboxSummaryScope(Result):
+    profile: str | None = None  # null on the unfiltered roster
+    pending_scope: Literal["process"]
+    pending_complete: bool
+    pending_epoch: str | None = None
+    replies_complete: bool | None = None  # REST page only; never global history coverage
+
+
 class SessionActiveListResult(Result):
     sessions: list[SessionActiveItem]
+    inbox_summary_scope: InboxSummaryScope | None = None
 
 
 method("session.active_list", params=SessionActiveListParams, result=SessionActiveListResult,

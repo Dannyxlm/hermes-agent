@@ -9,7 +9,7 @@ import hashlib
 import json
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from hermes_cli.config import load_config
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
@@ -18,6 +18,7 @@ from plugins.cloudseed_mobile.iphone_reminders import ReminderOutbox, ReminderEr
 from plugins.cloudseed_mobile import provider_accounts as accounts
 from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write_memory
 from plugins.cloudseed_mobile.session_activity import session_activity
+from plugins.cloudseed_mobile import workspace_files as files
 
 MAX_BODY = 1024 * 1024
 
@@ -38,7 +39,7 @@ def owner(request: Request):
     # Cookie clients must retain a same-origin write boundary, independently of
     # bearer clients. Never trust forwarded host headers here.
     origin = request.headers.get('origin')
-    if request.method != 'GET' and not request.headers.get('authorization', '').lower().startswith('bearer '):
+    if request.method not in ('GET', 'HEAD') and not request.headers.get('authorization', '').lower().startswith('bearer '):
         if origin != str(request.base_url).rstrip('/'):
             raise HTTPException(403, 'Same-origin request required')
     return hashlib.sha256(json.dumps(['cloudseed-mobile-owner-v1', session.provider, session.user_id], separators=(',', ':')).encode()).hexdigest()
@@ -168,6 +169,73 @@ for operation in PHOTO_OPS:
     router.add_api_route('/photo-catalog/'+operation, photo_endpoint(operation), methods=['POST'], name='photo_'+operation)
 for operation in REMINDER_OPS:
     router.add_api_route('/iphone-reminders/'+operation, reminder_endpoint(operation), methods=['POST'], name='reminder_'+operation)
+
+
+def deliverable_store(profile):
+    from hermes_constants import get_hermes_home
+    from plugins.cloudseed_mobile.deliverables_index import DeliverablesIndex
+    files.check_profile(profile)
+    return DeliverablesIndex(get_hermes_home(), profile, files.workspaces(profile, include_generation=True)['items'])
+
+
+@router.get('/deliverables')
+def deliverable_list(background_tasks: BackgroundTasks, profile: str, workspace_id: str | None = None, session_id: str | None = None, kind: str | None = None, q: str = '', cursor: str | None = None, limit: int = 50, reveal: bool = False):
+    def run():
+        index = deliverable_store(profile)
+        result = index.query(workspace_id, session_id, kind, q, cursor, limit, reveal)
+        background_tasks.add_task(index.refresh)
+        return result
+    return guarded(run)
+
+
+@router.get('/deliverables/content')
+def deliverable_content(profile: str, id: str, reveal: bool = False):
+    return guarded(lambda: deliverable_store(profile).content(id, reveal))
+
+
+@router.get('/workspaces')
+def file_workspaces(profile: str):
+    return guarded(lambda: files.workspaces(profile))
+
+
+@router.get('/workspace-files')
+def workspace_listing(profile: str, workspace_id: str, path: str = '', q: str = '', cursor: str | None = None, limit: int = 50, reveal: bool = False):
+    return guarded(lambda: files.listing(profile, workspace_id, path, q, cursor, limit, reveal))
+
+
+def workspace_target(profile, workspace_id, path, id, reveal):
+    files.check_profile(profile)
+    if id:
+        if workspace_id is not None or path is not None:
+            raise HTTPException(400, 'Choose deliverable id or workspace and path')
+        return deliverable_store(profile).file_target(id, reveal)
+    if workspace_id is None or path is None:
+        raise HTTPException(400, 'Workspace and relative path required')
+    return workspace_id, path
+
+
+@router.get('/workspace-files/read')
+def workspace_read(profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False):
+    def run():
+        wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
+        return files.read_file(profile, wid, rel, reveal, bool(id))
+    return guarded(run)
+
+
+@router.get('/workspace-files/download')
+def workspace_download(profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False):
+    def run():
+        wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
+        return files.transport(profile, wid, rel, reveal, generation=bool(id))
+    return guarded(run)
+
+
+@router.api_route('/workspace-files/stream', methods=['GET', 'HEAD'])
+def workspace_stream(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False):
+    def run():
+        wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
+        return files.transport(profile, wid, rel, reveal, request.headers.get('range'), request.method == 'HEAD', True, bool(id))
+    return guarded(run)
 
 
 @router.get('/session-activity')

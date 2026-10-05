@@ -241,6 +241,22 @@ class PushStore(WidgetPushStore):
             AND connection_id=? AND scope=? AND expires_at>?""",
             (sub["principal"], sub["installation_id"], sub["connection_id"], sub["scope"], self.clock())).fetchone() is not None
 
+    @staticmethod
+    def current_run_readonly(path, scope):
+        """Read an existing projection without creating a store or APNs worker."""
+        from pathlib import Path
+        path = Path(path).resolve()
+        if not path.is_file():
+            return None
+        db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+        try:
+            db.row_factory = sqlite3.Row
+            row = db.execute("SELECT * FROM runs WHERE scope=? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                             (scope.key,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            db.close()
+
     def current_run(self, scope):
         with self._lock:
             row = self._db.execute("SELECT * FROM runs WHERE scope=? ORDER BY started_at DESC, rowid DESC LIMIT 1",
