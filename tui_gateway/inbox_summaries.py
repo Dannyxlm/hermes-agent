@@ -1,5 +1,6 @@
 """Read-only Inbox projections; no runtime hydration or delivery enrollment."""
 from pathlib import Path
+import math
 import re
 import sys
 
@@ -39,6 +40,7 @@ def latest_run(session, launch_home, stored_id):
 def page_replies(db, rows):
     """One indexed message query for this page's already-resolved compression chains."""
     lineages = {row["id"]: row.get("_lineage_ids") or [row["id"]] for row in rows}
+    read_markers = {row["id"]: row.get("last_read_at") for row in rows}
     ids = list({sid for chain in lineages.values() for sid in chain})
     if not ids:
         return {}
@@ -57,7 +59,14 @@ def page_replies(db, rows):
         candidates = [by_id[sid] for sid in chain if sid in by_id]
         if candidates:
             final = max(candidates, key=lambda r: r["id"])
-            reply = {"row_id": final["id"], "at": final["timestamp"]}
+            # The read marker is lineage-stamped by Desktop's existing PATCH.
+            # NULL means never tracked/read, not historical unread debt. Compare
+            # the final reply itself, rather than newer user/tool activity.
+            read_at = read_markers[key]
+            reply_at = final["timestamp"]
+            unread = (isinstance(read_at, (int, float)) and math.isfinite(read_at) and read_at >= 0
+                      and isinstance(reply_at, (int, float)) and math.isfinite(reply_at) and reply_at > read_at)
+            reply = {"row_id": final["id"], "at": reply_at, "unread": unread}
             preview = reply_preview(final["head"])
             if preview:
                 reply["preview"] = preview

@@ -184,8 +184,28 @@ def read_file(profile,wid,path,reveal=False,generation=False):
     return {'path':path,'text':None if binary else text,'binary':binary,'truncated':size>len(data),'byteSize':size,'mime':mime}
 
 
-def transport(profile,wid,path,reveal=False,range_header=None,head=False,stream=False,generation=False):
-    fd=file_open(profile,wid,path,reveal,generation)
+def media_open(profile,path):
+    """Original native attachments, without granting the profile/config tree."""
+    check_profile(profile)
+    target=Path(path)
+    if not target.is_absolute(): raise HTTPException(400,'Absolute media path required')
+    home=get_hermes_home().absolute()
+    allowed={'.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.mp3','.wav','.ogg','.opus','.flac','.m4a','.mp4','.mov','.webm','.pdf'}
+    for name in ('images','screenshots','cache','attachments','audio_cache','image_cache',
+                 'video_cache','document_cache','browser_screenshots'):
+        root=home/name
+        try: relative=str(target.relative_to(root))
+        except ValueError: continue
+        if name!='attachments' and target.suffix.lower() not in allowed:
+            raise HTTPException(403,'Unsupported native media path')
+        try: return open_beneath(root,relative)
+        except FileNotFoundError: raise HTTPException(404,'File not found') from None
+        except OSError: raise HTTPException(403,'File access denied') from None
+    raise HTTPException(403,'Path outside profile media roots')
+
+
+def transport(profile,wid,path,reveal=False,range_header=None,head=False,stream=False,generation=False,media=False):
+    fd=media_open(profile,path) if media else file_open(profile,wid,path,reveal,generation)
     size=os.fstat(fd).st_size
     mime=mimetypes.guess_type(path)[0] or 'application/octet-stream'
     if stream and not mime.startswith(('audio/','video/')):

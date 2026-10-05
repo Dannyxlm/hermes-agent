@@ -274,10 +274,15 @@ Paths append to `/api/plugins/cloudseed_mobile`; query defaults are listed here.
 | GET `/deliverables/content` | `profile, id, reveal=0` | `{id,profile,content,version_hash,display_type,not_saved_to_workspace:true}`; inline content only |
 | GET `/workspace-files` | `profile, workspace_id, path="", q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,partial,workspace_id,path}` |
 | GET `/workspace-files/read` | `profile, workspace_id + path` **or** `profile + id`; `reveal=0` | `{path,text,binary,truncated,byteSize,mime}`; `text:null` for binary/invalid UTF-8 |
-| GET `/workspace-files/download` | same target as read | original streamed attachment bytes, MIME, Content-Length, `Cache-Control:no-store` |
-| GET/HEAD `/workspace-files/stream` | same target as read; optional `Range` header | original audio/video bytes; full 200, single-range 206, unsatisfiable/malformed/multiple-range 416; HEAD has identical headers and no body |
+| GET `/workspace-files/download` | same target as read **or** `profile + media_path` | original streamed attachment bytes, MIME, Content-Length, `Cache-Control:no-store` |
+| GET/HEAD `/workspace-files/stream` | same target as download; optional `Range` header | original audio/video bytes; full 200, single-range 206, unsatisfiable/malformed/multiple-range 416; HEAD has identical headers and no body |
 
-Supplying both target forms is 400. Generation-root handles are not independently
+Supplying multiple target forms is 400. `media_path` is an absolute path restricted
+to the selected profile's `images`, `screenshots`, `cache` media types and
+`attachments` directories, including producer-supported `audio_cache`,
+`image_cache`, `video_cache`, `document_cache`, and `browser_screenshots` layouts;
+it does not grant profile configuration or arbitrary host paths. The same descriptor and sensitive-name checks apply. This target lets
+transcript attachments reopen before/without a deliverables index entry. Generation-root handles are not independently
 browseable. File-ID lookup is profile/cache-authorized and then re-applies current
 grant, containment and sensitive/private checks at actual open. Deleted/moved
 source IDs are tombstones (404); direct workspace browsing shows current files.
@@ -312,19 +317,23 @@ Rebuildable cache: selected profile `<home>/plugin_data/cloudseed_mobile/deliver
 `GET /deliverables` reads derived metadata and schedules a bounded FastAPI background
 refresh; first cold response is partial, and the next explicit refresh observes
 progress. Source `state.db` uses the native read-only helper, never SessionDB.
-Source DB/WAL inode/size/mtime fence publication immediately after edits/deletions;
-changed segments compare session/message fingerprints and unchanged ones reuse their
-projection. Canonical source bytes are never modified. Archived/hidden sessions and
+Source DB/WAL inode/size/mtime changes schedule a scan; they never revoke published
+file handles on an unrelated chat write. A completed session projection replaces its
+prior projection in one cache transaction. Keysets persist progress through every
+session/message batch, including across concurrent source writes. Changed workspace
+grants immediately fence old projections; actual file opens also revalidate grants. Canonical source bytes are never modified. Archived/hidden sessions and
 inactive rewound messages are excluded. Original stored IDs and durable message UIDs
 preserve provenance/dedup across native lineage.
 
 - Metadata pages: default 50, range 1–200. Query text <=256 characters;
   relative paths <=4096; cursors <=8192. Cursors bind profile/home, filters/private
   reveal and index revision (or listing metadata snapshot), and use keyset ordering.
-- Cold backfill: at most 1000 recent stored sessions; 20 segments per HTTP-triggered
-  refresh; at most 2000 messages / 4 Mi characters per segment; 1 Mi characters per
-  saved content/tool-call string; 500 reference occurrences per segment; parser depth
-  6 and 512 nodes. Refresh/query SQLite budget 0.75 seconds with progress interruption;
+- Cold backfill visits every stored session; 20 session/message work units per
+  HTTP-triggered refresh. Each message batch is at most 2000 messages / 4 Mi
+  characters (one oversized message still advances). No session or reference-count
+  cutoff silently discards the remainder. Individual saved content/tool-call
+  strings retain the 1 Mi character parser bound, depth 6 and 512 nodes.
+  Refresh/query SQLite budget 0.75 seconds with progress interruption;
   worker refresh additionally accepts a cancellation event. Finished unchanged
   snapshots require no further source scan.
 - Occurrence history: <=20 contributing session rows and <=100 occurrences per file;
@@ -337,8 +346,15 @@ preserve provenance/dedup across native lineage.
   Audio/video stream permits one closed/open/suffix byte range; 416 includes
   `Content-Range: bytes */<size>`. Unsupported stream type is 415.
 
-Coverage is `{indexed_sessions,total_sessions,session_cap:1000}`. The total is
-nullable when unknown or capped, not a fabricated full-history count. `updated_at`
+Coverage is `{indexed_sessions,total_sessions,session_cap:null,refresh_pending,refresh_progress}`.
+`refresh_pending` is true while source/grant changes or unfinished batches require
+more work, independently of top-level `partial` (which can also mean a permanent
+projection limitation). `refresh_progress` is an opaque scan checkpoint digest; it
+changes as a long session advances, even before `indexed_sessions` increments.
+Clients may continue scoped, cancelable polling while pending, with bounded retries
+when the checkpoint stalls. A missing/symlinked source has no runnable refresh work.
+The total is
+nullable when the source is unavailable, not a fabricated full-history count. `updated_at`
 is nullable cache-refresh Unix time, not deliverable time; `index_revision` is
 opaque/nullable. `refresh_status` is `cold|refresh_pending|partial|ready|source_missing|
 source_unavailable|query_budget_exceeded`. Missing/corrupt source yields HTTP 200
@@ -410,3 +426,10 @@ SQLite schema strings and every retained domain method are unchanged; only `rebi
 was added. Skill patches applied to scratch copies match the complete replacement
 files. Native authentication middleware, real subscription usage and real phone
 acceptance still require verification on the sealed candidate before cutover.
+
+Publication preparation also checkpoints hashing and row decoding by keyset,
+with cancellation checks between rows. The final cache replacement uses one
+transaction and SQL copy so readers never see a partially replaced session.
+Its atomic database commit still scales with the completed session size; no
+Python materialization of the whole session is required. Additional cache tables
+leave the deployed three-column `segments` contract intact for rollback.

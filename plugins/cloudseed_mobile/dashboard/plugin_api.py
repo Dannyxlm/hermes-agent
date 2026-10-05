@@ -223,16 +223,22 @@ def workspace_read(profile: str, workspace_id: str | None = None, path: str | No
 
 
 @router.get('/workspace-files/download')
-def workspace_download(profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False):
+def workspace_download(profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
     def run():
+        if media_path is not None:
+            if any(value is not None for value in (workspace_id,path,id)): raise HTTPException(400,'Choose media path or workspace file')
+            return files.transport(profile,None,media_path,media=True)
         wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
         return files.transport(profile, wid, rel, reveal, generation=bool(id))
     return guarded(run)
 
 
 @router.api_route('/workspace-files/stream', methods=['GET', 'HEAD'])
-def workspace_stream(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False):
+def workspace_stream(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
     def run():
+        if media_path is not None:
+            if any(value is not None for value in (workspace_id,path,id)): raise HTTPException(400,'Choose media path or workspace file')
+            return files.transport(profile,None,media_path,range_header=request.headers.get('range'),head=request.method=='HEAD',stream=True,media=True)
         wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
         return files.transport(profile, wid, rel, reveal, request.headers.get('range'), request.method == 'HEAD', True, bool(id))
     return guarded(run)

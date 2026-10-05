@@ -23,6 +23,7 @@ def inbox(mobile_home, monkeypatch):
                                     "history": [], "created_at": 100, "last_active": 200}
     app = FastAPI()
     app.include_router(sessions.list_router)
+    app.include_router(sessions.manage_router)
     return TestClient(app)
 
 
@@ -93,7 +94,7 @@ def test_final_reply_is_page_batched_and_profile_isolated(inbox, mobile_home, mo
     response = inbox.get("/api/sessions", params={"profile": "ops"}).json()
     summaries = [r for r in response["sessions"] if "last_assistant_reply" in r]
     assert len(summaries) == 6
-    assert next(r for r in summaries if r["id"] == "same")["last_assistant_reply"] == {"row_id": final_id, "at": 123, "preview": "final reply"}
+    assert next(r for r in summaries if r["id"] == "same")["last_assistant_reply"] == {"row_id": final_id, "at": 123, "preview": "final reply", "unread": False}
     assert len([sql for sql in queries if "MAX(id)" in sql and "finish_reason" in sql]) == 1
     assert "last_assistant_reply" not in row(inbox, "default")
 
@@ -127,10 +128,49 @@ def test_latest_run_reads_unenrolled_ordinary_scope_without_mutation(inbox, mobi
         service.close()
 
 
-def test_capability_advertises_inbox_v1(mobile_home, peer):
+def test_capability_advertises_reply_read_contract(mobile_home, peer):
     capabilities = rpc("mobile.capabilities")["result"]
-    assert capabilities["feature_versions"]["inbox_summaries"] == 1
+    assert capabilities["feature_versions"]["inbox_summaries"] >= 2
     assert capabilities["feature_versions"]["rich_stream_snapshot"] == 1
+
+
+def test_reply_read_watermark_roundtrip_is_profile_scoped(inbox, mobile_home):
+    for home in [mobile_home, mobile_home / "profiles" / "ops"]:
+        with SessionDB(db_path=home / "state.db") as db:
+            db.append_message("same", "assistant", "reply", timestamp=100, finish_reason="stop")
+    assert row(inbox, "ops")["last_assistant_reply"]["unread"] is False
+    for unread in [True, False, True]:
+        changed = inbox.patch("/api/sessions/same", json={"profile": "ops", "unread": unread})
+        assert changed.status_code == 200, changed.text
+        current = row(inbox, "ops")
+        assert current["last_assistant_reply"]["unread"] is unread
+        assert current["unread"] is unread
+        assert current["last_read_at"] is not None
+        assert row(inbox, "default")["last_assistant_reply"]["unread"] is False
+
+
+def test_reply_read_marker_follows_compression_but_not_branch(inbox, mobile_home):
+    home = mobile_home / "profiles" / "ops"
+    with SessionDB(db_path=home / "state.db") as db:
+        db.append_message("same", "assistant", "root reply", timestamp=100, finish_reason="stop")
+        db._conn.execute("UPDATE sessions SET end_reason='compression', ended_at=101 WHERE id='same'")
+        db.create_session("tip", "desktop", parent_session_id="same")
+        db.create_session("branch", "desktop", parent_session_id="same", model_config={"_branched_from": "same"})
+        db.append_message("branch", "assistant", "branch reply", timestamp=102, finish_reason="stop")
+    for unread in [True, False]:
+        changed = inbox.patch("/api/sessions/tip", json={"profile": "ops", "unread": unread})
+        assert changed.status_code == 200, changed.text
+        rows = {r["id"]: r for r in inbox.get("/api/sessions", params={"profile": "ops"}).json()["sessions"]}
+        assert rows["tip"]["last_assistant_reply"]["unread"] is unread
+        assert rows["branch"]["last_assistant_reply"]["unread"] is False
+
+
+def test_newer_user_activity_does_not_mark_an_old_reply_unread(inbox, mobile_home):
+    with SessionDB(db_path=mobile_home / "profiles" / "ops" / "state.db") as db:
+        db.append_message("same", "assistant", "already read", timestamp=100, finish_reason="stop")
+        db._write_sql("UPDATE sessions SET last_read_at = 150 WHERE id = ?", ("same",))
+        db.append_message("same", "user", "next prompt", timestamp=200)
+    assert row(inbox, "ops")["last_assistant_reply"]["unread"] is False
 
 
 def test_scope_completeness_is_process_and_page_only(inbox, peer):
@@ -161,7 +201,7 @@ def test_compression_reply_and_run_do_not_follow_branches(inbox, mobile_home, pe
     request("ops", "approval")
     response = inbox.get("/api/sessions", params={"profile": "ops"}).json()
     tip = next(r for r in response["sessions"] if r["id"] == "tip")
-    assert tip["last_assistant_reply"] == {"row_id": final_id, "at": 100, "preview": "root final"}
+    assert tip["last_assistant_reply"] == {"row_id": final_id, "at": 100, "preview": "root final", "unread": False}
     assert tip["attention"]["kind"] == "approval"
     service = PushService(mobile_home / "mobile-push" / "outbox.sqlite3", Sender(), clock=lambda: 321)
     try:

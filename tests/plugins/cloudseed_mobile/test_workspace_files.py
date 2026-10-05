@@ -124,3 +124,59 @@ def test_descriptor_replacement_race(client, monkeypatch):
     assert r.status_code in (200,403)
     if r.status_code == 200:
         assert r.json()['text'] == 'inside'
+
+
+def test_native_media_originals_profile_scope_and_symlinks(client):
+    c, home = client
+    other = home / 'profiles' / 'b'
+    other.mkdir(parents=True)
+    (other / 'config.yaml').write_text('{}')
+    for profile, base in [('default', home), ('b', other)]:
+        for folder, name in [('images', 'upload.png'), ('screenshots', 'capture.png'), ('cache/audio', 'voice.mp3'), ('attachments', 'original.pdf')]:
+            directory = base / folder
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / name).write_bytes((profile + ':' + name).encode())
+    for profile, base in [('default', home), ('b', other), ('default', home)]:
+        for folder, name in [('images', 'upload.png'), ('screenshots', 'capture.png'), ('cache/audio', 'voice.mp3'), ('attachments', 'original.pdf')]:
+            params = {'profile': profile, 'media_path': str(base / folder / name)}
+            response = c.get(P + '/workspace-files/download', params=params)
+            assert response.status_code == 200
+            assert response.content == (profile + ':' + name).encode()
+        response = c.get(P + '/workspace-files/stream', params={'profile': profile, 'media_path': str(base / 'cache/audio/voice.mp3')}, headers={'Range': 'bytes=1-3'})
+        assert response.status_code == 206 and response.content == (profile + ':voice.mp3').encode()[1:4]
+    assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(other / 'images/upload.png')}).status_code == 403
+    (home / 'images/escape.png').symlink_to(other / 'images/upload.png')
+    (home / 'cache/auth.json').write_text('synthetic private file')
+    for path in [home / 'images/escape.png', home / 'config.yaml', home / 'cache/auth.json', home / 'images/../config.yaml']:
+        assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(path)}).status_code == 403
+    c.headers.pop('Authorization')
+    assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(home / 'images/upload.png')}).status_code == 401
+
+
+def test_producer_resolved_legacy_media_and_browser_screenshots(client):
+    from hermes_constants import get_hermes_dir, set_hermes_home_override, reset_hermes_home_override
+    c, home = client
+    other = home / 'profiles' / 'legacy'
+    other.mkdir(parents=True)
+    (other / 'config.yaml').write_text('{}')
+    folders = [('audio_cache', 'voice.mp3'), ('image_cache', 'image.png'),
+               ('video_cache', 'clip.mp4'), ('document_cache', 'doc.pdf'),
+               ('browser_screenshots', 'capture.png')]
+    for profile, base in [('default', home), ('legacy', other)]:
+        for folder, filename in folders:
+            (base / folder).mkdir()
+            (base / folder / filename).write_bytes((profile + ':' + filename).encode())
+    for profile, base in [('default', home), ('legacy', other), ('default', home)]:
+        token = set_hermes_home_override(base)
+        try:
+            audio = get_hermes_dir('cache/audio', 'audio_cache') / 'voice.mp3'
+            assert audio == base / 'audio_cache/voice.mp3'
+        finally:
+            reset_hermes_home_override(token)
+        for folder, filename in folders:
+            response = c.get(P + '/workspace-files/download', params={'profile': profile, 'media_path': str(base / folder / filename)})
+            assert response.status_code == 200
+            assert response.content == (profile + ':' + filename).encode()
+    assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(other / 'audio_cache/voice.mp3')}).status_code == 403
+    (home / 'audio_cache/escape.mp3').symlink_to(other / 'audio_cache/voice.mp3')
+    assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(home / 'audio_cache/escape.mp3')}).status_code == 403

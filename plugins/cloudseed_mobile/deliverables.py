@@ -104,14 +104,14 @@ def locator(value,session,workspaces):
     return None
 
 
-def project(profile,session,messages,workspaces,status=None):
+def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_REFERENCES):
     status={} if status is None else status
     rows={}; results={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool' and isinstance(m.get('tool_call_id'),str) and m.get('tool_call_id') and m.get('active',1)!=0}
     seen=set(); count=0; ranks={}
     message_order={id(m):i for i,m in enumerate(messages)}
     def add(value,action,message,provenance,inline=None):
         nonlocal count
-        if count>=MAX_REFERENCES:
+        if reference_limit is not None and count>=reference_limit:
             status['partial']=True; return
         loc=locator(value,session,workspaces) if inline is None else {'kind':'inline_content','workspace_id':None,'relative_path':None,'display_name':value,'inline_content':inline,'version_hash':digest(inline)}
         if not loc: return
