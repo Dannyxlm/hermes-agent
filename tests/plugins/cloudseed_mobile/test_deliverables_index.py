@@ -219,3 +219,17 @@ def test_native_lineage_and_profile_fences(client):
     assert not (b/'state.db').exists()
     assert c.get(P+'/deliverables?profile=missing').status_code==404
     c.headers.pop('Authorization'); assert c.get(P+'/deliverables?profile=default').status_code==401
+
+
+def test_one_malformed_session_marks_partial_instead_of_failing_the_index(client, monkeypatch):
+    c,home=client; root,wid=setup_root(c,home); store(home,root,3)
+    real=ix.project
+    def flaky(profile,session,*a,**k):
+        if session['id']=='1': raise TypeError("cannot use 'dict' as a set element")
+        return real(profile,session,*a,**k)
+    monkeypatch.setattr(ix,'project',flaky)
+    index=ix.DeliverablesIndex(home,'default',[{'id':wid,'root_path':str(root),'name':'Fixture'}])
+    index.refresh(max_sessions=10)
+    page=index.query()
+    assert {r['relative_path'] for r in page['items']}=={'outputs/0.md','outputs/2.md'}
+    assert page['partial'] is True
