@@ -23,7 +23,7 @@ def _restore_stdout():
 
 
 @pytest.fixture()
-def server():
+def server(tmp_path):
     # The sys.modules mocks only need to cover the *initial* import — once
     # tui_gateway.server is cached, they are inert. Keeping them active for
     # the whole test poisons any module first imported inside a test body:
@@ -40,7 +40,7 @@ def server():
     import tui_gateway.server_requests  # noqa: F401
     import tui_gateway.transport  # noqa: F401
     with patch.dict("sys.modules", {
-        "hermes_constants": MagicMock(get_hermes_home=MagicMock(return_value="/tmp/hermes_test")),
+        "hermes_constants": MagicMock(get_hermes_home=MagicMock(return_value=tmp_path)),
         "hermes_cli.env_loader": MagicMock(),
         "hermes_cli.banner": MagicMock(),
         "hermes_state": MagicMock(),
@@ -942,7 +942,7 @@ def test_deferred_hydration_falls_back_to_tip_when_lineage_exceeds_limit(server,
 
 def test_session_resume_guard_failure_fails_open(server, monkeypatch):
     """A transient guard error must not block resume (fail open, log only)."""
-    reopened = []
+    reads = []
 
     class _DB:
         def get_session(self, sid):
@@ -957,9 +957,17 @@ def test_session_resume_guard_failure_fails_open(server, monkeypatch):
         def assert_resume_safe(self, _sid):
             raise RuntimeError("database is locked")
 
-        def reopen_session(self, sid):
-            reopened.append(sid)
-            return True
+        def get_messages_as_conversation(self, _sid, **_kwargs):
+            reads.append("tip")
+            return []
+
+        def get_resume_conversations(self, _sid):
+            reads.append("lineage")
+            return ([], [])
+
+        def get_ancestor_display_prefix(self, _sid):
+            reads.append("prefix")
+            return []
 
     monkeypatch.setattr(server, "_get_db", lambda: _DB())
 
@@ -974,11 +982,13 @@ def test_session_resume_guard_failure_fails_open(server, monkeypatch):
         }
     )
 
-    # The guard must not block: no 4130. Reopen being attempted proves
-    # execution moved past the guard.
+    # The guard must not block: no 4130, and execution moved PAST the guard to the
+    # history read (omit_messages reads the tip segment). (#85303 made the mount
+    # read-only — resume no longer reopens the row, so the history read is what
+    # proves the guard was survived.)
     err = response.get("error") or {}
     assert err.get("code") != 4130
-    assert reopened == ["transient-guard-session"]
+    assert "tip" in reads, "history read must have run"
 
 
 def test_session_resume_active_turn_payload_matches_desktop_fixture(server, monkeypatch):
@@ -1034,6 +1044,15 @@ def test_session_resume_active_turn_payload_matches_desktop_fixture(server, monk
 
     assert result["running"] is True
     assert result["turn_started_at"] == active_turn["started_at"]
+    snapshot = result.pop("stream_snapshot")
+    assert isinstance(snapshot["epoch"], str) and snapshot["epoch"]
+    assert snapshot == {
+        "baseline_seq": 0,
+        "epoch": snapshot["epoch"],
+        "session_id": fixture["session_id"],
+        "stored_session_id": fixture["session_key"],
+        "stream": None,
+    }
     assert result == fixture
 
 

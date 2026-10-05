@@ -66,6 +66,49 @@ def test_events_since_returns_only_newer_frames_in_order():
     assert latest_seq("s1") == 5
 
 
+def test_atomic_replay_snapshot_thaws_frozen_frames_and_preserves_sequence():
+    frame = _frame("mobile", "message.delta")
+    frame["params"]["payload"] = {"text": "original"}
+    event_replay._stamp_event(frame)
+    frame["params"]["payload"]["text"] = "later mutation"
+
+    snapshot = event_replay.replay_snapshot("mobile", 0)
+    assert snapshot["events"] == [{"type": "message.delta", "session_id": "mobile",
+                                  "payload": {"text": "original"}, "seq": 1}]
+    assert snapshot["latest_seq"] == 1
+    assert snapshot["count"] == 1
+    assert snapshot["truncated"] is False
+    snapshot["events"][0]["payload"]["text"] = "client mutation"
+    assert event_replay.replay_snapshot("mobile", 0)["events"][0]["payload"]["text"] == "original"
+
+
+def test_replay_snapshot_is_detached_from_live_event_mutation():
+    frame = _frame("s1", "tool.complete")
+    frame["params"]["payload"] = {"result": "small"}
+    event_replay._stamp_event(frame)
+    retained = replay_stats()["bytes"]
+
+    # The transport/caller still owns the live frame after stamping. Mutating it must not
+    # rewrite or grow an already-admitted replay entry behind the byte-accounting budget.
+    frame["params"]["payload"]["result"] = "x" * 1_000_000
+
+    (replayed,) = events_since("s1", 0)
+    assert replayed["payload"]["result"] == "small"
+    assert replay_stats()["bytes"] == retained
+
+
+def test_each_replay_read_returns_an_independent_event_graph():
+    frame = _frame("s1", "tool.complete")
+    frame["params"]["payload"] = {"nested": {"value": "original"}}
+    event_replay._stamp_event(frame)
+
+    (first,) = events_since("s1", 0)
+    first["payload"]["nested"]["value"] = "caller-mutated"
+    (second,) = events_since("s1", 0)
+
+    assert second["payload"]["nested"]["value"] == "original"
+
+
 def test_events_since_returns_client_dispatchable_event_objects():
     """Cross-language contract: the client's replay loop dispatches an element
     only when it has a TOP-LEVEL ``type`` (json-rpc-gateway.ts fetchReplay:

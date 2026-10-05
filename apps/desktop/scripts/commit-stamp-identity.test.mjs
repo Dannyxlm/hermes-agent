@@ -9,7 +9,7 @@ import { test } from 'vitest'
 const root = path.resolve(import.meta.dirname, '../../..')
 
 test('desktop stamp uses the admitted checkout rather than the dispatch SHA', () => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'stamp-identity-'))
+  const temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stamp-identity-')))
   const repo = path.join(temp, 'repo')
   const scripts = path.join(repo, 'apps/desktop/scripts')
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()

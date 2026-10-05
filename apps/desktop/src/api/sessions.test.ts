@@ -31,6 +31,7 @@ const {
   listSidebarSessions,
   getLatestSessionMessages,
   renameSession,
+  searchSessions,
   setSessionArchived,
   setSessionPinnedRemote,
   setSessionUnreadRemote
@@ -352,6 +353,21 @@ describe('session reads pin the owner connection (#125372)', () => {
     expect(hermesApi.mock.calls[0][0]).toMatchObject({
       connectionId: 'other-conn',
       profile: 'tommy'
+    })
+  })
+})
+
+describe('searchSessions profile scope', () => {
+  it('searches the given profile instead of the primary backend', async () => {
+    // Unscoped, the primary searched its launch profile while the sidebar showed another.
+    hermesApi.mockResolvedValue({ results: [] } as never)
+    vi.mocked(client.profileScoped).mockImplementation(profile => (profile ? { priority: 'foreground', profile } : {}))
+
+    await searchSessions('zebra', 'research')
+
+    expect(hermesApi.mock.calls[0][0]).toMatchObject({
+      path: '/api/sessions/search?q=zebra&profile=research',
+      profile: 'research'
     })
   })
 })

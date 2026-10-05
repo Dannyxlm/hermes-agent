@@ -488,7 +488,7 @@ class TestWriteClaudeCodeCredentials:
                 "expiresAt": int(time.time() * 1000) + 3600_000,
             },
         }))
-        monkeypatch.setattr("agent.anthropic_adapter.Path.home", lambda: service_home)
+        monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: service_home)
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
         monkeypatch.delenv("HERMES_CLAUDE_CODE_CONFIG_DIR", raising=False)
         monkeypatch.setenv(config_env, str(claude_config_dir))
@@ -591,7 +591,7 @@ class TestRunOauthSetupToken:
 
     def test_returns_token_from_credential_files(self, monkeypatch, tmp_path):
         """After subprocess completes, reads credentials from Claude Code files."""
-        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr("agent.anthropic_adapter.find_claude_code_cli", lambda _: "/usr/bin/claude")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
 
@@ -621,7 +621,7 @@ class TestRunOauthSetupToken:
 
     def test_returns_none_when_no_creds_found(self, monkeypatch, tmp_path):
         """Returns None when subprocess completes but no credentials are found."""
-        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+        monkeypatch.setattr("agent.anthropic_adapter.find_claude_code_cli", lambda _: "/usr/bin/claude")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
         monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: tmp_path)

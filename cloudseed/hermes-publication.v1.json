@@ -1,18 +1,16 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20261005-be5e9f7-native-crash-recovery",
+  "release_id": "hermes-20261005-2d66d6e",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
-  "official_revision": "be5e9f72c6681af9dfb75bf480f08844f1499949",
+  "official_revision": "2d66d6e2f8967bb3f6153f24878059e415a1a9f1",
   "official_release_tag": "v2026.9.24",
   "integration_repository": "Dannyxlm/hermes-agent",
   "integration_branch": "main",
   "desktop_install_mode": "managed-publication",
   "desktop_self_update_allowed": true,
   "overlay_transition": {
-    "added": [
-      "cloudseed-mobile-plugin"
-    ],
+    "added": [],
     "retained": [
       "codex-ephemeral-context",
       "managed-upstream-status",
@@ -24,7 +22,8 @@
       "runtime-review-hardening",
       "hermex-shared-state",
       "hermex-hosted-rooms",
-      "private-mobile-delivery"
+      "private-mobile-delivery",
+      "cloudseed-mobile-plugin"
     ],
     "retired": []
   }
