@@ -47,7 +47,7 @@ def test_wrapped_failed_producer_does_not_create_and_move_tombstone():
     for _ in range(50): wrapped={'content':wrapped}
     status={}
     assert d.project('default', {'id':'s','cwd':'/granted'}, [{'id':1,'role':'assistant','content':wrapped}], [], status=status)==[]
-    assert status['partial']
+    assert status['truncated'] and not status.get('partial'), 'A deep payload is a bounded scan, not missing coverage'
 
 
 def test_latest_successful_occurrence_wins_not_extraction_order():
@@ -68,3 +68,14 @@ def test_inline_versions_and_message_uid_dedup():
     assert len(rows)==1 and rows[0]['kind']=='inline_content'
     assert rows[0]['inline_content'].startswith('<html>')
     assert len(rows[0]['occurrences'])==1
+
+
+def test_real_shaped_tool_payloads_never_crash_projection():
+    # Real tool results carry nested objects under "type" and odd call ids (seen in production 2026-10-05).
+    rows=project([{'id':1,'role':'assistant','content':[{'type':{'name':'block'},'text':'MEDIA: /granted/outputs/a.png'}],
+                   'tool_calls':[{'id':{'nested':True},'function':{'name':'write_file','arguments':{'path':'outputs/b.md'}}}]},
+                  {'id':2,'role':'tool','tool_call_id':'x','tool_name':'image_generate','content':'{"type":{"kind":"image"},"path":"/granted/outputs/c.png"}'}])
+    paths={r['relative_path'] for r in rows}
+    assert 'outputs/a.png' in paths and 'outputs/c.png' in paths
+    b=next(r for r in rows if r['relative_path']=='outputs/b.md')
+    assert b['action']=='pending', 'An unmatchable call id stays pending, never a crash or a false success'

@@ -43,25 +43,28 @@ def visible(text):
 
 
 def strings(value,status=None):
+    """Bounded scan of one message. Depth/node/length cut-offs set status['truncated'] (a
+    per-message scan detail), not 'partial', which means unindexed coverage the UI must flag."""
     status={} if status is None else status
     stack=[(decode(value),0,None)]; visited=0
     while stack and visited<MAX_NODES:
         value,depth,key=stack.pop(); visited+=1
         if depth>6:
-            status['partial']=True; continue
+            status['truncated']=True; continue
         if isinstance(value,dict):
-            if value.get('type') in {'reasoning','thinking','scratchpad'}: continue
-            if len(value)>MAX_NODES: status['partial']=True
+            kind=value.get('type')
+            if isinstance(kind,str) and kind in {'reasoning','thinking','scratchpad'}: continue
+            if len(value)>MAX_NODES: status['truncated']=True
             stack.extend((v,depth+1,k) for k,v in list(value.items())[:MAX_NODES] if k not in {'reasoning','reasoning_content','scratchpad'})
         elif isinstance(value,list):
-            if len(value)>MAX_NODES: status['partial']=True
+            if len(value)>MAX_NODES: status['truncated']=True
             stack.extend((v,depth+1,key) for v in value[:MAX_NODES])
         elif isinstance(value,str) and len(value)<=MAX_STRING:
             parsed=decode(value)
             if isinstance(parsed,(dict,list)): stack.append((parsed,depth+1,key))
             else: yield key,value
-        elif isinstance(value,str): status['partial']=True
-    if stack: status['partial']=True
+        elif isinstance(value,str): status['truncated']=True
+    if stack: status['truncated']=True
 
 
 def references(text):
@@ -103,7 +106,7 @@ def locator(value,session,workspaces):
 
 def project(profile,session,messages,workspaces,status=None):
     status={} if status is None else status
-    rows={}; results={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool' and m.get('tool_call_id') and m.get('active',1)!=0}
+    rows={}; results={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool' and isinstance(m.get('tool_call_id'),str) and m.get('tool_call_id') and m.get('active',1)!=0}
     seen=set(); count=0; ranks={}
     message_order={id(m):i for i,m in enumerate(messages)}
     def add(value,action,message,provenance,inline=None):
@@ -159,7 +162,8 @@ def project(profile,session,messages,workspaces,status=None):
                 action=MUTATIONS.get(name)
                 args=decode(function.get('arguments',{}))
                 if not action or not isinstance(args,dict): continue
-                result=results.get(call.get('id'))
+                call_id=call.get('id')
+                result=results.get(call_id) if isinstance(call_id,str) else None
                 body=unwrap(result.get('content')) if result else None
                 if result is None: outcome='pending'
                 elif isinstance(body,dict) and (body.get('error') or body.get('success') is False or body.get('verified') is False): outcome='write_failed'

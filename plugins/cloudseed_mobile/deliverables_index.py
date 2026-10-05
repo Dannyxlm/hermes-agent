@@ -7,6 +7,7 @@ rewinds and deletion do not masquerade as monotonic append-only history.
 import base64
 import contextlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
 import threading
@@ -16,6 +17,8 @@ from fastapi import HTTPException
 from hermes_state_holders import read_only_db_uri
 from plugins.cloudseed_mobile.deliverables import project, MAX_STRING
 from plugins.cloudseed_mobile.workspace_files import digest
+
+LOG=logging.getLogger(__name__)
 
 MAX_SESSIONS=1000
 MAX_MESSAGES=2000
@@ -121,7 +124,11 @@ class DeliverablesIndex:
                         cached=cache.execute('SELECT fingerprint FROM segments WHERE sid=?',(session['id'],)).fetchone()
                         if not cached or cached[0]!=fingerprint:
                             projection_status={}
-                            rows=[] if session.get('archived') or session.get('hidden') else project(self.profile,session,messages,self.workspaces,status=projection_status)
+                            try:
+                                rows=[] if session.get('archived') or session.get('hidden') else project(self.profile,session,messages,self.workspaces,status=projection_status)
+                            except Exception as exc:  # one malformed saved chat must never fail the whole index
+                                LOG.warning('deliverables projection skipped one session: %s', type(exc).__name__)
+                                rows=[]; projection_status['partial']=True
                             if len(rows)>=500 or projection_status.get('partial'): segment_partial=True
                             cache.execute('DELETE FROM entries WHERE sid=?',(session['id'],))
                             for row in rows:
