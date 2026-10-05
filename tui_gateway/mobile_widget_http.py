@@ -20,9 +20,20 @@ async def widget_snapshot_response(request, *, service=None):
     if service is None:
         return JSONResponse({"detail": "Unavailable"}, status_code=503, headers=headers)
     try:
-        snapshot = await run_in_threadpool(service.store.widget_snapshot, token)
+        from .mobile_widget_inbox import inbox_snapshot, WidgetInboxChanged
+        query = request.query_params
+        if query:
+            if set(query) - {"inbox", "cursor"} or query.getlist("inbox") != ["1"] or len(query.getlist("cursor")) > 1:
+                raise ValueError("invalid query")
+            snapshot = await run_in_threadpool(inbox_snapshot, service.store, token, query.get("cursor"))
+        else:
+            snapshot = await run_in_threadpool(service.store.widget_snapshot, token)
     except PermissionError:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401, headers=headers)
+    except WidgetInboxChanged:
+        return JSONResponse({"detail": "Inbox changed; retry from the first page"}, status_code=409, headers=headers)
+    except ValueError:
+        return JSONResponse({"detail": "Invalid widget query"}, status_code=400, headers=headers)
     except (OSError, RuntimeError, sqlite3.Error):
         return JSONResponse({"detail": "Unavailable"}, status_code=503, headers=headers)
     return JSONResponse(snapshot, headers=headers)

@@ -34,6 +34,37 @@ class WidgetPushStore:
                                    (digest, self.clock())).fetchone()
             return dict(row) if row else None
 
+    def register_widget_inbox(self, principal, *, installation_id, connection_id, profile, home, token):
+        from pathlib import Path
+        import uuid
+        from .mobile_push_store import normalized_uuid
+        installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
+        identity = (principal, installation_id, connection_id)
+        expires = self.clock() + 30 * 86400
+        home = str(Path(home).resolve())
+        with self.transaction() as db:
+            previous = self.widget_reader(token)
+            self._save_widget_reader(db, *identity, token, expires)
+            old = db.execute("SELECT * FROM widget_inbox_grants WHERE principal=? AND installation_id=? AND connection_id=?", identity).fetchone()
+            grant_id = old['grant_id'] if previous and old and (old['profile'], old['home']) == (profile, home) else str(uuid.uuid4())
+            db.execute("""INSERT INTO widget_inbox_grants VALUES (?,?,?,?,?,?)
+                ON CONFLICT(principal, installation_id, connection_id) DO UPDATE
+                SET profile=excluded.profile, home=excluded.home, grant_id=excluded.grant_id""",
+                (*identity, profile, home, grant_id))
+        return {"expires_at": expires, "profile": profile, "grant_id": grant_id,
+                "snapshot_path": "/api/mobile/widgets/snapshot", "protocol_version": 2}
+
+    def widget_inbox_grant(self, token):
+        with self._lock:
+            reader = self.widget_reader(token)
+            if reader is None:
+                raise PermissionError("widget credential expired")
+            row = self._db.execute("SELECT * FROM widget_inbox_grants WHERE principal=? AND installation_id=? AND connection_id=?",
+                tuple(reader[k] for k in ('principal', 'installation_id', 'connection_id'))).fetchone()
+            if row is None:
+                raise PermissionError("Inbox grant required")
+            return {**reader, **dict(row)}
+
     def widget_snapshot(self, token):
         # One transaction binds credential validation and data selection to logout.
         with self.transaction() as db:

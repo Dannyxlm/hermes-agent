@@ -970,3 +970,67 @@ def test_flush_messages_to_session_db_fences_stale_holder_on_live_db(tmp_path):
     second.release_session_turn_lease("shared", next_holder)
     first.close()
     second.close()
+
+
+@pytest.mark.parametrize("prior", [[], [("user", "same prompt"), ("assistant", "done")], [("user", "same prompt")]])
+def test_submit_time_user_row_is_not_replayed_as_its_own_history(monkeypatch, tmp_path, prior):
+    """One accepted mobile/Desktop send remains one model input across lease reload.
+
+    A prior identical or unanswered send is still history; exclusion uses the staged
+    durable identity before replay can merge adjacent user messages.
+    """
+    from agent.turn_context import _stage_turn_user_message
+    from tui_gateway import server
+
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("mobile", source="tui")
+    for role, content in prior:
+        db.append_message("mobile", role, content)
+    agent = _agent_with_db(db, session_id="mobile")
+    agent._session_persist_lock = None
+    session = {"session_key": "mobile", "agent": agent}
+    monkeypatch.setattr(server, "_get_db", lambda: db)
+    server._persist_submit_user_row(session, "same prompt", None)
+    staged_id = session["_submit_user_row"]["_row_id"]
+    server._adopt_submit_user_row(session, agent, "same prompt", "same prompt")
+    observed = {}
+
+    def receive(_agent, message, _system, history, *_args, **kwargs):
+        observed["history"] = history
+        current, _ = _stage_turn_user_message(_agent, message, "same prompt", None, None, None, None)
+        observed["current"] = current
+        return {"final_response": "ok", "messages": history + [current], "failed": False}
+
+    monkeypatch.setattr("agent.conversation_loop.run_conversation", receive)
+    try:
+        AIAgent.run_conversation(agent, "same prompt", conversation_history=[], persist_user_message="same prompt")
+        assert [(m["role"], m["content"]) for m in observed["history"]] == prior
+        assert observed["current"]["_row_id"] == staged_id
+        assert len(db.get_messages("mobile")) == len(prior) + 1
+    finally:
+        db.close()
+
+
+def test_stale_staged_input_remains_history_for_a_different_turn(monkeypatch, tmp_path):
+    from agent.turn_context import _stage_turn_user_message
+    from tui_gateway import server
+
+    with SessionDB(tmp_path / "state.db") as db:
+        db.create_session("mobile", source="tui")
+        agent = _agent_with_db(db, session_id="mobile")
+        agent._session_persist_lock = None
+        session = {"session_key": "mobile", "agent": agent}
+        monkeypatch.setattr(server, "_get_db", lambda: db)
+        server._persist_submit_user_row(session, "earlier input", None)
+        server._adopt_submit_user_row(session, agent, "earlier input", "earlier input")
+        observed = {}
+
+        def receive(_agent, message, _system, history, *_args, **kwargs):
+            observed["history"] = history
+            current, _ = _stage_turn_user_message(_agent, message, message, None, None, None, None)
+            return {"final_response": "ok", "messages": history + [current], "failed": False}
+
+        monkeypatch.setattr("agent.conversation_loop.run_conversation", receive)
+        AIAgent.run_conversation(agent, "different followup", conversation_history=[])
+        assert [m["content"] for m in observed["history"]] == ["earlier input"]
+        assert agent._pending_cli_user_message is None

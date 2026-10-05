@@ -115,6 +115,7 @@ class TurnFacadeMixin:
                 conversation_history=conversation_history,
                 session_turn_lease_holder=session_turn_lease_holder,
                 borrowed_session_snapshot_authoritative=borrowed_session_snapshot_authoritative,
+                current_user_message=persist_user_message if persist_user_message is not None else user_message,
             )
             if admission.early_result is not None:
                 carry_unadmitted_user_message(

@@ -230,6 +230,21 @@ class MobileWidgetRegisterParams(MobileRegistrationParams, MobileStoredSessionPa
     widget_token: str = ""
 
 
+class MobileWidgetInboxParams(Params):
+    installation_id: str
+    connection_id: str
+    profile: str
+    read_token: str
+
+
+class MobileWidgetInboxResult(Result):
+    expires_at: float
+    profile: str
+    grant_id: str
+    snapshot_path: Literal["/api/mobile/widgets/snapshot"]
+    protocol_version: Literal[2]
+
+
 class MobileSessionDestination(Result):
     surface: Literal["native_session"]
     profile: str
@@ -265,6 +280,8 @@ method("mobile.session_activity.unregister", params=MobileActivityUnregisterPara
 method("mobile.widget.register", params=MobileWidgetRegisterParams, result=MobileSessionRegistrationResult,
        doc="Register or rotate an ordinary-session widget lease and exact GET snapshot capability.")
 method("mobile.widget.unregister", params=MobileUnregisterParams, result=MobileUnregisterResult)
+method("mobile.widget.inbox.register", params=MobileWidgetInboxParams, result=MobileWidgetInboxResult,
+       doc="Grant the widget read-only paginated Inbox summaries for one selected profile, independent of run enrollment.")
 
 
 method("mobile.capabilities", params=MobileEmptyParams, result=MobileCapabilitiesResult)

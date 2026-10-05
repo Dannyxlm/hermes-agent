@@ -1,6 +1,6 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20261005-be5e9f7-mobile-stability",
+  "release_id": "hermes-20261005-be5e9f7-native-inbox-send",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
   "official_revision": "be5e9f72c6681af9dfb75bf480f08844f1499949",

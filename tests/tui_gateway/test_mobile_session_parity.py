@@ -124,7 +124,7 @@ def test_widget_exact_path_never_grants_general_access(push_service, ordinary):
         request = Request({"type": "http", "path": path, "method": method,
                            "headers": [(b"authorization", b"Bearer " + b"12" * 32)]})
         assert asyncio.run(widget_snapshot_response(request, service=push_service)) is None
-    request = Request({"type": "http", "path": "/api/mobile/widgets/snapshot", "method": "GET",
+    request = Request({"type": "http", "path": "/api/mobile/widgets/snapshot", "method": "GET", "query_string": b"",
                        "headers": [(b"authorization", b"Bearer " + b"12" * 32)]})
     response = asyncio.run(widget_snapshot_response(request, service=push_service))
     assert response.status_code == 200

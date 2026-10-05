@@ -244,6 +244,7 @@ def admit_durable_turn_lease(
     conversation_history: Optional[List[Dict[str, Any]]],
     session_turn_lease_holder: Optional[str] = None,
     borrowed_session_snapshot_authoritative: bool = False,
+    current_user_message: Any = None,
 ) -> TurnLeaseAdmission:
     """Acquire the session turn lease (the row need not exist yet); build (not start) its threads.
 
@@ -331,8 +332,20 @@ def admit_durable_turn_lease(
                 if str(agent.session_id) != str(latest_session_id):
                     agent.session_id = latest_session_id
                 task_context["session_id"] = latest_session_id
+            # Desktop/mobile persist accepted input before entering this lease. The
+            # turn prologue will append that staged dict itself; replaying it here
+            # sends the same input twice even though the DB still has only one row.
+            # Exclude its durable identity BEFORE alternation repair can merge it
+            # into an earlier unanswered user row. Identical earlier sends stay.
+            from agent.message_metadata import message_uid_or_none
+            pending = getattr(agent, "_pending_cli_user_message", None)
+            replay_options = {}
+            if (isinstance(pending, dict) and pending.get("_db_persisted")
+                    and pending.get("content") == current_user_message
+                    and (uid := message_uid_or_none(pending))):
+                replay_options["exclude_message_uid"] = uid
             reloaded = db.get_messages_as_conversation(
-                agent.session_id, repair_alternation=True, include_row_ids=True
+                agent.session_id, repair_alternation=True, include_row_ids=True, **replay_options
             )
             # Decide on the stored rows alone: an unknown row that reloads nothing keeps the
             # caller's history, which already holds any carried input below.

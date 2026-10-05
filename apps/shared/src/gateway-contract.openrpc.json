@@ -2293,6 +2293,24 @@
       }
     },
     {
+      "name": "mobile.widget.inbox.register",
+      "summary": "Grant the widget read-only paginated Inbox summaries for one selected profile, independent of run enrollment.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileWidgetInboxParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileWidgetInboxResult"
+        }
+      }
+    },
+    {
       "name": "mobile.widget.register",
       "summary": "Register or rotate an ordinary-session widget lease and exact GET snapshot capability.",
       "params": [
@@ -21013,6 +21031,71 @@
           "removed"
         ],
         "title": "MobileUnregisterResult",
+        "type": "object"
+      },
+      "MobileWidgetInboxParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "read_token": {
+            "title": "Read Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "profile",
+          "read_token"
+        ],
+        "title": "MobileWidgetInboxParams",
+        "type": "object"
+      },
+      "MobileWidgetInboxResult": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "snapshot_path": {
+            "const": "/api/mobile/widgets/snapshot",
+            "title": "Snapshot Path",
+            "type": "string"
+          },
+          "protocol_version": {
+            "const": 2,
+            "title": "Protocol Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expires_at",
+          "profile",
+          "grant_id",
+          "snapshot_path",
+          "protocol_version"
+        ],
+        "title": "MobileWidgetInboxResult",
         "type": "object"
       },
       "MobileWidgetRegisterParams": {

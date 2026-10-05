@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS widget_readers (
  token_hash TEXT PRIMARY KEY, principal TEXT NOT NULL, installation_id TEXT NOT NULL,
  connection_id TEXT NOT NULL, expires_at REAL NOT NULL,
  UNIQUE(principal, installation_id, connection_id));
+CREATE TABLE IF NOT EXISTS widget_inbox_grants (
+ principal TEXT NOT NULL, installation_id TEXT NOT NULL, connection_id TEXT NOT NULL,
+ profile TEXT NOT NULL, home TEXT NOT NULL, grant_id TEXT NOT NULL,
+ PRIMARY KEY(principal, installation_id, connection_id),
+ FOREIGN KEY(principal, installation_id, connection_id)
+ REFERENCES widget_readers(principal, installation_id, connection_id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS subscriptions (
  id TEXT PRIMARY KEY, principal TEXT NOT NULL, installation_id TEXT NOT NULL, connection_id TEXT NOT NULL,
  scope TEXT NOT NULL, surface TEXT NOT NULL, profile TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -211,10 +217,14 @@ class PushStore(WidgetPushStore):
             if subscription_id is None and kind is None and surface is None:
                 db.execute("DELETE FROM widget_readers WHERE principal=? AND installation_id=? AND connection_id=?", args)
             elif kind == "widget":
+                if subscription_id is None:
+                    db.execute("DELETE FROM widget_inbox_grants WHERE principal=? AND installation_id=? AND connection_id=?", args[:3])
                 db.execute("""DELETE FROM widget_readers WHERE principal=? AND installation_id=? AND connection_id=?
                     AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.principal=widget_readers.principal
                     AND s.installation_id=widget_readers.installation_id AND s.connection_id=widget_readers.connection_id
-                    AND s.kind='widget' AND s.expires_at>?)""", (*args[:3], self.clock()))
+                    AND s.kind='widget' AND s.expires_at>?)
+                    AND NOT EXISTS (SELECT 1 FROM widget_inbox_grants g WHERE g.principal=widget_readers.principal
+                    AND g.installation_id=widget_readers.installation_id AND g.connection_id=widget_readers.connection_id)""", (*args[:3], self.clock()))
             db.execute("""DELETE FROM mobile_presence WHERE principal=? AND installation_id=? AND connection_id=?
                 AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.principal=mobile_presence.principal
                   AND s.installation_id=mobile_presence.installation_id AND s.connection_id=mobile_presence.connection_id

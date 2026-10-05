@@ -2946,6 +2946,19 @@ export interface MobileWidgetRegisterParams {
   read_token: string
   widget_token?: string
 }
+export interface MobileWidgetInboxParams {
+  installation_id: string
+  connection_id: string
+  profile: string
+  read_token: string
+}
+export interface MobileWidgetInboxResult {
+  expires_at: number
+  profile: string
+  grant_id: string
+  snapshot_path: '/api/mobile/widgets/snapshot'
+  protocol_version: 2
+}
 export type MobileEmptyParams = Record<string, never>
 export interface MobileCapabilitiesResult {
   protocol_version: number
@@ -5453,6 +5466,8 @@ export interface RpcMethods {
   'mobile.snapshot': { params: MobileSnapshotParams; result: MobileSnapshotResult }
   'mobile.stop': { params: MobileScopeParams; result: SessionInterruptResult }
   'mobile.submit': { params: MobileSubmitParams; result: MobileSubmitResult }
+  /** Grant the widget read-only paginated Inbox summaries for one selected profile, independent of run enrollment. */
+  'mobile.widget.inbox.register': { params: MobileWidgetInboxParams; result: MobileWidgetInboxResult }
   /** Register or rotate an ordinary-session widget lease and exact GET snapshot capability. */
   'mobile.widget.register': { params: MobileWidgetRegisterParams; result: MobileSessionRegistrationResult }
   'mobile.widget.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
@@ -5880,6 +5895,7 @@ export const RPC_METHODS = [
   'mobile.snapshot',
   'mobile.stop',
   'mobile.submit',
+  'mobile.widget.inbox.register',
   'mobile.widget.register',
   'mobile.widget.unregister',
   'model.disconnect',
