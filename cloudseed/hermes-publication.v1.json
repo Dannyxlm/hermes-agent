@@ -1,6 +1,6 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20261001-be5e9f7",
+  "release_id": "hermes-20261005-be5e9f7-mobile-stability",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
   "official_revision": "be5e9f72c6681af9dfb75bf480f08844f1499949",
@@ -10,7 +10,9 @@
   "desktop_install_mode": "managed-publication",
   "desktop_self_update_allowed": true,
   "overlay_transition": {
-    "added": ["cloudseed-mobile-plugin"],
+    "added": [
+      "cloudseed-mobile-plugin"
+    ],
     "retained": [
       "codex-ephemeral-context",
       "managed-upstream-status",
