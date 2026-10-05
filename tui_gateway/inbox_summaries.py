@@ -1,5 +1,6 @@
 """Read-only Inbox projections; no runtime hydration or delivery enrollment."""
 from pathlib import Path
+import re
 import sys
 
 from . import server_requests
@@ -42,7 +43,7 @@ def page_replies(db, rows):
     if not ids:
         return {}
     latest = db._read_all(f"""
-        SELECT m.session_id, m.id, m.timestamp FROM messages m
+        SELECT m.session_id, m.id, m.timestamp, substr(m.content, 1, 1200) AS head FROM messages m
         JOIN (SELECT session_id, MAX(id) AS max_id FROM messages
               WHERE session_id IN ({','.join('?' for _ in ids)})
                 AND role = 'assistant'
@@ -56,8 +57,35 @@ def page_replies(db, rows):
         candidates = [by_id[sid] for sid in chain if sid in by_id]
         if candidates:
             final = max(candidates, key=lambda r: r["id"])
-            result[key] = {"row_id": final["id"], "at": final["timestamp"]}
+            reply = {"row_id": final["id"], "at": final["timestamp"]}
+            preview = reply_preview(final["head"])
+            if preview:
+                reply["preview"] = preview
+            result[key] = reply
     return result
+
+
+REPLY_PREVIEW_CHARS = 240
+
+
+def reply_preview(text, limit=REPLY_PREVIEW_CHARS):
+    """Plain one-paragraph glance at a reply: markdown markers and whitespace collapsed,
+    cut at a word boundary. Bounded by the SQL head read; never the full message."""
+    if not isinstance(text, str):
+        return None
+
+    body = re.sub(r"```.*?(```|$)", " ", text, flags=re.S)  # drop fenced code
+    body = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", body)  # images
+    body = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)  # links -> text
+    body = re.sub(r"(?m)^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+", "", body)  # block markers
+    body = re.sub(r"[*_`~]{1,3}", "", body)
+    body = " ".join(body.split())
+    if not body:
+        return None
+    if len(body) <= limit:
+        return body
+    cut = body[:limit].rsplit(" ", 1)[0].rstrip(",;:.-")
+    return (cut or body[:limit]) + "…"
 
 
 def page_attention(rows, home):
