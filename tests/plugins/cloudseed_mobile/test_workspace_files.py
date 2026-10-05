@@ -1,0 +1,126 @@
+"""Contained native files routes, using synthetic roots only."""
+import os
+import pytest
+from fastapi import HTTPException
+from tests.plugins.test_cloudseed_mobile import client, P
+
+
+def setup_root(c, home):
+    root = home.parent/('workspaces-'+home.name)/'Fixture'
+    (root/'outputs').mkdir(parents=True)
+    (home/'config.yaml').write_text('cloudseed_mobile:\n  workspace_root: '+str(root.parent)+'\n')
+    response = c.get(P+'/workspaces?profile=default')
+    assert response.status_code == 200
+    return root, response.json()['items'][0]['id']
+
+
+def test_files_preview_original_and_stream(client):
+    c, home = client
+    root, wid = setup_root(c, home)
+    data = b'a'*(512*1024)+b'\xfftail'
+    (root/'outputs/report.md').write_bytes(data)
+    params = {'profile':'default','workspace_id':wid,'path':'outputs/report.md'}
+    preview = c.get(P+'/workspace-files/read', params=params).json()
+    assert preview['truncated'] and preview['byteSize'] == len(data)
+    assert preview['mime'] == 'text/markdown'
+    assert c.get(P+'/workspace-files/download', params=params).content == data
+    (root/'clip.mp4').write_bytes(b'0123456789')
+    params['path'] = 'clip.mp4'
+    url = P+'/workspace-files/stream'
+    r = c.get(url, params=params, headers={'Range':'bytes=2-5'})
+    assert r.status_code == 206 and r.content == b'2345'
+    assert r.headers['content-range'] == 'bytes 2-5/10'
+    assert c.get(url, params=params, headers={'Range':'bytes=20-'}).status_code == 416
+    assert c.head(url, params=params).content == b''
+    assert c.head(url, params=params).headers['content-length'] == '10'
+
+
+@pytest.mark.parametrize('path', ['../outside','/etc/passwd','outputs/../../outside','%2e%2e/outside','%252e%252e/outside','a\x00b','.SSH/key','Credentials/key','.ENV','state.db','auth.json','outputs/private/x'])
+def test_sensitive_and_traversal_denied(client, path):
+    c, home = client
+    root, wid = setup_root(c, home)
+    for route in ['read','download','stream']:
+        assert c.get(P+'/workspace-files/'+route, params={'profile':'default','workspace_id':wid,'path':path}).status_code in (400,403,404)
+
+
+def test_metadata_private_symlink_nonregular_and_auth(client):
+    c, home = client
+    root, wid = setup_root(c, home)
+    (root/'outputs/private').mkdir()
+    (root/'outputs/private/x').write_text('private')
+    (root/'.Env').write_text('secret')
+    (root/'escape').symlink_to(home)
+    os.mkfifo(root/'pipe')
+    params = {'profile':'default','workspace_id':wid,'q':'','path':''}
+    listing = c.get(P+'/workspace-files',params=params).json()
+    assert not {'.Env','escape','pipe'} & {i['name'] for i in listing['items']}
+    params.update(path='outputs/private/x')
+    assert c.get(P+'/workspace-files/read',params=params).status_code == 403
+    params['reveal'] = 1
+    assert c.get(P+'/workspace-files/read',params=params).json()['text'] == 'private'
+    params['path'] = '.Env'
+    assert c.get(P+'/workspace-files/read',params=params).status_code == 403
+    params['workspace_id'] = 'unknown'
+    assert c.get(P+'/workspace-files',params=params).status_code == 404
+    c.headers.pop('Authorization')
+    assert c.get(P+'/workspaces?profile=default').status_code == 401
+
+
+def test_workspace_listing_search_caps_cursor_and_symlinks(client):
+    c,home=client; root,wid=setup_root(c,home)
+    (root/'outputs/a').write_text('a'); (root/'outputs/b').write_text('b')
+    (root/'escape').symlink_to(home/'state.db')
+    os.mkfifo(root/'pipe')
+    params={'profile':'default','workspace_id':wid,'path':'outputs','limit':1}
+    page=c.get(P+'/workspace-files',params=params).json()
+    params['cursor']=page['next_cursor']
+    assert c.get(P+'/workspace-files',params=params).json()['items'][0]['name']=='b'
+    params['q']='different'
+    assert c.get(P+'/workspace-files',params=params).status_code==409
+    for path in ['escape','pipe']:
+        assert c.get(P+'/workspace-files/download',params={'profile':'default','workspace_id':wid,'path':path}).status_code==403
+    assert c.get(P+'/workspace-files',params={'profile':'default','workspace_id':wid,'limit':201}).status_code==400
+    from plugins.cloudseed_mobile import workspace_files as files
+    old=files.MAX_ENTRIES; files.MAX_ENTRIES=1
+    try:
+        assert c.get(P+'/workspace-files',params={'profile':'default','workspace_id':wid,'q':'a'}).json()['partial']
+    finally: files.MAX_ENTRIES=old
+    c.headers.pop('Authorization'); c.cookies.set('fixture_session','owner')
+    (root/'clip.mp4').write_bytes(b'bytes')
+    assert c.head(P+'/workspace-files/stream',params={'profile':'default','workspace_id':wid,'path':'clip.mp4'}).status_code==200
+
+
+def test_default_cwd_does_not_grant_unrelated_siblings(client):
+    c,home=client
+    parent=home.parent/('projects-'+home.name); parent.mkdir()
+    repo=parent/'Repo'; repo.mkdir(); unrelated=parent/'Other'; unrelated.mkdir()
+    (home/'config.yaml').write_text('terminal:\n  cwd: '+str(repo)+'\n')
+    response=c.get(P+'/workspaces?profile=default')
+    assert {row['root_path'] for row in response.json()['items']}=={str(repo)}
+
+
+def test_sensitive_native_credential_floor(client):
+    c,home=client; root,wid=setup_root(c,home)
+    from plugins.cloudseed_mobile.workspace_files import parts
+    for path in ['MCP-TOKENS/a.json','Pairing/a.json','Google_Token.json','BWS_CACHE.ENC.JSON','.anthropic_oauth.json','webhook_subscriptions.json']:
+        with pytest.raises(HTTPException): parts(path,True)
+
+
+def test_descriptor_replacement_race(client, monkeypatch):
+    from plugins.cloudseed_mobile import workspace_files as files
+    c, home = client
+    root, wid = setup_root(c, home)
+    (root/'dir').mkdir()
+    (root/'dir/x').write_text('inside')
+    outside = home/'outside'; outside.mkdir(); (outside/'x').write_text('secret')
+    original = os.open
+    def swapped(path, flags, *args, **kwargs):
+        if path == 'x':
+            (root/'dir').rename(root/'old')
+            (root/'dir').symlink_to(outside)
+        return original(path,flags,*args,**kwargs)
+    monkeypatch.setattr(files.os, 'open', swapped)
+    r = c.get(P+'/workspace-files/read',params={'profile':'default','workspace_id':wid,'path':'dir/x'})
+    assert r.status_code in (200,403)
+    if r.status_code == 200:
+        assert r.json()['text'] == 'inside'
