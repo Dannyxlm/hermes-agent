@@ -114,8 +114,9 @@ def _(rid, params):
         "features": ["strict_canonical_open", "bounded_history", "scoped_interactions",
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
-                     "atomic_stream_snapshot", "rich_stream_snapshot"],
-        "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1},
+                     "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery"],
+        "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
+                             "display_history": 1, "chunked_recovery": 1},
         "max_history_limit": 100, "max_roster_limit": 100})
 
 

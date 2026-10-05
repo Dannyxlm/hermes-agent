@@ -680,7 +680,7 @@ def write_json(obj: dict) -> bool:
     return _write_json_published(obj)
 
 
-def _write_json_published(obj: dict, project_session=None) -> bool:
+def _write_json_published(obj: dict, project_session=None, event_transport=None) -> bool:
     """Emit one JSON frame via the most-specific transport: (1) event frames with a session id → that
     session's transport (async events reach the owner even from threads with no contextvar binding);
     (2) the context-bound transport (:func:`dispatch`); (3) module stdio (tests monkey-patch ``_real_stdout``).
@@ -692,6 +692,9 @@ def _write_json_published(obj: dict, project_session=None) -> bool:
         from tui_gateway.session_stream_cut import project_event
         project_event(project_session, obj)
     _mobile_push_capture(obj)
+    if event_transport is not None:
+        project_room_member_activity(obj, _sessions)
+        return event_transport.write(obj)
     params = obj.get("params")
     if obj.get("method") == "event" or (isinstance(obj.get("id"), str) and "method" in obj):
         # Event notifications AND server→client requests carry ``params.session_id``; both route to the
@@ -747,6 +750,8 @@ def unregister_live_transport(transport: Transport | None) -> None:
     with _live_transports_lock:
         _live_transports.discard(transport)
     _server_requests.forget(transport)
+    from tui_gateway.response_transfers import transfers
+    transfers.forget(transport=transport)
 
 
 def _broadcast_global_event(event: str, payload: dict | None = None) -> None:

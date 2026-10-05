@@ -64,3 +64,28 @@ def test_messages_inline_images_false_renders_placeholder(client):
     # Non-image rows are untouched.
     assistant_row = next(m for m in page["messages"] if m["role"] == "assistant")
     assert assistant_row["content"] == "a chart"
+
+
+def test_display_only_omits_replay_blobs_but_preserves_visible_and_raw_history(client):
+    from hermes_state import SessionDB
+    import json
+    import os
+    with SessionDB(Path(os.environ["HERMES_HOME"]) / "state.db") as db:
+        db.append_messages_batch("img-chat", [{"role": "assistant", "content": "visible answer",
+            "api_content": "MODEL-ONLY-" + "x" * 1024,
+            "codex_reasoning_items": [{"encrypted_content": "OPAQUE-" + "x" * 1024}],
+            "codex_message_items": [{"id": "MODEL-ONLY-ID"}],
+            "reasoning_details": [{"type": "reasoning.text", "text": "visible reasoning", "signature": "OPAQUE-SIGNATURE"},
+                                  {"type": "reasoning.text", "text": '{"example": "keep this prose"}'}],
+            "display_metadata": {"tool_result_metadata": {"inline_diff": "+kept"}}}])
+    url = "/api/sessions/img-chat/messages?limit=10&order=oldest&inline_images=false"
+    display = client.get(url + "&display_only=true").json()["messages"][-1]
+    assert display["content"] == "visible answer"
+    assert display["display_metadata"]["tool_result_metadata"]["inline_diff"] == "+kept"
+    assert "visible reasoning" in json.dumps(display["reasoning_details"])
+    assert display["reasoning_details"][1]["text"] == '{"example": "keep this prose"}'
+    assert "api_content" not in display and "codex_reasoning_items" not in display and "codex_message_items" not in display
+    assert "OPAQUE" not in json.dumps(display) and "MODEL-ONLY" not in json.dumps(display)
+    raw = client.get(url).json()["messages"][-1]
+    assert raw["api_content"].startswith("MODEL-ONLY-")
+    assert "OPAQUE-SIGNATURE" in raw["reasoning_details"]

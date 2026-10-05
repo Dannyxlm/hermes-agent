@@ -103,6 +103,60 @@ When the gateway withdraws a question (timeout, interrupt, answered from another
 
 `session.resume` / `session.activate` results carry `inflight` — the turn still running (or the retained failed one) that history does not hold yet: `user`, `assistant` streamed so far, `streaming`, mid-turn `corrections`, and error fields. When the turn was started by the gateway rather than typed by a person (a background-process completion, an async delegation result, a hidden scaffolding prompt) `inflight` also carries the same `display_kind` / `display_metadata` the persisted `messages` row will get, so a client renders the live prompt exactly as it will render history after the turn lands — a `process_complete` timeline marker with `display_metadata.display_text`, nothing at all for `hidden`. Both fields are absent for genuine user input; never infer origin from the prompt text (a user quoting a marker string is still a user).
 
+`session.events.since` reads its events and sequence watermark atomically. A reply
+that exceeds the replay response byte budget returns `truncated: true` with an
+empty event list and the current watermark. Treat this like an evicted replay
+window: obtain a fresh stream/history cut before advancing the client cursor.
+
+Mobile clients can negotiate `mobile.capabilities` feature `chunked_recovery`
+version 1, then send `chunked_response: true` on `session.resume`,
+`session.stream.snapshot` and `session.events.since`. Do not send this parameter
+to older gateways: RPC contracts reject unknown keys. Below 1 MiB the original
+result remains inline; otherwise the result is:
+
+```json
+{"response_transfer":{"transfer_id":"opaque-handle","session_id":"runtime-id","encoding":"base64-json-utf8","byte_length":5702468,"chunk_bytes":196608,"expires_in":120}}
+```
+
+Read `session.response.read` with `{session_id, profile?, transfer_id, offset}`.
+The reply `{transfer_id, offset, data, next_offset, eof}` carries base64 bytes of
+one immutable UTF-8 JSON **result**, without its outer JSON-RPC envelope. Start
+at offset 0, validate identity and exact byte progress, and decode JSON only
+after all `byte_length` bytes arrive. Keep receiving/buffering live events while
+fetching; apply the complete result's original atomic baseline/epoch once, then
+replay its successors. The cut, legacy inflight state and open requests retain
+their full content; transfer does not modify model or durable history. An
+opted-in replay keeps its complete available ring and open requests instead of
+the inline-size recut fallback described above.
+
+Call `session.response.release` with the same scope/handle after completion or
+cancellation (`{released:true}`). Every read/release requires the original
+attached runtime object, profile and exact connection. Reconnect cannot reuse a
+handle. Private temporary spools expire after 120 seconds without a successful read
+(each read renews that idle deadline) and close on detach,
+disconnect or session finalization. The server permits 64 MiB per result,
+256 MiB across transfers, 32 transfers total and two per connection. Error
+`4413` means explicit capacity/storage failure, never a partial snapshot;
+clients should surface it and stop automatic retry until a deliberate retry.
+Error `4414` means another in-progress serialization temporarily occupies the
+available writer slots or bytes; retry with bounded backoff. Encoding runs outside
+the transfer registry lock, so other peers can disconnect or read concurrently.
+Error `4400` means the reference or its owning scope is no longer available.
+Resume reserves capacity before constructing a runtime. If complete serialization
+is refused, a newly added subscription is removed and auto-continue remains
+deferred until a subsequent complete resume succeeds; previously attached peers
+remain attached. No partial-success result is returned. Legacy replay whose open
+requests alone exceed the frame budget returns explicit `4413` instead of an
+unresolvable `truncated` response; the client must negotiate chunked recovery.
+
+For paginated display history, request
+`GET /api/sessions/{id}/messages?limit=100&order=latest&inline_images=false&display_only=true`.
+`display_only` retains transcript identity, visible content, tool evidence, readable
+reasoning and display metadata, while excluding model-only `api_content`, Codex
+replay items and signed/encrypted reasoning envelopes. `mobile.capabilities`
+advertises `display_history` version 1. The default route still returns the original
+inspection/export fields; neither mode modifies stored or model-facing history.
+
 ### Pi-style RPC mapping
 
 Every command in the Pi-mono RPC spec ([issue #360](https://github.com/NousResearch/hermes-agent/issues/360)) has a TUI-gateway equivalent:

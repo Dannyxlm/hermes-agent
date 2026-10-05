@@ -675,6 +675,8 @@ class _Resume:
             self.target, cols=self.cols, cwd=cwd, history=history, lease=None, source=source,
             close_on_disconnect=_flag(self.params, "close_on_disconnect"),
             profile_home=self.profile_home, explicit_cwd=bool(self.profile_resume_cwd), **extra)
+        if _flag(self.params, "chunked_response"):
+            record["_resume_recovery_pending"] = True
         if follows_profile:
             record.update(
                 follow_profile_config=True,
@@ -1044,6 +1046,8 @@ def _resume_eager(ctx: _Resume) -> dict:
                 if ctx.profile_home is not None:
                     session["profile_home"] = str(ctx.profile_home)
                 session.update(display_history_prefix=display_history_prefix, active_session_lease=None)
+                if _flag(ctx.params, "chunked_response"):
+                    session["_resume_recovery_pending"] = True
         except Exception as e:
             # _init_session registers _sessions[sid] BEFORE its first db read; left in place the fast path
             # would serve that dead session forever.
@@ -1069,22 +1073,60 @@ def _(rid, params):
         from hermes_cli.profiles import get_profile_dir
         if Path(get_profile_dir(params["profile"])).resolve() != Path(session.get("profile_home") or _hermes_home).resolve():
             return _err(rid, 4400, "runtime profile mismatch")
-    return _ok(rid, stream_cut(sid, session))
+    from tui_gateway.response_transfers import recovery_reply
+    return recovery_reply(rid, stream_cut(sid, session), sid, params)
 
 
 @method("session.resume")
 def _(rid, params: dict) -> dict:
-    response = _resume_session(rid, params)
-    result = response.get("result")
-    if isinstance(result, dict):
-        sid = result.get("session_id")
-        session = _sessions.get(sid)
-        if session is not None:
-            from tui_gateway.session_stream_cut import stream_cut
-            # The legacy transcript/inflight fields keep their old semantics.
-            # This optional field is the event-published replacement and watermark.
-            result["stream_snapshot"] = stream_cut(sid, session)
-    return response
+    from tui_gateway.response_transfers import TransferError, transfers
+    transport = current_transport()
+    reservation = session = None
+    sid = None
+    previously_attached = {id(record) for record in list(_sessions.values())
+                           if _session_transport_contains(record, transport)}
+    try:
+        if params.get("chunked_response") is True:
+            reservation = transfers.reserve(transport)
+        response = _resume_session(rid, params)
+        result = response.get("result")
+        if isinstance(result, dict):
+            sid = result.get("session_id")
+            session = _sessions.get(sid)
+            if session is not None:
+                from tui_gateway.session_stream_cut import stream_cut
+                result["stream_snapshot"] = stream_cut(sid, session)
+                pending = None
+                if session.get("_resume_recovery_pending"):
+                    with session["history_lock"]:
+                        pending = session.pop("_recovery_auto_continue", None)
+                if pending is not None:
+                    # A previous refused recovery may have waited beyond the
+                    # marker freshness window. Revalidate before promising a turn.
+                    descriptor = _maybe_schedule_auto_continue(sid, session, session["session_key"])
+                    if descriptor is not None:
+                        result["auto_continue"] = descriptor
+                    else:
+                        result.pop("auto_continue", None)
+                if reservation is not None:
+                    response = _ok(rid, transfers.prepare(result, sid, params.get("profile"), transport,
+                                                          reservation=reservation))
+                _commit_resume_recovery(session)
+        return response
+    except TransferError as exc:
+        if session is not None and id(session) not in previously_attached:
+            # Roll back only this new subscription; existing peers and this peer's
+            # previously attached sessions keep their ownership and stream.
+            with _session_resume_lock, _sessions_lock:
+                if _sessions.get(sid) is session:
+                    with _session_transport_lock:
+                        if not _detach_session_transport(session, transport):
+                            session["transport"] = _detached_ws_transport
+                            _schedule_ws_orphan_reap(sid)
+        return _err(rid, exc.code, str(exc))
+    finally:
+        if reservation is not None:
+            transfers.cancel(reservation)
 
 
 def _resume_session(rid, params: dict) -> dict:
@@ -2663,12 +2705,37 @@ def _(rid, params: dict) -> dict:
     except (TypeError, ValueError):
         return _err(rid, -32602, "invalid params: last_seen must be an integer")
     from tui_gateway import event_replay as er
-    frames = er.events_since(sid, last_seen)
+    result = er.replay_snapshot(sid, last_seen)
     # ``epoch``: in-process seq — clients reset watermarks when this differs from gateway.ready's.
     # ``open_requests``: server→client requests still unanswered — the ring cannot carry "a question still
     # waiting", so the reconnecting client re-delivers these to its request handlers.
-    return _ok(rid, {"events": frames, "latest_seq": er.latest_seq(sid), "truncated": er.is_truncated(sid, last_seen),
-                     "count": len(frames), "epoch": er.replay_epoch(), "open_requests": _open_requests(sid)})
+    result["open_requests"] = _open_requests(sid)
+    if params.get("chunked_response") is True:
+        from tui_gateway.response_transfers import recovery_reply
+        return recovery_reply(rid, result, sid, params)
+    reply = _ok(rid, result)
+    # The ring counts compact event params, while the wire also contains the
+    # RPC envelope, separators and open requests. Leave headroom below mobile's
+    # 4 MiB frame budget. The existing truncation contract requests an atomic
+    # stream/history cut; never silently return an incomplete successful replay.
+    if len(json.dumps(reply, ensure_ascii=False).encode("utf-8", errors="surrogatepass")) > 3 * 1024 * 1024:
+        if result["events"]:
+            result.update(events=[], count=0, truncated=True)
+        if len(json.dumps(reply, ensure_ascii=False).encode("utf-8", errors="surrogatepass")) > 3 * 1024 * 1024:
+            return _err(rid, 4413, "replay response exceeds frame budget; use chunked_response")
+    return reply
+
+
+@method("session.response.read")
+def _(rid, params):
+    from tui_gateway.response_transfers import transfer_rpc
+    return transfer_rpc(rid, params)
+
+
+@method("session.response.release")
+def _(rid, params):
+    from tui_gateway.response_transfers import transfer_rpc
+    return transfer_rpc(rid, params, release=True)
 
 
 @method("session.events.stats")

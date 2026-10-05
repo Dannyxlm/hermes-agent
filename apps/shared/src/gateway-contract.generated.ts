@@ -2273,7 +2273,9 @@ export interface SessionResumeParams {
   eager_build?: boolean
   close_on_disconnect?: boolean
   inline_images?: boolean
+  chunked_response?: boolean
 }
+export type SessionResumeWireResult = SessionResumeResult | ResponseTransferResult
 export interface SessionResumeResult {
   session_id: string
   message_count: number
@@ -2383,6 +2385,17 @@ export interface TodoState {
 export interface AutoContinue {
   attempt: number
   interrupted_at: number
+}
+export interface ResponseTransferResult {
+  response_transfer: ResponseTransferDescriptor
+}
+export interface ResponseTransferDescriptor {
+  transfer_id: string
+  session_id: string
+  encoding: 'base64-json-utf8'
+  byte_length: number
+  chunk_bytes: number
+  expires_in: number
 }
 export interface SessionActivateParams {
   session_id: string
@@ -2810,11 +2823,19 @@ export interface TerminalResizeParams {
 export interface TerminalResizeResult {
   cols: number
 }
+export interface SessionStreamSnapshotParams {
+  session_id: string
+  profile?: string | null
+  chunked_response?: boolean
+}
+export type SessionStreamSnapshotWireResult = SessionStreamSnapshotResult | ResponseTransferResult
 export interface SessionEventsSinceParams {
   session_id: string
   profile?: string | null
   last_seen?: number | null
+  chunked_response?: boolean
 }
+export type SessionEventsSinceWireResult = SessionEventsSinceResult | ResponseTransferResult
 export interface SessionEventsSinceResult {
   events: Record<string, unknown>[]
   latest_seq: number
@@ -2822,6 +2843,27 @@ export interface SessionEventsSinceResult {
   count: number
   epoch: string
   open_requests: OpenRequestEntry[]
+}
+export interface ResponseTransferReadParams {
+  session_id: string
+  profile?: string | null
+  transfer_id: string
+  offset: number
+}
+export interface ResponseTransferReadResult {
+  transfer_id: string
+  offset: number
+  data: string
+  next_offset: number
+  eof: boolean
+}
+export interface ResponseTransferParams {
+  session_id: string
+  profile?: string | null
+  transfer_id: string
+}
+export interface ResponseTransferReleaseResult {
+  released: boolean
 }
 export interface SessionEventsStatsParams {
   profile?: string | null
@@ -5622,7 +5664,7 @@ export interface RpcMethods {
   /** Delete a stored session + transcripts; refused while it is live here. */
   'session.delete': { params: SessionDeleteParams; result: SessionDeleteResult }
   /** Replay events after a seq watermark on WS reconnect; truncated means refetch state. */
-  'session.events.since': { params: SessionEventsSinceParams; result: SessionEventsSinceResult }
+  'session.events.since': { params: SessionEventsSinceParams; result: SessionEventsSinceWireResult }
   /** Replay-buffer occupancy telemetry (ops/debug). */
   'session.events.stats': { params: SessionEventsStatsParams; result: SessionEventsStatsResult }
   /** Import a foreign session into this profile's history (idempotent per origin). */
@@ -5641,8 +5683,12 @@ export interface RpcMethods {
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult }
   /** Redirect the active turn (queued for the next turn while the agent is still building). */
   'session.redirect': { params: SessionCorrectionParams; result: SessionCorrectionResult }
-  /** Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild. */
-  'session.resume': { params: SessionResumeParams; result: SessionResumeResult }
+  /** Read a bounded base64 chunk of an immutable recovery result, owned by this exact runtime and connection. */
+  'session.response.read': { params: ResponseTransferReadParams; result: ResponseTransferReadResult }
+  /** Release a completed or cancelled recovery transfer; expiry and disconnect also release it. */
+  'session.response.release': { params: ResponseTransferParams; result: ResponseTransferReleaseResult }
+  /** Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild. chunked_response opts into a bounded immutable transfer for large results. */
+  'session.resume': { params: SessionResumeParams; result: SessionResumeWireResult }
   /** Export the transcript to ~/.hermes/sessions/saved (classic /save). */
   'session.save': { params: SessionSaveParams; result: SessionSaveResult }
   /** Set/clear hidden (out of the default list, still resumable by its owner) on a session + lineage. */
@@ -5652,7 +5698,7 @@ export interface RpcMethods {
   /** Inject text into the next tool result without interrupting the turn. */
   'session.steer': { params: SessionCorrectionParams; result: SessionCorrectionResult }
   /** Atomic event-published stream cut. Buffer live frames, replace stream from this cut, then replay session.events.since(last_seen=baseline_seq). Admit only newer seq in this runtime/epoch; on truncation or epoch change rebuild. No durable-history watermark implied. */
-  'session.stream.snapshot': { params: SessionParams; result: SessionStreamSnapshotResult }
+  'session.stream.snapshot': { params: SessionStreamSnapshotParams; result: SessionStreamSnapshotWireResult }
   /** Read or set a live session's title; a title set before the row exists is queued. */
   'session.title': { params: SessionTitleParams; result: SessionTitleResult }
   /** Drop the last user turn (and everything after it) from an idle session. */
@@ -5983,6 +6029,8 @@ export const RPC_METHODS = [
   'session.list',
   'session.most_recent',
   'session.redirect',
+  'session.response.read',
+  'session.response.release',
   'session.resume',
   'session.save',
   'session.set_hidden',

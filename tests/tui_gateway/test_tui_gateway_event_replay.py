@@ -269,3 +269,20 @@ def test_truncation_detection_semantics():
     assert event_replay.is_truncated("s1", 5)
     # Unknown session: nothing evicted, nothing truncated.
     assert not event_replay.is_truncated("nope", 0)
+
+
+def test_replay_rpc_fits_mobile_frame_or_explicitly_requires_rebuild():
+    """The ring budget is not a JSON-RPC envelope budget (spaces/ids/requests add bytes)."""
+    import json
+    from tui_gateway import server
+    for index in range(64):
+        frame = _frame("mobile", "tool.complete")
+        frame["params"]["payload"] = {"result": "x" * 65_420, "tool_id": str(index), "name": "terminal"}
+        event_replay._stamp_event(frame)
+    reply = server.handle_request({"jsonrpc": "2.0", "id": "probe", "method": "session.events.since",
+                                   "params": {"session_id": "mobile", "last_seen": 0}})
+    result = reply["result"]
+    assert len(json.dumps(reply, ensure_ascii=False).encode()) < 4 * 1024 * 1024
+    if len(result["events"]) != 64:
+        assert result["truncated"] is True
+    assert result["latest_seq"] == 64

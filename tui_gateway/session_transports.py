@@ -123,6 +123,8 @@ def _detach_session_transport(session: dict | None, transport) -> bool:
 
 def _detach_transport_from_sessions(transport) -> list[tuple[str, dict]]:
     """Remove even closed/pruned peers' viewer entries; return clientless slots."""
+    from tui_gateway.response_transfers import transfers
+    transfers.forget(transport=transport)
     with _sessions_lock:
         attached = []
         for sid, session in _sessions.items():

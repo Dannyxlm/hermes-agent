@@ -63,6 +63,8 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
     # its execution generation and duplicate work.
     if session.get("source") == "bot_room":
         return None
+    if pending := session.get("_recovery_auto_continue"):
+        return pending["descriptor"]
     home = _session_home(session)
     if (marker := read_turn_marker(home, session_key)) is None:
         return None
@@ -84,7 +86,6 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
         return None
     if session.get("_auto_continue_scheduled"):
         return None
-    session["_auto_continue_scheduled"] = True
     attempt, text = marker["attempts"] + 1, _auto_continue_note(marker["prompt"])
 
     def kickoff() -> None:
@@ -131,12 +132,38 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
         except Exception as exc:
             _notif_log_failure("auto-continue dispatch failed", exc)
             _notif_release_turn(session)  # rebound from session_notifications
-    if _start_session_work(kickoff, name=f"auto-continue-{sid}") is None:
-        session["_auto_continue_scheduled"] = False
-        return None
-    logger.info("auto-continue scheduled for session %s (attempt %d, interrupted %.0fs ago, writer pid %s: %s, "
-                "reader pid %s)", session_key, attempt, age, marker.get("writer_pid"), writer_state, os.getpid())
-    return {"attempt": attempt, "interrupted_at": marker["started_at"]}
+    descriptor = {"attempt": attempt, "interrupted_at": marker["started_at"]}
+
+    def start():
+        with session["history_lock"]:
+            if session.get("_auto_continue_scheduled") or session.get("_finalized"):
+                return None
+            session["_auto_continue_scheduled"] = True
+        if _start_session_work(kickoff, name=f"auto-continue-{sid}") is None:
+            session["_auto_continue_scheduled"] = False
+            return None
+        logger.info("auto-continue scheduled for session %s (attempt %d, interrupted %.0fs ago, writer pid %s: %s, "
+                    "reader pid %s)", session_key, attempt, age, marker.get("writer_pid"), writer_state, os.getpid())
+        return descriptor
+
+    with session["history_lock"]:
+        if session.get("_resume_recovery_pending"):
+            # A refused recovery must not start a turn the client cannot identify.
+            # Keep the plan for the next successful resume, including its descriptor.
+            session["_recovery_auto_continue"] = {"descriptor": descriptor, "start": start}
+            return descriptor
+    return start()
+
+
+def _commit_resume_recovery(session: dict) -> None:
+    """Enable deferred recovery work only after the complete resume result is admitted."""
+    if not session.get("_resume_recovery_pending"):
+        return
+    with session["history_lock"]:
+        session.pop("_resume_recovery_pending", None)
+        pending = session.pop("_recovery_auto_continue", None)
+    if pending is not None:
+        pending["start"]()
 
 
 def _ac_inflight_original(session: dict) -> str:

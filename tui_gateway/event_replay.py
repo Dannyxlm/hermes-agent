@@ -127,6 +127,17 @@ def is_truncated(sid: str, last_seen: int) -> bool:
         return last_seen < _replay_evicted_through.get(sid or "", 0)
 
 
+def replay_snapshot(sid: str, last_seen: int) -> dict:
+    """Read the frames and their watermark together; concurrent publication cannot
+    make the reply claim a later event than the list it contains."""
+    sid = sid or ""
+    with _replay_lock:
+        frames = [event for seq, event, _size in _replay_buffers.get(sid, ()) if seq > last_seen]
+        return {"events": frames, "latest_seq": _replay_next_seq.get(sid, 0),
+                "truncated": last_seen < _replay_evicted_through.get(sid, 0),
+                "count": len(frames), "epoch": _REPLAY_EPOCH}
+
+
 def latest_seq(sid: str) -> int:
     """Current highest stamped seq for *sid* (0 when unknown)."""
     with _replay_lock:

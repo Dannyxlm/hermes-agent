@@ -3710,7 +3710,7 @@
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/SessionEventsSinceResult"
+          "$ref": "#/components/schemas/SessionEventsSinceWireResult"
         }
       }
     },
@@ -3877,8 +3877,44 @@
       }
     },
     {
+      "name": "session.response.read",
+      "summary": "Read a bounded base64 chunk of an immutable recovery result, owned by this exact runtime and connection.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ResponseTransferReadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ResponseTransferReadResult"
+        }
+      }
+    },
+    {
+      "name": "session.response.release",
+      "summary": "Release a completed or cancelled recovery transfer; expiry and disconnect also release it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ResponseTransferParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ResponseTransferReleaseResult"
+        }
+      }
+    },
+    {
       "name": "session.resume",
-      "summary": "Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild.",
+      "summary": "Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild. chunked_response opts into a bounded immutable transfer for large results.",
       "params": [
         {
           "name": "params",
@@ -3890,7 +3926,7 @@
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/SessionResumeResult"
+          "$ref": "#/components/schemas/SessionResumeWireResult"
         }
       }
     },
@@ -3973,14 +4009,14 @@
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/SessionParams"
+            "$ref": "#/components/schemas/SessionStreamSnapshotParams"
           }
         }
       ],
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/SessionStreamSnapshotResult"
+          "$ref": "#/components/schemas/SessionStreamSnapshotWireResult"
         }
       }
     },
@@ -29300,6 +29336,174 @@
         "title": "RequestCancelPayload",
         "type": "object"
       },
+      "ResponseTransferDescriptor": {
+        "additionalProperties": false,
+        "properties": {
+          "transfer_id": {
+            "title": "Transfer Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "encoding": {
+            "const": "base64-json-utf8",
+            "title": "Encoding",
+            "type": "string"
+          },
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "chunk_bytes": {
+            "title": "Chunk Bytes",
+            "type": "integer"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "transfer_id",
+          "session_id",
+          "encoding",
+          "byte_length",
+          "chunk_bytes",
+          "expires_in"
+        ],
+        "title": "ResponseTransferDescriptor",
+        "type": "object"
+      },
+      "ResponseTransferParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "transfer_id": {
+            "title": "Transfer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "transfer_id"
+        ],
+        "title": "ResponseTransferParams",
+        "type": "object"
+      },
+      "ResponseTransferReadParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "transfer_id": {
+            "title": "Transfer Id",
+            "type": "string"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "transfer_id",
+          "offset"
+        ],
+        "title": "ResponseTransferReadParams",
+        "type": "object"
+      },
+      "ResponseTransferReadResult": {
+        "additionalProperties": false,
+        "properties": {
+          "transfer_id": {
+            "title": "Transfer Id",
+            "type": "string"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "next_offset": {
+            "title": "Next Offset",
+            "type": "integer"
+          },
+          "eof": {
+            "title": "Eof",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "transfer_id",
+          "offset",
+          "data",
+          "next_offset",
+          "eof"
+        ],
+        "title": "ResponseTransferReadResult",
+        "type": "object"
+      },
+      "ResponseTransferReleaseResult": {
+        "additionalProperties": false,
+        "properties": {
+          "released": {
+            "title": "Released",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "released"
+        ],
+        "title": "ResponseTransferReleaseResult",
+        "type": "object"
+      },
+      "ResponseTransferResult": {
+        "additionalProperties": false,
+        "properties": {
+          "response_transfer": {
+            "$ref": "#/components/schemas/ResponseTransferDescriptor"
+          }
+        },
+        "required": [
+          "response_transfer"
+        ],
+        "title": "ResponseTransferResult",
+        "type": "object"
+      },
       "ResumePhaseStatus": {
         "enum": [
           "loading",
@@ -32601,6 +32805,11 @@
             ],
             "default": null,
             "title": "Last Seen"
+          },
+          "chunked_response": {
+            "default": false,
+            "title": "Chunked Response",
+            "type": "boolean"
           }
         },
         "required": [
@@ -32654,6 +32863,17 @@
         ],
         "title": "SessionEventsSinceResult",
         "type": "object"
+      },
+      "SessionEventsSinceWireResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SessionEventsSinceResult"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseTransferResult"
+          }
+        ],
+        "title": "SessionEventsSinceWireResult"
       },
       "SessionEventsStatsParams": {
         "additionalProperties": false,
@@ -33619,6 +33839,11 @@
             "default": true,
             "title": "Inline Images",
             "type": "boolean"
+          },
+          "chunked_response": {
+            "default": false,
+            "title": "Chunked Response",
+            "type": "boolean"
           }
         },
         "required": [
@@ -33901,6 +34126,17 @@
         "title": "SessionResumeResult",
         "type": "object"
       },
+      "SessionResumeWireResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SessionResumeResult"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseTransferResult"
+          }
+        ],
+        "title": "SessionResumeWireResult"
+      },
       "SessionSaveParams": {
         "additionalProperties": false,
         "properties": {
@@ -34164,6 +34400,37 @@
         "title": "SessionStreamProjection",
         "type": "object"
       },
+      "SessionStreamSnapshotParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "chunked_response": {
+            "default": false,
+            "title": "Chunked Response",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionStreamSnapshotParams",
+        "type": "object"
+      },
       "SessionStreamSnapshotResult": {
         "additionalProperties": false,
         "properties": {
@@ -34210,6 +34477,17 @@
         ],
         "title": "SessionStreamSnapshotResult",
         "type": "object"
+      },
+      "SessionStreamSnapshotWireResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SessionStreamSnapshotResult"
+          },
+          {
+            "$ref": "#/components/schemas/ResponseTransferResult"
+          }
+        ],
+        "title": "SessionStreamSnapshotWireResult"
       },
       "SessionTitleParams": {
         "additionalProperties": false,

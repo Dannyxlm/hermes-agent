@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, RootModel
 
 from .base import JsonValue, Params, Result, WireEnum
 from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
@@ -194,14 +194,33 @@ class SessionResumeParams(SessionParams):
     # False: render image parts as "[image]" instead of their data URIs — a remote client reads a
     # transcript in kilobytes instead of re-transmitting every stored attachment (#116511).
     inline_images: bool = True
+    chunked_response: bool = False
 
 
 class SessionResumeResult(LiveSessionSnapshot):
     pass
 
 
-method("session.resume", params=SessionResumeParams, result=SessionResumeResult,
-       doc="Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild.")
+class ResponseTransferDescriptor(Result):
+    transfer_id: str
+    session_id: str
+    encoding: Literal["base64-json-utf8"]
+    byte_length: int
+    chunk_bytes: int
+    expires_in: int
+
+
+class ResponseTransferResult(Result):
+    response_transfer: ResponseTransferDescriptor
+
+
+class SessionResumeWireResult(RootModel[SessionResumeResult | ResponseTransferResult]):
+    pass
+
+
+method("session.resume", params=SessionResumeParams, result=SessionResumeWireResult,
+       doc="Attach to a stored session: reuse it if live here, else lazy / deferred / cold / eager rebuild. "
+           "chunked_response opts into a bounded immutable transfer for large results.")
 
 
 class SessionActivateParams(SessionParams):
@@ -789,7 +808,15 @@ class SessionStreamSnapshotResult(Result):
     stream: SessionStreamProjection | None
 
 
-method("session.stream.snapshot", params=SessionParams, result=SessionStreamSnapshotResult,
+class SessionStreamSnapshotParams(SessionParams):
+    chunked_response: bool = False
+
+
+class SessionStreamSnapshotWireResult(RootModel[SessionStreamSnapshotResult | ResponseTransferResult]):
+    pass
+
+
+method("session.stream.snapshot", params=SessionStreamSnapshotParams, result=SessionStreamSnapshotWireResult,
        doc="Atomic event-published stream cut. Buffer live frames, replace stream from this cut, "
            "then replay session.events.since(last_seen=baseline_seq). Admit only newer seq in this "
            "runtime/epoch; on truncation or epoch change rebuild. No durable-history watermark implied.")
@@ -797,6 +824,7 @@ method("session.stream.snapshot", params=SessionParams, result=SessionStreamSnap
 
 class SessionEventsSinceParams(SessionParams):
     last_seen: int | None = None
+    chunked_response: bool = False
 
 
 class SessionEventsSinceResult(Result):
@@ -808,8 +836,38 @@ class SessionEventsSinceResult(Result):
     open_requests: list[OpenRequestEntry]
 
 
-method("session.events.since", params=SessionEventsSinceParams, result=SessionEventsSinceResult,
+class SessionEventsSinceWireResult(RootModel[SessionEventsSinceResult | ResponseTransferResult]):
+    pass
+
+
+method("session.events.since", params=SessionEventsSinceParams, result=SessionEventsSinceWireResult,
        doc="Replay events after a seq watermark on WS reconnect; truncated means refetch state.")
+
+
+class ResponseTransferParams(SessionParams):
+    transfer_id: str
+
+
+class ResponseTransferReadParams(ResponseTransferParams):
+    offset: int
+
+
+class ResponseTransferReadResult(Result):
+    transfer_id: str
+    offset: int
+    data: str
+    next_offset: int
+    eof: bool
+
+
+class ResponseTransferReleaseResult(Result):
+    released: bool
+
+
+method("session.response.read", params=ResponseTransferReadParams, result=ResponseTransferReadResult,
+       doc="Read a bounded base64 chunk of an immutable recovery result, owned by this exact runtime and connection.")
+method("session.response.release", params=ResponseTransferParams, result=ResponseTransferReleaseResult,
+       doc="Release a completed or cancelled recovery transfer; expiry and disconnect also release it.")
 
 
 class SessionEventsStatsParams(ProfileParams):

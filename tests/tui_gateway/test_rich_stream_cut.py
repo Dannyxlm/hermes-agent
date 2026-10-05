@@ -143,3 +143,17 @@ def test_nonstreaming_interim_seals_text(mobile_home, peer):
     server._emit("message.interim", sid, {"text": "whole", "already_streamed": False})
     server._emit("message.delta", sid, {"text": "tail"})
     assert cut(sid)["parts"] == [{"kind": "text", "text": "whole"}, {"kind": "text", "text": "tail"}]
+
+
+def test_connector_publication_is_in_cut_before_cursor_advances(mobile_home, peer):
+    from tui_gateway import event_replay
+    sid = begin(peer)
+    server._emit_tool_lifecycle("tool.start", sid, "manage_connections", {},
+        {"tool_id": "connector", "name": "manage_connections", "args": {"token": "private-fixture"}})
+    snapshot = rpc("session.stream.snapshot", session_id=sid)["result"]
+    part = next(p for p in snapshot["stream"]["parts"] if p.get("tool_id") == "connector")
+    assert "private-fixture" not in part["args_text"]
+    assert event_replay.events_since(sid, snapshot["baseline_seq"]) == []
+    server._emit_tool_lifecycle("tool.complete", sid, "manage_connections", {},
+        {"tool_id": "connector", "name": "manage_connections", "result": {"ok": True}})
+    assert cut(sid)["parts"][0]["status"] == "complete"

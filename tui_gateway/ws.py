@@ -442,7 +442,7 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
                 _log.error("ws dispatcher failed peer=%s", peer, exc_info=failure)
         reaped_sessions = detached_sessions = 0
         if transport is not None:
-            server.unregister_live_transport(transport)
+            await asyncio.to_thread(server.unregister_live_transport, transport)
             # Owner-safely park browser controllers this transport registered (a same-identity reconnect may
             # deliver a terminal result for in-flight work). Offloaded: disconnect takes the controller's
             # send_lock, which a worker-thread dispatch may hold while blocking on THIS loop to transmit.

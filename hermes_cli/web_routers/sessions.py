@@ -696,7 +696,8 @@ def _project_for_display(messages: list, *, home=None, inline_images: bool = Tru
 async def get_session_messages(
     session_id: str, profile: Optional[str] = None, limit: Optional[int] = Query(None, ge=0),
     offset: int = Query(0, ge=0), order: Optional[str] = Query(None),
-    include_compacted: bool = Query(False), inline_images: bool = Query(True)):
+    include_compacted: bool = Query(False), inline_images: bool = Query(True),
+    display_only: bool = Query(False)):
     if order not in (None, "oldest", "latest"):
         raise HTTPException(status_code=400, detail="order must be one of: oldest, latest")
 
@@ -727,6 +728,9 @@ async def get_session_messages(
     projected_messages = await asyncio.to_thread(
         _project_for_display, messages, home=_history_profile_home(profile),
         inline_images=inline_images)
+    if display_only:
+        from hermes_cli.web_routers.session_display import project_display_rows
+        projected_messages = await asyncio.to_thread(project_display_rows, projected_messages)
     return {
         "session_id": sid,
         # The same stamp list rows carry, so the Desktop keys a page under the
