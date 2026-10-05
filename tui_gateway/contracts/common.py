@@ -98,6 +98,15 @@ class SessionLiveInfo(OpenModel):
     lazy: bool | None = None
 
 
+class InboxAssistantReply(Result):
+    """Factual latest final-looking reply across a compression path (Unix seconds)."""
+
+    row_id: int
+    at: float
+    preview: str | None = None
+    unread: bool | None = None  # inbox_summaries v2; NULL watermark means read
+
+
 class StoredSessionRow(OpenModel):
     """One ``sessions`` row as ``hermes_state`` lists it (``session.list`` / ``session.info`` rows /
     ``sessions.changed``)."""
@@ -121,6 +130,7 @@ class StoredSessionRow(OpenModel):
     parent_session_id: str | None = None
     pinned: bool | None = None
     unread: bool | None = None
+    last_assistant_reply: InboxAssistantReply | None = None
     archived: bool | None = None
     actual_cost_usd: float | None = None
     estimated_cost_usd: float | None = None

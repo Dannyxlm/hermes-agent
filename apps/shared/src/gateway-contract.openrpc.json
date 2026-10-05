@@ -16723,6 +16723,50 @@
         "title": "ImageGenerateResult",
         "type": "object"
       },
+      "InboxAssistantReply": {
+        "additionalProperties": false,
+        "description": "Factual latest final-looking reply across a compression path (Unix seconds).",
+        "properties": {
+          "row_id": {
+            "title": "Row Id",
+            "type": "integer"
+          },
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview"
+          },
+          "unread": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unread"
+          }
+        },
+        "required": [
+          "row_id",
+          "at"
+        ],
+        "title": "InboxAssistantReply",
+        "type": "object"
+      },
       "InboxLatestRun": {
         "additionalProperties": false,
         "properties": {
@@ -27546,6 +27590,17 @@
             "default": null,
             "title": "Unread"
           },
+          "last_assistant_reply": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxAssistantReply"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "archived": {
             "anyOf": [
               {
@@ -30787,6 +30842,17 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/InboxLatestRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "last_assistant_reply": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxAssistantReply"
               },
               {
                 "type": "null"

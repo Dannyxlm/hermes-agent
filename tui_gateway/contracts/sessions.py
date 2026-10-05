@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
-from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
+from .common import (InboxAssistantReply, OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
                      Usage)
 from .connectors_operation import ConnectionRequestPayload
 from .registry import method
@@ -282,6 +282,7 @@ class SessionActiveItem(Result):
     pending_count: int | None = Field(default=None, ge=1)
     pending_revision: str | None = None
     latest_run: InboxLatestRun | None = None
+    last_assistant_reply: InboxAssistantReply | None = None
 
     current: bool
     id: str

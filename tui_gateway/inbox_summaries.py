@@ -37,7 +37,11 @@ def latest_run(session, launch_home, stored_id):
 
 
 def page_replies(db, rows):
-    """One indexed message query for this page's already-resolved compression chains."""
+    """One indexed message query for this page's already-resolved compression chains.
+
+    Projected list rows retain the root read watermark; live rows supply the same
+    root explicitly. Compare reply time, not later user/tool activity. NULL is read.
+    """
     lineages = {row["id"]: row.get("_lineage_ids") or [row["id"]] for row in rows}
     ids = list({sid for chain in lineages.values() for sid in chain})
     if not ids:
@@ -53,16 +57,43 @@ def page_replies(db, rows):
     """, ids)
     by_id = {r["session_id"]: r for r in latest}
     result = {}
+    watermarks = {row["id"]: row.get("last_read_at") for row in rows}
     for key, chain in lineages.items():
         candidates = [by_id[sid] for sid in chain if sid in by_id]
         if candidates:
             final = max(candidates, key=lambda r: r["id"])
-            reply = {"row_id": final["id"], "at": final["timestamp"]}
+            watermark = watermarks[key]
+            reply = {"row_id": final["id"], "at": final["timestamp"],
+                     "unread": watermark is not None and final["timestamp"] > watermark}
             preview = reply_preview(final["head"])
             if preview:
                 reply["preview"] = preview
             result[key] = reply
     return result
+
+
+def live_reply(session, launch_home, stored_id):
+    """Same durable reply/read projection as REST; never hydrate a runtime or create a DB."""
+    import logging
+    import sqlite3
+    from hermes_state import SessionDB
+
+    path = Path(session.get("profile_home") or launch_home) / "state.db"
+    if not path.is_file():
+        return None
+    try:
+        with SessionDB(db_path=path, read_only=True) as db:
+            chain = db.get_compression_lineage(stored_id)
+            if not chain:
+                return None
+            root = db.get_session(chain[0])
+            if root is None:
+                return None
+            root["_lineage_ids"] = chain
+            return page_replies(db, [root]).get(root["id"])
+    except (OSError, sqlite3.Error, RuntimeError) as error:
+        logging.getLogger(__name__).warning("Inbox reply summary unavailable (%s)", type(error).__name__)
+        return None
 
 
 REPLY_PREVIEW_CHARS = 240

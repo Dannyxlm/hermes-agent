@@ -2457,6 +2457,7 @@ export interface SessionActiveItem {
   pending_count?: number | null
   pending_revision?: string | null
   latest_run?: InboxLatestRun | null
+  last_assistant_reply?: InboxAssistantReply | null
   current: boolean
   id: string
   last_active: number
@@ -2472,6 +2473,13 @@ export interface InboxLatestRun {
   run_id: string
   status: 'starting' | 'thinking' | 'usingTool' | 'responding' | 'waitingForApproval' | 'waitingForClarification' | 'complete' | 'failed' | 'cancelled'
   at: number
+}
+/** Factual latest final-looking reply across a compression path (Unix seconds). */
+export interface InboxAssistantReply {
+  row_id: number
+  at: number
+  preview?: string | null
+  unread?: boolean | null
 }
 export type LiveSessionStatus = 'idle' | 'starting' | 'waiting' | 'working' | 'streaming' | 'resuming'
 export interface InboxSummaryScope {
@@ -3754,6 +3762,7 @@ export interface ProjectTreeSession {
   parent_session_id?: string | null
   pinned?: boolean | null
   unread?: boolean | null
+  last_assistant_reply?: InboxAssistantReply | null
   archived?: boolean | null
   actual_cost_usd?: number | null
   estimated_cost_usd?: number | null

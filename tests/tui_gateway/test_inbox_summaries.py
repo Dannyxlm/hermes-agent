@@ -93,7 +93,7 @@ def test_final_reply_is_page_batched_and_profile_isolated(inbox, mobile_home, mo
     response = inbox.get("/api/sessions", params={"profile": "ops"}).json()
     summaries = [r for r in response["sessions"] if "last_assistant_reply" in r]
     assert len(summaries) == 6
-    assert next(r for r in summaries if r["id"] == "same")["last_assistant_reply"] == {"row_id": final_id, "at": 123, "preview": "final reply"}
+    assert next(r for r in summaries if r["id"] == "same")["last_assistant_reply"] == {"row_id": final_id, "at": 123, "preview": "final reply", "unread": False}
     assert len([sql for sql in queries if "MAX(id)" in sql and "finish_reason" in sql]) == 1
     assert "last_assistant_reply" not in row(inbox, "default")
 
@@ -127,9 +127,9 @@ def test_latest_run_reads_unenrolled_ordinary_scope_without_mutation(inbox, mobi
         service.close()
 
 
-def test_capability_advertises_inbox_v1(mobile_home, peer):
+def test_capability_advertises_inbox_v2(mobile_home, peer):
     capabilities = rpc("mobile.capabilities")["result"]
-    assert capabilities["feature_versions"]["inbox_summaries"] == 1
+    assert capabilities["feature_versions"]["inbox_summaries"] == 2
     assert capabilities["feature_versions"]["rich_stream_snapshot"] == 1
 
 
@@ -161,7 +161,7 @@ def test_compression_reply_and_run_do_not_follow_branches(inbox, mobile_home, pe
     request("ops", "approval")
     response = inbox.get("/api/sessions", params={"profile": "ops"}).json()
     tip = next(r for r in response["sessions"] if r["id"] == "tip")
-    assert tip["last_assistant_reply"] == {"row_id": final_id, "at": 100, "preview": "root final"}
+    assert tip["last_assistant_reply"] == {"row_id": final_id, "at": 100, "preview": "root final", "unread": False}
     assert tip["attention"]["kind"] == "approval"
     service = PushService(mobile_home / "mobile-push" / "outbox.sqlite3", Sender(), clock=lambda: 321)
     try:
