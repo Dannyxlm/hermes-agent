@@ -44,6 +44,23 @@ def test_mobile_scope_and_activity_subscription_are_required():
         METHODS["mobile.activity.unregister"].params.model_validate({"installation_id": "i", "connection_id": "c"})
 
 
+@pytest.mark.parametrize('method', ['mobile.push.refresh', 'mobile.session_push.refresh'])
+def test_alert_refresh_can_narrow_without_token_and_reports_acknowledged_privacy(method):
+    assert METHODS[method].params.model_validate({**REGISTRATION, 'categories': [], 'preview_enabled': False}).device_token is None
+    result = METHODS[method].result.model_validate({'updated': 1, 'subscriptions': [
+        {'subscription_id': 'fixture', 'expires_at': 123, 'categories': [], 'preview_enabled': False}]})
+    assert result.subscriptions[0].preview_enabled is False
+
+
+@pytest.mark.parametrize('method,scope', [
+    ('mobile.push.register', SCOPE),
+    ('mobile.session_push.register', {'profile': 'ava', 'stored_session_id': 'stored'})])
+@pytest.mark.parametrize('token', [{}, {'device_token': None}])
+def test_alert_registration_still_requires_token(method, scope, token):
+    with pytest.raises(ValidationError):
+        METHODS[method].params.model_validate({**REGISTRATION, **scope, **token})
+
+
 def test_mobile_clarify_result_retains_batch_and_expiry_semantics():
     model = METHODS["mobile.clarify.respond"].result
     assert model.model_validate({"status": "ok", "remaining": ["second"]}).remaining == ["second"]

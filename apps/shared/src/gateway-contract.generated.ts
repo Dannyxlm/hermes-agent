@@ -2955,17 +2955,19 @@ export interface MobilePushRefreshParams {
   installation_id: string
   connection_id: string
   environment: 'production' | 'sandbox'
-  device_token: string
+  device_token?: string | null
   categories?: ('attention' | 'completion')[]
   preview_enabled?: boolean
 }
 export interface MobileRefreshResult {
   updated: number
-  subscriptions: MobileRegistrationResult[]
+  subscriptions: MobileRefreshSubscription[]
 }
-export interface MobileRegistrationResult {
+export interface MobileRefreshSubscription {
   subscription_id: string
   expires_at: number
+  categories?: ('attention' | 'completion')[] | null
+  preview_enabled?: boolean | null
 }
 export interface MobileUnregisterParams {
   installation_id: string
@@ -3183,6 +3185,10 @@ export interface MobilePushRegisterParams {
   device_token: string
   categories?: ('attention' | 'completion')[]
   preview_enabled?: boolean
+}
+export interface MobileRegistrationResult {
+  subscription_id: string
+  expires_at: number
 }
 export interface MobileActivityRegisterParams {
   profile: string

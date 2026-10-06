@@ -20350,8 +20350,16 @@
             "type": "string"
           },
           "device_token": {
-            "title": "Device Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Token"
           },
           "categories": {
             "items": {
@@ -20373,8 +20381,7 @@
         "required": [
           "installation_id",
           "connection_id",
-          "environment",
-          "device_token"
+          "environment"
         ],
         "title": "MobilePushRefreshParams",
         "type": "object"
@@ -20471,7 +20478,7 @@
           },
           "subscriptions": {
             "items": {
-              "$ref": "#/components/schemas/MobileRegistrationResult"
+              "$ref": "#/components/schemas/MobileRefreshSubscription"
             },
             "title": "Subscriptions",
             "type": "array"
@@ -20482,6 +20489,56 @@
           "subscriptions"
         ],
         "title": "MobileRefreshResult",
+        "type": "object"
+      },
+      "MobileRefreshSubscription": {
+        "additionalProperties": false,
+        "properties": {
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "attention",
+                    "completion"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Categories"
+          },
+          "preview_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview Enabled"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "expires_at"
+        ],
+        "title": "MobileRefreshSubscription",
         "type": "object"
       },
       "MobileRegistrationResult": {

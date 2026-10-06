@@ -60,11 +60,13 @@ def normalized_uuid(value):
     return str(uuid.UUID(value))
 
 
-def _validate_delivery(principal, token, environment, kind, categories):
+def _validate_delivery(principal, token, environment, kind, categories, *, allow_missing_token=False):
     if not isinstance(principal, str) or not principal or len(principal) > 256:
         raise ValueError("principal required")
     if kind == "widget" and token == "":
         pass  # A read-only widget can register before WidgetKit issues its token.
+    elif allow_missing_token and kind == "alert" and token is None:
+        pass  # Existing alert leases may only narrow privacy without a fresh token.
     elif not isinstance(token, str) or not re.fullmatch(r"[0-9a-fA-F]{32,512}", token) or len(token) % 2:
         raise ValueError("invalid token")
     if environment not in {"production", "sandbox"} or kind not in {"alert", "activity", "widget"}:
@@ -162,9 +164,10 @@ class PushStore(WidgetPushStore):
     def refresh(self, principal, *, installation_id, connection_id, token, environment,
                 accepts_scope, kind="alert", categories=("attention", "completion"),
                 activity_id="", run_id="", preview_enabled=False):
-        """Rotate existing leases without granting scopes or opening agent runtimes."""
+        """Rotate existing leases; a missing alert token can only narrow their privacy."""
         installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
-        _validate_delivery(principal, token, environment, kind, categories)
+        privacy_only = kind == "alert" and token is None
+        _validate_delivery(principal, token, environment, kind, categories, allow_missing_token=privacy_only)
         if not isinstance(preview_enabled, bool):
             raise ValueError("preview_enabled must be a boolean")
         if kind == "activity" and (not isinstance(activity_id, str) or not 1 <= len(activity_id) <= 128
@@ -185,11 +188,16 @@ class PushStore(WidgetPushStore):
         receipts = []
         with self.transaction() as db:
             for row, scope in accepted:
-                expiry = row["expires_at"] if kind == "activity" else now + 30 * 86400
+                expiry = row["expires_at"] if kind == "activity" or privacy_only else now + 30 * 86400
+                allowed = set(categories)
+                if privacy_only:
+                    allowed.intersection_update(json.loads(row["categories"]))
+                preview = preview_enabled and kind == "alert" and (not privacy_only or row["preview_enabled"])
                 changed = db.execute("""UPDATE subscriptions SET token=?, categories=?, expires_at=?, preview_enabled=?, version=version+1
                     WHERE id=? AND version=? AND expires_at>?""",
-                    (token.lower(), json.dumps(sorted(set(categories))) if kind == "alert" else row["categories"],
-                     expiry, int(preview_enabled and kind == "alert"), row["id"], row["version"], self.clock())).rowcount
+                    (row["token"] if privacy_only else token.lower(),
+                     json.dumps(sorted(allowed)) if kind == "alert" else row["categories"],
+                     expiry, int(preview), row["id"], row["version"], self.clock())).rowcount
                 if not changed:
                     continue
                 sub = db.execute("SELECT * FROM subscriptions WHERE id=?", (row["id"],)).fetchone()
@@ -197,7 +205,10 @@ class PushStore(WidgetPushStore):
                     run = db.execute("SELECT * FROM runs WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
                     if run:
                         self._enqueue(db, sub, run, scope, f"{run_id}:refreshed:{sub['version']}")
-                receipts.append({"subscription_id": row["id"], "expires_at": expiry})
+                receipt = {"subscription_id": row["id"], "expires_at": expiry}
+                if kind == "alert":
+                    receipt.update(categories=json.loads(sub["categories"]), preview_enabled=bool(sub["preview_enabled"]))
+                receipts.append(receipt)
         return {"updated": len(receipts), "subscriptions": receipts}
 
     def unregister(self, principal, *, installation_id, connection_id, subscription_id=None, kind=None, surface=None):

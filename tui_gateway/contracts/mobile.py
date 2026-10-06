@@ -168,13 +168,13 @@ class MobileRegistrationParams(Params):
 
 
 class MobilePushRefreshParams(MobileRegistrationParams):
-    device_token: str
+    device_token: str | None = None  # missing token permits only privacy narrowing of existing leases
     categories: list[Literal["attention", "completion"]] = Field(default_factory=lambda: ["attention", "completion"])
     preview_enabled: bool = False
 
 
 class MobilePushRegisterParams(MobilePushRefreshParams, MobileScopeParams):
-    pass
+    device_token: str
 
 
 class MobileActivityRefreshParams(MobileRegistrationParams):
@@ -192,9 +192,14 @@ class MobileRegistrationResult(Result):
     expires_at: float
 
 
+class MobileRefreshSubscription(MobileRegistrationResult):
+    categories: list[Literal["attention", "completion"]] | None = None
+    preview_enabled: bool | None = None
+
+
 class MobileRefreshResult(Result):
     updated: int
-    subscriptions: list[MobileRegistrationResult]
+    subscriptions: list[MobileRefreshSubscription]
 
 
 class MobileUnregisterParams(Params):
@@ -218,7 +223,7 @@ class MobileStoredSessionParams(Params):
 
 
 class MobileSessionPushRegisterParams(MobilePushRefreshParams, MobileStoredSessionParams):
-    pass
+    device_token: str
 
 
 class MobileSessionActivityRegisterParams(MobileActivityRefreshParams, MobileStoredSessionParams):
