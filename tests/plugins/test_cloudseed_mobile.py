@@ -211,10 +211,12 @@ def test_memory_closed_names_size_and_symlinks(client):
     assert c.post(P+'/memory/write', json={'section': 'soul', 'content': ''}).status_code == 400
 
 
-def test_account_display_saved_nickname():
+@pytest.mark.parametrize('label', ['DANNY-ANT', 'SJ-ANT', 'SYB-Codex', 'Work Max', 'Personal (Max) 2._-', 'W ' * 19 + 'WW'],
+                         ids=['danny-ant', 'sj-ant', 'syb-codex', 'spaces', 'alphabet', 'nickname-limit'])
+def test_account_display_saved_key_name(label):
     from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label='Work Max', auth_type='oauth', access_token='')
-    assert _safe_entry_label(entry, 3) == 'Work Max'
+    entry = SimpleNamespace(label=label, auth_type='oauth', access_token='')
+    assert _safe_entry_label(entry, 3) == label
 
 
 def _display_test_jwt(claims):
@@ -223,78 +225,33 @@ def _display_test_jwt(claims):
     return 'fixture.' + payload + '.fixture'
 
 
-def test_account_display_token_like_label_uses_jwt_email():
-    from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label='a' * 20, auth_type='oauth',
-                            access_token=_display_test_jwt({'email': 'ada@example.com'}))
-    assert _safe_entry_label(entry, 3) == 'ada@example.com'
-
-
-def test_account_display_missing_identity_is_generic():
-    from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label=None, auth_type='oauth', access_token=None)
-    assert _safe_entry_label(entry, 7) == 'Account 7'
-
-
-def test_account_display_id_token_email():
-    from agent.credential_pool import PooledCredential
-    from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = PooledCredential.from_dict('openai-codex', {
-        'id': 'fixture', 'label': '', 'auth_type': 'oauth',
-        'id_token': _display_test_jwt({'email': 'ada@example.com'}),
-    })
-    assert _safe_entry_label(entry, 2) == 'ada@example.com'
-
-
-def test_account_display_namespaced_oauth_email():
-    from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label='', auth_type='oauth', access_token=_display_test_jwt({
-        'https://api.openai.com/profile': {'email': 'ada@example.com'},
-    }))
-    assert _safe_entry_label(entry, 1) == 'ada@example.com'
-
-
 @pytest.mark.parametrize('label', [
     'sk-fictional', 'Bearer fixture', 'SK-fictional', 'bearer fixture',
-    'a' * 20, 'a' * 19 + '/', 'a' * 19 + '=',
-    'x ' * 21, 'a.b.' * 19 + 'ab@example.com',
-    'ada\n@example.com', 'Work\x00Max', 'Work\x7fMax', 'Work\x85Max',
-    ' ', '', None, 12, 'Work <Max>', 'ada@@example.com',
-    'ada@-example.com', 'ada@example', 'ada..test@example.com',
-    'a' * 20 + '@example.com', 'sk-ada@example.com', 'Bearer@example.com',
-], ids=[f'case-{i}' for i in range(25)])
-def test_account_display_rejects_unsafe_candidates(label):
+    'a' * 20, 'a' * 19 + '/', 'a' * 19 + '=', 'x ' * 21,
+    'Work\nMax', 'Work\x00Max', 'Work\x7fMax', 'Work\x85Max',
+    ' ', '', None, 12, 'Work <Max>',
+    'ada@example.com', 'synthetic@example.invalid', 'DANNY@ANT',
+], ids=[f'case-{i}' for i in range(20)])
+def test_account_display_rejects_unsafe_or_email_labels(label):
     from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label=label, auth_type='oauth', access_token=_display_test_jwt({'email': label}),
+    entry = SimpleNamespace(label=label, auth_type='oauth', access_token=_display_test_jwt({'email': 'ada@example.com'}),
                             last_error_message='Work Max')
     assert _safe_entry_label(entry, 4) == 'Account 4'
 
 
-@pytest.mark.parametrize('label', [
-    'Work Max', 'Personal (Max) 2._-', 'W ' * 19 + 'WW',
-    'ada@example.com', 'a.b.' * 16 + 'abcd@example.com',
-], ids=['nickname', 'alphabet', 'nickname-limit', 'email', 'email-limit'])
-def test_account_display_saved_label_has_priority(label):
+@pytest.mark.parametrize('extra', [{}, {'id_token': 'x'}], ids=['access-token', 'id-token'])
+def test_account_display_never_reads_token_email(extra):
     from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label=label, auth_type='oauth',
-                            access_token=_display_test_jwt({'email': 'other@example.com'}))
-    assert _safe_entry_label(entry, 4) == label
+    jwt = _display_test_jwt({'email': 'ada@example.com', 'https://api.openai.com/profile': {'email': 'ada@example.com'}})
+    entry = SimpleNamespace(label='', auth_type='oauth', access_token=jwt,
+                            extra={'id_token': jwt} if extra else None)
+    assert _safe_entry_label(entry, 7) == 'Account 7'
 
 
-@pytest.mark.parametrize('token', ['', 'not-a-jwt', 'fixture.!.fixture',
-                                  _display_test_jwt([]), 12],
-                         ids=['empty', 'opaque', 'bad-base64', 'non-object', 'non-string'])
-def test_account_display_malformed_claims_are_generic(token):
+def test_account_display_missing_label_is_generic():
     from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label='', auth_type='oauth', access_token=token)
-    assert _safe_entry_label(entry, 5) == 'Account 5'
-
-
-def test_account_display_api_key_claims_not_used():
-    from plugins.cloudseed_mobile.account_render import _safe_entry_label
-    entry = SimpleNamespace(label='', auth_type='api_key',
-                            access_token=_display_test_jwt({'email': 'ada@example.com'}))
-    assert _safe_entry_label(entry, 5) == 'Account 5'
+    entry = SimpleNamespace(label=None, auth_type='oauth', access_token=None)
+    assert _safe_entry_label(entry, 7) == 'Account 7'
 
 
 def test_account_primary_cas_uses_native_store(client):
@@ -316,7 +273,9 @@ def test_account_primary_cas_uses_native_store(client):
     assert [a['priority'] for a in accounts] == [0, 1]
     assert accounts[0]['is_primary'] and not accounts[1]['is_primary']
     assert accounts[0]['label'] == 'Account 1'  # token-like saved label rejected
-    assert accounts[1]['label'] == 'synthetic@example.invalid'
+    assert accounts[1]['label'] == 'Account 2'  # email-shaped label never shown
+    assert 'synthetic@example.invalid' not in response.text
+    assert 'synthetic-private-label' not in response.text
     section = next(p for p in response.json()['providers'] if p['id'] == 'openai-codex')
     body = {'provider': 'openai-codex', 'account_id': 'second', 'profile_id': 'default', 'revision': section['revision']}
     changed = c.post(P+'/provider/accounts/primary', json=body)
