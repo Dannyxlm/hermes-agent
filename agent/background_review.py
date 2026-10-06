@@ -487,7 +487,9 @@ _SKILL_REVIEW_PROMPT = (
     "name MUST be at the class level. The name MUST NOT be a specific PR number, error string, "
     "feature codename, library-alone name, or 'fix-X / debug-Y / audit-Z-today' session artifact. "
     "If the proposed name only makes sense for today's task, it's wrong — fall back to (1), (2), "
-    "or (3).\n\n"
+    "or (3). skill_manage answers your first create of a name with the closest existing skills; "
+    "patch one of them when it covers the same class, and repeat the create only when the new "
+    "skill is genuinely a different class.\n\n"
     "Read-before-write (ENFORCED — skill_manage refuses otherwise): before you patch or edit an "
     "existing skill's SKILL.md, call skill_view(name) for that skill during this review. Before "
     "you overwrite or remove an EXISTING supporting file, call skill_view(name, file_path=...) for "
@@ -555,7 +557,9 @@ _COMBINED_REVIEW_PROMPT = (
     "probes). Add a one-line pointer in SKILL.md so future agents find them.\n"
     "  4. CREATE A NEW CLASS-LEVEL UMBRELLA when nothing exists. Name at the class level — NOT a "
     "PR number, error string, codename, library-alone name, or 'fix-X / debug-Y' session artifact. "
-    "If the name only fits today's task, fall back to (1), (2), or (3).\n\n"
+    "If the name only fits today's task, fall back to (1), (2), or (3). Your first create of a "
+    "name is answered with the closest existing skills: patch one of them when it covers the "
+    "same class; repeat the create only for a genuinely different class.\n\n"
     "Read-before-write (ENFORCED — skill_manage refuses otherwise): before patching or editing an "
     "existing skill's SKILL.md, call skill_view(name) during this review; before overwriting or "
     "removing an EXISTING supporting file, call skill_view(name, file_path=...) for that exact "
@@ -1351,8 +1355,14 @@ def spawn_background_review_thread(
         )
 
     def _target() -> None:  # resolves _run_review_in_thread at call time (tests patch it)
+        # Built in the worker thread: it reads the skill ledger, which the turn must not wait on.
+        run_prompt = prompt
+        if review_skills:
+            from agent.background_review_skills import session_skill_activity_block
+            run_prompt += session_skill_activity_block(
+                (getattr(agent, "session_id", None), getattr(agent, "_parent_session_id", None)))
         _run_review_in_thread(
-            agent, messages_snapshot, prompt, task_cfg=task_cfg, review_run=review_run,
+            agent, messages_snapshot, run_prompt, task_cfg=task_cfg, review_run=review_run,
             review_memory=review_memory, explicit=explicit)
 
     return _target, prompt

@@ -33,11 +33,13 @@ def _resolved_str(path: Path) -> str:
 
 
 class _BackgroundReviewReadMarks:
-    """Read marks shared by copied tool contexts within one review run."""
+    """Read marks shared by copied tool contexts within one review run, plus the skill names whose
+    create already met the overlap speed bump in this run."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._paths: set[str] = set()
+        self._overlap_warned: set[str] = set()
 
     def add(self, path: str) -> None:
         with self._lock:
@@ -46,6 +48,13 @@ class _BackgroundReviewReadMarks:
     def contains(self, path: str) -> bool:
         with self._lock:
             return path in self._paths
+
+    def warn_overlap_once(self, name: str) -> bool:
+        """True the first time ``name`` is seen in this run, False on every repeat."""
+        with self._lock:
+            first = name not in self._overlap_warned
+            self._overlap_warned.add(name)
+            return first
 
 
 _background_review_read_paths: "_ctxvars.ContextVar[Optional[_BackgroundReviewReadMarks]]" = (
@@ -228,6 +237,25 @@ def _background_review_read_before_write_guard(
         f"skill_view(name, file_path=...) for a supporting file, then retry the write using the "
         f"content just returned.",
         _read_before_write_required=True)
+
+
+def _background_review_overlap_guard(name: str, content: str) -> Optional[Dict[str, Any]]:
+    """One-time speed bump on autonomous creates: the first create of ``name`` in a review run is
+    refused with the closest installed skills, so the fork compares before minting a sibling of
+    something that already exists (its cached skill index predates skills created earlier in the
+    same session). Repeating the create in the same run goes through. Runs without the seeded
+    per-run store (every real review and curator fork seeds it) skip the bump rather than refuse
+    forever."""
+    if not _is_background_review():
+        return None
+    marks = _background_review_read_paths.get()
+    if marks is None or not marks.warn_overlap_once(name):
+        return None
+    from tools.skill_overlap import format_overlap_refusal, overlap_candidates_or_none
+    if not (matches := overlap_candidates_or_none(name, content)):
+        return None
+    return _refusal(format_overlap_refusal(name, matches), overlap_candidates=matches,
+                    _overlap_check=True)
 
 
 def _background_review_preflight(action: str, name: str) -> Optional[Dict[str, Any]]:
