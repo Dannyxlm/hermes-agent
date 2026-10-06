@@ -24,35 +24,22 @@ def _entry_pool_retry_after(entry):
     return until.isoformat().replace('+00:00', 'Z') if until else None
 
 
-def _valid_display_label(value, *, email=False):
+def _valid_display_label(value):
+    """A saved key name such as "DANNY-ANT": short, plain, never an email or token."""
     if not isinstance(value, str) or not value.strip():
         return False
-    if (len(value) > (80 if email else 40)
-            or re.search(r'sk-|Bearer|[\x00-\x1f\x7f-\x9f]|[A-Za-z0-9+/=_\-]{20,}', value, re.IGNORECASE)):
+    if (len(value) > 40
+            or re.search(r'sk-|Bearer|@|[\x00-\x1f\x7f-\x9f]|[A-Za-z0-9+/=_\-]{20,}', value, re.IGNORECASE)):
         return False
-    pattern = (r'[A-Za-z0-9]+(?:[._+\-][A-Za-z0-9]+)*@'
-               r'(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}'
-               if email else r'[A-Za-z0-9 ._()\-]+')
-    return re.fullmatch(pattern, value) is not None
+    return re.fullmatch(r'[A-Za-z0-9 ._()\-]+', value) is not None
 
 
 def _safe_entry_label(entry, index):
-    # Saved labels are untrusted; never expose token fragments or provider errors.
+    # Show only the owner's saved key name. Saved labels are untrusted: emails,
+    # token fragments and provider errors fall back to a closed label. Token
+    # claims are never read for display (owner decision 2026-10-05: key names only).
     label = getattr(entry, 'label', None)
-    if _valid_display_label(label) or _valid_display_label(label, email=True):
-        return label
-    if getattr(entry, 'auth_type', None) == 'oauth':
-        # Unverified claims are display hints only, never an authorization identity.
-        extra = getattr(entry, 'extra', None)
-        id_token = extra.get('id_token') if isinstance(extra, dict) else None
-        for token in (id_token, getattr(entry, 'access_token', None)):
-            claims = _decode_jwt_claims_unverified(token)
-            profile = claims.get('https://api.openai.com/profile')
-            nested_email = profile.get('email') if isinstance(profile, dict) else None
-            for email in (claims.get('email'), nested_email):
-                if _valid_display_label(email, email=True):
-                    return email
-    return f'Account {index}'
+    return label if _valid_display_label(label) else f'Account {index}'
 
 
 def _decode_jwt_claims_unverified(token):
