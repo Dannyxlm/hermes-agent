@@ -220,6 +220,43 @@ Existing completion events still carry their original result text to their owner
 Errors: 401/403 owner/scope, 400 malformed query/profile, 404 missing profile,
 422 absent required query fields, 503 unreadable/corrupt existing session store.
 
+### Worker discovery without attaching
+
+`GET /api/plugins/cloudseed_mobile/session-activity/batch?profile=<name>&stored_session_id=<a>&stored_session_id=<b>`
+accepts 1–50 distinct IDs (1–512 characters each; no NUL or whitespace-only IDs).
+The existing single-session endpoint and its response are unchanged. The batch
+returns `{version:1, profile, epoch, complete:true, sessions:[...]}` in request
+order. Every session has the single-route fields above plus:
+
+```json
+{"subagents":[{"subagent_id":"child","status":"running","started_at":1791130000.0}],"subagents_complete":true,"processes":[{"session_id":"proc_example","status":"running","started_at":1791130000.0}],"processes_complete":true}
+```
+
+These arrays contain current worker metadata only. Agent status is `running|queued`;
+process status is `running`; timestamps are optional Unix seconds. Arrays are null
+when their registry cannot be read. A false per-domain completeness flag means
+positive returned items remain useful, but missing items cannot be cleared. In
+particular, old records lacking captured profile/conversation provenance are not
+attributed and make their domain incomplete. No commands, goals, output, file
+paths, runtime handles, or control authority are returned.
+
+The active registry cannot enumerate children between construction and admission.
+While a scoped delegation call or asynchronous unit is still in progress, its
+subagent snapshot is conservatively incomplete. Existing positive rows remain
+visible; no queued identity is invented. Completeness returns when those owners
+settle, including construction rejection and worker failure.
+
+Worker registration captures resolved profile home and the durable conversation.
+Nested delegates inherit that identity from their exact registered parent, and
+their processes capture it before the child registry entry can disappear. Process
+checkpoints preserve the fields; old checkpoints leave them unknown. Read-only
+compression lineage resolves the captured durable key; a branched conversation
+does not inherit the original conversation's work. This endpoint reads the same
+in-process registries as the native gateway, so the bundled plugin must mount in
+that process. An isolated user-plugin host is not a substitute for this evidence.
+Snapshot epochs describe the current process, independently of event sequence
+numbers. Completeness applies to each queried domain, never global task history.
+
 ## Files & deliverables (Hermex R3)
 
 All endpoints below are read-only capabilities on the same owner-guarded router.

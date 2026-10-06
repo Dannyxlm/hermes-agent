@@ -9,7 +9,7 @@ import hashlib
 import json
 import sqlite3
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from hermes_cli.config import load_config
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
@@ -17,7 +17,7 @@ from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, Pho
 from plugins.cloudseed_mobile.iphone_reminders import ReminderOutbox, ReminderError
 from plugins.cloudseed_mobile import provider_accounts as accounts
 from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write_memory
-from plugins.cloudseed_mobile.session_activity import session_activity
+from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
 
 MAX_BODY = 1024 * 1024
@@ -247,6 +247,11 @@ def workspace_stream(request: Request, profile: str, workspace_id: str | None = 
 @router.get('/session-activity')
 def activity(profile: str, stored_session_id: str):
     return guarded(lambda: session_activity(profile, stored_session_id))
+
+
+@router.get('/session-activity/batch')
+def activity_batch(profile: str, stored_session_id: list[str] = Query(...)):
+    return guarded(lambda: session_activity_batch(profile, stored_session_id))
 
 
 @router.get('/provider/accounts')

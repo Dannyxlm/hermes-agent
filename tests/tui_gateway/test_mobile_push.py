@@ -550,3 +550,35 @@ def test_cancelled_attention_does_not_deliver_stale_alert(delivery, old_delivery
     service.record(scope, run["run_id"], "new-question", "waitingForApproval")
     assert service.drain_once() == 1
     assert sender.jobs[0]["payload"]["hermex.status"] == "waitingForApproval"
+
+
+@pytest.mark.parametrize('status', ['waitingForApproval', 'waitingForClarification'])
+@pytest.mark.parametrize('policy', ['enabled', 'opted-out', 'foreground', 'other-device'])
+def test_activity_attention_cue_honors_current_scoped_alert_preference(delivery, status, policy):
+    service, sender, now, ids, _ = delivery
+    scope = Scope('native_session', 'default', 'stored')
+    alert_ids = ids if policy != 'other-device' else {**ids, 'installation_id': str(uuid.uuid4())}
+    service.register('p', scope, **alert_ids, token='aa' * 32, environment='production', categories=['attention'])
+    run = service.start_run(scope)
+    service.register('p', scope, **ids, token='cc' * 32, environment='production',
+                     kind='activity', activity_id='activity', run_id=run['run_id'])
+    service.record(scope, run['run_id'], 'approval', status)
+    if policy == 'opted-out':
+        service.register('p', scope, **ids, token='aa' * 32, environment='production', categories=[])
+    if policy == 'foreground':
+        service.store.presence('p', scope, **ids, foreground=True)
+    now[0] += 1
+    service.drain_once()
+    aps = next(job['payload']['aps'] for job in sender.jobs if job['kind'] == 'activity')
+    assert aps['content-state']['status'] == status
+    assert aps['relevance-score'] == 100
+    assert ('alert' in aps) == (policy == 'enabled')
+    if policy == 'enabled':
+        assert 'Open the app' in aps['alert']['body']
+        assert 'stored' not in json.dumps(aps['alert'])
+    service.record(scope, run['run_id'], 'resumed', 'thinking')
+    now[0] += 11
+    service.drain_once()
+    latest = [job for job in sender.jobs if job['kind'] == 'activity'][-1]['payload']['aps']
+    assert 'alert' not in latest
+    assert latest['relevance-score'] < aps['relevance-score']

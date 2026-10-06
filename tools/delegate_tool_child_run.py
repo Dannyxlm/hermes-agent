@@ -358,8 +358,14 @@ def _register_child(
             owner_session_id = get_session_env("HERMES_UI_SESSION_ID", "") or None
     if owner_session_id and (owner_transport is None or owner_session_record is None):
         owner_transport, owner_session_record = _capture_gateway_steer_authority(owner_session_id)
+    from tools.activity_provenance import worker_provenance
+    provenance = worker_provenance(
+        _str_or_none(getattr(child, "_parent_session_id", None))
+        or _str_or_none(getattr(parent_agent, "session_id", None)) or "",
+        _str_or_none(getattr(parent_agent, "_subagent_id", None)))
     _raw_depth = getattr(child, "_delegate_depth", 1)
     _register_subagent({
+        **provenance,
         "subagent_id": _subagent_id,
         "parent_id": _str_or_none(getattr(child, "_parent_subagent_id", None)),
         "depth": max(0, _raw_depth - 1) if isinstance(_raw_depth, int) else 0,

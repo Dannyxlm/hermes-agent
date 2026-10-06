@@ -98,6 +98,7 @@ def activity_payload(run, scope, now):
     if run.get("activity_expired"):
         content["currentActivity"] = "Open app for current status"
     aps = {"timestamp": int(run["updated_at"]), "event": "end" if final else "update",
-           "content-state": content}
+           "content-state": content,
+           "relevance-score": 100 if run["status"] in ATTENTION else 0 if final else 10}
     aps["dismissal-date" if final else "stale-date"] = int(now + (300 if final else 120))
     return {"aps": aps}

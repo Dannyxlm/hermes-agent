@@ -401,6 +401,17 @@ class PushStore(WidgetPushStore):
                 # Order published states rather than adding future seconds for token events.
                 # A second transition this second waits until the next real clock second.
                 aps = job["payload"]["aps"]
+                if aps["content-state"]["status"] in ATTENTION:
+                    # Alert only for this device's opted-in destination, evaluated
+                    # at delivery so a queued update respects a later opt-out.
+                    alert = db.execute("""SELECT a.* FROM subscriptions a JOIN subscriptions live
+                        ON a.principal=live.principal AND a.installation_id=live.installation_id
+                        AND a.connection_id=live.connection_id AND a.scope=live.scope
+                        WHERE live.id=? AND a.kind='alert' AND a.expires_at>?
+                        AND EXISTS (SELECT 1 FROM json_each(a.categories) WHERE value='attention')""",
+                        (job["subscription_id"], now)).fetchone()
+                    if alert is not None and not self._foreground(db, alert):
+                        aps["alert"] = generic_alert(aps["content-state"]["status"])
                 aps["timestamp"] = int(now)
                 aps["dismissal-date" if aps["event"] == "end" else "stale-date"] = int(now + (300 if aps["event"] == "end" else 120))
                 db.execute("UPDATE subscriptions SET last_timestamp=? WHERE id=?", (int(now), job["subscription_id"]))

@@ -36,6 +36,7 @@ from tools.process_registry_notifications import format_process_notification
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
+from tools.process_registry_activity import new_process_session
 
 logger = logging.getLogger(__name__)
 
@@ -543,6 +544,8 @@ class ProcessSession:
     owner_task_id: str = ""                     # RAW spawning task id ("sa-..."); ownership
                                                 # checks must use this, not task_id
     session_key: str = ""                       # Gateway session key (reset protection)
+    owner_profile_home: str = ""                # Captured at spawn; empty on old checkpoints.
+    owner_conversation_id: str = ""             # Durable root, including delegated descendants.
     pid: Optional[int] = None
     process: Optional[subprocess.Popen] = None  # Popen handle (local only)
     env_ref: Any = None                         # Environment object (sandbox spawns)
@@ -646,7 +649,7 @@ _WATCHER_ROUTE_KEYS = ("platform", "chat_id", "user_id", "user_name", "thread_id
 # ``session_id``; ``command`` is redacted and ``owner_task_id`` defaulted on write).
 _CHECKPOINT_FIELDS = (
     "command", "pid", "pid_scope", "host_start_time", "systemd_unit", "wsl_chain", "cwd",
-    "started_at", "task_id", "owner_task_id", "session_key",
+    "started_at", "task_id", "owner_task_id", "session_key", "owner_profile_home", "owner_conversation_id",
     *(f"watcher_{k}" for k in _WATCHER_ROUTE_KEYS), "watcher_interval",
     "parent_session_id", "notify_on_complete", "completion_output_chars", "watch_patterns",
     "heartbeat_seconds", "persist_on_release")
@@ -1099,16 +1102,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
 
     # ----- Spawn -----
 
-    @staticmethod
-    def _new_session(command, task_id, owner_task_id, session_key, cwd, **extra) -> ProcessSession:
-        from gateway.session_context import get_session_env
-
-        return ProcessSession(
-            id=f"proc_{uuid.uuid4().hex[:12]}", command=command, task_id=task_id,
-            owner_task_id=owner_task_id, session_key=session_key, cwd=cwd,
-            parent_session_id=get_session_env("HERMES_SESSION_ID", ""),
-            wsl_chain=_is_wsl_launcher_command(command),
-            started_at=time.time(), **extra)
+    _new_session = staticmethod(new_process_session)
 
     @staticmethod
     def _env_temp_dir(env: Any) -> str:
