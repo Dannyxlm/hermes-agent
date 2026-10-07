@@ -378,11 +378,20 @@ class DeliverablesIndex:
                 sql='WITH ranked AS (SELECT id,sort_time,data,ROW_NUMBER() OVER (PARTITION BY id ORDER BY recent DESC,sort_time,sid) rank FROM entries WHERE '+where+') SELECT id,sort_time,data FROM ranked WHERE '+outer+' ORDER BY sort_time,id LIMIT ?'
                 fetched=list(db.execute(sql,(*params,limit+1)))
                 items=[]
+                histories={rid: [] for rid, _, _ in fetched[:limit]}
+                if histories:
+                    # Each correlated keyset stops at 21 rows; bodies outside that
+                    # bound are never hydrated, even for heavily repeated files.
+                    values=','.join('(?,?)' for _ in histories)
+                    args=[value for ordinal,rid in enumerate(histories) for value in (rid,ordinal)]
+                    history_sql='WITH requested(id,ordinal) AS (VALUES '+values+') SELECT requested.id,e.data FROM requested JOIN entries e ON e.rowid IN (SELECT rowid FROM entries WHERE generation=? AND id=requested.id ORDER BY sort_time LIMIT 21) ORDER BY requested.ordinal,e.sort_time,e.rowid'
+                    for rid,data in db.execute(history_sql,(*args,meta.get('generation'))):
+                        histories[rid].append((data,))
                 for rid,sort_time,data in fetched[:limit]:
                     row=json.loads(data)
                     # Occurrence history is bounded independently of file count.
                     history={}
-                    history_rows=list(db.execute('SELECT data FROM entries WHERE generation=? AND id=? ORDER BY sort_time LIMIT 21',(meta.get('generation'),rid)))
+                    history_rows=histories[rid]
                     for (other,) in history_rows[:20]:
                         for occurrence in json.loads(other)['occurrences']:
                             if lineage and occurrence['stored_session_id'] not in lineage: continue

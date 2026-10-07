@@ -26,9 +26,29 @@ def _lineages(home, ids):
     # A batch opens one read-only connection, never SessionDB (which can migrate).
     db = sqlite3.connect(read_only_db_uri(path), uri=True, timeout=1)
     try:
-        for sid in ids:
-            parents[sid] = [row[0] for row in db.execute(
-                _LINEAGE_CTE_SQL + ' SELECT id FROM lineage', (sid, sid))]
+        sql = """
+            WITH RECURSIVE roots(root) AS (VALUES %s),
+            ancestors(root,id) AS (
+                SELECT root,root FROM roots
+                UNION
+                SELECT a.root,parent.id FROM ancestors a
+                JOIN sessions child ON child.id=a.id
+                JOIN sessions parent ON parent.id=child.parent_session_id
+                WHERE parent.end_reason='compression'
+            ),
+            descendants(root,id) AS (
+                SELECT root,root FROM roots
+                UNION
+                SELECT d.root,child.id FROM descendants d
+                JOIN sessions parent ON parent.id=d.id
+                JOIN sessions child ON child.parent_session_id=parent.id
+                WHERE parent.end_reason='compression'
+            )
+            SELECT root,id FROM ancestors UNION SELECT root,id FROM descendants
+        """ % ','.join('(?)' for _ in ids)
+        parents = {sid: [] for sid in ids}
+        for root, member in db.execute(sql, ids):
+            parents[root].append(member)
     finally:
         db.close()
     return parents
@@ -95,6 +115,26 @@ def _scoped_workers(rows, home, parents, identity):
     return result, complete
 
 
+def _worker_batches(rows, home, reverse, roots):
+    if not isinstance(rows, list):
+        return {root: None for root in roots}
+    batches = {root: [] for root in roots}
+    for row in rows:
+        if (not isinstance(row, dict)
+                or not isinstance(row.get('owner_profile_home'), str)
+                or not row['owner_profile_home']):
+            targets = roots  # Unknown ownership affects every root's completeness.
+        elif row['owner_profile_home'] != home:
+            continue
+        elif not _valid_id(row.get('owner_conversation_id')):
+            targets = roots
+        else:
+            targets = reverse.get(row['owner_conversation_id'], ())
+        for root in targets:
+            batches[root].append(row)
+    return batches
+
+
 def session_activity_batch(profile, stored_session_ids):
     if profile != profile_id():
         raise HTTPException(403, 'Profile not found')
@@ -104,12 +144,18 @@ def session_activity_batch(profile, stored_session_ids):
         raise ValueError('Expected 1 to 50 unique stored session ids')
     home = get_hermes_home()
     lineages = _lineages(home, stored_session_ids)
-    agents, processes = _read_workers(_agent_snapshot), _read_workers(_process_snapshot)
+    reverse = {}
+    for root, members in lineages.items():
+        for member in members:
+            reverse.setdefault(member, []).append(root)
+    owner_home = str(home.resolve())
+    agents = _worker_batches(_read_workers(_agent_snapshot), owner_home, reverse, stored_session_ids)
+    processes = _worker_batches(_read_workers(_process_snapshot), owner_home, reverse, stored_session_ids)
     sessions = []
     for sid in stored_session_ids:
         parents = set(lineages[sid])
-        subagents, agents_complete = _scoped_workers(agents, str(home.resolve()), parents, 'subagent_id')
-        jobs, processes_complete = _scoped_workers(processes, str(home.resolve()), parents, 'session_id')
+        subagents, agents_complete = _scoped_workers(agents[sid], owner_home, parents, 'subagent_id')
+        jobs, processes_complete = _scoped_workers(processes[sid], owner_home, parents, 'session_id')
         sessions.append({'version': 1, 'profile': profile, 'stored_session_id': sid,
                          'epoch': registry.epoch, 'complete': True, 'tasks': registry.snapshot(home, parents),
                          'subagents': subagents, 'subagents_complete': agents_complete,
