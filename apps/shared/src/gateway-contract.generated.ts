@@ -1928,6 +1928,75 @@ export interface ClientCapabilitiesResult {
   server_requests: string[]
   declines_not_shown?: boolean
 }
+export interface MediaUploadBeginParams {
+  session_id: string
+  profile?: string | null
+  filename: string
+  size: number
+  mime?: string | null
+}
+export interface MediaUploadBeginResult {
+  upload_id: string
+  upload_path: string
+  offset: number
+  size: number
+  chunk_bytes: number
+  max_bytes: number
+  max_seconds: number
+  expires_in: number
+}
+export interface MediaUploadCancelParams {
+  session_id: string
+  profile?: string | null
+  upload_id: string
+}
+export interface MediaUploadCancelResult {
+  cancelled: boolean
+}
+export interface VideoAttachParams {
+  session_id: string
+  profile?: string | null
+  upload_id: string
+  filename?: string | null
+}
+export interface VideoAttachResult {
+  attached: boolean
+  name: string
+  path: string
+  ref_path: string
+  ref_text: string
+  bytes: number
+  duration_s: number
+  width: number
+  height: number
+  has_audio: boolean
+  evidence: VideoEvidenceSummary
+}
+export interface VideoEvidenceSummary {
+  status: string
+  poster_path?: string | null
+  contact_sheet_path?: string | null
+  frame_count: number
+  transcript_status: string
+  errors: string[]
+}
+export interface VideoEvidenceParams {
+  session_id: string
+  profile?: string | null
+  path: string
+  queue_contact_sheet?: boolean
+}
+export interface VideoEvidenceResult {
+  status: string
+  poster_path?: string | null
+  contact_sheet_path?: string | null
+  frame_count: number
+  transcript_status: string
+  errors: string[]
+  path: string
+  running: boolean
+  queued_image_paths: string[]
+}
 /** ``text`` is normally a string; the relay / hosted paths may hand a structured (parts list) payload, and the busy path renders it. Truncation (rewind / edit / regenerate) needs explicit consent: ``confirm_truncate`` plus one durable target (``truncate_before_row_id`` preferred, ``truncate_before_message_id``, or the legacy ``truncate_before_user_ordinal``). */
 export interface PromptSubmitParams {
   session_id: string
@@ -3090,6 +3159,14 @@ export interface MobileCapabilitiesResult {
   feature_versions?: Record<string, number> | null
   max_history_limit: number
   max_roster_limit: number
+  video_upload?: VideoUploadLimits | null
+}
+/** Advertised in ``mobile.capabilities.video_upload`` (feature ``video_upload`` v1). */
+export interface VideoUploadLimits {
+  max_bytes: number
+  max_seconds: number
+  chunk_bytes: number
+  extensions: string[]
 }
 export interface MobileBotsParams {
   limit?: number
@@ -5595,6 +5672,10 @@ export interface RpcMethods {
   'mcp.servers.status': { params: ProfileParams; result: McpServersStatusResult }
   /** Connect, list tools, disconnect — an OAuth server with no token on disk is reported as not ok. */
   'mcp.servers.test': { params: McpServerNameParams; result: McpServersTestResult }
+  /** Mint a one-use upload slot for a video this session will attach (caps checked here). */
+  'media.upload.begin': { params: MediaUploadBeginParams; result: MediaUploadBeginResult }
+  /** Drop an unfinished upload slot owned by this session. */
+  'media.upload.cancel': { params: MediaUploadCancelParams; result: MediaUploadCancelResult }
   /** Set/clear one author's emoji reaction on a message; returns the row's full reaction list. */
   'message.react': { params: MessageReactParams; result: MessageReactResult }
   'mobile.activity.refresh': { params: MobileActivityRefreshParams; result: MobileRefreshResult }
@@ -5905,6 +5986,10 @@ export interface RpcMethods {
   'vault.unlock': { params: VaultUnlockParams; result: VaultUnlockResult }
   /** Best known verification evidence for a cwd/session; read-only, never runs checks. */
   'verification.status': { params: VerificationStatusParams; result: VerificationStatusResult }
+  /** Claim a completed upload, store it in the session's attachments and start the evidence job. */
+  'video.attach': { params: VideoAttachParams; result: VideoAttachResult }
+  /** Evidence progress for an attached video; optionally queue its contact sheet for the next turn. */
+  'video.evidence': { params: VideoEvidenceParams; result: VideoEvidenceResult }
   /** VAD-bounded push-to-talk; the transcript arrives as a voice.transcript event. */
   'voice.record': { params: VoiceRecordParams; result: VoiceRecordResult }
   /** /voice parity: report, flip voice mode on/off, or toggle speech output. */
@@ -6031,6 +6116,8 @@ export const RPC_METHODS = [
   'mcp.servers.set_api_key',
   'mcp.servers.status',
   'mcp.servers.test',
+  'media.upload.begin',
+  'media.upload.cancel',
   'message.react',
   'mobile.activity.refresh',
   'mobile.activity.register',
@@ -6197,6 +6284,8 @@ export const RPC_METHODS = [
   'vault.sources',
   'vault.unlock',
   'verification.status',
+  'video.attach',
+  'video.evidence',
   'voice.record',
   'voice.toggle',
   'voice.tts',

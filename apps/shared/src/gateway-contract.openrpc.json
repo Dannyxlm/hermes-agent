@@ -1897,6 +1897,42 @@
       }
     },
     {
+      "name": "media.upload.begin",
+      "summary": "Mint a one-use upload slot for a video this session will attach (caps checked here).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MediaUploadBeginParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MediaUploadBeginResult"
+        }
+      }
+    },
+    {
+      "name": "media.upload.cancel",
+      "summary": "Drop an unfinished upload slot owned by this session.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MediaUploadCancelParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MediaUploadCancelResult"
+        }
+      }
+    },
+    {
       "name": "message.react",
       "summary": "Set/clear one author's emoji reaction on a message; returns the row's full reaction list.",
       "params": [
@@ -4881,6 +4917,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/VerificationStatusResult"
+        }
+      }
+    },
+    {
+      "name": "video.attach",
+      "summary": "Claim a completed upload, store it in the session's attachments and start the evidence job.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/VideoAttachParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/VideoAttachResult"
+        }
+      }
+    },
+    {
+      "name": "video.evidence",
+      "summary": "Evidence progress for an attached video; optionally queue its contact sheet for the next turn.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/VideoEvidenceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/VideoEvidenceResult"
         }
       }
     },
@@ -19364,6 +19436,148 @@
         "title": "McpServersTestResult",
         "type": "object"
       },
+      "MediaUploadBeginParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "mime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mime"
+          }
+        },
+        "required": [
+          "session_id",
+          "filename",
+          "size"
+        ],
+        "title": "MediaUploadBeginParams",
+        "type": "object"
+      },
+      "MediaUploadBeginResult": {
+        "additionalProperties": false,
+        "properties": {
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "upload_path": {
+            "title": "Upload Path",
+            "type": "string"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "chunk_bytes": {
+            "title": "Chunk Bytes",
+            "type": "integer"
+          },
+          "max_bytes": {
+            "title": "Max Bytes",
+            "type": "integer"
+          },
+          "max_seconds": {
+            "title": "Max Seconds",
+            "type": "integer"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "upload_id",
+          "upload_path",
+          "offset",
+          "size",
+          "chunk_bytes",
+          "max_bytes",
+          "max_seconds",
+          "expires_in"
+        ],
+        "title": "MediaUploadBeginResult",
+        "type": "object"
+      },
+      "MediaUploadCancelParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "upload_id"
+        ],
+        "title": "MediaUploadCancelParams",
+        "type": "object"
+      },
+      "MediaUploadCancelResult": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "title": "MediaUploadCancelResult",
+        "type": "object"
+      },
       "MessageCompletePayload": {
         "additionalProperties": false,
         "description": "``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` /\n``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) /\n``compute_host_bridge`` (``text`` + ``status``).",
@@ -20352,6 +20566,17 @@
           "max_roster_limit": {
             "title": "Max Roster Limit",
             "type": "integer"
+          },
+          "video_upload": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoUploadLimits"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -41954,6 +42179,311 @@
           "verification"
         ],
         "title": "VerificationStatusResult",
+        "type": "object"
+      },
+      "VideoAttachParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "upload_id": {
+            "title": "Upload Id",
+            "type": "string"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Filename"
+          }
+        },
+        "required": [
+          "session_id",
+          "upload_id"
+        ],
+        "title": "VideoAttachParams",
+        "type": "object"
+      },
+      "VideoAttachResult": {
+        "additionalProperties": false,
+        "properties": {
+          "attached": {
+            "title": "Attached",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "ref_path": {
+            "title": "Ref Path",
+            "type": "string"
+          },
+          "ref_text": {
+            "title": "Ref Text",
+            "type": "string"
+          },
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "has_audio": {
+            "title": "Has Audio",
+            "type": "boolean"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/VideoEvidenceSummary"
+          }
+        },
+        "required": [
+          "attached",
+          "name",
+          "path",
+          "ref_path",
+          "ref_text",
+          "bytes",
+          "duration_s",
+          "width",
+          "height",
+          "has_audio",
+          "evidence"
+        ],
+        "title": "VideoAttachResult",
+        "type": "object"
+      },
+      "VideoEvidenceParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "queue_contact_sheet": {
+            "default": false,
+            "title": "Queue Contact Sheet",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "path"
+        ],
+        "title": "VideoEvidenceParams",
+        "type": "object"
+      },
+      "VideoEvidenceResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "poster_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Poster Path"
+          },
+          "contact_sheet_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Sheet Path"
+          },
+          "frame_count": {
+            "title": "Frame Count",
+            "type": "integer"
+          },
+          "transcript_status": {
+            "title": "Transcript Status",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "queued_image_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Queued Image Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "frame_count",
+          "transcript_status",
+          "errors",
+          "path",
+          "running",
+          "queued_image_paths"
+        ],
+        "title": "VideoEvidenceResult",
+        "type": "object"
+      },
+      "VideoEvidenceSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "poster_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Poster Path"
+          },
+          "contact_sheet_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contact Sheet Path"
+          },
+          "frame_count": {
+            "title": "Frame Count",
+            "type": "integer"
+          },
+          "transcript_status": {
+            "title": "Transcript Status",
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "frame_count",
+          "transcript_status",
+          "errors"
+        ],
+        "title": "VideoEvidenceSummary",
+        "type": "object"
+      },
+      "VideoUploadLimits": {
+        "additionalProperties": false,
+        "description": "Advertised in ``mobile.capabilities.video_upload`` (feature ``video_upload`` v1).",
+        "properties": {
+          "max_bytes": {
+            "title": "Max Bytes",
+            "type": "integer"
+          },
+          "max_seconds": {
+            "title": "Max Seconds",
+            "type": "integer"
+          },
+          "chunk_bytes": {
+            "title": "Chunk Bytes",
+            "type": "integer"
+          },
+          "extensions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Extensions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "max_bytes",
+          "max_seconds",
+          "chunk_bytes",
+          "extensions"
+        ],
+        "title": "VideoUploadLimits",
         "type": "object"
       },
       "VoicePartialPayload": {
