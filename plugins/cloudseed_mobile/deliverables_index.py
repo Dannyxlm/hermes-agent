@@ -152,7 +152,7 @@ class DeliverablesIndex:
         for rid,data,inline in rows:
             if stopped(): break
             row=json.loads(data)
-            recent=row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
+            recent=not row.get('subagent',False) and row.get('availability') not in {'unavailable','deleted'} and row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
             search=' '.join(str(row.get(k) or '') for k in ('display_name','relative_path','source_chat_title')).casefold()
             search+=' '+next((w['name'] for w in self.workspaces if w['id']==row.get('workspace_id')),'').casefold()
             cache.execute('INSERT OR REPLACE INTO prepared_entries VALUES(?,?,?,?,?,?,?,?,?,?,?)',(sid,rid,generation,-(row.get('observed_at') or 0),row.get('workspace_id'),row['kind'],int(row.get('private',False)),int(recent),search,data,inline))
@@ -216,14 +216,14 @@ class DeliverablesIndex:
                 # Old runtimes upsert metadata without removing unknown keys.
                 # Their lineage write is the signal to rebuild after rollback.
                 legacy=cache.execute("SELECT 1 FROM meta WHERE key='lineage'").fetchone() is not None
-                if (not legacy and meta.get('scan_version')==4 and meta.get('source_signature')==signature
+                if (not legacy and meta.get('scan_version')==5 and meta.get('source_signature')==signature
                     and meta.get('grant_signature')==grant_signature and 'scan_signature' not in meta
                     and meta.get('refresh_status') in {'ready','partial'}): return
-                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=4:
-                    reconcile_legacy=legacy or meta.get('scan_version')!=4
+                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=5:
+                    reconcile_legacy=legacy or meta.get('scan_version')!=5
                     generation=meta.get('generation') if meta.get('grant_signature')==grant_signature else None
                     epoch=cache.execute('SELECT COALESCE(MAX(scan_epoch),0) FROM session_nodes').fetchone()[0]
-                    meta={'scan_version':4,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+                    meta={'scan_version':5,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
                     if reconcile_legacy and cache.execute('SELECT 1 FROM segments LIMIT 1').fetchone():
                         meta['legacy_after']=None
                     cache.execute('DELETE FROM staged')
@@ -240,7 +240,7 @@ class DeliverablesIndex:
                     source.set_progress_handler(lambda: int(time.monotonic()>deadline or bool(cancel and cancel.is_set())),1000)
                     source.execute('BEGIN')
                     session_columns={r[1] for r in source.execute('PRAGMA table_info(sessions)')}
-                    selected_columns=['rowid AS scan_rowid']+[c for c in ('id','cwd','parent_session_id','end_reason','archived','hidden','git_metadata_generation','rewind_count') if c in session_columns]
+                    selected_columns=['rowid AS scan_rowid']+[c for c in ('id','cwd','source','parent_session_id','end_reason','archived','hidden','git_metadata_generation','rewind_count') if c in session_columns]
                     if 'title' in session_columns: selected_columns.append('substr(title,1,512) AS title')
                     if 'scan_signature' not in meta:
                         total=source.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
@@ -330,7 +330,7 @@ class DeliverablesIndex:
         source_available=(self.home/'state.db').is_file() and not (self.home/'state.db').is_symlink()
         grants_current=meta.get('grant_signature')==digest(self.workspaces)
         source_current=meta.get('source_signature')==source_signature(self.home)
-        scan_current=not legacy and meta.get('scan_version')==4
+        scan_current=not legacy and meta.get('scan_version')==5
         if not grants_current or not source_available:
             meta.update(partial=True,refresh_status='refresh_pending',generation=None)
         elif not source_current or not scan_current:
@@ -413,6 +413,7 @@ class DeliverablesIndex:
         row=json.loads(result[0])
         if row.get('private') and not reveal: raise HTTPException(403,'Explicit private reveal required')
         if row.get('availability')=='deleted': raise HTTPException(404,'File was deleted or moved')
+        if row.get('availability')=='unavailable': raise HTTPException(404,'File unavailable')
         return row['workspace_id'],row['relative_path']
 
     def content(self,rid,reveal=False):
