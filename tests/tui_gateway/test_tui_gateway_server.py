@@ -17748,13 +17748,19 @@ def test_prompt_submit_preserves_empty_response_without_error(monkeypatch):
 
 
 def test_session_active_list_reports_live_sessions(monkeypatch):
-    class _DB:
-        def get_session_title(self, key):
-            return {"key-a": "Research", "key-b": "Implement"}.get(key, "")
+    # Durable titles come from the batched read-only projection (covered end to end
+    # in test_active_list_projection.py); this test pins the live-row shape.
+    from tui_gateway import inbox_summaries
+
+    titles = {"key-a": "Research", "key-b": "Implement"}
+    monkeypatch.setattr(
+        inbox_summaries,
+        "live_projections",
+        lambda entries, home: {sid: {"title": titles.get(key, "")} for sid, key, _ in entries},
+    )
 
     previous_sessions = dict(server._sessions)
     server._sessions.clear()
-    monkeypatch.setattr(server, "_get_db", lambda: _DB())
     server._sessions["sid-a"] = _session(
         agent=types.SimpleNamespace(model="model-a"),
         history=[{"role": "user", "content": "find docs"}],
