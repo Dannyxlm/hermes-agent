@@ -5,7 +5,9 @@ Extracted from ``hermes_cli.web_server``; app state and helpers are late-bound t
 """
 
 import asyncio
+import os
 import sqlite3
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -77,6 +79,31 @@ def _rows(db, sql: str, cutoff: float) -> List[Dict[str, Any]]:
     return [dict(r) for r in db._conn.execute(sql, (cutoff,)).fetchall()]
 
 
+# Per-state.db tool/skill tallies (agent/insights_usage_cache.py), keyed by the
+# file's identity so a replaced or restored state.db starts cold. Persisted to a
+# sidecar beside state.db (cache/usage-tallies.json) so a dashboard restart does
+# not put the first Usage open back on a full message scan.
+_usage_caches: Dict[tuple, Any] = {}
+_usage_caches_lock = threading.Lock()
+
+
+def _usage_cache_for(profile: Optional[str]):
+    from agent.insights_usage_cache import SessionUsageCache
+
+    path = _session_db_path_for_profile(profile)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (os.path.abspath(path), st.st_dev, st.st_ino)
+    with _usage_caches_lock:
+        cache = _usage_caches.get(key)
+        if cache is None:
+            store = os.path.join(os.path.dirname(key[0]), "cache", "usage-tallies.json")
+            cache = _usage_caches[key] = SessionUsageCache(store_path=store, db_identity=(st.st_dev, st.st_ino))
+        return cache
+
+
 def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
     from agent.insights import InsightsEngine
 
@@ -127,7 +154,7 @@ def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
                    SUM(COALESCE(api_call_count, 0)) as total_api_calls
             FROM sessions WHERE started_at > ?
         """, cutoff)[0]
-        usage = InsightsEngine(db).get_usage_breakdown(days=days)
+        usage = InsightsEngine(db).get_usage_breakdown(days=days, cache=_usage_cache_for(profile))
 
         return {
             "daily": daily,
