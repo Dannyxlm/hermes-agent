@@ -532,7 +532,7 @@ async def get_session_stats(profile: Optional[str] = None):
 
 
 @manage_router.get("/api/sessions/{session_id}")
-async def get_session_detail(session_id: str, profile: Optional[str] = None):
+async def get_session_detail(session_id: str, profile: Optional[str] = None, compact: bool = False):
     def _detail(db):
         sid = _resolve_session_id(db, session_id)
         session = db.get_session(sid) if sid else None
@@ -549,6 +549,10 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None):
         owned = cron_run_scheduler_owned(session, profile)
         if owned is not None:
             session["scheduler_owned"] = owned
+        if compact:
+            # Opt-in phone metadata; Desktop's rich detail stays byte-for-byte unchanged.
+            for key in ("system_prompt", "model_config", "tool_names"):
+                session.pop(key, None)
         return session
 
     return await asyncio.to_thread(_with_db, profile, _detail, read_only=True)

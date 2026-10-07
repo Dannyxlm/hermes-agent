@@ -181,20 +181,32 @@ def _mobile_history_page(db, tip_id, chain, params):
                 return db._encode_content(live.get("content"))
         return content
 
+    def identity_key(role, content, timestamp, call_id, calls, tool_name, kind, metadata):
+        return db._display_identity((role, content_key(role, content, kind, metadata),
+                                     timestamp, call_id, calls, tool_name))
+
     slots = ",".join("?" for _ in chain)
-    partition = "role, mobile_content_key(role, content, display_kind, display_metadata), timestamp, tool_call_id, tool_calls, tool_name"
+    # Stored identities avoid reading every content blob. Mobile historically keys
+    # assistant tool calls by their payload (not stable call IDs), so preserve that
+    # distinction instead of silently changing its existing page/cursor contract.
+    computed = "mobile_display_identity(role, content, timestamp, tool_call_id, tool_calls, tool_name, display_kind, display_metadata)"
+    partition = f"CASE WHEN role = 'assistant' AND tool_calls IS NOT NULL THEN {computed} ELSE COALESCE(display_identity, {computed}) END"
     page_key = (tip_id, tuple(chain), before, limit)
     with db._lock:
         token, rows = history_pages.lookup(db, page_key)
         if rows is None:
-            db._conn.create_function("mobile_content_key", 4, content_key, deterministic=True)
+            db._conn.create_function("mobile_display_identity", 8, identity_key, deterministic=True)
             rows = db._conn.execute(f"""
-                WITH ranked AS (
-                    SELECT *, MIN(id) OVER (PARTITION BY {partition}) AS logical_id,
-                        ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY active DESC, id DESC) AS generation_rank
+                WITH identities AS (
+                    SELECT id, active, {partition} AS identity
                     FROM messages WHERE session_id IN ({slots}) AND (active = 1 OR compacted = 1)
-                ) SELECT * FROM ranked WHERE generation_rank = 1 AND logical_id < ?
-                  ORDER BY logical_id DESC LIMIT ?
+                ), page AS (
+                    SELECT COALESCE(MAX(CASE WHEN active = 1 THEN id END), MAX(id)) AS id,
+                        MIN(id) AS logical_id FROM identities GROUP BY identity
+                    HAVING logical_id < ? ORDER BY logical_id DESC LIMIT ?
+                ) SELECT chosen.*, page.logical_id FROM page
+                  JOIN messages chosen ON chosen.id = page.id
+                  ORDER BY page.logical_id DESC
             """, (*chain, before, limit + 1)).fetchall()
             history_pages.publish(token, page_key, rows)
     has_more = len(rows) > limit
