@@ -8,6 +8,14 @@ from tests.plugins.test_cloudseed_mobile import client, P
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
 
 
+@pytest.fixture(autouse=True)
+def _index_semantics_over_synthetic_paths(monkeypatch):
+    """These tests pin index, keyset and admission semantics over synthetic paths that
+    are never written to disk. Recent's existence check has its own tests in
+    test_deliverables_recent_exists.py."""
+    monkeypatch.setattr(ix.DeliverablesIndex, '_exists', lambda self, row: True)
+
+
 def store(home,root,count=2):
     with sqlite3.connect(home/'state.db') as db:
         db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,cwd TEXT,parent_session_id TEXT,end_reason TEXT,archived INTEGER)')

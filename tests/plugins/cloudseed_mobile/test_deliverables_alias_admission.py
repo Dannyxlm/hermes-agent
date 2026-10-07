@@ -1,9 +1,18 @@
 """Rename containment and published legacy projection recovery."""
 import sqlite3
+import pytest
 from plugins.cloudseed_mobile import deliverables as d, deliverables_index as ix
 from tests.plugins.test_cloudseed_mobile import client, P
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
 from tests.plugins.cloudseed_mobile.test_deliverables_index import store
+
+
+@pytest.fixture(autouse=True)
+def _index_semantics_over_synthetic_paths(monkeypatch):
+    """These tests pin index, keyset and admission semantics over synthetic paths that
+    are never written to disk. Recent's existence check has its own tests in
+    test_deliverables_recent_exists.py."""
+    monkeypatch.setattr(ix.DeliverablesIndex, '_exists', lambda self, row: True)
 
 
 def test_renamed_workspace_deliveries_open_without_new_grants(client):
