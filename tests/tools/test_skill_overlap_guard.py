@@ -97,6 +97,22 @@ def test_review_create_is_first_shown_the_closest_skill_then_allowed_on_repeat(s
     assert second["success"] is True
 
 
+def test_single_skill_library_detects_renamed_near_duplicate(skills_env):
+    from tools.skill_overlap import nearest_skills
+
+    unrelated = skills_env / 'kubernetes-rollouts'
+    (unrelated / 'SKILL.md').unlink()
+    unrelated.rmdir()
+    matches = nearest_skills('personal-identity-paperwork', NEAR_DUPLICATE)
+    assert [match['name'] for match in matches] == ['personal-records-vault']
+    assert matches[0]['score'] > 0.1
+    assert nearest_skills('kubernetes-rollouts', UNRELATED) == []
+    result = _in_review(lambda: _create('personal-identity-paperwork', NEAR_DUPLICATE))
+    assert result['success'] is False
+    assert result['overlap_candidates'][0]['name'] == 'personal-records-vault'
+    assert not (skills_env / 'personal-identity-paperwork').exists()
+
+
 def test_foreground_create_is_not_slowed_by_the_overlap_check(skills_env):
     result = _create("personal-identity-paperwork", NEAR_DUPLICATE)
     assert result["success"] is True

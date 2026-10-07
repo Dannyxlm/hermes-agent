@@ -96,7 +96,8 @@ def nearest_skills(name: str, content: str, *, limit: int = 3,
     total = len(docs)
 
     def _vector(terms: List[str]) -> Dict[str, float]:
-        weights = {t: (1 + math.log(c)) * math.log((total + 1) / (df.get(t, 0) + 1))
+        # Keep shared terms informative even in a one-skill library.
+        weights = {t: (1 + math.log(c)) * (1 + math.log((total + 1) / (df.get(t, 0) + 1)))
                    for t, c in Counter(terms).items()}
         norm = math.sqrt(sum(w * w for w in weights.values())) or 1.0
         return {t: w / norm for t, w in weights.items()}
