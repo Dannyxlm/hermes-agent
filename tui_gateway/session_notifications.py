@@ -164,9 +164,16 @@ def _notif_submit(rid: str, sid: str, session: dict, text: str, what: str, **kwa
     """message.start + _run_prompt_submit for a claimed (running=True) turn; releases on failure."""
     try:
         from gateway.warning_notifications import render_notification
+        metadata = kwargs.get("display_metadata") or {}
+        payload = None
+        if kwargs.get("display_kind"):
+            fields = ("display_text", "delegation_id", "process_ids", "task_count",
+                      "completed_count", "failed_count", "duration_seconds")
+            payload = {"presentation": {"display_kind": kwargs["display_kind"],
+                                         **{key: metadata[key] for key in fields if key in metadata}}}
         with _session_profile_runtime_scope(session):
-            render_notification(lambda: _emit("message.start", sid), platform="tui",
-                                diagnostic=(kwargs.get("display_metadata") or {}).get("notification_category") == "diagnostic")
+            render_notification(lambda: _emit("message.start", sid, payload), platform="tui",
+                                diagnostic=metadata.get("notification_category") == "diagnostic")
         _run_prompt_submit(rid, sid, session, text, **kwargs)
     except Exception as exc:
         _notif_log_failure(what, exc)
@@ -568,6 +575,20 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
     return True
 
 
+def _process_completion_display_metadata(batch, registry) -> dict:
+    """Keep producer output separate from the model-facing completion envelope."""
+    events = [event for event, _text in batch.notifications
+              if not registry.is_completion_consumed(event.get("session_id", ""))]
+    failed = sum(event.get("exit_code") != 0 for event in events)
+    return {"display_text": batch.display_text(registry),
+            "process_ids": [str(event.get("session_id") or "") for event in events],
+            "task_count": len(events), "completed_count": len(events) - failed, "failed_count": failed,
+            "results": [{"process_id": str(event.get("session_id") or ""),
+                         "exit_code": event.get("exit_code"), "body": str(event.get("output") or ""),
+                         **{key: event[key] for key in ("completion_reason", "output_cut") if key in event}}
+                        for event in events]}
+
+
 def _notif_dispatch_completions(sid, session, notifications, registry, deferred):
     from tools.process_registry_notifications import PROCESS_COMPLETE_DISPLAY_KIND, ProcessNotificationBatch
     from tools.async_delegation import claim_event_delivery, complete_event_delivery, release_event_delivery
@@ -599,7 +620,7 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
         if text is not None:
             _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
                           "completion batch dispatch failed", display_kind=PROCESS_COMPLETE_DISPLAY_KIND,
-                          display_metadata={"display_text": batch.display_text(registry)})
+                          display_metadata=_process_completion_display_metadata(batch, registry))
     except Exception:
         for event, _text, claim in claimed:
             release_event_delivery(event, claim)
@@ -779,16 +800,37 @@ def _notification_poller_scoped_loop(stop_event: threading.Event, sid: str, sess
         queue.put(evt)
 
 
+def _notice_preview_text(message: dict) -> str:
+    """Only server-authored typing suppresses envelopes; human prefix lookalikes stay text."""
+    kind = message.get("display_kind")
+    if kind == "hidden":
+        return ""
+    labels = {"async_delegation_complete": "background agent work finished",
+              "process_complete": "background process finished", "internal_notification": "internal notification"}
+    if kind in labels:
+        import json
+        metadata = message.get("display_metadata") or {}
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        return str(metadata.get("display_text") or labels[kind])
+    return _content_display_text(message.get("content", message.get("text", "")))
+
+
 def _async_delegation_display_metadata(evt: dict) -> dict:
     """Build display-only metadata before the completion event is formatted."""
     from tools.process_registry_notifications import async_delegation_display_text
     raw_results = evt.get("results")
-    results: list[dict] = [r for r in raw_results if isinstance(r, dict)] if isinstance(raw_results, list) else []
+    results: list[dict] = ([r for r in raw_results if isinstance(r, dict)]
+                           if isinstance(raw_results, list) else [evt])
     task_count = len(results) or 1
     completed_count = sum(1 for r in results if r.get("status") in {"completed", "success"})
     failed_count = sum(1 for r in results if r.get("status") in {"failed", "error"})
     duration = evt.get("total_duration_seconds") or evt.get("duration_seconds")
     return {"display_text": async_delegation_display_text(evt),
+            "results": [{"task_index": r.get("task_index", 0), "status": r.get("status") or "completed",
+                         "body": str(r.get("summary") or ""),
+                         **{key: r[key] for key in ("error", "duration_seconds", "truncated", "exit_reason") if key in r}}
+                        for r in results],
             "delegation_id": str(evt.get("delegation_id") or ""), "task_count": task_count,
             "completed_count": completed_count or task_count - failed_count, "failed_count": failed_count,
             **({"duration_seconds": duration} if isinstance(duration, (int, float)) else {})}

@@ -111,14 +111,16 @@ def _latest_message_preview(db, session_id):
     try:
         with db._lock:
             row = db._conn.execute(
-                "SELECT content FROM messages"
+                "SELECT content, display_kind, display_metadata FROM messages"
                 " WHERE session_id = ? AND role IN ('user', 'assistant')"
                 " AND active = 1 AND content IS NOT NULL AND TRIM(content) != ''"
+                " AND COALESCE(display_kind, '') != 'hidden'"
                 " ORDER BY id DESC LIMIT 1",
                 (session_id,)).fetchone()
     except Exception:
         return ""
-    text = " ".join(str(row[0] or "").split()).strip() if row else ""
+    text = (" ".join(_notice_preview_text({"content": row[0], "display_kind": row[1],
+                                         "display_metadata": row[2]}).split()).strip() if row else "")
     return text[:80] + "..." if len(text) > 80 else text
 
 
