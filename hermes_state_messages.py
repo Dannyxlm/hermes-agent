@@ -1413,10 +1413,12 @@ class SessionMessagesMixin:
         def read(conn):
             conn.create_function('lineage_display_identity', len(names), identity, deterministic=True)
             direction = 'DESC' if latest else 'ASC'
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(messages)')}
+            computed = f"lineage_display_identity({', '.join(names)})"
+            partition = f"COALESCE(display_identity, {computed})" if 'display_identity' in columns else computed
             return conn.execute(f"""
                 WITH identities AS (
-                    SELECT id, active, COALESCE(display_identity,
-                        lineage_display_identity({', '.join(names)})) AS identity
+                    SELECT id, active, {partition} AS identity
                     FROM messages WHERE session_id IN ({_placeholders(session_ids)})
                         {active_clause}{DISPLAY_VISIBLE_SQL}
                 ), page AS (

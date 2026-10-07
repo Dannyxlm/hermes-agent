@@ -6,7 +6,18 @@ import pytest
 
 from hermes_state import SessionDB
 from tui_gateway import mobile_history_cache, server
-from tests.hermes_cli.test_sessions_messages_paging import lineage
+from tests.hermes_cli.test_sessions_messages_paging import lineage, legacy_lineage
+
+
+def test_readonly_legacy_mobile_pages_use_computed_identity(legacy_lineage, history_cache):
+    db, expected = legacy_lineage
+    page = server._mobile_history_page(db, 'tip', ['root', 'tip'], {'limit': 1})
+    assert [(m['row_id'], m['text']) for m in page['messages']] == expected[-1:]
+    assert page['has_more']
+    older = server._mobile_history_page(db, 'tip', ['root', 'tip'],
+                                       {'limit': 1, 'before_row_id': page['before_row_id']})
+    assert [(m['row_id'], m['text']) for m in older['messages']] == expected[:1]
+    assert not older['has_more']
 
 
 @pytest.mark.parametrize("size", [50, 100])

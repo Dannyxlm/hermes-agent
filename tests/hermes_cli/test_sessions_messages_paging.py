@@ -1,6 +1,7 @@
 """Characterize canonical history pages before replacing full-lineage payload reads."""
 import asyncio
 import json
+import sqlite3
 
 import pytest
 
@@ -26,6 +27,37 @@ def lineage(tmp_path):
         db.append_message('sibling', 'assistant', 'must-not-leak')
         db._conn.execute("UPDATE sessions SET end_reason='compression', ended_at=1 WHERE id IN ('root', 'middle')")
         yield db, expected
+
+
+@pytest.fixture
+def legacy_lineage(tmp_path):
+    path = tmp_path / 'legacy.db'
+    with SessionDB(db_path=path) as db:
+        db.create_session('root', 'desktop')
+        db.append_message('root', 'user', 'old', timestamp=10)
+        db._write_sql('UPDATE messages SET active=0, compacted=1')
+        db.create_session('tip', 'desktop', parent_session_id='root')
+        copied = db.append_message('tip', 'user', 'old', timestamp=10)
+        newest = db.append_message('tip', 'assistant', 'new', timestamp=11)
+        db._write_sql("UPDATE sessions SET end_reason='compression', ended_at=12 WHERE id='root'")
+    with sqlite3.connect(path) as conn:
+        dependent = conn.execute("SELECT type,name FROM sqlite_master WHERE type IN ('trigger','index') "
+                                 "AND (sql LIKE '%display_identity%' OR sql LIKE '%display_order%')").fetchall()
+        for kind, name in dependent:
+            conn.execute(f'DROP {kind} "{name}"')
+        for column in ('display_identity', 'display_order'):
+            conn.execute(f'ALTER TABLE messages DROP COLUMN {column}')
+    with SessionDB(db_path=path, read_only=True) as db:
+        yield db, [(copied, 'old'), (newest, 'new')]
+        assert 'display_identity' not in {row[1] for row in db._conn.execute('PRAGMA table_info(messages)')}
+
+
+def test_readonly_legacy_lineage_pages_use_computed_identity(legacy_lineage):
+    db, expected = legacy_lineage
+    rows = db.get_messages('tip', include_ancestors=True, include_compacted=True, limit=50)
+    assert [(row['id'], row['content']) for row in rows] == expected
+    latest = db.get_messages('tip', include_ancestors=True, include_compacted=True, latest=True, limit=1)
+    assert [(row['id'], row['content']) for row in latest] == expected[-1:]
 
 
 @pytest.mark.parametrize('size', [50, 100, 500])

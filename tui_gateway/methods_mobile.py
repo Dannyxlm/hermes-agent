@@ -190,11 +190,14 @@ def _mobile_history_page(db, tip_id, chain, params):
     # assistant tool calls by their payload (not stable call IDs), so preserve that
     # distinction instead of silently changing its existing page/cursor contract.
     computed = "mobile_display_identity(role, content, timestamp, tool_call_id, tool_calls, tool_name, display_kind, display_metadata)"
-    partition = f"CASE WHEN role = 'assistant' AND tool_calls IS NOT NULL THEN {computed} ELSE COALESCE(display_identity, {computed}) END"
     page_key = (tip_id, tuple(chain), before, limit)
     with db._lock:
         token, rows = history_pages.lookup(db, page_key)
         if rows is None:
+            columns = {row[1] for row in db._conn.execute('PRAGMA table_info(messages)')}
+            partition = computed
+            if 'display_identity' in columns:
+                partition = f"CASE WHEN role = 'assistant' AND tool_calls IS NOT NULL THEN {computed} ELSE COALESCE(display_identity, {computed}) END"
             db._conn.create_function("mobile_display_identity", 8, identity_key, deterministic=True)
             rows = db._conn.execute(f"""
                 WITH identities AS (
