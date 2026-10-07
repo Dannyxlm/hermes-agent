@@ -197,12 +197,18 @@ class InsightsEngine:
             "top_sessions": self._compute_top_sessions(sessions),
         }
 
-    def get_usage_breakdown(self, days: int = 30, source: str = None) -> Dict[str, Any]:
+    def get_usage_breakdown(self, days: int = 30, source: str = None, cache=None) -> Dict[str, Any]:
         """Analytics-usage payload (tools + skills) without a full generate(); the
-        instr()-prefiltered skill query loads only skill_view/skill_manage messages."""
+        instr()-prefiltered skill query loads only skill_view/skill_manage messages.
+        With ``cache`` (an ``agent.insights_usage_cache.SessionUsageCache`` for this
+        state.db) only sessions whose message rows changed are re-read."""
         cutoff = time.time() - (days * 86400)
-        return {"tools": self._compute_tool_breakdown(self._get_tool_usage(cutoff, source)),
-                "skills": self._compute_skill_breakdown(self._get_skill_usage(cutoff, source))}
+        if cache is not None:
+            tool_usage, skill_usage = cache.collect(self._conn, cutoff, source)
+        else:
+            tool_usage, skill_usage = self._get_tool_usage(cutoff, source), self._get_skill_usage(cutoff, source)
+        return {"tools": self._compute_tool_breakdown(tool_usage),
+                "skills": self._compute_skill_breakdown(skill_usage)}
 
     # ------------------------------------------------------------------ SQL
 

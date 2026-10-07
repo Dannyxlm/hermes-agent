@@ -8,11 +8,20 @@ from tests.plugins.test_cloudseed_mobile import client, P
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
 
 
+@pytest.fixture(autouse=True)
+def _index_semantics_over_synthetic_paths(monkeypatch):
+    """These tests pin index, keyset and admission semantics over synthetic paths that
+    are never written to disk. Recent's existence check has its own tests in
+    test_deliverables_recent_exists.py."""
+    monkeypatch.setattr(ix.DeliverablesIndex, '_exists', lambda self, row: True)
+
+
 def store(home,root,count=2):
     with sqlite3.connect(home/'state.db') as db:
         db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,cwd TEXT,parent_session_id TEXT,end_reason TEXT,archived INTEGER)')
         db.execute('CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,timestamp REAL,tool_calls TEXT,tool_call_id TEXT,tool_name TEXT,active INTEGER,message_uid TEXT)')
         for i in range(count):
+            (root/f'outputs/{i}.md').write_text('synthetic delivery')
             db.execute('INSERT INTO sessions VALUES(?,?,?,NULL,NULL,0)',(str(i),'Synthetic',str(root)))
             db.execute('INSERT INTO messages VALUES(?,?,?, ?,NULL,NULL,NULL,NULL,1,?)',(i,str(i),'assistant','MEDIA: '+str(root/f'outputs/{i}.md'),str(i)))
 
@@ -31,6 +40,7 @@ def test_index_keyset_source_edits_deletion_and_bounds(client):
     assert nextpage['items'][0]['id']!=page['items'][0]['id']
     with pytest.raises(HTTPException): index.query(q='other',cursor=page['next_cursor'])
     assert (home/'state.db').read_bytes()==original
+    (root/'outputs/new.md').write_text('synthetic delivery')
     with sqlite3.connect(home/'state.db') as db:
         db.execute("UPDATE messages SET content=? WHERE id=0",('MEDIA: '+str(root/'outputs/new.md'),))
         db.execute('DELETE FROM messages WHERE id=1')
@@ -138,6 +148,8 @@ def test_cancel_refresh_preserves_partial(client):
 
 def test_cold_coverage_never_invents_total_or_imports_private(client):
     c,home=client; root,wid=setup_root(c,home); store(home,root,1005)
+    (root/'outputs/private').mkdir(exist_ok=True)
+    (root/'outputs/private/report.md').write_text('synthetic delivery')
     with sqlite3.connect(home/'state.db') as db:
         db.execute('UPDATE messages SET content=? WHERE session_id=?',('MEDIA: '+str(root/'outputs/private/report.md'),'1004'))
     index=ix.DeliverablesIndex(home,'default',[{'id':wid,'root_path':str(root),'name':'Fixture'}]); index.refresh(max_sessions=1)
@@ -161,6 +173,7 @@ def test_source_store_symlink_never_crosses_profile(client):
 
 def test_repeated_cross_chat_history_is_honestly_bounded(client):
     c,home=client; root,wid=setup_root(c,home); store(home,root,25)
+    (root/'outputs/shared.md').write_text('synthetic delivery')
     with sqlite3.connect(home/'state.db') as db:
         db.execute('UPDATE messages SET content=?',('MEDIA: '+str(root/'outputs/shared.md'),))
     index=ix.DeliverablesIndex(home,'default',[{'id':wid,'root_path':str(root),'name':'Fixture'}]); index.refresh(max_sessions=100)
@@ -173,6 +186,8 @@ def test_occurrence_page_uses_one_bounded_query(client, monkeypatch, limit):
     c, home = client
     root, wid = setup_root(c, home)
     store(home, root, 25)
+    for i in range(50):
+        (root/f'outputs/shared-{i}.md').write_text('synthetic delivery')
     with sqlite3.connect(home / 'state.db') as db:
         body = '\n'.join('MEDIA: ' + str(root / f'outputs/shared-{i}.md') for i in range(50))
         db.execute('UPDATE messages SET content=?', (body,))
@@ -281,6 +296,9 @@ def test_refresh_continues_past_session_message_and_byte_budgets(client, monkeyp
     c, home = client
     root, wid = setup_root(c, home)
     store(home, root, 1005)
+    for i in range(550):
+        (root/f'outputs/late-{i}.md').write_text('synthetic delivery')
+    (root/'outputs/paired.md').write_text('synthetic delivery')
     with sqlite3.connect(home / 'state.db') as db:
         db.execute('DELETE FROM messages')
         db.executemany('INSERT INTO messages(id,session_id,role,content,active) VALUES(?,?,?,?,1)',
@@ -328,6 +346,7 @@ def test_published_links_survive_unrelated_writes_and_refresh_publishes_atomical
     assert index.file_target(row['id']) == (wid, 'outputs/0.md')
     assert len(index.query()['items']) == len(before['items'])
     # Existing rows stay published until a complete replacement for that session exists.
+    (root/'outputs/new.md').write_text('synthetic delivery')
     with sqlite3.connect(home / 'state.db') as db:
         db.execute('UPDATE messages SET content=? WHERE id=0', ('MEDIA: ' + str(root / 'outputs/new.md'),))
         db.executemany('INSERT INTO messages(id,session_id,role,content,active) VALUES(?,?,?,?,1)',
@@ -519,6 +538,8 @@ def test_publication_checkpoint_cancellation_keeps_previous_complete_rows(client
     index=ix.DeliverablesIndex(home,'default',[{'id':wid,'root_path':str(root),'name':'Fixture'}])
     index.refresh()
     old=index.query()['items'][0]
+    for n in range(7):
+        (root/f'outputs/new-{n}.md').write_text('synthetic delivery')
     with sqlite3.connect(home/'state.db') as db:
         db.execute('UPDATE messages SET content=?',('\n'.join('MEDIA: '+str(root/f'outputs/new-{n}.md') for n in range(7)),))
     monkeypatch.setattr(ix,'MAX_PUBLICATION_ROWS',2)

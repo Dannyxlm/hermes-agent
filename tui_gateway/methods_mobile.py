@@ -114,10 +114,16 @@ def _(rid, params):
         "features": ["strict_canonical_open", "bounded_history", "scoped_interactions",
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
-                     "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery"],
+                     "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery",
+                     "video_upload"],
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
-                             "display_history": 1, "chunked_recovery": 1},
-        "max_history_limit": 100, "max_roster_limit": 100})
+                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1},
+        "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
+
+
+def _video_upload_limits():
+    from tui_gateway import media_uploads
+    return media_uploads.limits()
 
 
 @_mobile_handler("mobile.bots")

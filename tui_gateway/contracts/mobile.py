@@ -7,6 +7,7 @@ from pydantic import Field
 
 from .base import Params, Result
 from .common import PendingApproval, TranscriptMessage
+from .media import VideoUploadLimits
 from .prompt_voice import PromptSubmitResult
 from .registry import method
 from .server_requests import ClarifyQuestion
@@ -24,6 +25,7 @@ class MobileCapabilitiesResult(Result):
     feature_versions: dict[str, int] | None = None
     max_history_limit: int
     max_roster_limit: int
+    video_upload: VideoUploadLimits | None = None
 
 
 class MobileBotsParams(Params):

@@ -7,11 +7,12 @@ import ipaddress
 import json
 import math
 import mimetypes
+import os
 from pathlib import PurePosixPath
 import re
 from urllib.parse import urlsplit
 from fastapi import HTTPException
-from plugins.cloudseed_mobile.workspace_files import digest, parts, workspace_aliases
+from plugins.cloudseed_mobile.workspace_files import digest, open_beneath, parts, workspace_aliases
 
 SCHEMA_VERSION=1
 MAX_STRING=1024*1024
@@ -20,6 +21,16 @@ MAX_REFERENCES=500
 MUTATIONS={'write_file':'created','write':'created','patch':'edited','edit':'edited','edit_file':'edited','move':'edited','move_file':'edited','delete':'edited','delete_file':'edited','read_file':'read'}
 PRODUCERS={'image_generate','text_to_speech','write_file','pdf','powerpoint','docx','xlsx','browser_vision','capture_screenshot'}
 OUTPUT_KEYS={'path','file_path','output_path','image_url','audio_path','video_path','download_url','media','url'}
+# These tools echo files, transcripts, page text or arbitrary program stdout.
+# A MEDIA example in that content is not a delivery by the enclosing tool.
+CONTENT_READERS={
+    'read_file','search_files','terminal','process','process_manage','execute_code',
+    'web_extract','web_search','session_search','skill_view','skills_list',
+    'skill_manage','read_terminal','read_window_below','delegate_task',
+    'browser_exec','browser_cdp','browser_snapshot','browser_navigate',
+    'browser_console','browser_click','browser_back','browser_scroll',
+    'browser_press','browser_type','browser_get_images',
+}
 
 
 def decode(value):
@@ -162,6 +173,9 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
     rows={}; results={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool' and isinstance(m.get('tool_call_id'),str) and m.get('tool_call_id') and m.get('active',1)!=0}
     seen=set(); count=0; ranks={}
     aliases=workspace_aliases(workspaces)
+    roots={w['id']:w['root_path'] for w in workspaces}
+    availability={}
+    subagent=bool(session.get('parent_session_id') and (session.get('source') in {'subagent','delegate'} or session.get('delegate_child')))
     message_order={id(m):i for i,m in enumerate(messages)}
     def add(value,action,message,provenance,inline=None):
         nonlocal count
@@ -179,6 +193,15 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
         if not isinstance(time,(float,int)) or not math.isfinite(time): time=None
         occurrence={'id':occurrence_id,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512]}
         row={'schema_version':SCHEMA_VERSION,'id':rid,'profile':profile,**loc,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],'display_type':mimetypes.guess_type(loc['display_name'])[0] or 'application/octet-stream','occurrences':[]}
+        if subagent: row['subagent']=True
+        if loc['kind']=='file':
+            if rid not in availability:
+                try:
+                    fd=open_beneath(roots[loc['workspace_id']],loc['relative_path'],reveal=True)
+                except (OSError,HTTPException): availability[rid]='unavailable'
+                else:
+                    os.close(fd); availability[rid]='available'
+            row['availability']=availability[rid]
         existing=rows.get(rid)
         rank=(action in {'created','edited','delivered'},time is not None,time or 0,message_order.get(id(message),0))
         if existing:
@@ -238,6 +261,8 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
             body=unwrap(m.get('content'))
             if isinstance(body,dict) and (body.get('error') or body.get('success') is False or body.get('verified') is False): continue
             for key,text in strings(body,status):
-                for value,action in references(text): add(value,action,m,'tool_media')
+                for value,action in references(text, assistant=True):
+                    action='referenced' if not name or name in CONTENT_READERS else action
+                    add(value,action,m,'tool_media')
                 if name in PRODUCERS and key in OUTPUT_KEYS: add(text,'created',m,'producer:'+name)
     return list(rows.values())

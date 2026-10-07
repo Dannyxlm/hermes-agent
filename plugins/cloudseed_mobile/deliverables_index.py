@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from hermes_state_holders import read_only_db_uri
@@ -24,6 +25,10 @@ LOG=logging.getLogger(__name__)
 MAX_MESSAGES=2000
 MAX_SEGMENT_BYTES=4*1024*1024
 REFRESH_SECONDS=0.75
+# Files › Recent lists only files that exist now. Path text cut out of tool output or
+# code (`+str(generation`, `example.pdf'`) never reaches it. Each page may examine this
+# many candidates per requested row before handing back a cursor.
+RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
 _LOCKS={}
 _LOCK_GUARD=threading.Lock()
@@ -152,7 +157,7 @@ class DeliverablesIndex:
         for rid,data,inline in rows:
             if stopped(): break
             row=json.loads(data)
-            recent=row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
+            recent=not row.get('subagent',False) and row.get('availability')!='deleted' and row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
             search=' '.join(str(row.get(k) or '') for k in ('display_name','relative_path','source_chat_title')).casefold()
             search+=' '+next((w['name'] for w in self.workspaces if w['id']==row.get('workspace_id')),'').casefold()
             cache.execute('INSERT OR REPLACE INTO prepared_entries VALUES(?,?,?,?,?,?,?,?,?,?,?)',(sid,rid,generation,-(row.get('observed_at') or 0),row.get('workspace_id'),row['kind'],int(row.get('private',False)),int(recent),search,data,inline))
@@ -216,14 +221,14 @@ class DeliverablesIndex:
                 # Old runtimes upsert metadata without removing unknown keys.
                 # Their lineage write is the signal to rebuild after rollback.
                 legacy=cache.execute("SELECT 1 FROM meta WHERE key='lineage'").fetchone() is not None
-                if (not legacy and meta.get('scan_version')==4 and meta.get('source_signature')==signature
+                if (not legacy and meta.get('scan_version')==5 and meta.get('source_signature')==signature
                     and meta.get('grant_signature')==grant_signature and 'scan_signature' not in meta
                     and meta.get('refresh_status') in {'ready','partial'}): return
-                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=4:
-                    reconcile_legacy=legacy or meta.get('scan_version')!=4
+                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=5:
+                    reconcile_legacy=legacy or meta.get('scan_version')!=5
                     generation=meta.get('generation') if meta.get('grant_signature')==grant_signature else None
                     epoch=cache.execute('SELECT COALESCE(MAX(scan_epoch),0) FROM session_nodes').fetchone()[0]
-                    meta={'scan_version':4,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+                    meta={'scan_version':5,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
                     if reconcile_legacy and cache.execute('SELECT 1 FROM segments LIMIT 1').fetchone():
                         meta['legacy_after']=None
                     cache.execute('DELETE FROM staged')
@@ -240,8 +245,12 @@ class DeliverablesIndex:
                     source.set_progress_handler(lambda: int(time.monotonic()>deadline or bool(cancel and cancel.is_set())),1000)
                     source.execute('BEGIN')
                     session_columns={r[1] for r in source.execute('PRAGMA table_info(sessions)')}
-                    selected_columns=['rowid AS scan_rowid']+[c for c in ('id','cwd','parent_session_id','end_reason','archived','hidden','git_metadata_generation','rewind_count') if c in session_columns]
+                    selected_columns=['rowid AS scan_rowid']+[c for c in ('id','cwd','source','parent_session_id','end_reason','archived','hidden','git_metadata_generation','rewind_count') if c in session_columns]
                     if 'title' in session_columns: selected_columns.append('substr(title,1,512) AS title')
+                    # Delegate children often inherit the parent's surface as `source`;
+                    # the delegation marker Hermes writes into model_config is structural.
+                    if 'model_config' in session_columns:
+                        selected_columns.append("instr(coalesce(model_config,''),'\"_delegate_from\"')>0 AS delegate_child")
                     if 'scan_signature' not in meta:
                         total=source.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
                         meta.update(scan_signature=signature,scan_before=None,indexed_sessions=0,incomplete_segments=False,
@@ -330,7 +339,7 @@ class DeliverablesIndex:
         source_available=(self.home/'state.db').is_file() and not (self.home/'state.db').is_symlink()
         grants_current=meta.get('grant_signature')==digest(self.workspaces)
         source_current=meta.get('source_signature')==source_signature(self.home)
-        scan_current=not legacy and meta.get('scan_version')==4
+        scan_current=not legacy and meta.get('scan_version')==5
         if not grants_current or not source_available:
             meta.update(partial=True,refresh_status='refresh_pending',generation=None)
         elif not source_current or not scan_current:
@@ -341,6 +350,29 @@ class DeliverablesIndex:
         meta['refresh_pending']=source_available and (not grants_current or not source_current or not scan_current or 'scan_signature' in meta)
         meta['refresh_progress']=digest([meta.get('scan_signature'),meta.get('scan_before'),(meta.get('scan_session') or {}).get('id'),meta.get('scan_after'),meta.get('scan_cleanup'),publication])
         return meta
+
+    def _exists(self,row):
+        """True unless a workspace file row names a path that is not a regular file inside its
+        workspace right now. Bounded to one stat; symlinks may not escape the workspace."""
+        if row.get('kind')=='remote_media':
+            # Unencoded quotes, brackets and backticks are not legal in a URL: such a row is
+            # code cut out of a test or a log (`x.png'}])[0]['kind']`), never a delivery.
+            url=row.get('url')
+            if not isinstance(url,str): return False
+            try: tail=urlsplit(url); tail=tail.path+tail.query+tail.fragment
+            except ValueError: return False
+            return not any(c in tail for c in '\'"`[]{}<>\\ ')
+        if row.get('kind')!='file': return True
+        root=next((w.get('root_path') for w in self.workspaces if w.get('id')==row.get('workspace_id')),None)
+        relative=row.get('relative_path')
+        if not root or not isinstance(relative,str) or not relative: return False
+        try:
+            base=Path(root).resolve(strict=True)
+            target=(base/relative).resolve(strict=True)
+            target.relative_to(base)
+            return target.is_file()
+        except (OSError,ValueError,RuntimeError):
+            return False
 
     def query(self,workspace_id=None,session_id=None,kind=None,q='',cursor=None,limit=50,reveal=False):
         if not 1<=limit<=200 or len(q)>256 or kind not in (None,'file','remote_media','inline_content'):
@@ -376,7 +408,16 @@ class DeliverablesIndex:
                 if after:
                     outer+=' AND (sort_time,id)>(?,?)'; params.extend(after)
                 sql='WITH ranked AS (SELECT id,sort_time,data,ROW_NUMBER() OVER (PARTITION BY id ORDER BY recent DESC,sort_time,sid) rank FROM entries WHERE '+where+') SELECT id,sort_time,data FROM ranked WHERE '+outer+' ORDER BY sort_time,id LIMIT ?'
-                fetched=list(db.execute(sql,(*params,limit+1)))
+                validates=not lineage
+                window=limit*RECENT_SCAN_FACTOR if validates else limit
+                candidates=list(db.execute(sql,(*params,window+1)))
+                fetched=[]; last=None; more=len(candidates)>window
+                for rid,sort_time,data in candidates[:window]:
+                    if len(fetched)>=limit:
+                        more=True; break
+                    last=(sort_time,rid)
+                    if validates and not self._exists(json.loads(data)): continue
+                    fetched.append((rid,sort_time,data))
                 items=[]
                 histories={rid: [] for rid, _, _ in fetched[:limit]}
                 if histories:
@@ -402,7 +443,8 @@ class DeliverablesIndex:
         except sqlite3.OperationalError as exc:
             if 'interrupt' not in str(exc): raise
             items=[]; fetched=[]; meta.update(partial=True,refresh_status='query_budget_exceeded')
-        next_cursor=base64.urlsafe_b64encode(json.dumps({'scope':scope,'after':[fetched[limit-1][1],fetched[limit-1][0]]}).encode()).decode() if len(fetched)>limit else None
+            last=None; more=False
+        next_cursor=base64.urlsafe_b64encode(json.dumps({'scope':scope,'after':[last[0],last[1]]}).encode()).decode() if more and last else None
         return {'items':items,'next_cursor':next_cursor,'coverage':{'indexed_sessions':meta.get('indexed_sessions',0),'total_sessions':meta.get('total_sessions'),'session_cap':None,'refresh_pending':meta['refresh_pending'],'refresh_progress':meta['refresh_progress']},'index_revision':meta.get('index_revision'),'updated_at':meta.get('updated_at'),'partial':meta.get('partial',True),'refresh_status':meta.get('refresh_status','cold')}
 
     def file_target(self,rid,reveal=False):
@@ -413,6 +455,9 @@ class DeliverablesIndex:
         row=json.loads(result[0])
         if row.get('private') and not reveal: raise HTTPException(403,'Explicit private reveal required')
         if row.get('availability')=='deleted': raise HTTPException(404,'File was deleted or moved')
+        # Index-time 'unavailable' is history only: the file may have been saved since,
+        # so check it live (bounded, workspace-contained) rather than trusting the stamp.
+        if not self._exists(row): raise HTTPException(404,'File unavailable')
         return row['workspace_id'],row['relative_path']
 
     def content(self,rid,reveal=False):

@@ -1,9 +1,18 @@
 """Rename containment and published legacy projection recovery."""
 import sqlite3
+import pytest
 from plugins.cloudseed_mobile import deliverables as d, deliverables_index as ix
 from tests.plugins.test_cloudseed_mobile import client, P
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
 from tests.plugins.cloudseed_mobile.test_deliverables_index import store
+
+
+@pytest.fixture(autouse=True)
+def _index_semantics_over_synthetic_paths(monkeypatch):
+    """These tests pin index, keyset and admission semantics over synthetic paths that
+    are never written to disk. Recent's existence check has its own tests in
+    test_deliverables_recent_exists.py."""
+    monkeypatch.setattr(ix.DeliverablesIndex, '_exists', lambda self, row: True)
 
 
 def test_renamed_workspace_deliveries_open_without_new_grants(client):
@@ -34,6 +43,8 @@ def test_renamed_workspace_deliveries_open_without_new_grants(client):
 def test_scan_v3_false_deliveries_rebuilt_out_of_recent(client, monkeypatch):
     c, home = client
     root, wid = setup_root(c, home); store(home, root, 1)
+    for name in ('example.pdf','fenced.pdf','real.pdf'):
+        (root/'outputs'/name).write_bytes(b'synthetic delivery')
     with sqlite3.connect(home / 'state.db') as db:
         db.execute('UPDATE messages SET content=?', ('The syntax is MEDIA:outputs/example.pdf\n```text\nMEDIA:outputs/fenced.pdf\n```\nMEDIA:outputs/real.pdf',))
     grants = [{'id':wid,'root_path':str(root),'name':'Fixture'}]
