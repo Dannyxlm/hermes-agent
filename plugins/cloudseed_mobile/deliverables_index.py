@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from hermes_state_holders import read_only_db_uri
@@ -349,6 +350,14 @@ class DeliverablesIndex:
     def _exists(self,row):
         """True unless a workspace file row names a path that is not a regular file inside its
         workspace right now. Bounded to one stat; symlinks may not escape the workspace."""
+        if row.get('kind')=='remote_media':
+            # Unencoded quotes, brackets and backticks are not legal in a URL: such a row is
+            # code cut out of a test or a log (`x.png'}])[0]['kind']`), never a delivery.
+            url=row.get('url')
+            if not isinstance(url,str): return False
+            try: tail=urlsplit(url); tail=tail.path+tail.query+tail.fragment
+            except ValueError: return False
+            return not any(c in tail for c in '\'"`[]{}<>\\ ')
         if row.get('kind')!='file': return True
         root=next((w.get('root_path') for w in self.workspaces if w.get('id')==row.get('workspace_id')),None)
         relative=row.get('relative_path')

@@ -80,3 +80,14 @@ def test_recent_route_applies_the_same_check(client):
     c.get(P + '/deliverables?profile=default')
     body = c.get(P + '/deliverables?profile=default').json()
     assert {r['relative_path'] for r in body['items']} == {'outputs/real.md'}
+
+
+def test_recent_drops_remote_media_cut_out_of_code(client):
+    c, home = client
+    root, wid = setup_root(c, home)
+    test_source = "assert d.project(...)[0]['kind']=='remote_media'  # MEDIA:https://cdn.example.com/x.png'}])[0]['kind']=='remote_media'"
+    seed(home, root, [('tool', test_source, 'terminal'), ('tool', 'MEDIA:https://cdn.example.com/real.png', 'image_generate')])
+    index = ix.DeliverablesIndex(home, 'default', [{'id': wid, 'root_path': str(root), 'name': 'Fixture'}])
+    index.refresh()
+    urls = {r.get('url') for r in index.query()['items']}
+    assert urls == {'https://cdn.example.com/real.png'}
