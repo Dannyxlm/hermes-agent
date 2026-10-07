@@ -2500,6 +2500,7 @@ export interface SessionActiveItem {
   pending_count?: number | null
   pending_revision?: string | null
   latest_run?: InboxLatestRun | null
+  last_assistant_reply?: InboxAssistantReply | null
   current: boolean
   id: string
   last_active: number
@@ -2515,6 +2516,12 @@ export interface InboxLatestRun {
   run_id: string
   status: 'starting' | 'thinking' | 'usingTool' | 'responding' | 'waitingForApproval' | 'waitingForClarification' | 'complete' | 'failed' | 'cancelled'
   at: number
+}
+export interface InboxAssistantReply {
+  row_id: number
+  at: number
+  unread: boolean
+  preview?: string | null
 }
 export type LiveSessionStatus = 'idle' | 'starting' | 'waiting' | 'working' | 'streaming' | 'resuming'
 export interface InboxSummaryScope {

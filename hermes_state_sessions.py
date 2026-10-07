@@ -1028,7 +1028,14 @@ class SessionSessionsMixin:
     def set_session_read(self, session_id: str, read: bool = True) -> bool:
         """Mark read/unread across the compression lineage. ``last_read_at`` is a watermark: unread when
         activity postdates it (no write on the message path). NULL = never tracked = read; 0 = unread."""
-        return self._set_lineage_column("last_read_at", session_id, time.time() if read else 0.0)
+        family = self.get_compression_family(session_id)
+        if not family:
+            return False
+        # Explicit branches are separate conversations, not compression aliases.
+        return self._write_rowcount(
+            f"UPDATE sessions SET last_read_at = ? WHERE id IN ({_session_ids_placeholders(family)})",
+            (time.time() if read else 0.0, *family),
+        ) > 0
 
     @staticmethod
     def session_unread(session_row: Dict[str, Any]) -> bool:

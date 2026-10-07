@@ -16805,6 +16805,42 @@
         "title": "ImageGenerateResult",
         "type": "object"
       },
+      "InboxAssistantReply": {
+        "additionalProperties": false,
+        "properties": {
+          "row_id": {
+            "title": "Row Id",
+            "type": "integer"
+          },
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "unread": {
+            "title": "Unread",
+            "type": "boolean"
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview"
+          }
+        },
+        "required": [
+          "row_id",
+          "at",
+          "unread"
+        ],
+        "title": "InboxAssistantReply",
+        "type": "object"
+      },
       "InboxLatestRun": {
         "additionalProperties": false,
         "properties": {
@@ -31491,6 +31527,17 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/InboxLatestRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "last_assistant_reply": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxAssistantReply"
               },
               {
                 "type": "null"
