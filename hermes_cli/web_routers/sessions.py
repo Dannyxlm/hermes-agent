@@ -570,7 +570,7 @@ async def get_session_stats(profile: Optional[str] = None):
 
 
 @manage_router.get("/api/sessions/{session_id}")
-async def get_session_detail(session_id: str, profile: Optional[str] = None):
+async def get_session_detail(session_id: str, profile: Optional[str] = None, compact: bool = False):
     def _detail(db):
         sid = _resolve_session_id(db, session_id)
         session = db.get_session(sid) if sid else None
@@ -587,6 +587,10 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None):
         owned = cron_run_scheduler_owned(session, profile)
         if owned is not None:
             session["scheduler_owned"] = owned
+        if compact:
+            # Opt-in phone metadata; Desktop's rich detail stays byte-for-byte unchanged.
+            for key in ("system_prompt", "model_config", "tool_names"):
+                session.pop(key, None)
         return session
 
     return await asyncio.to_thread(_with_db, profile, _detail, read_only=True)
@@ -913,6 +917,17 @@ async def rename_session_endpoint(session_id: str, body: SessionRename):
         sid = _resolve_session_id(db, session_id)
         if not sid:
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
+        if body.unread is not None:
+            # A read stamp edits the compression family; every segment must
+            # belong to the serving profile. Legacy NULL owners belong here.
+            owner = _serving_profile(body.profile)
+            family = db.get_compression_family(sid)
+            owners = db._read_all(
+                f"SELECT profile_name FROM sessions WHERE id IN ({','.join('?' for _ in family)})",
+                family,
+            )
+            if not owners or any(row["profile_name"] not in (None, owner) for row in owners):
+                raise HTTPException(status_code=404, detail=_NOT_FOUND)
         if body.title is None and all(getattr(body, f) is None for f in flags):
             raise HTTPException(
                 status_code=400,

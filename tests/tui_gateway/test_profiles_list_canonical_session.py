@@ -41,6 +41,7 @@ def home(tmp_path, monkeypatch):
     h = tmp_path / ".hermes"
     (h / "profiles" / "ops").mkdir(parents=True)
     monkeypatch.setenv("HERMES_HOME", str(h))
+    monkeypatch.setattr("hermes_cli.profiles._get_wrapper_dir", lambda: tmp_path / "wrappers")
     return h
 
 
@@ -73,6 +74,7 @@ def _add_session(db, sid, *, source="cli", title="", ts, text, hidden=False,
 
 def _profiles(params):
     envelope = srv._methods["profiles.list"](1, params)
+    assert "result" in envelope, envelope
     return envelope["result"]["profiles"]
 
 

@@ -216,9 +216,19 @@ def test_compression_reply_and_run_do_not_follow_branches(inbox, mobile_home, pe
 def test_reply_preview_is_a_bounded_plain_glance():
     from tui_gateway.inbox_summaries import reply_preview, REPLY_PREVIEW_CHARS
     text = "## Weekly plan\n\n**Done.** See [the report](outputs/r.md).\n\n```python\nsecret = 1\n```\n- next step one\n- next step two"
-    assert reply_preview(text) == "Weekly plan Done. See the report. next step one next step two"
+    assert reply_preview(text) == "Weekly plan. Done. See the report. next step one next step two"
     long = " ".join(["word"] * 200)
     preview = reply_preview(long)
     assert preview.endswith("…") and len(preview) <= REPLY_PREVIEW_CHARS + 1
     assert reply_preview("   \n ") is None
     assert reply_preview(None) is None
+
+
+def test_reply_preview_preserves_identifiers_paths_and_line_boundaries():
+    from tui_gateway.inbox_summaries import reply_preview
+    assert reply_preview("Use `read_file` on ~/notes_v2") == "Use read_file on ~/notes_v2"
+    assert reply_preview("# Heading\nNext sentence\nMEDIA:/tmp/x.png\nKeep _words_ and ~~done~~.") == (
+        "Heading. Next sentence Keep words and done."
+    )
+    assert reply_preview("MEDIA:/tmp/x.png") is None
+    assert reply_preview("# Heading!\nNext sentence") == "Heading! Next sentence"

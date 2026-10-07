@@ -1,6 +1,7 @@
 """Sanitized presentation only; native account_usage owns HTTP and parsing."""
 import base64
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from agent.account_usage import _parse_dt
 
@@ -23,13 +24,27 @@ def _entry_pool_retry_after(entry):
     return until.isoformat().replace('+00:00', 'Z') if until else None
 
 
+def _valid_display_label(value):
+    """A saved key name such as "DANNY-ANT": short, plain, never an email or token."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if (len(value) > 40
+            or re.search(r'sk-|Bearer|@|[\x00-\x1f\x7f-\x9f]|[A-Za-z0-9+/=_\-]{20,}', value, re.IGNORECASE)):
+        return False
+    return re.fullmatch(r'[A-Za-z0-9 ._()\-]+', value) is not None
+
+
 def _safe_entry_label(entry, index):
-    # Saved labels can be arbitrary credential material. Emit a closed label,
-    # never an email, token fragment or provider response.
-    return f'Account {index}'
+    # Show only the owner's saved key name. Saved labels are untrusted: emails,
+    # token fragments and provider errors fall back to a closed label. Token
+    # claims are never read for display (owner decision 2026-10-05: key names only).
+    label = getattr(entry, 'label', None)
+    return label if _valid_display_label(label) else f'Account {index}'
 
 
 def _decode_jwt_claims_unverified(token):
+    if not isinstance(token, str):
+        return {}
     try:
         middle = token.split('.')[1]
         data = json.loads(base64.urlsafe_b64decode(middle + '=' * (-len(middle) % 4)))

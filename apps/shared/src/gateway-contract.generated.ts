@@ -2542,6 +2542,7 @@ export interface SessionActiveItem {
   pending_count?: number | null
   pending_revision?: string | null
   latest_run?: InboxLatestRun | null
+  last_assistant_reply?: InboxAssistantReply | null
   current: boolean
   id: string
   last_active: number
@@ -2557,6 +2558,12 @@ export interface InboxLatestRun {
   run_id: string
   status: 'starting' | 'thinking' | 'usingTool' | 'responding' | 'waitingForApproval' | 'waitingForClarification' | 'complete' | 'failed' | 'cancelled'
   at: number
+}
+export interface InboxAssistantReply {
+  row_id: number
+  at: number
+  unread: boolean
+  preview?: string | null
 }
 export type LiveSessionStatus = 'idle' | 'starting' | 'waiting' | 'working' | 'streaming' | 'resuming'
 export interface InboxSummaryScope {
@@ -5020,6 +5027,20 @@ export interface ErrorPayload {
 export interface NoticePayload {
   message: string
 }
+export interface MessageStartPayload {
+  presentation?: NoticePresentation | null
+}
+/** Display-only notice identity; never replaces the user-role model input. */
+export interface NoticePresentation {
+  display_kind: string
+  display_text?: string | null
+  delegation_id?: string | null
+  process_ids?: string[] | null
+  task_count?: number | null
+  completed_count?: number | null
+  failed_count?: number | null
+  duration_seconds?: number | null
+}
 /** ``prompt_turn._invoke_agent._stream`` (message.delta: ``text`` + optional ``rendered``), ``agent_callbacks._agent_cbs`` (reasoning.delta / thinking.delta), ``tool_progress._progress_reasoning`` (reasoning.available). ``verbose`` rides only when the session's verbose reasoning mode is on. */
 export interface StreamDeltaPayload {
   text: string
@@ -6283,8 +6304,8 @@ export interface BackendGatewayEventMap {
   'message.interim': MessageInterimPayload
   /** The agent reacted to a message; paint it live. */
   'message.reaction': MessageReactionPayload
-  /** A turn began streaming; no payload. */
-  'message.start': Record<string, never>
+  /** A turn began streaming; optional display-only notice presentation. */
+  'message.start': MessageStartPayload
   /** The MoA aggregator started. */
   'moa.aggregating': MoaAggregatingPayload
   /** MoA phase transition (currently only ``aggregator``). */

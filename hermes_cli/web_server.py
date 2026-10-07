@@ -1474,6 +1474,11 @@ async def _dashboard_health_middleware(request: Request, call_next):
     return response
 
 
+# Aggregate metrics sit outside auth/host gates so rejected requests get fixed
+# buckets too. Pure ASGI preserves streamed bodies and supplies WS timing scope.
+from hermes_cli.route_metrics import RouteMetricsMiddleware
+app.add_middleware(RouteMetricsMiddleware)
+
 # CORS: restrict to localhost origins only.  The web UI is intended to run
 # locally; binding to 0.0.0.0 with allow_origins=["*"] would let any website
 # read/modify config and secrets.

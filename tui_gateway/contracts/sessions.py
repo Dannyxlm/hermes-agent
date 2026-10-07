@@ -297,6 +297,13 @@ class InboxLatestRun(Result):
     at: float  # persisted updated_at, Unix seconds
 
 
+class InboxAssistantReply(Result):
+    row_id: int
+    at: float
+    unread: bool
+    preview: str | None = None
+
+
 class SessionActiveItem(Result):
     """``server._session_live_item``."""
 
@@ -305,6 +312,7 @@ class SessionActiveItem(Result):
     pending_count: int | None = Field(default=None, ge=1)
     pending_revision: str | None = None
     latest_run: InboxLatestRun | None = None
+    last_assistant_reply: InboxAssistantReply | None = None
 
     current: bool
     id: str

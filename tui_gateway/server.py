@@ -2215,6 +2215,29 @@ def _get_usage(agent) -> dict:
         "completion": g("session_completion_tokens"), "total": g("session_total_tokens"),
         "calls": g("session_api_calls"),
     }
+    for field in ("cache_read", "cache_write"):
+        value = getattr(agent, f"session_{field}_tokens", None)
+        if value is not None:
+            usage[field] = value
+    # Live estimates remain current during a turn; persisted billing wins.
+    cost = {field: getattr(agent, f"session_{field}", None)
+            for field in ("estimated_cost_usd", "actual_cost_usd", "cost_status")}
+    with contextlib.suppress(Exception):
+        db = getattr(agent, "_session_db", None)
+        sid = getattr(agent, "session_id", None)
+        row = db._read_one(
+            "SELECT estimated_cost_usd, actual_cost_usd, cost_status FROM sessions WHERE id = ?",
+            (sid,)) if db is not None and sid else None
+        row = dict(row) if row is not None else None
+        if row and (row.get("actual_cost_usd") is not None
+                    or cost["cost_status"] in (None, "unknown")):
+            cost = {field: row.get(field) for field in cost}
+    usage["cost_status"] = cost["cost_status"] or "unknown"
+    amount = cost["actual_cost_usd"]
+    if amount is None and cost["cost_status"] not in (None, "unknown"):
+        amount = cost["estimated_cost_usd"]
+    if amount is not None:
+        usage["cost_usd"] = amount
     comp = getattr(agent, "context_compressor", None)
     if comp:
         from agent.context_breakdown import context_usage_fields
@@ -3070,28 +3093,31 @@ def _session_live_title(session: dict, key: str) -> str:
     return title
 
 
-def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
+def _session_live_item(sid: str, session: dict, current_sid: str = "", *, projection=None) -> dict:
     key = _session_lookup_key(session, fallback=sid)
     agent = session.get("agent")
-    history = list(session.get("history") or [])
+    history = session.get("history") or []
     status = _session_live_status(sid, session)
     inflight = _inflight_snapshot(session)
     queued = _queued_prompt_snapshot(session)
-    preview = next((" ".join(text.split())[:160] for msg in reversed(history)
-                    if (text := _content_display_text(msg.get("content", msg.get("text", ""))).strip())), "")
+    from itertools import islice
+    preview = next((" ".join(text.split())[:160] for msg in islice(reversed(history), 64)
+                    if (text := _notice_preview_text(msg).strip())), "")
     if queued:
         preview = " ".join(str(queued.get("user") or preview).split())[:160]
     elif inflight:
-        preview = " ".join(str(inflight.get("assistant") or inflight.get("user") or preview).split())[:160]
+        user_preview = _notice_preview_text({**inflight, "content": inflight.get("user", "")})
+        preview = " ".join(str(inflight.get("assistant") or user_preview or preview).split())[:160]
     now = time.time()
     from tui_gateway.server_requests import attention_summaries
     attention = attention_summaries([sid]).get(sid)
     pending = {"pending_kind": attention["kind"], "pending_count": attention["count"],
                "pending_revision": attention["revision"]} if attention else {}
-    from tui_gateway.inbox_summaries import latest_run
-    run = latest_run(session, _hermes_home, key)
+    if projection is None:
+        from tui_gateway.inbox_summaries import live_projections
+        projection = live_projections([(sid, key, session)], _hermes_home)[sid]
     return {
-        **({"latest_run": run} if run else {}),
+        **{name: value for name, value in projection.items() if name != "title"},
         **pending,
         "current": sid == current_sid, "id": sid,
         "profile": profile_name_for_home(session.get("profile_home") or _hermes_home),
@@ -3099,7 +3125,7 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
         "message_count": len(history),
         "model": str(getattr(agent, "model", "") or _resolve_model()), "preview": preview,
         "session_key": key, "started_at": float(session.get("created_at") or now), "status": status,
-        "title": _session_live_title(session, key),
+        "title": str(projection.get("title") or session.get("pending_title") or "").strip(),
     }
 
 

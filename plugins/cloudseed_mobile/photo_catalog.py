@@ -10,13 +10,26 @@ import math
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from hermes_state_holders import read_only_db_uri
+
 MAX_PREVIEW = 256 * 1024
 MIN_FREE_BYTES = 5 * 1024**3
+SCHEMA_VERSION = 1
+_INITIALIZED = {}
+_SCHEMA_LOCK = threading.Lock()
+
+
+def _catalog_identity(path):
+    if not path.is_file():
+        return None
+    stat = path.stat()
+    return (SCHEMA_VERSION, stat.st_dev, stat.st_ino)
 
 
 class PhotoError(ValueError):
@@ -52,6 +65,14 @@ class PhotoCatalog:
         self.free_bytes = free_bytes or (
             lambda: shutil.disk_usage(self.path.parent).free
         )
+        key = str(self.path.absolute())
+        with _SCHEMA_LOCK:
+            identity = _catalog_identity(self.path)
+            if identity is None or _INITIALIZED.get(key) != identity:
+                self._initialize()
+                _INITIALIZED[key] = _catalog_identity(self.path)
+
+    def _initialize(self):
         with self.connection() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS devices (
@@ -80,12 +101,17 @@ class PhotoCatalog:
         self.path.chmod(0o600)
 
     @contextmanager
-    def connection(self):
-        db = sqlite3.connect(self.path, timeout=15, isolation_level=None)
+    def connection(self, readonly=False):
+        db = sqlite3.connect(
+            read_only_db_uri(self.path) if readonly else self.path,
+            uri=readonly, timeout=15, isolation_level=None)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA secure_delete=ON")
+        if not readonly:
+            db.execute("PRAGMA secure_delete=ON")
         try:
-            db.execute("BEGIN IMMEDIATE")
+            # A deferred read transaction keeps multi-query projections coherent
+            # without taking the writer reservation held by BEGIN IMMEDIATE.
+            db.execute("BEGIN" if readonly else "BEGIN IMMEDIATE")
             yield db
             db.commit()
         except BaseException:
@@ -286,12 +312,12 @@ class PhotoCatalog:
         }
 
     def status(self, profile, device, principal=None):
-        with self.connection() as db:
+        with self.connection(readonly=True) as db:
             row = self._device(db, device, profile, principal)
             return {"ok": True, "protocol_version": 1, **self._stats(db, row)}
 
     def devices(self, profile):
-        with self.connection() as db:
+        with self.connection(readonly=True) as db:
             return [
                 self._stats(db, row)
                 for row in db.execute(
@@ -326,7 +352,7 @@ class PhotoCatalog:
                     raise PhotoError("Invalid filter")
                 clauses.append("p." + key + "=?")
                 args.append(query[key])
-        with self.connection() as db:
+        with self.connection(readonly=True) as db:
             row = self._device(db, device, profile, principal)
             signature = hashlib.sha256(
                 json.dumps(
@@ -383,7 +409,7 @@ class PhotoCatalog:
 
     def preview(self, profile, device, asset, principal=None):
         token(asset)
-        with self.connection() as db:
+        with self.connection(readonly=True) as db:
             self._device(db, device, profile, principal)
             row = db.execute(
                 "SELECT p.preview" + self._visible() + " AND p.asset=?",

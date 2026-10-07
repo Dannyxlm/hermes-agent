@@ -157,8 +157,6 @@ def _section(provider, profile_id, home, auth):
     for i, entry in enumerate(entries):
         status = "dead" if entry.last_status == "dead" else "cooldown" if _entry_is_pool_exhausted(entry) else "ready"
         label = _safe_entry_label(entry, i + 1)
-        if "@" in label or "sk-" in label or "Bearer " in label:
-            label = f"Account {i + 1}"
         can_move = reason is None and status != "dead" and _can_move(provider, entries, entry.id)
         unavailable = reason
         if unavailable is None and status == "dead":

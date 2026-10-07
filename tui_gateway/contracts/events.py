@@ -110,7 +110,24 @@ event("notice", NoticePayload, doc="Informational one-liner for the session (cap
 # ── turn stream ───────────────────────────────────────────────────────────────────────────────
 
 
-event("message.start", None, doc="A turn began streaming; no payload.")
+class NoticePresentation(Payload):
+    """Display-only notice identity; never replaces the user-role model input."""
+
+    display_kind: str
+    display_text: str | None = None
+    delegation_id: str | None = None
+    process_ids: list[str] | None = None
+    task_count: int | None = None
+    completed_count: int | None = None
+    failed_count: int | None = None
+    duration_seconds: float | None = None
+
+
+class MessageStartPayload(Payload):
+    presentation: NoticePresentation | None = None
+
+
+event("message.start", MessageStartPayload, doc="A turn began streaming; optional display-only notice presentation.")
 
 
 class StreamDeltaPayload(Payload):

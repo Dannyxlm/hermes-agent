@@ -1247,9 +1247,9 @@ def _(rid, params: dict) -> dict:
     # ``_finalized`` sessions linger until the reaper pops them (they inflated the footer). Do NOT filter on
     # the WS-detached sentinel: detached is attachable until grace-reap, and ``hermes --tui`` rides stdio.
     # Keep insertion order (focused must not jump).
-    rows = [_session_live_item(sid, session, current) for sid, session in snapshot
-            if not session.get("_finalized") and _live_profile_matches(session, profile_home)]
-    from tui_gateway.inbox_summaries import summary_scope
+    from tui_gateway.inbox_summaries import live_items, summary_scope
+    rows = live_items([(sid, session) for sid, session in snapshot
+                       if not session.get("_finalized") and _live_profile_matches(session, profile_home)], current)
     return _ok(rid, {"sessions": rows, "inbox_summary_scope": summary_scope(profile or None)})
 
 

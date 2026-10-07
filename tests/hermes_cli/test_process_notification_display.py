@@ -127,4 +127,5 @@ def test_process_completion_display_keeps_payload_separate_across_surfaces(monke
     (_rid, _sid, _session, text, _what), kwargs = submitted[0]
     assert text == payload
     assert kwargs["display_kind"] == PROCESS_COMPLETE_DISPLAY_KIND
-    assert kwargs["display_metadata"] == {"display_text": expected}
+    assert kwargs["display_metadata"]["display_text"] == expected
+    assert kwargs["display_metadata"]["results"][0]["body"] == events[0]["output"]
