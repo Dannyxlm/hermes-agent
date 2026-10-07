@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from hermes_state_holders import read_only_db_uri
@@ -24,6 +25,10 @@ LOG=logging.getLogger(__name__)
 MAX_MESSAGES=2000
 MAX_SEGMENT_BYTES=4*1024*1024
 REFRESH_SECONDS=0.75
+# Files › Recent lists only files that exist now. Path text cut out of tool output or
+# code (`+str(generation`, `example.pdf'`) never reaches it. Each page may examine this
+# many candidates per requested row before handing back a cursor.
+RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
 _LOCKS={}
 _LOCK_GUARD=threading.Lock()
@@ -346,6 +351,29 @@ class DeliverablesIndex:
         meta['refresh_progress']=digest([meta.get('scan_signature'),meta.get('scan_before'),(meta.get('scan_session') or {}).get('id'),meta.get('scan_after'),meta.get('scan_cleanup'),publication])
         return meta
 
+    def _exists(self,row):
+        """True unless a workspace file row names a path that is not a regular file inside its
+        workspace right now. Bounded to one stat; symlinks may not escape the workspace."""
+        if row.get('kind')=='remote_media':
+            # Unencoded quotes, brackets and backticks are not legal in a URL: such a row is
+            # code cut out of a test or a log (`x.png'}])[0]['kind']`), never a delivery.
+            url=row.get('url')
+            if not isinstance(url,str): return False
+            try: tail=urlsplit(url); tail=tail.path+tail.query+tail.fragment
+            except ValueError: return False
+            return not any(c in tail for c in '\'"`[]{}<>\\ ')
+        if row.get('kind')!='file': return True
+        root=next((w.get('root_path') for w in self.workspaces if w.get('id')==row.get('workspace_id')),None)
+        relative=row.get('relative_path')
+        if not root or not isinstance(relative,str) or not relative: return False
+        try:
+            base=Path(root).resolve(strict=True)
+            target=(base/relative).resolve(strict=True)
+            target.relative_to(base)
+            return target.is_file()
+        except (OSError,ValueError,RuntimeError):
+            return False
+
     def query(self,workspace_id=None,session_id=None,kind=None,q='',cursor=None,limit=50,reveal=False):
         if not 1<=limit<=200 or len(q)>256 or kind not in (None,'file','remote_media','inline_content'):
             raise HTTPException(400,'Invalid deliverables query')
@@ -380,7 +408,16 @@ class DeliverablesIndex:
                 if after:
                     outer+=' AND (sort_time,id)>(?,?)'; params.extend(after)
                 sql='WITH ranked AS (SELECT id,sort_time,data,ROW_NUMBER() OVER (PARTITION BY id ORDER BY recent DESC,sort_time,sid) rank FROM entries WHERE '+where+') SELECT id,sort_time,data FROM ranked WHERE '+outer+' ORDER BY sort_time,id LIMIT ?'
-                fetched=list(db.execute(sql,(*params,limit+1)))
+                validates=not lineage
+                window=limit*RECENT_SCAN_FACTOR if validates else limit
+                candidates=list(db.execute(sql,(*params,window+1)))
+                fetched=[]; last=None; more=len(candidates)>window
+                for rid,sort_time,data in candidates[:window]:
+                    if len(fetched)>=limit:
+                        more=True; break
+                    last=(sort_time,rid)
+                    if validates and not self._exists(json.loads(data)): continue
+                    fetched.append((rid,sort_time,data))
                 items=[]
                 histories={rid: [] for rid, _, _ in fetched[:limit]}
                 if histories:
@@ -406,7 +443,8 @@ class DeliverablesIndex:
         except sqlite3.OperationalError as exc:
             if 'interrupt' not in str(exc): raise
             items=[]; fetched=[]; meta.update(partial=True,refresh_status='query_budget_exceeded')
-        next_cursor=base64.urlsafe_b64encode(json.dumps({'scope':scope,'after':[fetched[limit-1][1],fetched[limit-1][0]]}).encode()).decode() if len(fetched)>limit else None
+            last=None; more=False
+        next_cursor=base64.urlsafe_b64encode(json.dumps({'scope':scope,'after':[last[0],last[1]]}).encode()).decode() if more and last else None
         return {'items':items,'next_cursor':next_cursor,'coverage':{'indexed_sessions':meta.get('indexed_sessions',0),'total_sessions':meta.get('total_sessions'),'session_cap':None,'refresh_pending':meta['refresh_pending'],'refresh_progress':meta['refresh_progress']},'index_revision':meta.get('index_revision'),'updated_at':meta.get('updated_at'),'partial':meta.get('partial',True),'refresh_status':meta.get('refresh_status','cold')}
 
     def file_target(self,rid,reveal=False):
