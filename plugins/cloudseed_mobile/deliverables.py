@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 import re
 from urllib.parse import urlsplit
 from fastapi import HTTPException
-from plugins.cloudseed_mobile.workspace_files import digest, parts
+from plugins.cloudseed_mobile.workspace_files import digest, parts, workspace_aliases
 
 SCHEMA_VERSION=1
 MAX_STRING=1024*1024
@@ -67,17 +67,64 @@ def strings(value,status=None):
     if stack: status['truncated']=True
 
 
-def references(text):
+MEDIA_DELIVERY_EXTS = 'png jpg jpeg gif webp bmp tiff svg mp4 mov avi mkv webm 3gp mp3 m2a wav ogg opus m4a flac pdf docx doc odt rtf txt md epub xlsx xls ods csv tsv json xml yaml yml kmz kml geojson gpx pptx ppt odp key zip tar gz tgz bz2 xz 7z rar apk ipa html htm'.split()
+_MEDIA_EXTS = '|'.join(sorted(MEDIA_DELIVERY_EXTS, key=len, reverse=True))
+_MEDIA_ANCHORED = rf"(?:~/|/|[A-Za-z]:[/\\])\S+?(?:[^\S\n]+\S+?)*?\.(?:{_MEDIA_EXTS})(?=[\s`\"'*_,;:)\]}}]|MEDIA:|$)"
+_MEDIA_TAG = re.compile(r'MEDIA:[ \t]*(?P<path>`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\'|' + _MEDIA_ANCHORED + r'|[^\s`"]+)')
+
+
+def plausible_media_path(value):
+    return '/' in value or '\\' in value or re.search(r'\.[^.]', value) is not None
+
+
+def media_candidates(text):
+    """Desktop's quoted, extension-anchored, then whitespace-bounded grammar."""
+    for match in _MEDIA_TAG.finditer(text):
+        value = match.group('path').strip()
+        quoted = value[0] in '\"\'`' and value[-1] == value[0]
+        if quoted:
+            value = value[1:-1]
+        else:
+            value = value.rstrip('`"')
+            while value and value[-1] in '.,;:!?' and plausible_media_path(value[:-1]):
+                value = value[:-1]
+        if plausible_media_path(value):
+            yield match, value
+
+
+def references(text, assistant=False):
     if not isinstance(text,str): return
     text=text[:MAX_STRING]
-    for m in re.finditer(r'MEDIA:\s*(?:["\']([^"\'\n]+)["\']|([^\r\n<>]+))',text):
-        yield (m.group(1) or m.group(2)), 'delivered'
+    # Fenced examples remain searchable references, never assistant deliveries.
+    fenced = set(); fence = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r'^[ \t]{0,3}(`{3,}|~{3,})', line)
+        if fence:
+            fenced.add(offset)
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence):
+                fence = None
+        elif marker:
+            fence = marker[1]; fenced.add(offset)
+        offset += len(line)
+    code_spans = iter(re.finditer(r'(?<!`)(`+)(?!`)(.*?)\1(?!`)', text, re.S))
+    span = next(code_spans, None)
+    for match, value in media_candidates(text):
+        while span is not None and span.end() <= match.start():
+            span = next(code_spans, None)
+        in_code = span is not None and span.start() <= match.start() < span.end()
+        start = text.rfind('\n', 0, match.start()) + 1
+        end = text.find('\n', match.end())
+        if end < 0: end = len(text)
+        standalone = not text[start:match.start()].strip() and not text[match.end():end].strip()
+        action = 'delivered' if not assistant or (standalone and start not in fenced and not in_code) else 'referenced'
+        yield value, action
     for m in re.finditer(r'!?\[[^\]]*\]\(([^)\n]+)\)',text):
         value=m.group(1).strip().strip('<>')
         if not value.startswith(('http:','https:')): yield value,'referenced'
 
 
-def locator(value,session,workspaces):
+def locator(value,session,workspaces,aliases=None):
     if not isinstance(value,str) or len(value)>4096: return None
     if value.startswith('https://'):
         try:
@@ -95,6 +142,12 @@ def locator(value,session,workspaces):
         cwd=session.get('cwd')
         if not cwd: return None
         path=PurePosixPath(cwd)/path
+    aliases = workspace_aliases(workspaces) if aliases is None else aliases
+    for old, current in aliases.items():
+        try: relative = path.relative_to(PurePosixPath(old))
+        except ValueError: continue
+        path = PurePosixPath(current) / relative
+        break
     for ws in sorted(workspaces,key=lambda w:len(w['root_path']),reverse=True):
         try: rel=str(path.relative_to(PurePosixPath(ws['root_path'])))
         except ValueError: continue
@@ -108,12 +161,13 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
     status={} if status is None else status
     rows={}; results={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool' and isinstance(m.get('tool_call_id'),str) and m.get('tool_call_id') and m.get('active',1)!=0}
     seen=set(); count=0; ranks={}
+    aliases=workspace_aliases(workspaces)
     message_order={id(m):i for i,m in enumerate(messages)}
     def add(value,action,message,provenance,inline=None):
         nonlocal count
         if reference_limit is not None and count>=reference_limit:
             status['partial']=True; return
-        loc=locator(value,session,workspaces) if inline is None else {'kind':'inline_content','workspace_id':None,'relative_path':None,'display_name':value,'inline_content':inline,'version_hash':digest(inline)}
+        loc=locator(value,session,workspaces,aliases) if inline is None else {'kind':'inline_content','workspace_id':None,'relative_path':None,'display_name':value,'inline_content':inline,'version_hash':digest(inline)}
         if not loc: return
         identity=[profile,loc.get('workspace_id'),loc.get('relative_path') or loc.get('url') or [session['id'],loc.get('version_hash')]]
         rid=digest(identity)
@@ -143,7 +197,7 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
             content=m.get('content') or ''
             for _,text in strings(content,status):
                 text=visible(text)
-                for value,action in references(text): add(value,action,m,'assistant_reference')
+                for value,action in references(text, assistant=True): add(value,action,m,'assistant_reference')
                 for match in re.finditer(r'```(html|svg|[a-zA-Z0-9_+-]+)\s*\n(.*?)\n```',text,re.S):
                     lang,body=match.groups()
                     threshold={'html':160,'svg':2000}.get(lang,3000)
@@ -175,7 +229,7 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
                 destination=args.get('destination') or args.get('new_path')
                 if destination: add(destination,outcome,result or m,'tool:'+name)
                 if name.startswith(('delete','move')) and outcome==action and value:
-                    loc=locator(value,session,workspaces)
+                    loc=locator(value,session,workspaces,aliases)
                     if loc:
                         for row in rows.values():
                             if row.get('relative_path')==loc.get('relative_path') and row.get('workspace_id')==loc.get('workspace_id'): row['availability']='deleted'

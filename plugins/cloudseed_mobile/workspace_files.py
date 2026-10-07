@@ -142,6 +142,31 @@ def workspaces(profile, include_generation=False):
     return {'items':sorted(items,key=lambda x:(x['name'],x['id'])),'partial':len(roots)>=1000}
 
 
+def workspace_aliases(workspaces):
+    """Only direct parent links to already-granted sibling roots are aliases."""
+    granted = {Path(w['root_path']) for w in workspaces}
+    aliases = {}
+    for parent in {root.parent for root in granted}:
+        try:
+            fd = open_absolute_directory(parent)
+        except (OSError, HTTPException):
+            continue
+        try:
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    if not entry.is_symlink(): continue
+                    try:
+                        target = Path(os.readlink(entry.name, dir_fd=fd))
+                    except OSError:
+                        continue
+                    target = Path(os.path.abspath(parent / target))
+                    if target.parent == parent and target in granted:
+                        aliases[str(parent / entry.name)] = str(target)
+        finally:
+            os.close(fd)
+    return aliases
+
+
 def workspace(profile,wid,generation=False):
     for item in workspaces(profile, generation)['items']:
         if item['id']==wid: return Path(item['root_path'])

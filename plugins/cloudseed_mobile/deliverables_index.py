@@ -216,14 +216,14 @@ class DeliverablesIndex:
                 # Old runtimes upsert metadata without removing unknown keys.
                 # Their lineage write is the signal to rebuild after rollback.
                 legacy=cache.execute("SELECT 1 FROM meta WHERE key='lineage'").fetchone() is not None
-                if (not legacy and meta.get('scan_version')==3 and meta.get('source_signature')==signature
+                if (not legacy and meta.get('scan_version')==4 and meta.get('source_signature')==signature
                     and meta.get('grant_signature')==grant_signature and 'scan_signature' not in meta
                     and meta.get('refresh_status') in {'ready','partial'}): return
-                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=3:
-                    reconcile_legacy=legacy or meta.get('scan_version')!=3
+                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=4:
+                    reconcile_legacy=legacy or meta.get('scan_version')!=4
                     generation=meta.get('generation') if meta.get('grant_signature')==grant_signature else None
                     epoch=cache.execute('SELECT COALESCE(MAX(scan_epoch),0) FROM session_nodes').fetchone()[0]
-                    meta={'scan_version':3,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+                    meta={'scan_version':4,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
                     if reconcile_legacy and cache.execute('SELECT 1 FROM segments LIMIT 1').fetchone():
                         meta['legacy_after']=None
                     cache.execute('DELETE FROM staged')
@@ -330,7 +330,7 @@ class DeliverablesIndex:
         source_available=(self.home/'state.db').is_file() and not (self.home/'state.db').is_symlink()
         grants_current=meta.get('grant_signature')==digest(self.workspaces)
         source_current=meta.get('source_signature')==source_signature(self.home)
-        scan_current=not legacy and meta.get('scan_version')==3
+        scan_current=not legacy and meta.get('scan_version')==4
         if not grants_current or not source_available:
             meta.update(partial=True,refresh_status='refresh_pending',generation=None)
         elif not source_current or not scan_current:

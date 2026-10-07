@@ -57,9 +57,9 @@ def test_latest_successful_occurrence_wins_not_extraction_order():
                   {'id':3,'timestamp':3,'role':'tool','tool_call_id':'b','content':{'success':True}}])
     assert rows[0]['action']=='edited' and rows[0]['observed_at']==3
     rows=project([{'id':1,'role':'assistant','content':'MEDIA: /granted/outputs/exact,'}])
-    assert rows[0]['relative_path']=='outputs/exact,'
+    assert rows[0]['relative_path']=='outputs/exact'
     rows=project([{'id':1,'role':'assistant','content':'MEDIA: /granted/outputs/my report.unknown'}])
-    assert rows[0]['relative_path']=='outputs/my report.unknown'
+    assert rows[0]['relative_path']=='outputs/my'
 
 
 def test_inline_versions_and_message_uid_dedup():
