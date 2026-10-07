@@ -27,7 +27,11 @@ def test_recent_drops_fragments_and_missing_files_but_chat_history_keeps_them(cl
     root, wid = setup_root(c, home)
     (root/'outputs/real.pdf').write_bytes(b'%PDF synthetic')
     grep_output = "test.py:12:    assert x == 'MEDIA:+str(generation'\nMEDIA:outputs/example.pdf'\nMEDIA:" + str(root/'outputs/real.pdf')
-    seed(home, root, [('tool', grep_output, 'terminal'), ('assistant', 'MEDIA: ' + str(root/'outputs/report.md'), None)])
+    # Reader-tool output (terminal/grep) is reference-only even when a line names a
+    # real file; the assistant's own standalone directive is what delivers it.
+    seed(home, root, [('tool', grep_output, 'terminal'),
+                      ('assistant', 'MEDIA: ' + str(root/'outputs/real.pdf'), None),
+                      ('assistant', 'MEDIA: ' + str(root/'outputs/report.md'), None)])
     index = ix.DeliverablesIndex(home, 'default', [{'id': wid, 'root_path': str(root), 'name': 'Fixture'}])
     index.refresh()
     assert recent(index) == {'outputs/real.pdf'}

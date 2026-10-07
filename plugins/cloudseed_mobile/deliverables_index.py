@@ -157,7 +157,7 @@ class DeliverablesIndex:
         for rid,data,inline in rows:
             if stopped(): break
             row=json.loads(data)
-            recent=not row.get('subagent',False) and row.get('availability') not in {'unavailable','deleted'} and row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
+            recent=not row.get('subagent',False) and row.get('availability')!='deleted' and row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
             search=' '.join(str(row.get(k) or '') for k in ('display_name','relative_path','source_chat_title')).casefold()
             search+=' '+next((w['name'] for w in self.workspaces if w['id']==row.get('workspace_id')),'').casefold()
             cache.execute('INSERT OR REPLACE INTO prepared_entries VALUES(?,?,?,?,?,?,?,?,?,?,?)',(sid,rid,generation,-(row.get('observed_at') or 0),row.get('workspace_id'),row['kind'],int(row.get('private',False)),int(recent),search,data,inline))
@@ -455,7 +455,9 @@ class DeliverablesIndex:
         row=json.loads(result[0])
         if row.get('private') and not reveal: raise HTTPException(403,'Explicit private reveal required')
         if row.get('availability')=='deleted': raise HTTPException(404,'File was deleted or moved')
-        if row.get('availability')=='unavailable': raise HTTPException(404,'File unavailable')
+        # Index-time 'unavailable' is history only: the file may have been saved since,
+        # so check it live (bounded, workspace-contained) rather than trusting the stamp.
+        if not self._exists(row): raise HTTPException(404,'File unavailable')
         return row['workspace_id'],row['relative_path']
 
     def content(self,rid,reveal=False):
