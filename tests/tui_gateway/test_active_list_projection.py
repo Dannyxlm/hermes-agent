@@ -35,6 +35,28 @@ def test_canonical_run_and_expected_absent_scopes_are_quiet(mobile_home, peer, c
         push.close()
 
 
+@pytest.mark.parametrize('compacted', [False, True])
+def test_active_list_excludes_rewound_replies(mobile_home, peer, monkeypatch, compacted):
+    monkeypatch.setattr(server, '_resolve_model', lambda: 'fixture')
+    with SessionDB(db_path=mobile_home / 'state.db') as db:
+        db.create_session('ordinary', 'desktop')
+        kept = db.append_message('ordinary', 'assistant', 'retained reply', timestamp=10)
+        if compacted:
+            db._write_sql('UPDATE messages SET active=0, compacted=1 WHERE id=?', (kept,))
+        revoked = db.append_message('ordinary', 'assistant', 'rewound reply', timestamp=20)
+        db.deactivate_message('ordinary', revoked)
+        db._write_sql("UPDATE sessions SET last_read_at=15 WHERE id='ordinary'")
+        assert [m['id'] for m in db.get_messages('ordinary', include_compacted=True)] == [kept]
+    server._sessions['live'] = {'session_key': 'ordinary', 'history': []}
+    row = rpc('session.active_list')['result']['sessions'][0]
+    assert row['last_assistant_reply'] == {
+        'row_id': kept, 'at': 10, 'preview': 'retained reply', 'unread': False}
+    with SessionDB(db_path=mobile_home / 'state.db') as db:
+        db.deactivate_message('ordinary', kept)
+        db._write_sql('UPDATE messages SET compacted=0 WHERE id=?', (kept,))
+    assert 'last_assistant_reply' not in rpc('session.active_list')['result']['sessions'][0]
+
+
 def test_unknown_stored_id_warns_once_per_session_interval(mobile_home, peer, monkeypatch, caplog):
     import time
     monkeypatch.setattr(server, '_resolve_model', lambda: 'fixture')

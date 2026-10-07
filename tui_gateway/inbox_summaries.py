@@ -126,6 +126,7 @@ def page_replies(db, rows):
         JOIN (SELECT session_id, MAX(id) AS max_id FROM messages
               WHERE session_id IN ({','.join('?' for _ in ids)})
                 AND role = 'assistant'
+                AND (active = 1 OR compacted = 1)
                 AND COALESCE(finish_reason, '') != 'tool_calls'
                 AND length(trim(COALESCE(content, ''), char(9)||char(10)||char(13)||' ')) > 0
               GROUP BY session_id) final ON m.id = final.max_id
