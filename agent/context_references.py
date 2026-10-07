@@ -317,6 +317,8 @@ def _read_file_reference(
 ) -> tuple[Expansion | None, str]:
     """Raw file I/O for an @file ref: ``(early, text)`` where ``early`` is a refusal block
     (then ``text`` is empty) or ``None`` with the text to inline."""
+    if (video_block := _uploaded_video_reference_block(ref, path)) is not None:
+        return (None, video_block), ""
     if _is_binary_file(path):
         # A bare "not supported" warning was a dead end (the model gave up); the file IS
         # on disk where the agent's tools run, so hand it an actionable block instead.
@@ -654,6 +656,27 @@ def _on_disk_reference_block(ref: ContextReference, path: Path, descriptor: str,
         f"📎 {ref.raw} ({descriptor}, {size}) — {reason} "
         f"It is available on disk at `{_agent_visible_path(path)}`. {guidance}"
     )
+
+
+def _uploaded_video_reference_block(ref: ContextReference, path: Path) -> str | None:
+    """A video the app uploaded (``video.attach``) has an evidence sidecar: expand into the
+    inbound-video note plus its frames/contact sheet/transcript instead of a bare binary stub.
+    Any other file (or a read problem) falls through to the normal handling."""
+    if path.suffix.lower() not in (".mp4", ".m4v", ".mov", ".webm"):
+        return None
+    try:
+        from tui_gateway import video_evidence
+        manifest = video_evidence.read_manifest(path)
+        if manifest is None:
+            return None
+        note = video_evidence.agent_note(path, manifest, visible=_agent_visible_path_str)
+    except Exception:
+        return None
+    return f"🎬 {ref.raw}\n{note}"
+
+
+def _agent_visible_path_str(raw: str) -> str:
+    return _agent_visible_path(Path(raw))
 
 
 def _binary_reference_block(ref: ContextReference, path: Path) -> str:
