@@ -3081,11 +3081,12 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
     inflight = _inflight_snapshot(session)
     queued = _queued_prompt_snapshot(session)
     preview = next((" ".join(text.split())[:160] for msg in reversed(history)
-                    if (text := _content_display_text(msg.get("content", msg.get("text", ""))).strip())), "")
+                    if (text := _notice_preview_text(msg).strip())), "")
     if queued:
         preview = " ".join(str(queued.get("user") or preview).split())[:160]
     elif inflight:
-        preview = " ".join(str(inflight.get("assistant") or inflight.get("user") or preview).split())[:160]
+        user_preview = _notice_preview_text({**inflight, "content": inflight.get("user", "")})
+        preview = " ".join(str(inflight.get("assistant") or user_preview or preview).split())[:160]
     now = time.time()
     from tui_gateway.server_requests import attention_summaries
     attention = attention_summaries([sid]).get(sid)
