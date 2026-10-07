@@ -3096,14 +3096,15 @@ def _session_live_title(session: dict, key: str) -> str:
     return title
 
 
-def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
+def _session_live_item(sid: str, session: dict, current_sid: str = "", *, projection=None) -> dict:
     key = _session_lookup_key(session, fallback=sid)
     agent = session.get("agent")
-    history = list(session.get("history") or [])
+    history = session.get("history") or []
     status = _session_live_status(sid, session)
     inflight = _inflight_snapshot(session)
     queued = _queued_prompt_snapshot(session)
-    preview = next((" ".join(text.split())[:160] for msg in reversed(history)
+    from itertools import islice
+    preview = next((" ".join(text.split())[:160] for msg in islice(reversed(history), 64)
                     if (text := _notice_preview_text(msg).strip())), "")
     if queued:
         preview = " ".join(str(queued.get("user") or preview).split())[:160]
@@ -3115,12 +3116,11 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
     attention = attention_summaries([sid]).get(sid)
     pending = {"pending_kind": attention["kind"], "pending_count": attention["count"],
                "pending_revision": attention["revision"]} if attention else {}
-    from tui_gateway.inbox_summaries import latest_run, live_reply
-    run = latest_run(session, _hermes_home, key)
-    reply = live_reply(session, _hermes_home, key)
+    if projection is None:
+        from tui_gateway.inbox_summaries import live_projections
+        projection = live_projections([(sid, key, session)], _hermes_home)[sid]
     return {
-        **({"last_assistant_reply": reply} if reply else {}),
-        **({"latest_run": run} if run else {}),
+        **{name: value for name, value in projection.items() if name != "title"},
         **pending,
         "current": sid == current_sid, "id": sid,
         "profile": profile_name_for_home(session.get("profile_home") or _hermes_home),
@@ -3128,7 +3128,7 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
         "message_count": len(history),
         "model": str(getattr(agent, "model", "") or _resolve_model()), "preview": preview,
         "session_key": key, "started_at": float(session.get("created_at") or now), "status": status,
-        "title": _session_live_title(session, key),
+        "title": str(projection.get("title") or session.get("pending_title") or "").strip(),
     }
 
 

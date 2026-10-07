@@ -3,6 +3,7 @@ from pathlib import Path
 import math
 import re
 import sys
+from threading import Lock
 
 from . import server_requests
 
@@ -17,24 +18,100 @@ def summary_scope(profile, *, replies_complete=None):
     return scope
 
 
-def latest_run(session, launch_home, stored_id):
-    """Use the ordinary producer's exact destination, not a cached runtime run id."""
+_WARNING_INTERVAL = 60
+
+# Active-list requests can overlap on the dispatch pool.
+_WARNING_LOCK = Lock()
+
+
+def _warn_unavailable(session, error):
     import logging
+    import time
+    now = time.monotonic()
+    with _WARNING_LOCK:
+        if now - session.get('_inbox_warning_at', -_WARNING_INTERVAL) < _WARNING_INTERVAL:
+            return
+        session['_inbox_warning_at'] = now
+    logging.getLogger(__name__).warning('Inbox run summary unavailable (%s)', type(error).__name__)
+
+
+def _runs_readonly(path, keys):
+    import sqlite3
+    from hermes_state_holders import read_only_db_uri
+    db = sqlite3.connect(read_only_db_uri(path), uri=True)
+    try:
+        db.execute('PRAGMA query_only=ON')
+        db.row_factory = sqlite3.Row
+        rows = db.execute(f"""SELECT scope,run_id,status,updated_at FROM (
+            SELECT scope,run_id,status,updated_at,
+                   ROW_NUMBER() OVER (PARTITION BY scope ORDER BY started_at DESC,rowid DESC) AS position
+            FROM runs WHERE scope IN ({','.join('?' for _ in keys)})
+        ) WHERE position=1""", keys).fetchall()
+        return {row['scope']: {'run_id': row['run_id'], 'status': row['status'], 'at': row['updated_at']} for row in rows}
+    finally:
+        db.close()
+
+
+def live_projections(entries, launch_home):
+    """One metadata/reply read per profile and one run read for the whole list."""
     import sqlite3
     from hermes_constants import profile_name_for_home
-    from .mobile_session_scope import resolve_destination
-    from .mobile_push_store import PushStore
-    path = Path(launch_home) / "mobile-push" / "outbox.sqlite3"
-    if not path.is_file():
-        return None
-    home = Path(session.get("profile_home") or launch_home)
-    try:
-        scope, _tip, _title = resolve_destination(profile_name_for_home(home), home, stored_id)
-        run = PushStore.current_run_readonly(path, scope)
-    except (OSError, ValueError, sqlite3.Error) as error:
-        logging.getLogger(__name__).warning("Inbox run summary unavailable (%s)", type(error).__name__)
-        return None
-    return {"run_id": run["run_id"], "status": run["status"], "at": run["updated_at"]} if run else None
+    from hermes_state import SessionDB
+    from .mobile_session_scope import projection_destinations
+
+    result = {sid: {} for sid, _key, _session in entries}
+    groups, scopes = {}, {}
+    for sid, key, session in entries:
+        # A fresh runtime has no durable destination yet. It is not an error.
+        if not session.get('session_key') and not getattr(session.get('agent'), 'session_id', None):
+            continue
+        home = Path(session.get('profile_home') or launch_home)
+        groups.setdefault(home, []).append((sid, key, session))
+    for home, members in groups.items():
+        path = home / 'state.db'
+        if not path.is_file():
+            continue
+        try:
+            with SessionDB(db_path=path, read_only=True) as db:
+                destinations = projection_destinations(db, profile_name_for_home(home), list(dict.fromkeys(key for _, key, _ in members)))
+                roots = {dest['root']['id']: dest['root'] for dest in destinations.values()}
+                replies = page_replies(db, list(roots.values()))
+            for sid, key, session in members:
+                dest = destinations.get(key)
+                if dest is None:
+                    _warn_unavailable(session, ValueError('unknown stored session'))
+                    continue
+                result[sid]['title'] = dest['title']
+                if reply := replies.get(dest['root']['id']):
+                    result[sid]['last_assistant_reply'] = reply
+                scopes[sid] = dest['scope'].key
+        except (OSError, ValueError, sqlite3.Error, RuntimeError) as error:
+            for _sid, _key, session in members:
+                _warn_unavailable(session, error)
+    path = Path(launch_home) / 'mobile-push' / 'outbox.sqlite3'
+    if scopes and path.is_file():
+        try:
+            runs = _runs_readonly(path, list(set(scopes.values())))
+            for sid, key in scopes.items():
+                if key in runs:
+                    result[sid]['latest_run'] = runs[key]
+        except (OSError, sqlite3.Error) as error:
+            for _sid, _key, session in entries:
+                _warn_unavailable(session, error)
+    return result
+
+
+def live_items(snapshot, current_sid=""):
+    from tui_gateway import server
+    entries = [(sid, server._session_lookup_key(session, fallback=sid), session) for sid, session in snapshot]
+    projections = live_projections(entries, server._hermes_home)
+    return [server._session_live_item(sid, session, current_sid, projection=projections[sid])
+            for sid, _, session in entries]
+
+
+def latest_run(session, launch_home, stored_id):
+    """Choose the canonical-bot or ordinary producer scope explicitly."""
+    return live_projections([('', stored_id, session)], launch_home)[''].get('latest_run')
 
 
 def page_replies(db, rows):
