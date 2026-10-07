@@ -35,6 +35,6 @@ def test_assistant_admission(text, action):
     assert [(row['relative_path'], row['outcome']) for row in rows] == [('outputs/example.pdf', action)]
 
 
-def test_tool_media_is_delivery_even_inline():
+def test_tool_media_inline_is_only_a_reference():
     rows = project([{'id': 1, 'role': 'tool', 'content': 'Result MEDIA:outputs/example.pdf ready'}])
-    assert [(r['relative_path'], r['outcome']) for r in rows] == [('outputs/example.pdf', 'delivered')]
+    assert [(r['relative_path'], r['outcome']) for r in rows] == [('outputs/example.pdf', 'referenced')]
