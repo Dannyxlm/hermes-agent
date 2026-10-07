@@ -19,6 +19,7 @@ from tui_gateway import server
 from agent.message_sanitization import _sanitize_surrogates
 from tui_gateway.event_replay import replay_epoch
 from tui_gateway.transport import serialize_frame
+from hermes_cli.route_metrics import rpc_dispatch_metrics
 
 _log = logging.getLogger(__name__)
 
@@ -325,17 +326,18 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
             # dispatch() may schedule long handlers on the pool; it returns None then and the worker
             # writes the response itself via transport.write (a separate thread, so that is the safe
             # path). Inline handlers return the response dict, written here from the loop.
-            try:
-                resp = await asyncio.to_thread(server.dispatch, req, transport)
-            except Exception:
-                dispatch_crashes += 1
-                _log.exception("ws dispatch crash peer=%s id=%s method=%s", peer, req_id, req_method)
-                await _reply(_error(-32603, "internal error", req_id), "send_failed_after_dispatch_crash",
-                             "ws dispatch-crash reply send failed peer=%s id=%s method=%s", peer, req_id, req_method)
-                continue
-            if resp is not None:
-                await _reply(resp, "send_failed_after_response",
-                             "ws response send failed peer=%s id=%s method=%s", peer, req_id, req_method)
+            with rpc_dispatch_metrics(req_method, server._methods):
+                try:
+                    resp = await asyncio.to_thread(server.dispatch, req, transport)
+                except Exception:
+                    dispatch_crashes += 1
+                    _log.exception("ws dispatch crash peer=%s id=%s method=%s", peer, req_id, req_method)
+                    await _reply(_error(-32603, "internal error", req_id), "send_failed_after_dispatch_crash",
+                                 "ws dispatch-crash reply send failed peer=%s id=%s method=%s", peer, req_id, req_method)
+                    continue
+                if resp is not None:
+                    await _reply(resp, "send_failed_after_response",
+                                 "ws response send failed peer=%s id=%s method=%s", peer, req_id, req_method)
 
     async def _unless_dispatch_failed(aw: Any) -> Any:
         """Await *aw*, or raise _SendFailed once the dispatcher has ended on a reply it could not send."""

@@ -1474,6 +1474,12 @@ async def _dashboard_health_middleware(request: Request, call_next):
     return response
 
 
+# Aggregate metrics sit outside auth/host gates so rejected requests get fixed
+# buckets too. Pure ASGI preserves streamed bodies and supplies WS timing scope.
+from hermes_cli.route_metrics import RouteMetricsMiddleware
+app.add_middleware(RouteMetricsMiddleware)
+
+
 # Authenticated-route self-test: one in-process request per minute against a
 # cheap DB-touching route, catching "liveness fine but every authed request 500s".
 _DASHBOARD_SELFTEST_INTERVAL_SECONDS = 60.0
