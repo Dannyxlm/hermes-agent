@@ -135,7 +135,3 @@ def test_mobile_and_profile_rosters_do_not_restore_raw_preview(mobile_home, peer
     profile = next(row for row in rpc("profiles.list")["result"]["profiles"] if row["name"] == "ops")
     assert profile["canonical_session"]["preview"] == expected
     assert profile["last_session"]["preview"] == expected
-
-
-
-
