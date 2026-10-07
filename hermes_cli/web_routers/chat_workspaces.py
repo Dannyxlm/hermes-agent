@@ -38,6 +38,57 @@ def resolve_chat_cwd(raw: Optional[str]) -> Optional[str]:
     return resolved
 
 
+_ALIAS_SCAN_LIMIT = 500
+
+
+def _workspace_aliases(projects: list) -> dict:
+    """Old folder names per project root, for client-side name search only.
+
+    A workspace folder renamed to a short name often keeps its old long name as a symlink in the
+    same parent (``CloudSeed Strategy -> CloudSeed``). Clients can't see symlink targets through
+    ``fs/list``, so list them here: symlinks placed directly in the parent of a project folder
+    whose ``realpath`` is that folder. Read-only, names only: no new paths, no grant change, no
+    file contents. Unreadable parents are skipped; at most ``_ALIAS_SCAN_LIMIT`` entries are
+    examined per parent.
+    """
+    roots: dict = {}
+    for project in projects or []:
+        if not isinstance(project, dict) or project.get("archived"):
+            continue
+        paths = [project.get("primary_path")] + [
+            (folder or {}).get("path") for folder in (project.get("folders") or []) if isinstance(folder, dict)]
+        for path in paths:
+            if isinstance(path, str) and os.path.isabs(path):
+                root = os.path.normpath(path)
+                if root not in roots:
+                    try:
+                        roots[root] = os.path.realpath(root)
+                    except OSError:
+                        continue
+    by_parent: dict = {}
+    for root, real in roots.items():
+        by_parent.setdefault(os.path.dirname(root), {}).setdefault(real, []).append(root)
+    aliases: dict = {}
+    for parent, targets in by_parent.items():
+        try:
+            with os.scandir(parent) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= _ALIAS_SCAN_LIMIT:
+                        break
+                    try:
+                        if not entry.is_symlink():
+                            continue
+                        target = os.path.realpath(entry.path)
+                    except OSError:
+                        continue
+                    for root in targets.get(target, []):
+                        if entry.name != os.path.basename(root):
+                            aliases.setdefault(root, []).append(entry.name)
+        except OSError:
+            continue
+    return {root: sorted(set(names)) for root, names in aliases.items()}
+
+
 def _collect_workspaces(profile: Optional[str], scan: bool) -> dict:
     # The dashboard hosts the in-process gateway (``web_server`` imports ``tui_gateway.server``
     # at startup), so the sidebar's repo-discovery helpers are already bound there.
@@ -58,7 +109,9 @@ def _collect_workspaces(profile: Optional[str], scan: bool) -> dict:
     default_cwd = gateway._completion_cwd({"profile": profile} if profile else {})
     return {
         "projects": projects, "repos": repos, "default_cwd": default_cwd,
-        "home": str(Path.home()), "scan_enabled": bool(policy["enabled"])}
+        "home": str(Path.home()), "scan_enabled": bool(policy["enabled"]),
+        # Additive: old long folder names (symlinks) per project root, for name search only.
+        "aliases": _workspace_aliases(projects)}
 
 
 @router.get("/api/chat/workspaces")
