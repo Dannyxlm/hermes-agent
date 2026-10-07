@@ -134,6 +134,19 @@ def test_subagent_source_excluded_but_parent_and_compression_reply_count(client,
     assert [row['stored_session_id'] for row in index.query()['items']] == ['continued']
 
 
+def test_delegate_child_with_inherited_source_is_excluded(client):
+    """Real delegate children often inherit the parent's surface (desktop/tui) as
+    `source`; the delegation marker in model_config is the structural signal."""
+    index, _, home = index_messages(client, [{'tool_name': 'custom_producer', 'content': 'MEDIA:$ROOT/outputs/real.png'}],
+                                    parent_session_id='parent', source='desktop', title='Renamed worker')
+    with sqlite3.connect(home / 'state.db') as db:
+        db.execute('ALTER TABLE sessions ADD COLUMN model_config TEXT')
+        db.execute('UPDATE sessions SET model_config=?', ('{"_delegate_from": "parent", "max_iterations": 750}',))
+    index.refresh()
+    assert index.query()['items'] == []
+    assert len(index.query(session_id='0')['items']) == 1
+
+
 def test_scan_v4_false_tool_delivery_is_rebuilt(client, monkeypatch):
     with monkeypatch.context() as m:
         # Freeze an actual v4-style row without changing the new reader policy.

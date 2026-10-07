@@ -175,7 +175,7 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
     aliases=workspace_aliases(workspaces)
     roots={w['id']:w['root_path'] for w in workspaces}
     availability={}
-    subagent=bool(session.get('parent_session_id') and session.get('source') in {'subagent','delegate'})
+    subagent=bool(session.get('parent_session_id') and (session.get('source') in {'subagent','delegate'} or session.get('delegate_child')))
     message_order={id(m):i for i,m in enumerate(messages)}
     def add(value,action,message,provenance,inline=None):
         nonlocal count

@@ -242,6 +242,10 @@ class DeliverablesIndex:
                     session_columns={r[1] for r in source.execute('PRAGMA table_info(sessions)')}
                     selected_columns=['rowid AS scan_rowid']+[c for c in ('id','cwd','source','parent_session_id','end_reason','archived','hidden','git_metadata_generation','rewind_count') if c in session_columns]
                     if 'title' in session_columns: selected_columns.append('substr(title,1,512) AS title')
+                    # Delegate children often inherit the parent's surface as `source`;
+                    # the delegation marker Hermes writes into model_config is structural.
+                    if 'model_config' in session_columns:
+                        selected_columns.append("instr(coalesce(model_config,''),'\"_delegate_from\"')>0 AS delegate_child")
                     if 'scan_signature' not in meta:
                         total=source.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
                         meta.update(scan_signature=signature,scan_before=None,indexed_sessions=0,incomplete_segments=False,
