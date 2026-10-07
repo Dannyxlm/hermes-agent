@@ -1397,6 +1397,40 @@ class SessionMessagesMixin:
         """Audit: every row; display: active plus compaction-archived (never Undo/Rewind rows); default: live."""
         return "" if include_inactive else (_DISPLAY_ACTIVE_CLAUSE if include_compacted else " AND active = 1")
 
+    def _lineage_display_page(self, session_ids, *, active_clause, limit, offset=0, latest=False):
+        """Select canonical representatives before loading any page payloads.
+
+        Segment-local display_order cannot order a lineage. Identity is shared across
+        segments; its first eligible row orders it, while the active/newest copy wins.
+        Legacy read-only rows use the same identity computation inside SQLite.
+        """
+        names = ('role', 'content', 'timestamp', 'tool_call_id', 'tool_calls', 'tool_name',
+                 'display_kind', 'display_metadata')
+
+        def identity(*values):
+            return self._display_identity(self._display_dedupe_key(dict(zip(names, values))))
+
+        def read(conn):
+            conn.create_function('lineage_display_identity', len(names), identity, deterministic=True)
+            direction = 'DESC' if latest else 'ASC'
+            return conn.execute(f"""
+                WITH identities AS (
+                    SELECT id, active, COALESCE(display_identity,
+                        lineage_display_identity({', '.join(names)})) AS identity
+                    FROM messages WHERE session_id IN ({_placeholders(session_ids)})
+                        {active_clause}{DISPLAY_VISIBLE_SQL}
+                ), page AS (
+                    SELECT COALESCE(MAX(CASE WHEN active = 1 THEN id END), MAX(id)) AS id,
+                        MIN(id) AS logical_id
+                    FROM identities GROUP BY identity
+                    ORDER BY logical_id {direction} LIMIT ? OFFSET ?
+                )
+                SELECT chosen.* FROM page JOIN messages chosen ON chosen.id = page.id
+                ORDER BY page.logical_id ASC
+                """, (*session_ids, -1 if limit is None else limit, offset)).fetchall()
+
+        return self._read_retrying_ioerr(read)
+
     def get_messages(self, session_id: str, include_inactive: bool = False, include_compacted: bool = False,
                      limit: Optional[int] = None, offset: int = 0, latest: bool = False,
                      after_id: Optional[int] = None, include_ancestors: bool = False) -> List[Dict[str, Any]]:
@@ -1416,13 +1450,8 @@ class SessionMessagesMixin:
         # Ancestor expansion uses the resume lineage (explicit /branch copies stay single-session).
         session_ids = self._resume_lineage_ids(session_id) if include_ancestors else [session_id]
         if len(session_ids) > 1:
-            # Multi-segment lineage: dedupe-then-page on the merged display set, matching the
-            # canonical multi-segment projection in get_messages_as_conversation(include_ancestors=True).
-            # (display_order is per-segment and not comparable across segments, so the per-segment
-            # display_order paging below does not apply across a lineage.)
-            rows = self._dedupe_display_generations(self._read_all(
-                f"SELECT * FROM messages WHERE session_id IN ({_placeholders(session_ids)})" + active_clause + " ORDER BY id ASC", session_ids))
-            rows = rows[::-1][offset:][:limit][::-1] if latest else rows[offset:][:limit]
+            rows = self._lineage_display_page(
+                session_ids, active_clause=active_clause, limit=limit, offset=offset, latest=latest)
         elif include_compacted and not include_inactive and self._ensure_display_order(session_id):
             # _read_retrying_ioerr: mode=ro pooled readers see a transient IOERR mid-checkpoint (#100871).
             rows = self._read_retrying_ioerr(

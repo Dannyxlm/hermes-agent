@@ -6,6 +6,36 @@ import pytest
 
 from hermes_state import SessionDB
 from tui_gateway import mobile_history_cache, server
+from tests.hermes_cli.test_sessions_messages_paging import lineage
+
+
+@pytest.mark.parametrize("size", [50, 100])
+def test_long_lineage_mobile_exact_pages(lineage, history_cache, size):
+    db, expected = lineage
+    page = server._mobile_history_page(db, "tip", ["root", "middle", "tip"], {"limit": size})
+    assert [(m["row_id"], m["text"]) for m in page["messages"]] == expected[-size:]
+    assert page["has_more"]
+    older = server._mobile_history_page(db, "tip", ["root", "middle", "tip"],
+                                       {"limit": size, "before_row_id": page["before_row_id"]})
+    assert [(m["row_id"], m["text"]) for m in older["messages"]] == expected[-2*size:-size]
+
+
+def test_mobile_materializes_only_page_plus_lookahead(lineage, history_cache):
+    db, expected = lineage
+    rows_read = []
+    factory = db._conn.row_factory
+    def count(cursor, row):
+        if 'content' in [col[0] for col in cursor.description]:
+            rows_read.append(1)
+        return factory(cursor, row)
+    db._conn.row_factory = count
+    try:
+        page = server._mobile_history_page(db, 'tip', ['root', 'middle', 'tip'], {'limit': 100})
+    finally:
+        db._conn.row_factory = factory
+    assert [(m['row_id'], m['text']) for m in page['messages']] == expected[-100:]
+    assert len(rows_read) == 101
+
 
 
 @pytest.fixture
@@ -21,7 +51,8 @@ def _page(home, *, tip="root", chain=None, **params):
         return server._mobile_history_page(reader, tip, chain or [tip], params)
 
 
-def test_repeated_pages_skip_lineage_work_but_commits_refresh_every_byte(tmp_path, monkeypatch, history_cache):
+@pytest.mark.parametrize('indexed', [False, True])
+def test_repeated_pages_skip_lineage_work_but_commits_refresh_every_byte(tmp_path, monkeypatch, history_cache, indexed):
     from agent import context_compressor
 
     visits = []
@@ -36,12 +67,14 @@ def test_repeated_pages_skip_lineage_work_but_commits_refresh_every_byte(tmp_pat
         writer.append_message("root", "user", text, timestamp=10)
         writer.append_message("root", "assistant", "middle", timestamp=20)
         writer.append_message("root", "user", "latest", timestamp=30)
+        if not indexed:
+            writer._conn.execute('UPDATE messages SET display_identity=NULL, display_order=NULL')
         first = _page(tmp_path, limit=1)
         cursor = first["before_row_id"]
         oldest = _page(tmp_path, limit=2, before_row_id=cursor)
         assert [m["text"] for m in oldest["messages"]] == [text.strip(), "middle"]
         decoded = len(visits)
-        assert decoded > 0
+        assert decoded == 0 if indexed else decoded > 0
         assert _page(tmp_path, limit=1) == first
         assert _page(tmp_path, limit=2, before_row_id=cursor) == oldest
         assert len(visits) == decoded  # Fresh handles still avoid re-decoding the lineage.
