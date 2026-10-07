@@ -322,6 +322,16 @@ async def _lifespan(app: "FastAPI"):
         selftest_task.cancel()
         auto_archive_task.cancel()
         await PTY_REGISTRY.close_all()
+
+        # PtySession.close() removes markers owned by live registry sessions.
+        # This second pass cleans any channel markers left in app state,
+        # including stale paths from sessions reaped earlier.
+        for marker in set(_get_pty_active_session_files(app).values()):
+            try:
+                marker.unlink(missing_ok=True)
+            except OSError:
+                pass
+
         # Stop the managed llama-server with its parent (an orphan pins VRAM).
         try:
             from hermes_cli.local_runtime.bootstrap import shutdown_local_runtime
@@ -440,16 +450,6 @@ _DASHBOARD_EMBEDDED_CHAT_ENABLED = True
 # Desktop file.attach sends a whole base64 data URL in one JSON-RPC frame;
 # uvicorn's 16 MiB default rejects files under the 256 MiB raw attach cap.
 _DESKTOP_ATTACHMENT_WS_MAX_BYTES = 384 * 1024 * 1024
-
-
-# CORS: localhost origins only — allow_origins=["*"] on 0.0.0.0 would let any
-# website read/modify config and secrets.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Endpoints that do NOT require the session token; everything else under /api/
 # is gated below. Shared with the OAuth gate so the two allowlists cannot
@@ -1463,7 +1463,7 @@ DASHBOARD_HEALTH = DashboardHealth()
 
 @app.middleware("http")
 async def _dashboard_health_middleware(request: Request, call_next):
-    """Outermost middleware (registered last): count unhandled exceptions and 5xx; re-raises, never alters."""
+    """Outermost non-CORS middleware: count unhandled exceptions and 5xx; re-raises, never alters."""
     try:
         response = await call_next(request)
     except Exception as exc:
@@ -1478,6 +1478,21 @@ async def _dashboard_health_middleware(request: Request, call_next):
 # buckets too. Pure ASGI preserves streamed bodies and supplies WS timing scope.
 from hermes_cli.route_metrics import RouteMetricsMiddleware
 app.add_middleware(RouteMetricsMiddleware)
+
+# CORS: restrict to localhost origins only.  The web UI is intended to run
+# locally; binding to 0.0.0.0 with allow_origins=["*"] would let any website
+# read/modify config and secrets.
+#
+# Registered AFTER all ``@app.middleware("http")`` decorators so it is the
+# *outermost* middleware (Starlette's onion: last-added runs first).
+# Without this, an OPTIONS preflight from a cross-origin SPA hits the auth
+# middlewares before CORS can answer, producing 401 instead of 204 + headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Authenticated-route self-test: one in-process request per minute against a
@@ -2154,7 +2169,9 @@ def _on_server_started(
         # a piped stdout otherwise surfaces this minutes after the sentinel.
         print(f"  Hermes backend listening on {host}:{actual_port}", flush=True)
     else:
-        print(f"  Hermes Web UI → http://{host}:{actual_port}")
+        from hermes_cli.url_utils import format_url_host
+
+        print(f"  Hermes Web UI → http://{format_url_host(host)}:{actual_port}")
     _maybe_open_browser(host, actual_port, open_browser, initial_profile)
 
     if start_mcp_discovery_after_bind:

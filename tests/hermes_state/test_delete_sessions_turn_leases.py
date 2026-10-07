@@ -36,3 +36,22 @@ def test_parent_delete_waits_for_active_persistent_delegate(tmp_path):
         assert db.get_session("delegate") is None
     finally:
         db.close()
+
+
+def test_chain_delete_waits_for_delegate_on_earlier_segment(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    try:
+        db.create_session("root", source="tui")
+        db.end_session("root", "compression")
+        db.create_session("tip", source="tui", parent_session_id="root")
+        db.create_session("delegate", source="subagent", parent_session_id="root",
+                          model_config={"_delegate_from": "root"})
+        assert db.try_acquire_session_turn_lease("delegate", "foreign-delegate-holder")
+        with pytest.raises(SessionTurnLeaseLostError):
+            db.delete_sessions(["tip"], include_compression_chain=True)
+        assert all(db.get_session(sid) is not None for sid in ("root", "tip", "delegate"))
+        db.release_session_turn_lease("delegate", "foreign-delegate-holder")
+        assert db.delete_sessions(["tip"], include_compression_chain=True) == 1
+        assert all(db.get_session(sid) is None for sid in ("root", "tip", "delegate"))
+    finally:
+        db.close()
