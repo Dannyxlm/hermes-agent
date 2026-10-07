@@ -870,6 +870,17 @@ async def rename_session_endpoint(session_id: str, body: SessionRename):
         sid = _resolve_session_id(db, session_id)
         if not sid:
             raise HTTPException(status_code=404, detail=_NOT_FOUND)
+        if body.unread is not None:
+            # A read stamp edits the compression family; every segment must
+            # belong to the serving profile. Legacy NULL owners belong here.
+            owner = _serving_profile(body.profile)
+            family = db.get_compression_family(sid)
+            owners = db._read_all(
+                f"SELECT profile_name FROM sessions WHERE id IN ({','.join('?' for _ in family)})",
+                family,
+            )
+            if not owners or any(row["profile_name"] not in (None, owner) for row in owners):
+                raise HTTPException(status_code=404, detail=_NOT_FOUND)
         if body.title is None and all(getattr(body, f) is None for f in flags):
             raise HTTPException(
                 status_code=400,

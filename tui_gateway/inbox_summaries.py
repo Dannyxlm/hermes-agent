@@ -74,6 +74,30 @@ def page_replies(db, rows):
     return result
 
 
+def live_reply(session, launch_home, stored_id):
+    """Project the durable reply without hydrating a runtime or creating a store."""
+    import logging
+    import sqlite3
+    from hermes_state import SessionDB
+
+    path = Path(session.get("profile_home") or launch_home) / "state.db"
+    if not path.is_file():
+        return None
+    try:
+        with SessionDB(db_path=path, read_only=True) as db:
+            chain = db.get_compression_lineage(stored_id)
+            if not chain:
+                return None
+            root = db.get_session(chain[0])
+            if root is None:
+                return None
+            root["_lineage_ids"] = chain
+            return page_replies(db, [root]).get(root["id"])
+    except (OSError, sqlite3.Error, RuntimeError) as error:
+        logging.getLogger(__name__).warning("Inbox reply summary unavailable (%s)", type(error).__name__)
+        return None
+
+
 REPLY_PREVIEW_CHARS = 240
 
 
@@ -86,9 +110,21 @@ def reply_preview(text, limit=REPLY_PREVIEW_CHARS):
     body = re.sub(r"```.*?(```|$)", " ", text, flags=re.S)  # drop fenced code
     body = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", body)  # images
     body = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)  # links -> text
-    body = re.sub(r"(?m)^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+", "", body)  # block markers
-    body = re.sub(r"[*_`~]{1,3}", "", body)
-    body = " ".join(body.split())
+    body = re.sub(r"(?m)^\s*MEDIA:[^\n]*$", "", body)
+    lines = []
+    for line in body.splitlines():
+        heading = re.match(r"^\s{0,3}#{1,6}\s+", line)
+        line = re.sub(r"^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+", "", line)
+        line = re.sub(r"[*`]{1,3}", "", line)
+        # Paired emphasis/strike markers only: underscores within identifiers
+        # and an unpaired home-directory tilde are ordinary text.
+        line = re.sub(r"(?<!\w)_{1,3}(\S(?:.*?\S)?)_{1,3}(?!\w)", r"\1", line)
+        line = re.sub(r"~~(\S(?:.*?\S)?)~~", r"\1", line)
+        line = line.strip()
+        if heading and line and line[-1] not in ".!?:;":
+            line += "."
+        lines.append(line)
+    body = " ".join(" ".join(lines).split())
     if not body:
         return None
     if len(body) <= limit:

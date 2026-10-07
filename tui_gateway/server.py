@@ -2207,6 +2207,29 @@ def _get_usage(agent) -> dict:
         "completion": g("session_completion_tokens"), "total": g("session_total_tokens"),
         "calls": g("session_api_calls"),
     }
+    for field in ("cache_read", "cache_write"):
+        value = getattr(agent, f"session_{field}_tokens", None)
+        if value is not None:
+            usage[field] = value
+    # Live estimates remain current during a turn; persisted billing wins.
+    cost = {field: getattr(agent, f"session_{field}", None)
+            for field in ("estimated_cost_usd", "actual_cost_usd", "cost_status")}
+    with contextlib.suppress(Exception):
+        db = getattr(agent, "_session_db", None)
+        sid = getattr(agent, "session_id", None)
+        row = db._read_one(
+            "SELECT estimated_cost_usd, actual_cost_usd, cost_status FROM sessions WHERE id = ?",
+            (sid,)) if db is not None and sid else None
+        row = dict(row) if row is not None else None
+        if row and (row.get("actual_cost_usd") is not None
+                    or cost["cost_status"] in (None, "unknown")):
+            cost = {field: row.get(field) for field in cost}
+    usage["cost_status"] = cost["cost_status"] or "unknown"
+    amount = cost["actual_cost_usd"]
+    if amount is None and cost["cost_status"] not in (None, "unknown"):
+        amount = cost["estimated_cost_usd"]
+    if amount is not None:
+        usage["cost_usd"] = amount
     comp = getattr(agent, "context_compressor", None)
     if comp:
         from agent.context_breakdown import context_usage_fields
@@ -3092,9 +3115,11 @@ def _session_live_item(sid: str, session: dict, current_sid: str = "") -> dict:
     attention = attention_summaries([sid]).get(sid)
     pending = {"pending_kind": attention["kind"], "pending_count": attention["count"],
                "pending_revision": attention["revision"]} if attention else {}
-    from tui_gateway.inbox_summaries import latest_run
+    from tui_gateway.inbox_summaries import latest_run, live_reply
     run = latest_run(session, _hermes_home, key)
+    reply = live_reply(session, _hermes_home, key)
     return {
+        **({"last_assistant_reply": reply} if reply else {}),
         **({"latest_run": run} if run else {}),
         **pending,
         "current": sid == current_sid, "id": sid,
