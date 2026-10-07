@@ -168,6 +168,48 @@ def test_repeated_cross_chat_history_is_honestly_bounded(client):
     assert row['occurrences_partial'] and len(row['occurrences'])<=100
 
 
+@pytest.mark.parametrize('limit', [1, 10, 50])
+def test_occurrence_page_uses_one_bounded_query(client, monkeypatch, limit):
+    c, home = client
+    root, wid = setup_root(c, home)
+    store(home, root, 25)
+    with sqlite3.connect(home / 'state.db') as db:
+        body = '\n'.join('MEDIA: ' + str(root / f'outputs/shared-{i}.md') for i in range(50))
+        db.execute('UPDATE messages SET content=?', (body,))
+    index = ix.DeliverablesIndex(home, 'default', [{'id': wid, 'root_path': str(root), 'name': 'Fixture'}])
+    for _ in range(10):
+        index.refresh(max_sessions=100)
+        if not index.snapshot()['refresh_pending']: break
+    expected = index.query(limit=limit)
+    # Today's per-file query remains an independent ordering/bounds oracle.
+    with index.connection() as db:
+        generation = index._meta(db)['generation']
+        for row in expected['items']:
+            history = {}
+            history_rows = list(db.execute('SELECT data FROM entries WHERE generation=? AND id=? ORDER BY sort_time LIMIT 21', (generation, row['id'])))
+            for (data,) in history_rows[:20]:
+                for occurrence in json.loads(data)['occurrences']:
+                    if len(history) < 100: history[occurrence['id']] = occurrence
+            row['occurrences'] = list(history.values())
+            row['occurrences_partial'] = row.get('occurrences_partial', False) or len(history) >= 100 or len(history_rows) > 20
+    statements = []
+    real = sqlite3.connect
+    def connect(*args, **kwargs):
+        db = real(*args, **kwargs)
+        db.set_trace_callback(statements.append)
+        return db
+    monkeypatch.setattr(ix.sqlite3, 'connect', connect)
+    assert json.dumps(index.query(limit=limit)).encode() == json.dumps(expected).encode()
+    page_statement_count = len(statements)
+    history_queries = [sql for sql in statements if 'FROM entries' in sql and 'sort_time' in sql and 'recent DESC' not in sql]
+    assert len(history_queries) == 1
+    statements.clear()
+    index.query(limit=1)
+    assert len(statements) == page_statement_count
+    assert len(expected['items']) == limit
+    assert all(len(row['occurrences']) == 20 and row['occurrences_partial'] for row in expected['items'])
+
+
 def test_http_contract_examples(client):
     c,home=client; root,wid=setup_root(c,home); store(home,root,2)
     (root/'outputs/report.md').write_text('# Synthetic\n')
