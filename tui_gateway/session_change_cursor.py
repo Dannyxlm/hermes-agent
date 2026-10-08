@@ -104,7 +104,7 @@ class Change:
 
 class _Scope:
     __slots__ = ("key", "profile", "tag", "epoch", "seq", "rows", "log", "identity",
-                 "sent_seq", "sent_at")
+                 "sent_seq", "sent_at", "replaced")
 
     def __init__(self, key: str, profile: str | None):
         self.key = key
@@ -113,6 +113,7 @@ class _Scope:
         self.identity: tuple[int, int] | None = None
         self.sent_seq = 0
         self.sent_at = float("-inf")
+        self.replaced = False
         self.reset()
 
     def reset(self) -> None:
@@ -140,20 +141,23 @@ class _Scope:
         return seq >= self.seq or bool(self.log) and self.log[0][0] <= seq + 1
 
     def root_of(self, sid: str) -> str:
-        """Lineage-root hint from the observed rows (compression edges only)."""
-        rows = self.rows or {}
-        seen = {sid}
-        current = sid
-        while True:
-            row = rows.get(current)
-            parent = row.parent if row is not None else None
-            if not isinstance(parent, str) or parent in seen:
-                return current
-            parent_row = rows.get(parent)
-            if parent_row is None or parent_row.end_reason != "compression":
-                return current
-            seen.add(parent)
-            current = parent
+        return _root_in(self.rows or {}, sid)
+
+
+def _root_in(rows: dict, sid: str) -> str:
+    """Lineage-root hint from observed rows (compression edges only)."""
+    seen = {sid}
+    current = sid
+    while True:
+        row = rows.get(current)
+        parent = row.parent if row is not None else None
+        if not isinstance(parent, str) or parent in seen:
+            return current
+        parent_row = rows.get(parent)
+        if parent_row is None or parent_row.end_reason != "compression":
+            return current
+        seen.add(parent)
+        current = parent
 
 
 _lock = threading.RLock()
@@ -221,11 +225,12 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
         scope = _scope(key)
         if scope.identity is not None and identity is not None and identity != scope.identity:
             scope.reset()  # replaced store: every outstanding cursor must repair
+            scope.replaced = True
         if identity is not None:
             scope.identity = identity
         previous = scope.rows
         new_children = [sid for sid, (_e, values) in observed.items()
-                        if value(values, "parent_session_id") and (previous is None or sid not in previous)]
+                        if (previous is None or sid not in previous) and value(values, "parent_session_id")]
     delegates = set()
     if new_children and delegate_ids is not None:
         try:
@@ -254,6 +259,10 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
             previous = scope.rows
         scope.rows = rows
         if previous is None:
+            if scope.replaced:
+                # Tell subscribers at once: their cursors belong to the old epoch and must repair.
+                scope.replaced = False
+                scope.append(frozenset(), frozenset(), now)
             return None
         changed, removed, inbox_changed, activity = set(), set(), set(), set()
         loud = False
@@ -273,6 +282,11 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
                 loud = loud or not old.quiet
                 if old.inbox_eligible:
                     inbox_changed.add(sid)
+                # Deleting a compression tip makes its untouched root a list row again.
+                root = _root_in(previous, sid)
+                if root != sid and root in rows and rows[root].tracked:
+                    changed.add(root)
+                    loud = loud or not rows[root].quiet
         if not changed and not removed:
             return None
         scope.append(frozenset(changed), frozenset(removed), now, loud)
@@ -363,16 +377,20 @@ def changes_since(db_path, cursor) -> tuple[set | None, str | None]:
         return touched, current
 
 
-def lineage_candidates(db, session_ids: Iterable[str]) -> set:
+def lineage_candidates(db, session_ids: Iterable[str]) -> set | None:
     """Every id of every compression lineage touching ``session_ids`` (the canonical edge rule),
-    so a delta returns the lineage's projected row and tombstones every other id of it."""
+    so a delta returns the lineage's projected row and tombstones every other id of it. None when
+    a lineage cannot be read: a partial set would turn a live row into a tombstone."""
     candidates: set = set()
     for sid in session_ids:
+        if sid in candidates:
+            continue  # already on an expanded lineage's selected path
         candidates.add(sid)
         try:
             candidates.update(db.get_compression_lineage(sid) or ())
-        except Exception:  # noqa: BLE001 - a corrupt lineage still tombstones its own id
+        except Exception:  # noqa: BLE001 - unreadable lineage: the caller repairs instead
             logger.debug("lineage expansion failed", exc_info=True)
+            return None
     return candidates
 
 
@@ -402,6 +420,8 @@ def delta(db, cursor, read_rows: Callable[[list], list]) -> dict:
     if touched is None:
         return {"repair": True, "change_cursor": None}
     candidates = lineage_candidates(db, sorted(touched)) if touched else set()
+    if candidates is None:
+        return {"repair": True, "change_cursor": None}
     rows = read_rows(sorted(candidates)) if candidates else []
     candidates |= {sid for row in rows for sid in (row.get("_lineage_ids") or ())}
     returned = {row.get("id") for row in rows}

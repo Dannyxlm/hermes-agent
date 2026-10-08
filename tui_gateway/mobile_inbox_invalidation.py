@@ -24,7 +24,9 @@ the dirty flag, and the push worker sends one trailing hint when the window open
 text, profile or session ids.
 
 Detection is process-local and in memory; scheduling and the trailing flag are durable. The work
-runs on the push worker thread (:func:`process`), so the hooks themselves only record intent.
+runs on the push worker thread (:func:`process`), so the hooks themselves only record intent. The
+worker also reads every leased profile's store itself each pass (a stat when nothing moved), so
+replies are noticed with no client connected and for profiles this process never served.
 """
 
 from __future__ import annotations
@@ -239,6 +241,10 @@ def schedule(store, profiles, now=None) -> int:
 def flush_trailing(store, now=None) -> int:
     """Send the one trailing hint of every dirty lease whose window has opened."""
     now = store.clock() if now is None else now
+    with store._lock:  # read first: the common pass has nothing due and takes no write lock
+        if not _has_table(store._db, "inbox_hints") or not store._db.execute(
+                _LEASES + " AND h.dirty=1 AND h.last_sent_at<=? LIMIT 1", (now, now - MIN_INTERVAL_S)).fetchone():
+            return 0
     with store.transaction() as db:
         if not _has_table(db, "inbox_hints"):
             return 0
@@ -248,24 +254,55 @@ def flush_trailing(store, now=None) -> int:
     return len(due)
 
 
+def _observe_leased_stores(profiles) -> None:
+    """Read each leased profile's store through the shared journal (a stat when nothing moved)."""
+    from . import session_change_cursor
+    from .mobile_widget_inbox import profile_home
+    for profile in sorted(profiles):
+        try:
+            session_change_cursor.refresh(profile_home(profile) / "state.db")
+        except (ValueError, OSError):
+            continue  # a removed or invalid profile: its lease simply never fires
+
+
+def _requeue(profiles, activity) -> None:
+    with _lock:
+        _pending_profiles.update(profiles)
+        for db_path, (profile, ids) in activity.items():
+            _pending_activity.setdefault(db_path, (profile, set()))[1].update(ids)
+
+
 def process(store, now=None) -> int:
-    """One push-worker pass: turn recorded intent into scheduled hints. Never raises."""
+    """One push-worker pass: turn recorded intent into scheduled hints. Never raises; intent
+    that could not be scheduled is kept for the next pass."""
+    profiles, activity = set(), {}
     try:
         now = store.clock() if now is None else now
+        leased = _leased_profiles(store, now)
+        _observe_leased_stores(leased)
         with _lock:
             profiles = set(_pending_profiles)
             _pending_profiles.clear()
             activity = dict(_pending_activity)
             _pending_activity.clear()
         profiles |= _run_profiles(store, now)
-        leased = _leased_profiles(store, now)
-        for db_path, (profile, ids) in activity.items():
-            if profile in leased and profile not in profiles and _new_reply(db_path, sorted(ids)):
-                profiles.add(profile)
+        for db_path, (profile, ids) in list(activity.items()):
+            if profile not in leased or profile in profiles:
+                activity.pop(db_path)
+                continue
+            try:
+                if _new_reply(db_path, sorted(ids)):
+                    profiles.add(profile)
+                activity.pop(db_path)
+            except Exception as error:  # noqa: BLE001 - one unreadable store must not drop the others
+                logger.warning("Inbox reply check unavailable (%s)", type(error).__name__)
         sent = schedule(store, profiles & leased, now) if profiles & leased else 0
+        profiles = set()  # scheduled: a later failure must not re-queue them
+        _requeue(set(), activity)  # reply checks that failed retry next pass
         return sent + flush_trailing(store, now)
     except Exception as error:  # noqa: BLE001 - hints are best effort and must not stall deliveries
         logger.warning("Inbox hint scheduling unavailable (%s)", type(error).__name__)
+        _requeue(profiles, activity)
         return 0
 
 

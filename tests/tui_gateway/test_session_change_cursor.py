@@ -155,6 +155,21 @@ def test_malformed_model_config_does_not_unmask_delegate_runs(watched):
     assert len(cursor.payloads()) == 1
 
 
+
+def test_replaced_store_tells_subscribers_at_once(watched):
+    home, legacy, cursor = watched
+    server._broadcast_watched_changes(now=0.0)
+    session_change_cursor.refresh(home / "state.db")
+    before = session_change_cursor.current_cursor(home / "state.db")
+    replacement = home / "replacement.db"
+    shutil.copy(home / "state.db", replacement)
+    os.replace(replacement, home / "state.db")
+    server._broadcast_watched_changes(now=0.25)
+    [payload] = cursor.payloads()
+    assert payload["cursor"].split(".")[1] != before.split(".")[1]  # new epoch
+    assert payload["changed"] == [] and payload["tombstoned"] == []
+
+
 def test_cron_changes_are_quiet_until_a_loud_change(watched):
     home, legacy, cursor = watched
     with SessionDB(db_path=home / "state.db") as db:
@@ -241,6 +256,46 @@ def test_compression_returns_the_new_tip_and_tombstones_the_old_row(inbox, mobil
     assert [row["id"] for row in later["sessions"]] == ["lineage-2"]
     assert later["sessions"][0]["last_assistant_reply"]["preview"] == "tip only"
     assert "lineage-2" not in later["tombstones"]
+
+
+
+def test_deleting_only_the_tip_brings_the_root_row_back(inbox, mobile_home):
+    db_path = _ops_db(mobile_home)
+
+    def lineage(db):
+        db.create_session("lineage", "desktop")
+        db.append_message("lineage", "user", "hi")
+        db.end_session("lineage", "compression")
+        db.create_session("lineage-2", "desktop", parent_session_id="lineage")
+        db.append_message("lineage-2", "user", "continued")
+    _write(db_path, lineage)
+    full = _list(inbox, change_cursor=1)
+    assert "lineage-2" in {row["id"] for row in full["sessions"]}
+    _write(db_path, lambda db: db.delete_session("lineage-2"))
+    delta = _list(inbox, changed_since=full["change_cursor"])
+    # Same answer a full read gives: the root is a list row again, the tip is gone.
+    listed = {row["id"] for row in _list(inbox)["sessions"]}
+    assert "lineage" in listed and "lineage-2" not in listed
+    assert [row["id"] for row in delta["sessions"]] == ["lineage"]
+    assert delta["tombstones"] == ["lineage-2"]
+
+
+def test_unreadable_lineage_answers_repair_not_a_tombstone(inbox, mobile_home, monkeypatch):
+    db_path = _ops_db(mobile_home)
+    cursor = _list(inbox, change_cursor=1)["change_cursor"]
+    _write(db_path, lambda db: db.set_session_title("same", "still here"))
+
+    def corrupt(self, session_id):
+        raise RuntimeError("Compression lineage contains a cycle")
+    monkeypatch.setattr(SessionDB, "get_compression_lineage", corrupt)
+    answer = _list(inbox, changed_since=cursor)
+    assert answer["repair"] is True and answer["sessions"] == [] and answer["tombstones"] == []
+
+
+def test_oversized_cursor_is_repair_on_rest_like_rpc(inbox):
+    answer = _list(inbox, changed_since="sc1." + "a" * 200)
+    assert answer["repair"] is True and answer["change_cursor"] is None
+    assert rpc("session.list", profile="ops", changed_since="sc1." + "a" * 200)["result"]["repair"] is True
 
 
 def test_lost_expired_foreign_or_oversized_cursors_answer_repair(inbox, mobile_home, monkeypatch):

@@ -179,8 +179,7 @@ def get_sessions(
     limit: int = Query(20, ge=0, le=100), offset: int = Query(0, ge=0), min_messages: int = 0,
     archived: str = "exclude", order: str = "created", source: str = None, sources: str = None,
     exclude_sources: str = None, cwd_prefix: str = None, full: bool = False,
-    profile: Optional[str] = None, changed_since: Optional[str] = Query(None, max_length=128),
-    change_cursor: bool = False):
+    profile: Optional[str] = None, changed_since: Optional[str] = None, change_cursor: bool = False):
     """List sessions.
 
     ``order=recent`` sorts by latest activity across the compression chain, so

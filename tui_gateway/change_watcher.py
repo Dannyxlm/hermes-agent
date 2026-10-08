@@ -155,7 +155,8 @@ def _session_db_content_sig(db_path: Path):
     # Sizes join the guard: mtimes are jiffy-coarse, so two commits a few ms apart can share one,
     # and the cursor journal must not miss the second. A WAL append always grows the file.
     stamp = (mtime, *(_watcher_size(p) for p in (db_path, db_path.with_name(f"{db_path.name}-wal"))))
-    cache_key = str(db_path)
+    # One entry per real file: the watcher, list reads and the push worker spell homes differently.
+    cache_key = os.path.realpath(db_path)
     cached = _sessions_db_sig_cache.get(cache_key)
 
     if cached is not None and cached[0] == stamp:

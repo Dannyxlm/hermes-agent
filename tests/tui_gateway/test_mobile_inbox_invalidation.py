@@ -216,3 +216,48 @@ def test_rpc_register_is_owner_scoped_idempotent_and_revocable(push, peer):
     ids = {key: params[key] for key in ("installation_id", "connection_id")}
     assert rpc("mobile.inbox_push.unregister", **ids)["result"]["removed"] == 1
     assert "inbox_silent_push" in rpc("mobile.capabilities")["result"]["features"]
+
+
+def test_worker_notices_replies_with_no_watcher_or_client(push, monkeypatch):
+    """After a restart nothing may have served the profile or connected a client: the push
+    worker reads the leased store itself."""
+    service, now, _ids, _lease, db_path = push
+    session_change_cursor.reset_for_tests()
+    monkeypatch.setattr(server, "_sessions_db_sig_cache", {})
+    hints.reset_for_tests()
+    assert _pass(service, now, 1.0) == 0  # seeds the journal and the run watermark silently
+    with SessionDB(db_path=db_path) as db:  # no watcher pass, no list read
+        db.append_message("same", "assistant", "written by another process", finish_reason="stop")
+    assert _pass(service, now, 1.0) == 1
+
+
+def test_scheduling_failure_keeps_the_intent(push, monkeypatch):
+    service, now, *_rest = push
+    real = hints.schedule
+    calls = []
+
+    def flaky(store, profiles, now=None):
+        calls.append(set(profiles))
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return real(store, profiles, now)
+    monkeypatch.setattr(hints, "schedule", flaky)
+    hints.note_profile("ops")
+    assert _pass(service, now, 1.0) == 0
+    assert _pass(service, now, 1.0) == 1
+    assert calls == [{"ops"}, {"ops"}]
+
+
+def test_token_rotation_during_an_in_flight_send_keeps_the_lease(push):
+    from tui_gateway.mobile_push_provider import DeliveryResult
+    service, now, ids, lease, _db_path = push
+    hints.note_profile("ops")
+    hints.process(service.store)
+    job = service.store.claim()  # an APNs send is in flight with the old token
+    rotated = hints.register(service.store, PRINCIPAL, **ids, profile="ops", device_token="ef" * 32,
+                             environment="production")
+    assert (rotated["subscription_id"], rotated["scope_token"]) == (lease["subscription_id"], lease["scope_token"])
+    service.store.finish(job, DeliveryResult("invalid", "token_invalid"))  # Apple rejects the OLD token
+    now[0] += 60  # past the retry backoff, well inside the hint's one-hour expiry
+    service.drain_once()  # the retry goes out with the rotated token; the lease survives
+    assert [j["token"] for j in service.sender.jobs] == ["ef" * 32]
