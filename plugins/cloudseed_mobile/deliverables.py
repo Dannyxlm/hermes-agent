@@ -13,6 +13,7 @@ import re
 from urllib.parse import urlsplit
 from fastapi import HTTPException
 from plugins.cloudseed_mobile.workspace_files import digest, open_beneath, parts, workspace_aliases
+from plugins.cloudseed_mobile.artifact_detect import artifact_slug, detect_artifact, display_name as artifact_display_name, fences
 
 SCHEMA_VERSION=1
 MAX_STRING=1024*1024
@@ -135,6 +136,17 @@ def references(text, assistant=False):
         if not value.startswith(('http:','https:')): yield value,'referenced'
 
 
+def delegate_child(session):
+    """Delegate children often inherit the parent's surface as `source`; the index
+    also reads the `_delegate_from` marker Hermes writes into model_config."""
+    return bool(session.get('parent_session_id') and (session.get('source') in {'subagent','delegate'} or session.get('delegate_child')))
+
+
+def earliest(*rows):
+    """An artifact version's place in message order is its first appearance."""
+    return min((r['artifact_first_seen'] for r in rows if r.get('artifact_first_seen')),default=None)
+
+
 def locator(value,session,workspaces,aliases=None):
     if not isinstance(value,str) or len(value)>4096: return None
     if value.startswith('https://'):
@@ -175,9 +187,12 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
     aliases=workspace_aliases(workspaces)
     roots={w['id']:w['root_path'] for w in workspaces}
     availability={}
-    subagent=bool(session.get('parent_session_id') and (session.get('source') in {'subagent','delegate'} or session.get('delegate_child')))
+    subagent=delegate_child(session)
     message_order={id(m):i for i,m in enumerate(messages)}
-    def add(value,action,message,provenance,inline=None):
+    # A compressed continuation keeps its chat's artifacts (KTD10); the index
+    # supplies the compression-lineage root, a bare projection uses the session.
+    lineage_root=session.get('lineage_root') or session['id']
+    def add(value,action,message,provenance,inline=None,artifact=None):
         nonlocal count
         if reference_limit is not None and count>=reference_limit:
             status['partial']=True; return
@@ -194,6 +209,11 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
         occurrence={'id':occurrence_id,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512]}
         row={'schema_version':SCHEMA_VERSION,'id':rid,'profile':profile,**loc,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],'display_type':mimetypes.guess_type(loc['display_name'])[0] or 'application/octet-stream','occurrences':[]}
         if subagent: row['subagent']=True
+        if artifact:
+            slug=artifact_slug(artifact['kind'],artifact['language'],artifact['title'])
+            seq=message['id'] if isinstance(message.get('id'),int) else message_order.get(id(message),0)
+            row.update(artifact_key=digest(['artifact',profile,lineage_root,slug]),artifact_kind=artifact['kind'],
+                       artifact_title=artifact['title'],artifact_slug=slug,artifact_first_seen=[time or 0,seq,mid])
         if loc['kind']=='file':
             if rid not in availability:
                 try:
@@ -206,9 +226,11 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
         rank=(action in {'created','edited','delivered'},time is not None,time or 0,message_order.get(id(message),0))
         if existing:
             history=existing['occurrences']
+            first=earliest(existing,row)
             if rank>=ranks[rid]:
                 row['occurrences']=history; rows[rid]=row; ranks[rid]=rank
             else: row=existing
+            if first: row['artifact_first_seen']=first
         else: rows[rid]=row; ranks[rid]=rank
         row['occurrences'].append(occurrence)
         if loc['kind']=='file':
@@ -221,12 +243,9 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
             for _,text in strings(content,status):
                 text=visible(text)
                 for value,action in references(text, assistant=True): add(value,action,m,'assistant_reference')
-                for match in re.finditer(r'```(html|svg|[a-zA-Z0-9_+-]+)\s*\n(.*?)\n```',text,re.S):
-                    lang,body=match.groups()
-                    threshold={'html':160,'svg':2000}.get(lang,3000)
-                    if lang in {'markdown','md','text','log','diff','mermaid'}: continue
-                    if len(body)>=threshold or (lang not in {'html','svg'} and body.count('\n')>=47):
-                        add('From chat.'+lang,'delivered',m,'assistant_fence',inline=body)
+                for language,body in fences(text):
+                    artifact=detect_artifact(language,body)
+                    if artifact: add(artifact_display_name(artifact),'delivered',m,'assistant_fence',inline=body,artifact=artifact)
             calls=decode(m.get('tool_calls') or [])
             if not isinstance(calls,list): continue
             if len(calls)>MAX_NODES: status['partial']=True

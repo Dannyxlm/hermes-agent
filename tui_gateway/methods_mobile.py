@@ -117,7 +117,8 @@ def _(rid, params):
                      "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery",
                      "video_upload"],
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
-                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1},
+                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
+                             "artifact_versions": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 

@@ -309,6 +309,7 @@ Paths append to `/api/plugins/cloudseed_mobile`; query defaults are listed here.
 | GET `/workspaces` | `profile` | `{items:[{id,name,root_path,quick_folders:{outputs,plans,reports}}],partial}`; quick-folder values are booleans |
 | GET `/deliverables` | `profile, workspace_id?, session_id?, kind?, q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,coverage,index_revision,updated_at,partial,refresh_status}` |
 | GET `/deliverables/content` | `profile, id, reveal=0` | `{id,profile,content,version_hash,display_type,not_saved_to_workspace:true}`; inline content only |
+| GET `/deliverables/versions` | `profile, artifact_key` | `{items:[{id,version_index,version_hash,observed_at,stored_session_id,message_id,byte_size}],version_count,partial}`; inline artifacts only, message order, newest 20 kept; unknown key is an empty list |
 | GET `/workspace-files` | `profile, workspace_id, path="", q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,partial,workspace_id,path}` |
 | GET `/workspace-files/read` | `profile, workspace_id + path` **or** `profile + id`; `reveal=0` | `{path,text,binary,truncated,byteSize,mime}`; `text:null` for binary/invalid UTF-8 |
 | GET `/workspace-files/download` | same target as read **or** `profile + media_path` | original streamed attachment bytes, MIME, Content-Length, `Cache-Control:no-store` |
@@ -332,6 +333,10 @@ Deliverable items carry `schema_version:1`, opaque `id`, `profile`, `kind`
 `outcome`, `provenance`, `occurrences`, `occurrences_partial`. File items carry
 `private` and optionally `availability:"deleted"`; remote items carry `url`;
 inline items carry `version_hash` but **never content in metadata lists**.
+Inline artifacts (`scan_version` 6, advertised as `mobile.capabilities`
+`feature_versions.artifact_versions: 1`) also carry `artifact_key`, `artifact_kind`
+(`html|svg|code`), `artifact_title`, `artifact_slug`, `version_index` (1-based, message
+order) and `version_count`, and their `display_name` is the title plus an extension.
 Occurrences carry `id,stored_session_id,message_id,observed_at,action,outcome,
 provenance,source_chat_title`. Actions/outcomes are
 `delivered|created|edited|read|referenced|write_failed|pending`. Unknown timestamps
@@ -340,8 +345,15 @@ are null, never request-time or filesystem timestamps. Unknown types stay visibl
 Write/patch/edit/move/delete/read intent is joined to tool results by tool_call_id;
 missing/unrecognized success stays pending and explicit errors never become
 production. Native untrusted-result wrappers are bounded. Assistant MEDIA,
-markdown local links, producer structured output and qualifying finished HTML/SVG/
-code fences are recognized. User imports, reasoning fields/blocks and terminal
+markdown local links, producer structured output and fences that pass Desktop's
+artifact rule (`artifact_detect.py`, a port of `apps/desktop/src/lib/artifact-detect.ts`
+checked against `tests/fixtures/artifact_detect_cases.json`, which Desktop vitest and
+the app XCTest also run) are recognized. An artifact is `(profile, compression-lineage
+root, kind:language:title-slug)`: a compressed continuation keeps it, a delegate child
+starts its own. Its versions are distinct bodies ordered by first appearance (message
+time, then message id), so a repeated body keeps its place and a backfilled older
+message never becomes the latest. Default Recent lists one row per artifact, its
+newest version that matches the same filters; `session_id` lists every version. User imports, reasoning fields/blocks and terminal
 prose are excluded. File identities fold cross-chat rows but retain occurrences;
 last successful production/delivery drives recency. Default Recent includes explicit
 deliveries plus successful production under `outputs`, `docs/plans`, `docs/reports`,
