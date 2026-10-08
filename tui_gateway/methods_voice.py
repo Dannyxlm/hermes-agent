@@ -444,10 +444,13 @@ def _(rid, params: dict) -> dict:
     """What the calling client handles. ``server_requests: true`` marks this connection as one that answers
     server→client requests; a WebSocket client that never sends it gets every such request failed fast
     instead of stalling the agent for the deadline (#112548)."""
-    from tui_gateway import server_requests
+    from tui_gateway import server_requests, session_change_cursor
     from tui_gateway.contracts import registry as contracts
     server_requests.advertise(_caller_transport(), bool(params.get("server_requests")))
-    return _ok(rid, {"server_requests": sorted(contracts.SERVER_REQUESTS), "declines_not_shown": True})
+    # Per-scope sessions.changed cursor frames (≤250 ms) instead of the payload-free 2 s frame.
+    session_change_cursor.subscribe(_caller_transport(), bool(params.get("session_change_cursor")))
+    return _ok(rid, {"server_requests": sorted(contracts.SERVER_REQUESTS), "declines_not_shown": True,
+                     "session_change_cursor": 1})
 
 
 @method("ping")

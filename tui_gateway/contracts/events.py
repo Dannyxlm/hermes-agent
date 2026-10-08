@@ -758,7 +758,21 @@ class ChangeSignalPayload(OpenPayload):
 
 
 event("cron.changed", ChangeSignalPayload, doc="cron/jobs.json moved; refetch the cron list.")
-event("sessions.changed", ChangeSignalPayload, doc="state.db moved; refetch the session list.")
+class SessionsChangedPayload(OpenPayload):
+    """``{}`` for clients without the cursor capability (refetch the list). A client that sent
+    ``client.capabilities {session_change_cursor: true}`` instead gets one frame per changed scope:
+    ``changed`` / ``tombstoned`` are lineage-root hints (bounded; ``truncated`` when cut), and the
+    authoritative delta is a list read with ``changed_since=<cursor>``."""
+
+    profile: str | None = None
+    cursor: str | None = None
+    changed: list[str] | None = None
+    tombstoned: list[str] | None = None
+    truncated: bool | None = None
+
+
+event("sessions.changed", SessionsChangedPayload,
+      doc="Session list changed. Cursor-aware clients get a per-scope cursor; others refetch.")
 event("platforms.changed", ChangeSignalPayload, doc="gateway_state.json moved; refetch platform status.")
 event("projects.changed", ChangeSignalPayload, doc="projects.db moved; refetch the project list + tree.")
 event("pairing.changed", ChangeSignalPayload, doc="Pairing state moved; refetch pairing.")
@@ -776,6 +790,7 @@ __all__ = [
     "PreviewOpenPayload", "PreviewRestartProgressPayload", "ReactionPayload", "ResumePhaseStatus",
     "ReviewSummaryPayload", "SessionControlSnapshot", "SessionControlUpdatePayload",
     "SessionReclaimedPayload", "SessionResumeProgressPayload", "SessionTitlePayload", "SessionUsagePayload",
+    "SessionsChangedPayload",
     "SetupReadyPayload", "SideAgentCompletePayload", "SkinPayload", "StatusUpdatePayload",
     "StreamDeltaPayload", "SubagentEventPayload", "SubagentOutputTailEntry", "TerminalClosePayload",
     "TerminalOutputPayload", "TipShowPayload", "TodoUpdatedPayload", "ToolCompletePayload",

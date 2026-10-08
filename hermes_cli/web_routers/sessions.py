@@ -179,12 +179,19 @@ def get_sessions(
     limit: int = Query(20, ge=0, le=100), offset: int = Query(0, ge=0), min_messages: int = 0,
     archived: str = "exclude", order: str = "created", source: str = None, sources: str = None,
     exclude_sources: str = None, cwd_prefix: str = None, full: bool = False,
-    profile: Optional[str] = None):
+    profile: Optional[str] = None, changed_since: Optional[str] = None, change_cursor: bool = False):
     """List sessions.
 
     ``order=recent`` sorts by latest activity across the compression chain, so
     a long-running chat stays on page one after it auto-compresses onto a fresh
     id.  Rows omit ``system_prompt`` / ``model_config`` unless ``full=1``.
+
+    Change cursor (``tui_gateway.session_change_cursor``, additive): ``change_cursor=1`` adds the
+    scope's ``change_cursor`` (taken before the rows are read; use page one's). ``changed_since=<cursor>``
+    returns, under the same filters, only the rows of lineages touched since that cursor plus
+    ``tombstones`` (row ids to drop) and the next ``change_cursor`` -- or ``repair: true`` when the
+    cursor is lost, foreign, expired, too far behind, or the filter lists untracked sources; then
+    do one full read. Without either parameter the response is unchanged.
     """
     if archived not in ("exclude", "only", "include"):
         raise HTTPException(
@@ -212,15 +219,36 @@ def get_sessions(
                 exclude_sources=exclude_list or None, cwd_prefix=(cwd_prefix or None),
                 min_message_count=min_message_count, include_archived=include_archived,
                 archived_only=archived_only, include_subagents=include_subagents)
-            sessions = db.list_sessions_rich(
-                limit=limit,
-                offset=offset,
-                order_by_last_active=order == "recent",
-                # Skip the system_prompt blob inside SQLite too (pairs with
-                # _strip_session_list_rows below).
-                compact_rows=not full,
-                include_pinned=True,
-                **scope)
+            cursor_fields: dict = {}
+            if changed_since is not None:
+                from tui_gateway import session_change_cursor as changes
+                if changes.listing_is_tracked(source=source, sources=source_list, exclude_sources=exclude_list,
+                                              include_subagents=include_subagents):
+                    answer = changes.delta(db, changed_since, lambda ids: db.list_sessions_rich(
+                        limit=len(ids), offset=0, order_by_last_active=order == "recent",
+                        compact_rows=not full, include_pinned=True, root_ids=ids, **scope))
+                else:  # the filter lists sessions the journal never tracks: a delta could miss them
+                    answer = {"repair": True, "change_cursor": None}
+                if answer["repair"]:
+                    return {"sessions": [], "tombstones": [], "delta": True, "repair": True,
+                            "change_cursor": None, "limit": limit, "offset": 0}
+                sessions, offset = answer["rows"], 0
+                cursor_fields = {"delta": True, "repair": False, "tombstones": answer["tombstones"],
+                                 "change_cursor": answer["change_cursor"]}
+            else:
+                if change_cursor:
+                    from tui_gateway import session_change_cursor as changes
+                    changes.refresh(db.db_path)  # the cursor must not be newer than these rows
+                    cursor_fields = {"change_cursor": changes.current_cursor(db.db_path)}
+                sessions = db.list_sessions_rich(
+                    limit=limit,
+                    offset=offset,
+                    order_by_last_active=order == "recent",
+                    # Skip the system_prompt blob inside SQLite too (pairs with
+                    # _strip_session_list_rows below).
+                    compact_rows=not full,
+                    include_pinned=True,
+                    **scope)
             total = db.session_count(exclude_children=True, **scope)
             now = time.time()
             row_profile = profile_name or _cron_default_profile()
@@ -247,7 +275,8 @@ def get_sessions(
             storage = {row_profile: STORAGE_CORRUPT} if storage_state(db.db_path) == STORAGE_CORRUPT else {}
             return {"sessions": sessions, "total": total, "limit": limit, "offset": offset,
                     "archived_count": archived_count, "storage": storage,
-                    "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage)}
+                    "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage),
+                    **cursor_fields}
         finally:
             db.close()
     except HTTPException:

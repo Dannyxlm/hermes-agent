@@ -2077,6 +2077,42 @@
       }
     },
     {
+      "name": "mobile.inbox_push.register",
+      "summary": "Create or renew a lease for content-free background pushes when this profile's Inbox changes.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileInboxPushRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileInboxPushRegisterResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.inbox_push.unregister",
+      "summary": "Remove Inbox silent-push leases (one by subscription_id, or every one of this connection).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
       "name": "mobile.open",
       "summary": "",
       "params": [
@@ -8500,6 +8536,11 @@
             "default": false,
             "title": "Server Requests",
             "type": "boolean"
+          },
+          "session_change_cursor": {
+            "default": false,
+            "title": "Session Change Cursor",
+            "type": "boolean"
           }
         },
         "title": "ClientCapabilitiesParams",
@@ -8519,6 +8560,11 @@
             "default": false,
             "title": "Declines Not Shown",
             "type": "boolean"
+          },
+          "session_change_cursor": {
+            "default": 0,
+            "title": "Session Change Cursor",
+            "type": "integer"
           }
         },
         "required": [
@@ -20699,6 +20745,74 @@
           "before_row_id"
         ],
         "title": "MobileHistory",
+        "type": "object"
+      },
+      "MobileInboxPushRegisterParams": {
+        "additionalProperties": false,
+        "description": "Opt one installation/connection into content-free Inbox-changed silent pushes for a profile.",
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "device_token": {
+            "title": "Device Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "environment",
+          "profile",
+          "device_token"
+        ],
+        "title": "MobileInboxPushRegisterParams",
+        "type": "object"
+      },
+      "MobileInboxPushRegisterResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "scope_token": {
+            "title": "Scope Token",
+            "type": "string"
+          },
+          "min_interval_s": {
+            "title": "Min Interval S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "expires_at",
+          "scope_token",
+          "min_interval_s"
+        ],
+        "title": "MobileInboxPushRegisterResult",
         "type": "object"
       },
       "MobileNotificationRun": {
@@ -34269,6 +34383,23 @@
             "default": false,
             "title": "Include Hidden",
             "type": "boolean"
+          },
+          "change_cursor": {
+            "default": false,
+            "title": "Change Cursor",
+            "type": "boolean"
+          },
+          "changed_since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Changed Since"
           }
         },
         "title": "SessionListParams",
@@ -34283,6 +34414,45 @@
             },
             "title": "Sessions",
             "type": "array"
+          },
+          "change_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Cursor"
+          },
+          "tombstones": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tombstones"
+          },
+          "repair": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Repair"
           }
         },
         "required": [
@@ -35974,6 +36144,80 @@
           "cwd"
         ],
         "title": "SessionWorkspaceMoveResult",
+        "type": "object"
+      },
+      "SessionsChangedPayload": {
+        "additionalProperties": true,
+        "description": "``{}`` for clients without the cursor capability (refetch the list). A client that sent\n``client.capabilities {session_change_cursor: true}`` instead gets one frame per changed scope:\n``changed`` / ``tombstoned`` are lineage-root hints (bounded; ``truncated`` when cut), and the\nauthoritative delta is a list read with ``changed_since=<cursor>``.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "changed": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Changed"
+          },
+          "tombstoned": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tombstoned"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Truncated"
+          }
+        },
+        "title": "SessionsChangedPayload",
         "type": "object"
       },
       "SetupReadyPayload": {
@@ -44471,12 +44715,12 @@
     },
     {
       "name": "sessions.changed",
-      "summary": "state.db moved; refetch the session list.",
+      "summary": "Session list changed. Cursor-aware clients get a per-scope cursor; others refetch.",
       "params": [
         {
           "name": "payload",
           "schema": {
-            "$ref": "#/components/schemas/ChangeSignalPayload"
+            "$ref": "#/components/schemas/SessionsChangedPayload"
           }
         }
       ]

@@ -1923,10 +1923,12 @@ export interface GatewayCapabilitiesResult {
 }
 export interface ClientCapabilitiesParams {
   server_requests?: boolean
+  session_change_cursor?: boolean
 }
 export interface ClientCapabilitiesResult {
   server_requests: string[]
   declines_not_shown?: boolean
+  session_change_cursor?: number
 }
 export interface MediaUploadBeginParams {
   session_id: string
@@ -2571,9 +2573,14 @@ export interface SessionListParams {
   title?: string | null
   limit?: number | null
   include_hidden?: boolean
+  change_cursor?: boolean
+  changed_since?: string | null
 }
 export interface SessionListResult {
   sessions: SessionListRow[]
+  change_cursor?: string | null
+  tombstones?: string[] | null
+  repair?: boolean | null
 }
 /** ``methods_session._session_row_summary``; ``resolved_id`` only on a title lookup that followed a compression lineage to its tip. */
 export interface SessionListRow {
@@ -3150,6 +3157,20 @@ export interface MobileWidgetInboxResult {
   grant_id: string
   snapshot_path: '/api/mobile/widgets/snapshot'
   protocol_version: 2
+}
+/** Opt one installation/connection into content-free Inbox-changed silent pushes for a profile. */
+export interface MobileInboxPushRegisterParams {
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  profile: string
+  device_token: string
+}
+export interface MobileInboxPushRegisterResult {
+  subscription_id: string
+  expires_at: number
+  scope_token: string
+  min_interval_s: number
 }
 export type MobileEmptyParams = Record<string, never>
 export interface MobileCapabilitiesResult {
@@ -5458,6 +5479,15 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
+/** ``{}`` for clients without the cursor capability (refetch the list). A client that sent ``client.capabilities {session_change_cursor: true}`` instead gets one frame per changed scope: ``changed`` / ``tombstoned`` are lineage-root hints (bounded; ``truncated`` when cut), and the authoritative delta is a list read with ``changed_since=<cursor>``. */
+export interface SessionsChangedPayload {
+  profile?: string | null
+  cursor?: string | null
+  changed?: string[] | null
+  tombstoned?: string[] | null
+  truncated?: boolean | null
+  [key: string]: unknown
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY'
 
 // ── Client→server methods ──
@@ -5685,6 +5715,10 @@ export interface RpcMethods {
   'mobile.bots': { params: MobileBotsParams; result: MobileBotsResult }
   'mobile.capabilities': { params: MobileEmptyParams; result: MobileCapabilitiesResult }
   'mobile.clarify.respond': { params: MobileClarifyParams; result: MobileClarifyResult }
+  /** Create or renew a lease for content-free background pushes when this profile's Inbox changes. */
+  'mobile.inbox_push.register': { params: MobileInboxPushRegisterParams; result: MobileInboxPushRegisterResult }
+  /** Remove Inbox silent-push leases (one by subscription_id, or every one of this connection). */
+  'mobile.inbox_push.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
   'mobile.open': { params: MobileOpenParams; result: MobileSnapshotResult }
   'mobile.push.refresh': { params: MobilePushRefreshParams; result: MobileRefreshResult }
   'mobile.push.register': { params: MobilePushRegisterParams; result: MobileRegistrationResult }
@@ -6126,6 +6160,8 @@ export const RPC_METHODS = [
   'mobile.bots',
   'mobile.capabilities',
   'mobile.clarify.respond',
+  'mobile.inbox_push.register',
+  'mobile.inbox_push.unregister',
   'mobile.open',
   'mobile.push.refresh',
   'mobile.push.register',
@@ -6453,8 +6489,8 @@ export interface BackendGatewayEventMap {
   'session.title': SessionTitlePayload
   /** Mid-turn usage tick; message.complete carries the authoritative final usage. */
   'session.usage': SessionUsagePayload
-  /** state.db moved; refetch the session list. */
-  'sessions.changed': ChangeSignalPayload
+  /** Session list changed. Cursor-aware clients get a per-scope cursor; others refetch. */
+  'sessions.changed': SessionsChangedPayload
   /** The free-tier bootstrap finished (broadcast); the desktop's setup gate reads the record. */
   'setup.ready': SetupReadyPayload
   /** The active skin moved (name switch or live colour edit); repaint from this palette. */

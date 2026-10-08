@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import mobile_inbox_invalidation
 from .mobile_push_payloads import Scope
 from .mobile_push_provider import APNsProvider
 from .mobile_push_store import PushStore
@@ -57,6 +58,7 @@ class PushService:
     def drain_once(self):
         with self._drain_lock:
             self.store.maintain()
+            mobile_inbox_invalidation.process(self.store)  # Inbox-changed silent hints (KTD9)
             count = 0
             for _ in range(20):
                 if self._stop.is_set():

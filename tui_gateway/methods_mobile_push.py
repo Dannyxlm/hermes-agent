@@ -11,6 +11,7 @@ _MOBILE_PUSH_METHODS = (
     "mobile.session_push.register", "mobile.session_push.refresh", "mobile.session_push.unregister",
     "mobile.session_activity.register", "mobile.session_activity.refresh", "mobile.session_activity.unregister",
     "mobile.widget.register", "mobile.widget.inbox.register", "mobile.widget.unregister", "mobile.session_push.presence",
+    "mobile.inbox_push.register", "mobile.inbox_push.unregister",
 )
 _MOBILE_PUSH_STATUSES = {
     "tool.start": "usingTool", "tool.complete": "thinking", "message.delta": "responding",
@@ -195,6 +196,27 @@ def _(rid, params, principal):
     return _ok(rid, service.store.register_widget_inbox(principal,
         installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
         profile=profile, home=home, token=params.get("read_token")))
+
+
+@_mobile_push_handler("mobile.inbox_push.register")
+def _(rid, params, principal):
+    from tui_gateway import mobile_inbox_invalidation
+    from tui_gateway.mobile_widget_inbox import profile_home
+    service = _mobile_push_service()
+    if service is None:
+        return _err(rid, 4405, "mobile notifications are not configured")
+    if params.get("environment") not in service.environments:
+        raise ValueError("delivery environment unavailable")
+    profile = _mobile_string(params, "profile")
+    profile_home(profile)  # an existing profile store, exactly as the widget Inbox grant requires
+    return _ok(rid, mobile_inbox_invalidation.register(service.store, principal,
+        installation_id=params.get("installation_id"), connection_id=params.get("connection_id"),
+        profile=profile, device_token=params.get("device_token"), environment=params.get("environment")))
+
+
+@_mobile_push_handler("mobile.inbox_push.unregister")
+def _(rid, params, principal):
+    return _mobile_push_unregister(rid, params, principal, "background")
 
 
 @_mobile_push_handler("mobile.session_push.presence")

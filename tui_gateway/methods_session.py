@@ -545,6 +545,21 @@ def _session_list_by_title(rid, db, title_lookup: str) -> dict:
     return _ok(rid, {"sessions": [_session_row_summary(row, tip_row=tip_row, resolved_id=tip, db=db)]})
 
 
+def _session_list_delta(db, changed_since, include_hidden: bool, include_subagents: bool) -> dict:
+    """``session.list {changed_since}``: rows of lineages touched since the cursor (deny-list applied)
+    plus ``tombstones``, or ``repair: true`` (see ``session_change_cursor.delta``)."""
+    from tui_gateway import session_change_cursor
+    if not getattr(db, "db_path", None) or not isinstance(changed_since, str) or include_subagents:
+        answer = {"repair": True, "change_cursor": None}
+    else:
+        answer = session_change_cursor.delta(db, changed_since, lambda ids: _listing_rows(
+            db, len(ids), include_hidden=include_hidden, include_subagents=False, root_ids=ids))
+    if answer["repair"]:
+        return {"sessions": [], "tombstones": [], "repair": True, "change_cursor": None}
+    return {"sessions": [_session_row_summary(s) for s in answer["rows"]], "tombstones": answer["tombstones"],
+            "repair": False, "change_cursor": answer["change_cursor"]}
+
+
 @method("session.list")
 @_with_db(5006, session_scoped=False)
 def _(rid, params: dict, db) -> dict:
@@ -562,12 +577,21 @@ def _(rid, params: dict, db) -> dict:
         # A store without a path has no profile config to read, so it keeps the default shape.
         db_path = getattr(db, "db_path", None)
         include_subagents = bool(db_path) and show_subagent_sessions(Path(db_path).parent)
-        rows = _listing_rows(db, max(limit * 2, 200), include_hidden=_flag(params, "include_hidden"),
+        include_hidden = _flag(params, "include_hidden")
+        changed_since = params.get("changed_since")
+        if changed_since is not None:
+            return _ok(rid, _session_list_delta(db, changed_since, include_hidden, include_subagents))
+        cursor_fields = {}
+        if db_path and _flag(params, "change_cursor"):
+            from tui_gateway import session_change_cursor
+            session_change_cursor.refresh(db_path)  # the cursor must not be newer than these rows
+            cursor_fields["change_cursor"] = session_change_cursor.current_cursor(db_path)
+        rows = _listing_rows(db, max(limit * 2, 200), include_hidden=include_hidden,
                              include_subagents=include_subagents)[:limit]
         # No live_message_count here on purpose: the bulk listing serves rows whose open
         # paths never demand history (expectHistory defaults false); the count is a
         # per-session scan and would turn one listing call into hundreds of them.
-        return _ok(rid, {"sessions": [_session_row_summary(s) for s in rows]})
+        return _ok(rid, {"sessions": [_session_row_summary(s) for s in rows], **cursor_fields})
     except Exception as e:
         return _err(rid, 5006, str(e))
 

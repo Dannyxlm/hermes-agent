@@ -105,6 +105,27 @@ NOT_SHOWN_MESSAGE = ("No Hermes Desktop window is showing this chat, so its prev
 # has __slots__ and cannot be weak-referenced; ws.py forgets a peer on disconnect).
 _answering_clients: set = set()
 
+# ``listener(sid)`` runs when an Inbox-kind request (approval, clarify, input) opens or settles: the
+# session change cursor and the Inbox silent-push hint follow attention that the session table never
+# shows. Called outside the lock; a failing listener is logged and skipped.
+_attention_listeners: list[Callable[[str], None]] = []
+
+
+def add_attention_listener(listener: Callable[[str], None]) -> None:
+    with _lock:
+        if listener not in _attention_listeners:
+            _attention_listeners.append(listener)
+
+
+def _attention_changed(req: ServerRequest) -> None:
+    if req.method not in _INBOX_KINDS:
+        return
+    for listener in list(_attention_listeners):
+        try:
+            listener(req.sid)
+        except Exception:  # noqa: BLE001 - attention projections never break a request
+            logger.debug("attention listener failed for %s", req.method, exc_info=True)
+
 
 def bind_sinks(write_json: Callable[[dict], Any], emit: Callable[[str, str, dict], Any],
                answerable: Callable[[str], bool], clients: Callable[[str], list] | None = None) -> None:
@@ -157,6 +178,7 @@ def _register(req: ServerRequest) -> None:
         raise ValueError(problem)  # a key the renderer's typed handler would never read: our bug
     with _lock:
         _open[req.id] = req
+    _attention_changed(req)
     _write(req.frame())
 
 
@@ -182,6 +204,7 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
         with _lock:
             still_open = _open.pop(req.id, None) is req
         if still_open:
+            _attention_changed(req)
             _emit_cancel(req, "interrupted")
         raise
     with _lock:
@@ -193,6 +216,7 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
     if answered:
         return result
     if timed_out:
+        _attention_changed(req)
         _emit_cancel(req, "timeout")
         if req.qids is not None:
             return {"answers": locked, "outcome": "timed_out"}
@@ -213,6 +237,7 @@ def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | 
         with _lock:
             still_open = _open.pop(req.id, None) is not None
         if still_open:
+            _attention_changed(req)
             _emit_cancel(req, reason)
 
     return settle
@@ -246,6 +271,7 @@ def _decline(rid: str, transport: Any, *, expected_sid: str | None = None,
         _open.pop(rid, None)
         req.result = {"value": json.dumps({"success": False, "error": NOT_SHOWN_MESSAGE})}
         req.answered = True
+    _attention_changed(req)
     if req.on_result is not None:
         req.on_result(req.result)
     req.event.set()
@@ -299,6 +325,7 @@ def resolve_response(frame: dict, transport: Any = None, *, expected_sid: str | 
             elif req.qids:
                 req.result = {"answers": dict(req.locked), "outcome": "cancelled"}
             req.answered = True
+    _attention_changed(req)
     req.event.set()
     if req.on_result is not None:
         req.on_result(req.result)
@@ -330,6 +357,7 @@ def lock_answer(request_id: str, question_id: str, answer: str | None, *,
             req.result, req.answered = {"answers": dict(req.locked), "outcome": "submitted"}, True
             _open.pop(request_id, None)
     if not remaining:
+        _attention_changed(req)
         req.event.set()
     return remaining
 
@@ -348,6 +376,7 @@ def cancel(sid: str | None = None, reason: str = "interrupted") -> int:
             else:
                 req.result, req.answered = None, False
     for req in targets:
+        _attention_changed(req)
         if req.on_result is not None:
             req.on_result(None)
         req.event.set()

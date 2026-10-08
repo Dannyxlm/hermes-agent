@@ -770,6 +770,10 @@ def _broadcast_global_event(event: str, payload: dict | None = None) -> None:
             return _emit(event, "", payload)
         logger.debug("global-event broadcast dropped (no connected client) type=%s", event)
         return None
+    if event == "sessions.changed":
+        # Cursor-aware clients get per-scope cursor frames instead (session_change_cursor).
+        from tui_gateway import session_change_cursor
+        targets = session_change_cursor.legacy_targets(targets)
     frame = _event_frame(event, "", payload)
     for transport in targets:
         try:

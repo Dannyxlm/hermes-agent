@@ -115,9 +115,10 @@ def _(rid, params):
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
                      "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery",
-                     "video_upload"],
+                     "video_upload", "session_change_cursor", "inbox_silent_push"],
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
-                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1},
+                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
+                             "session_change_cursor": 1, "inbox_silent_push": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 
