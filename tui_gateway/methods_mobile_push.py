@@ -251,12 +251,11 @@ def _(rid, params, principal):
 
 @_mobile_push_handler("mobile.session_activity.start_token.unregister")
 def _(rid, params, principal):
-    from tui_gateway.mobile_push import service_for_home
-    service = service_for_home(_hermes_home) if _mobile_push_service() is not None else None
-    ids = dict(installation_id=params.get("installation_id"), connection_id=params.get("connection_id"))
+    service = _mobile_push_service()
     if service is None:
-        return _ok(rid, {"removed": 0})
-    return _ok(rid, {"removed": service.store.unregister_start_token(principal, **ids)})
+        return _ok(rid, {"removed": 0})  # logout (mobile.push.unregister) still clears the stored token
+    return _ok(rid, {"removed": service.store.unregister_start_token(
+        principal, installation_id=params.get("installation_id"), connection_id=params.get("connection_id"))})
 
 
 def _mobile_session_refresh(rid, params, principal, kind):
