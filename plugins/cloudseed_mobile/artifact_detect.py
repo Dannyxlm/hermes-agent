@@ -132,6 +132,8 @@ def is_likely_prose_fence(info, body):
     has_info_tail = bool(trimmed_info) and trimmed_info != info_token
     if _BULLET_INFO.match(raw_info) or _URL_INFO.match(raw_info):
         return True
+    if not has_info_tail and language not in NON_CODE_FENCE_LANGUAGES:
+        return False  # the TS reaches the same answer after scanning the body
     signals = _code_signals(body)
     if not signals['trimmed']:
         return False

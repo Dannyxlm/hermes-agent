@@ -84,6 +84,8 @@ class DeliverablesIndex:
                     search TEXT, data TEXT, inline_content TEXT,
                     PRIMARY KEY(sid,id));
                 CREATE INDEX IF NOT EXISTS entries_page ON entries(generation,sort_time,id);
+                CREATE INDEX IF NOT EXISTS entries_artifact ON entries(generation,json_extract(data,'$.artifact_key'))
+                    WHERE kind='inline_content';
                 CREATE TABLE IF NOT EXISTS staged(sid TEXT,id TEXT,data TEXT,inline_content TEXT,
                     PRIMARY KEY(sid,id));
                 CREATE TABLE IF NOT EXISTS publication(sid TEXT PRIMARY KEY,after_id TEXT,fingerprint TEXT);
@@ -415,24 +417,21 @@ class DeliverablesIndex:
         """Every published version row of each artifact, as {key: [version, ...]} in
         message order. One version per body: a re-emitted body keeps its first place."""
         keys=sorted({k for k in keys if isinstance(k,str)})
-        found={key:{} for key in keys}
         if not keys: return {}
-        sql=('SELECT id,sid,recent,search,length(CAST(inline_content AS BLOB)),json_extract(data,\'$.artifact_key\'),'
-             'json_extract(data,\'$.version_hash\'),json_extract(data,\'$.artifact_first_seen\') FROM entries '
-             "WHERE generation=? AND kind='inline_content' AND "
-             "CASE WHEN kind='inline_content' THEN json_extract(data,'$.artifact_key') END IN ("+','.join('?' for _ in keys)+')')
+        found={key:{} for key in keys}
+        # Served by the partial index entries_artifact; never reads inline bodies.
+        sql=("SELECT id,sid,recent,search,json_extract(data,'$.byte_size'),json_extract(data,'$.artifact_key'),"
+             "json_extract(data,'$.version_hash'),json_extract(data,'$.artifact_first_seen') FROM entries "
+             "WHERE generation=? AND kind='inline_content' AND json_extract(data,'$.artifact_key') IN ("+','.join('?' for _ in keys)+')')
         for rid,sid,recent,search,size,key,version_hash,first in db.execute(sql,(generation,*keys)):
             first=json.loads(first) if first else None
             if not isinstance(first,list) or len(first)!=3: continue
-            row={'id':rid,'sid':sid,'recent':bool(recent),'search':search or '','byte_size':size or 0,'first':first}
-            versions=found[key]
-            current=versions.get(version_hash)
-            if current is None or (first,rid)<(current['first'],current['id']):
-                versions[version_hash]={**row,'version_hash':version_hash,'rows':(current or {}).get('rows',[])}
-            versions[version_hash]['rows'].append(row)
+            found[key].setdefault(version_hash,[]).append({'id':rid,'sid':sid,'recent':bool(recent),'search':search or '','byte_size':size or 0,'first':first})
+        place=lambda r:(r['first'],r['id'])
         result={}
-        for key,versions in found.items():
-            ordered=sorted(versions.values(),key=lambda v:(v['first'],v['id']))
+        for key,bodies in found.items():
+            # A version sits where its body first appeared; every row of the body is kept.
+            ordered=sorted(({**min(rows,key=place),'version_hash':version_hash,'rows':rows} for version_hash,rows in bodies.items()),key=place)
             for index,version in enumerate(ordered,1): version['index']=index
             result[key]=ordered
         return result
@@ -496,7 +495,7 @@ class DeliverablesIndex:
                         more=True; break
                     last=(sort_time,rid)
                     if validates and (not self._exists(row) or superseded(row,artifacts.get(row.get('artifact_key')),q)): continue
-                    fetched.append((rid,sort_time,data))
+                    fetched.append((rid,sort_time,row))
                 items=[]
                 histories={rid: [] for rid, _, _ in fetched[:limit]}
                 if histories:
@@ -507,8 +506,7 @@ class DeliverablesIndex:
                     history_sql='WITH requested(id,ordinal) AS (VALUES '+values+') SELECT requested.id,e.data FROM requested JOIN entries e ON e.rowid IN (SELECT rowid FROM entries WHERE generation=? AND id=requested.id ORDER BY sort_time LIMIT 21) ORDER BY requested.ordinal,e.sort_time,e.rowid'
                     for rid,data in db.execute(history_sql,(*args,meta.get('generation'))):
                         histories[rid].append((data,))
-                for rid,sort_time,data in fetched[:limit]:
-                    row=json.loads(data)
+                for rid,sort_time,row in fetched[:limit]:
                     # Occurrence history is bounded independently of file count.
                     history={}
                     history_rows=histories[rid]

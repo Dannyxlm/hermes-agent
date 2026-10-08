@@ -195,3 +195,12 @@ def test_body_repeated_in_one_chat_keeps_its_first_place(client, monkeypatch, se
     recent = inline(built.query())
     assert len(recent) == 1 and (recent[0]['version_index'], recent[0]['version_count']) == (2, 2)
     assert [v['message_id'] for v in built.versions(recent[0]['artifact_key'])['items']] == ['1', '2']
+
+
+def test_artifact_lookup_uses_its_partial_index_not_a_generation_scan(client):
+    c, home = client
+    store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0)])
+    built = index(home)
+    with built.connection() as db:
+        plan = db.execute("EXPLAIN QUERY PLAN SELECT id FROM entries WHERE generation=? AND kind='inline_content' AND json_extract(data,'$.artifact_key') IN (?)", ('g', 'k')).fetchall()
+    assert any('entries_artifact' in str(step) for step in plan)
