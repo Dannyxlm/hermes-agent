@@ -4,6 +4,7 @@ All domain IO runs in synchronous routes (FastAPI's context-copying threadpool).
 Only the bounded JSON dependency reads asynchronously. No WebUI imports/runtime.
 """
 import base64
+import contextlib
 import errno
 import hashlib
 import json
@@ -21,6 +22,7 @@ from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write
 from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
 from plugins.cloudseed_mobile import flight_recorder as recorder
+from plugins.cloudseed_mobile.deliverables_warmer import DeliverablesWarmer
 
 MAX_BODY = 1024 * 1024
 CLIENT_CLOSED_REQUEST = 499
@@ -68,7 +70,25 @@ async def payload(request: Request):
     return body
 
 
-router = APIRouter(dependencies=[Depends(owner)])
+def warm_indexes():
+    try:
+        return [deliverable_store(profile_id())]
+    except ValueError:  # an unverified custom home has no Files index to warm
+        return []
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    # The Files index converges in the background, bounded and bound to the dashboard.
+    warmer = DeliverablesWarmer(warm_indexes)
+    warmer.start()
+    try:
+        yield
+    finally:
+        warmer.stop()
+
+
+router = APIRouter(dependencies=[Depends(owner)], lifespan=lifespan)
 
 
 def photo_store():
