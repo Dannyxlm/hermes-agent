@@ -17,20 +17,38 @@ import threading
 import time
 
 _LOG = logging.getLogger("hermes_cli.web_server.route_metrics")
-_CLIENT = re.compile(r"(HermesMobile|HermesDesktop)/([0-9]{1,9})", re.ASCII)
+# Leading product token only; whatever follows the first space is never read.
+_LEADING_CLIENT = re.compile(r"(HermesMobile|HermesLiveActivityWidget|HermesDesktop)/([0-9]{1,12})(?: |$)", re.ASCII)
+_LEADING_NAMES = {"HermesMobile": "phone", "HermesLiveActivityWidget": "widget", "HermesDesktop": "desktop"}
+# Hermes Desktop is Electron with Chromium's UA plus a ``Hermes/x.y.z`` product token.
+_DESKTOP_PRODUCT = re.compile(r"Hermes/([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})", re.ASCII)
+_MAX_USER_AGENT = 256
+_MAX_UA_TOKENS = 16
 _DURATION_MS = (1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000)
 _BYTES = (0, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216)
 _OTHER = ("other", "other", "unknown", "unknown", "other")
 
 
 def client_label(headers) -> tuple[str, str]:
-    """Accept only a whole, bounded product/build token, never a UA substring."""
+    """``(client, build)`` with client in phone/widget/desktop/unknown.
+
+    Reads a bounded user agent: the leading product token for the phone and its
+    widget, or Electron's space-separated tokens for Desktop. Free text never
+    becomes a label; anything else is ``unknown``.
+    """
     for key, value in headers:
         if key.lower() == b"user-agent":
-            if len(value) <= 32:
-                match = _CLIENT.fullmatch(value.decode("ascii", errors="replace"))
+            if len(value) <= _MAX_USER_AGENT and value.isascii():
+                agent = value.decode("ascii")
+                match = _LEADING_CLIENT.match(agent)
                 if match:
-                    return match[1], match[2]
+                    return _LEADING_NAMES[match[1]], match[2]
+                tokens = agent.split(" ")
+                if len(tokens) <= _MAX_UA_TOKENS and any(t.startswith("Electron/") for t in tokens):
+                    for token in tokens:
+                        desktop = _DESKTOP_PRODUCT.fullmatch(token)
+                        if desktop:
+                            return "desktop", desktop[1]
             break
     return ("unknown", "unknown")
 
@@ -77,12 +95,15 @@ class RouteMetrics:
             summary.append({"label": label, "count": count, "bytes_total": byte_total,
                             "p50_ms": _percentile(durations, _DURATION_MS, count, .50),
                             "p95_ms": _percentile(durations, _DURATION_MS, count, .95),
+                            "p99_ms": _percentile(durations, _DURATION_MS, count, .99),
                             "p50_bytes": _percentile(sizes, _BYTES, count, .50),
                             "p95_bytes": _percentile(sizes, _BYTES, count, .95)})
         _LOG.info("route_metrics %s", json.dumps(summary, separators=(",", ":")))
 
 
 METRICS = RouteMetrics()
+# Scope key a middleware sets to the fixed path template of an endpoint it serves itself.
+MIDDLEWARE_ROUTE_KEY = "hermes.route_metrics.template"
 _SUMMARY_INTERVAL_S = 180.0
 _RPC: ContextVar[_RPCObservation | None] = ContextVar("route_metrics_rpc", default=None)
 _CONNECTION: ContextVar[tuple[RouteMetrics, tuple[str, str]] | None] = ContextVar("route_metrics_connection", default=None)
@@ -213,7 +234,8 @@ class RouteMetricsMiddleware:
             await self.app(scope, receive, measured_send)
         finally:
             route = scope.get("route")
-            template = getattr(route, "path", None)
+            # Middleware-served endpoints (no router match) name their fixed template.
+            template = getattr(route, "path", None) or scope.get(MIDDLEWARE_ROUTE_KEY)
             if template is None:
                 template = "rejected" if status in (400, 401, 403, 413) else "unmatched"
             label = ("http", template, *client, f"{status // 100}xx")
