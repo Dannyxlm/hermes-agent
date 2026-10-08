@@ -407,3 +407,73 @@ async def test_shutdown_mcp_servers_nonblocking_completes_fast_path():
         done = await gateway_run._shutdown_mcp_servers_nonblocking(timeout=5)
     assert done is True
     assert calls == [1]
+
+
+# ── Round 9 U30 (R25): a clean service-manager stop exits 0 ──────────────────
+# `systemctl stop/restart` used to log every gateway stop as `status=1/FAILURE`, so intentional
+# restarts were indistinguishable from crashes. An unexpected external SIGTERM still exits 1 so
+# Restart=on-failure revives the gateway (#5646); failure, explicit and restart codes are unchanged.
+
+
+def _verdict(runner, signal_initiated=True):
+    from gateway.run_shutdown import _resolve_gateway_exit_verdict
+    # make_restart_runner builds a bare runner; give it __init__'s exit-state defaults.
+    runner.__dict__.setdefault("_exit_with_failure", False)
+    runner.__dict__.setdefault("_exit_reason", None)
+    return _resolve_gateway_exit_verdict(runner, signal_initiated)
+
+
+@pytest.mark.asyncio
+async def test_clean_systemd_stop_drain_exits_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr("gateway.shutdown_forensics.systemd_unit_stopping", lambda: True)
+    runner, adapter = make_restart_runner()
+    adapter.disconnect = AsyncMock()
+    runner._signal_initiated_shutdown = True
+
+    with patch("gateway.status.remove_pid_file"), patch("gateway.status.publish_runtime_status"):
+        await runner.stop()
+
+    assert _verdict(runner) is True
+
+
+@pytest.mark.asyncio
+async def test_systemd_stop_with_timed_out_drain_exits_nonzero(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr("gateway.shutdown_forensics.systemd_unit_stopping", lambda: True)
+    runner, adapter = make_restart_runner()
+    adapter.disconnect = AsyncMock()
+    runner._signal_initiated_shutdown = True
+    runner._restart_drain_timeout = 0.0
+    runner._running_agents["agent:main:telegram:dm:busy"] = MagicMock()
+
+    with patch("gateway.status.remove_pid_file"), patch("gateway.status.publish_runtime_status"):
+        await runner.stop()
+
+    assert _verdict(runner) is False
+
+
+def test_unexpected_external_sigterm_still_exits_nonzero(monkeypatch):
+    monkeypatch.setattr("gateway.shutdown_forensics.systemd_unit_stopping", lambda: False)
+    runner, _adapter = make_restart_runner()
+    assert _verdict(runner) is False
+
+
+def test_exit_codes_other_than_clean_stop_are_unchanged(monkeypatch):
+    monkeypatch.setattr("gateway.shutdown_forensics.systemd_unit_stopping", lambda: True)
+    runner, _adapter = make_restart_runner()
+    runner._exit_with_failure = True
+    assert _verdict(runner) is False
+
+    runner, _adapter = make_restart_runner()
+    runner._exit_code = 78
+    with pytest.raises(SystemExit) as exc:
+        _verdict(runner)
+    assert exc.value.code == 78
+
+    runner, _adapter = make_restart_runner()
+    runner._restart_requested = True
+    runner._restart_via_service = True
+    with pytest.raises(SystemExit) as exc:
+        _verdict(runner)
+    assert exc.value.code == GATEWAY_SERVICE_RESTART_EXIT_CODE

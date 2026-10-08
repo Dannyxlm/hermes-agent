@@ -206,3 +206,40 @@ class TestCheckSystemdTimingAlignment:
         # for whatever unit pytest IS in.  Both are valid; we just ensure
         # the function doesn't raise.
         assert result is None or isinstance(result, dict)
+
+
+class TestSystemdUnitStopping:
+    """Round 9 U30: tell a systemd stop job (unit deactivating) from an external kill."""
+
+    def _fake(self, monkeypatch, state):
+        monkeypatch.setenv("INVOCATION_ID", "abc")
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/self/cgroup":
+                return io.StringIO("0::/system.slice/hermes-gateway.service\n")
+            return real_open(path, *args, **kwargs)
+
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            return sf.subprocess.CompletedProcess(command, 0, stdout=f"ActiveState={state}\n")
+
+        monkeypatch.setattr("builtins.open", fake_open)
+        monkeypatch.setattr(sf.subprocess, "run", fake_run)
+        return calls
+
+    def test_deactivating_unit_is_a_service_manager_stop(self, monkeypatch):
+        calls = self._fake(monkeypatch, "deactivating")
+        assert sf.systemd_unit_stopping() is True
+        assert calls == [["systemctl", "show", "hermes-gateway.service", "--property=ActiveState"]]
+
+    def test_active_unit_is_an_external_kill(self, monkeypatch):
+        self._fake(monkeypatch, "active")
+        assert sf.systemd_unit_stopping() is False
+
+    def test_not_under_systemd_never_queries(self, monkeypatch):
+        monkeypatch.delenv("INVOCATION_ID", raising=False)
+        monkeypatch.setattr(sf.subprocess, "run", lambda *a, **k: pytest.fail("must not query systemctl"))
+        assert sf.systemd_unit_stopping() is False

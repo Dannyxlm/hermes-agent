@@ -215,7 +215,8 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
 
     def _on_tick(res):
         ready_pending = bool(res.skipped_unassigned) or _ready_queue_nonempty()
-        if ready_pending and not res.spawned:
+        # A tick held only by concurrency caps is busy, not stuck (R25).
+        if ready_pending and not res.spawned and not kbd.caps_explain_hold([res]):
             health_state["bad_ticks"] += 1
         else:
             health_state["bad_ticks"] = 0

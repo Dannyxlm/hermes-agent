@@ -66,6 +66,28 @@ class TestResolveToken:
         assert source == ""
         mock_cli.assert_not_called()
 
+    def test_unsupported_env_token_warns_once_per_process(self, monkeypatch, caplog):
+        """Round 9 U30 (R25): every agent start probes the pool, so a classic PAT in the env
+        logged ~81 WARNINGs an hour. It warns once per (variable, reason); repeats go to DEBUG."""
+        import logging
+        from hermes_cli import copilot_auth
+        monkeypatch.setattr(copilot_auth, "_warned_unsupported_env", set(), raising=False)
+        monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_classic_pat_nope")
+        caplog.set_level(logging.DEBUG, logger=copilot_auth.logger.name)
+
+        for _ in range(3):
+            assert copilot_auth.resolve_copilot_token() == ("", "")
+        monkeypatch.setenv("GH_TOKEN", "ghp_other_classic")
+        assert copilot_auth.resolve_copilot_token() == ("", "")
+
+        warnings = [r.getMessage() for r in caplog.records
+                    if r.name == copilot_auth.logger.name and r.levelno == logging.WARNING]
+        assert len(warnings) == 2
+        assert sum("GITHUB_TOKEN" in w for w in warnings) == 1
+        assert sum("GH_TOKEN" in w for w in warnings) == 1
+
     def test_all_env_vars_invalid_skips_gh_cli_fallback(self, monkeypatch):
         """All three env vars set to classic PATs → no gh CLI call."""
         from hermes_cli.copilot_auth import resolve_copilot_token

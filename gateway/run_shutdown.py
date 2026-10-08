@@ -43,6 +43,15 @@ def _exit_with_failure_verdict(runner) -> bool:
     return True
 
 
+def _service_manager_stopping() -> bool:
+    try:
+        from gateway.shutdown_forensics import systemd_unit_stopping
+        return systemd_unit_stopping()
+    except Exception:
+        logger.debug("systemd stop-state probe failed", exc_info=True)
+        return False
+
+
 def _resolve_gateway_exit_verdict(runner, signal_initiated_shutdown: bool) -> bool:
     """Resolve the process verdict after either startup abort or normal shutdown."""
     if _exit_with_failure_verdict(runner):
@@ -50,6 +59,12 @@ def _resolve_gateway_exit_verdict(runner, signal_initiated_shutdown: bool) -> bo
     if runner.exit_code is not None:
         raise SystemExit(runner.exit_code)
     if signal_initiated_shutdown and not runner._restart_requested:
+        # A systemd stop/restart job that drained cleanly is an intentional stop: exit 0 so the
+        # journal stops recording it as a failure. An external kill (unit still active) or a
+        # timed-out drain keeps exit 1 so Restart=on-failure revives the gateway (#5646).
+        if not getattr(runner, "_stop_drain_timed_out", False) and _service_manager_stopping():
+            logger.info("Exiting with code 0 (systemd stopped the unit and the drain finished cleanly).")
+            return True
         logger.info(
             "Exiting with code 1 (signal-initiated shutdown without restart "
             "request) so the service manager can revive the gateway."
@@ -1915,6 +1930,7 @@ class GatewayShutdownMixin:
             )
         _drain_started_at = time.monotonic()
         ctx.active_agents, ctx.timed_out = await self._drain_active_agents(timeout, _cron_timeout)
+        self._stop_drain_timed_out = ctx.timed_out
         ctx.drain_elapsed = time.monotonic() - _drain_started_at
         logger.info(
             "Shutdown phase: drain done at +%.2fs (drain took %.2fs, timed_out=%s, active_at_start=%d, "

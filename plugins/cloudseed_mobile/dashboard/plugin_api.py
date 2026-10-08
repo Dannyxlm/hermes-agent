@@ -11,6 +11,7 @@ import sqlite3
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 from hermes_cli.config import load_config
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
 from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, PhotoStorageFull
@@ -22,6 +23,7 @@ from plugins.cloudseed_mobile import workspace_files as files
 from plugins.cloudseed_mobile import flight_recorder as recorder
 
 MAX_BODY = 1024 * 1024
+CLIENT_CLOSED_REQUEST = 499
 
 
 def owner_config():
@@ -48,10 +50,15 @@ def owner(request: Request):
 
 async def payload(request: Request):
     data = bytearray()
-    async for chunk in request.stream():
-        data.extend(chunk)
-        if len(data) > MAX_BODY:
-            raise HTTPException(413, 'Mobile request too large')
+    try:
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > MAX_BODY:
+                raise HTTPException(413, 'Mobile request too large')
+    except ClientDisconnect:
+        # The phone hung up mid-body (backgrounded, network change): nothing is
+        # listening, so end quietly with nginx's client-closed status, not a 5xx.
+        raise HTTPException(CLIENT_CLOSED_REQUEST, 'Client closed request') from None
     try:
         body = json.loads(data, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, RecursionError):
