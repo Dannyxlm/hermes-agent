@@ -346,3 +346,12 @@ def test_metrickit_summary_form_keeps_only_summary_keys(client):
     stored = json.loads(day.read_text())['events'][0]['payload']
     assert stored == {'hermex_summary': True, 'original_bytes': 400000, 'timeStampEnd': '2026-10-07 01:00',
                       'counts': {'hangDiagnostics': 3}}
+
+
+def test_metrickit_summary_drops_a_non_integer_size(client):
+    c, root = client
+    summary = {'hermex_summary': True, 'original_bytes': SENTINEL, 'counts': {}}
+    evs = [{'kind': 'metrickit', 't': T, 'payload_type': 'metric', 'payload': summary}]
+    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 200
+    [day] = (root / 'events').iterdir()
+    assert SENTINEL not in day.read_text()

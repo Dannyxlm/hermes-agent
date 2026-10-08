@@ -182,6 +182,7 @@ _DESKTOP = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 
     ("HermesDesktop/7", ("desktop", "7")),
     ("HermesMobile/１２３", ("unknown", "unknown")),
     ("HermesMobile/123\nPRIVATE_UA_SENTINEL", ("unknown", "unknown")),
+    ("HermesMobile/123\n", ("unknown", "unknown")),
     ("HermesMobile/1234567890123", ("unknown", "unknown")),
     ("PRIVATE_UA_SENTINEL HermesMobile/123", ("unknown", "unknown")),
     ("PRIVATE_UA_SENTINEL", ("unknown", "unknown")),

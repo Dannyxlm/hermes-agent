@@ -54,8 +54,12 @@ def load_day(root: Path, day: str):
         with open(path, 'rb') as handle:
             for line in handle:
                 try:
-                    batches.append(json.loads(line))
+                    batch = json.loads(line)
                 except ValueError:
+                    batch = None
+                if isinstance(batch, dict):
+                    batches.append(batch)
+                else:
                     unreadable += 1
     flags = []
     folder = root / 'flags' / day
@@ -64,8 +68,12 @@ def load_day(root: Path, day: str):
             record = entry / 'flag.json'
             if entry.is_dir() and not entry.is_symlink() and record.is_file():
                 try:
-                    flags.append(json.loads(record.read_text()) | {'_dir': str(entry)})
-                except ValueError:
+                    flag = json.loads(record.read_text())
+                except (OSError, ValueError):
+                    flag = None
+                if isinstance(flag, dict):
+                    flags.append(flag | {'_dir': str(entry)})
+                else:
                     unreadable += 1
     return batches, flags, unreadable
 

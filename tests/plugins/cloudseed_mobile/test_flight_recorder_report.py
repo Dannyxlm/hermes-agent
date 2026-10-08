@@ -151,3 +151,15 @@ def test_cli_writes_a_private_report_for_the_day(report, tmp_path):
     assert 'Batches 1, events 2, installations 1, flags 0.' in text
     with pytest.raises(SystemExit):
         report.main(['--root', str(root), '--day', '2026-10-09; rm -rf', '--out-dir', str(out)])
+
+
+def test_unreadable_stored_records_are_counted_not_fatal(report, tmp_path):
+    store(tmp_path, [{'kind': 'lifecycle', 't': T, 'state': 'foreground'}])
+    with open(tmp_path / 'events' / f'{DAY}.jsonl', 'a') as handle:
+        handle.write('[1, 2]\n{torn\n')
+    odd = tmp_path / 'flags' / DAY / 'odd'
+    odd.mkdir(parents=True)
+    (odd / 'flag.json').write_text('[]')
+    batches, flags, unreadable = report.load_day(tmp_path, DAY)
+    assert (len(batches), flags, unreadable) == (1, [], 3)
+    assert 'Unreadable stored lines: 3.' in report.build_report(tmp_path, DAY, [])

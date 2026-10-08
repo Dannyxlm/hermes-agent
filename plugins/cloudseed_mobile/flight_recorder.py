@@ -157,7 +157,9 @@ def _metrickit_payload(value):
     if len(json.dumps(value, separators=(',', ':'))) > MAX_METRICKIT:
         _fail('metrickit payload too large')
     if value.get('hermex_summary') is True:
-        kept = {k: v for k, v in value.items() if k in METRICKIT_SUMMARY_KEYS and k != 'counts'}
+        kept = {k: v for k, v in value.items() if k in METRICKIT_SUMMARY_KEYS - {'counts', 'original_bytes'}}
+        if type(value.get('original_bytes')) is int:
+            kept['original_bytes'] = value['original_bytes']
         counts = value.get('counts')
         if isinstance(counts, dict):
             kept['counts'] = {k: n for k, n in counts.items()

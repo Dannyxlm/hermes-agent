@@ -18,12 +18,12 @@ import time
 
 _LOG = logging.getLogger("hermes_cli.web_server.route_metrics")
 # Leading product token only; whatever follows the first space is never read.
-_LEADING_CLIENT = re.compile(r"(HermesMobile|HermesLiveActivityWidget|HermesDesktop)/([0-9]{1,12})(?: |$)", re.ASCII)
+_LEADING_CLIENT = re.compile(r"(HermesMobile|HermesLiveActivityWidget|HermesDesktop)/([0-9]{1,12})(?: |\Z)", re.ASCII)
 _LEADING_NAMES = {"HermesMobile": "phone", "HermesLiveActivityWidget": "widget", "HermesDesktop": "desktop"}
 # Hermes Desktop is Electron with Chromium's UA plus a ``Hermes/x.y.z`` product token.
 _DESKTOP_PRODUCT = re.compile(r"Hermes/([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})", re.ASCII)
 _MAX_USER_AGENT = 256
-_MAX_UA_TOKENS = 16
+_MAX_UA_TOKENS = 24
 _DURATION_MS = (1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000)
 _BYTES = (0, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216)
 _OTHER = ("other", "other", "unknown", "unknown", "other")
