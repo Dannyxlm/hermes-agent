@@ -425,7 +425,7 @@ class DeliverablesIndex:
              "WHERE generation=? AND kind='inline_content' AND json_extract(data,'$.artifact_key') IN ("+','.join('?' for _ in keys)+')')
         for rid,sid,recent,search,size,key,version_hash,first in db.execute(sql,(generation,*keys)):
             first=json.loads(first) if first else None
-            if not isinstance(first,list) or len(first)!=3: continue
+            if not isinstance(first,list) or len(first)!=4: continue
             found[key].setdefault(version_hash,[]).append({'id':rid,'sid':sid,'recent':bool(recent),'search':search or '','byte_size':size or 0,'first':first})
         place=lambda r:(r['first'],r['id'])
         result={}
@@ -447,7 +447,7 @@ class DeliverablesIndex:
             ordered=self._artifacts(db,meta.get('generation'),[artifact_key]).get(artifact_key,[])
         kept=ordered[-MAX_ARTIFACT_VERSIONS:]
         items=[{'id':v['id'],'version_index':v['index'],'version_hash':v['version_hash'],'observed_at':v['first'][0] or None,
-                'stored_session_id':v['sid'],'message_id':v['first'][2],'byte_size':v['byte_size']} for v in kept]
+                'stored_session_id':v['sid'],'message_id':v['first'][3],'byte_size':v['byte_size']} for v in kept]
         return {'items':items,'version_count':len(ordered),'partial':len(kept)<len(ordered) or bool(meta.get('partial',True))}
 
     def query(self,workspace_id=None,session_id=None,kind=None,q='',cursor=None,limit=50,reveal=False):

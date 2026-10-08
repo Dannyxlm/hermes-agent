@@ -213,7 +213,7 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
             slug=artifact_slug(artifact['kind'],artifact['language'],artifact['title'])
             seq=message['id'] if isinstance(message.get('id'),int) else message_order.get(id(message),0)
             row.update(artifact_key=digest(['artifact',profile,lineage_root,slug]),artifact_kind=artifact['kind'],
-                       artifact_title=artifact['title'],artifact_slug=slug,artifact_first_seen=[time or 0,seq,mid],
+                       artifact_title=artifact['title'],artifact_slug=slug,artifact_first_seen=[time or 0,seq,artifact['ordinal'],mid],
                        byte_size=len(inline.encode('utf-8','surrogatepass')))
         if loc['kind']=='file':
             if rid not in availability:
@@ -244,9 +244,9 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
             for _,text in strings(content,status):
                 text=visible(text)
                 for value,action in references(text, assistant=True): add(value,action,m,'assistant_reference')
-                for language,body in fences(text):
+                for ordinal,(language,body) in enumerate(fences(text)):
                     artifact=detect_artifact(language,body)
-                    if artifact: add(artifact_display_name(artifact),'delivered',m,'assistant_fence',inline=body,artifact=artifact)
+                    if artifact: add(artifact_display_name(artifact),'delivered',m,'assistant_fence',inline=body,artifact={**artifact,'ordinal':ordinal})
             calls=decode(m.get('tool_calls') or [])
             if not isinstance(calls,list): continue
             if len(calls)>MAX_NODES: status['partial']=True

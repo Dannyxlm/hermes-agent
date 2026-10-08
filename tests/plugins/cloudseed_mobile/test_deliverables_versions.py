@@ -201,6 +201,36 @@ def test_artifact_lookup_uses_its_partial_index_not_a_generation_scan(client):
     c, home = client
     store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0)])
     built = index(home)
+    key = inline(built.query())[0]['artifact_key']
+    statements = []
     with built.connection() as db:
-        plan = db.execute("EXPLAIN QUERY PLAN SELECT id FROM entries WHERE generation=? AND kind='inline_content' AND json_extract(data,'$.artifact_key') IN (?)", ('g', 'k')).fetchall()
-    assert any('entries_artifact' in str(step) for step in plan)
+        db.set_trace_callback(statements.append)
+        built._artifacts(db, built.snapshot()['generation'], [key])
+        db.set_trace_callback(None)
+        lookup = next(sql for sql in statements if 'artifact_key' in sql)
+        plan = db.execute('EXPLAIN QUERY PLAN ' + lookup).fetchall()
+    assert any('USING INDEX entries_artifact' in str(step) for step in plan)
+
+
+def test_two_versions_in_one_message_keep_their_fence_order(client):
+    c, home = client
+    store(home, [('s', None, None, None, None)], [(1, 's', fence(V2) + '\n\nOr this one:\n' + fence(V1), 100.0)])
+    built = index(home)
+    recent = inline(built.query())
+    assert len(recent) == 1 and (recent[0]['version_index'], recent[0]['version_count']) == (2, 2)
+    assert built.versions(recent[0]['artifact_key'])['items'][-1]['id'] == recent[0]['id']
+    assert c.get(P+'/deliverables/content', params={'profile': 'default', 'id': recent[0]['id']}).json()['content'] == V1
+
+
+def test_source_error_while_finding_lineage_keeps_published_rows(client, monkeypatch):
+    c, home = client
+    store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0)])
+    built = index(home)
+    before = inline(built.query())
+    add(home, [(2, 's', fence(V2), 200.0)])
+    def busy(*args):
+        raise sqlite3.OperationalError('interrupted')
+    monkeypatch.setattr(ix.DeliverablesIndex, '_lineage_root', busy)
+    built.refresh(max_sessions=50)
+    # The refresh stops as partial; the session is never republished as empty.
+    assert inline(built.query()) == before and built.snapshot()['refresh_pending'] is True

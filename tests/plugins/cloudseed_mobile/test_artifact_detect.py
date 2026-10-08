@@ -87,7 +87,7 @@ def test_projection_uses_desktop_rule():
     html = next(r for r in rows if r['artifact_kind'] == 'html')
     assert html['display_name'] == 'Pricing page.html' and html['display_type'] == 'text/html'
     assert html['artifact_title'] == 'Pricing page' and html['artifact_slug'] == 'html:html:pricing-page'
-    assert html['artifact_first_seen'] == [10.0, 1, '1'] and html['inline_content'] == HTML
+    assert html['artifact_first_seen'] == [10.0, 1, 0, '1'] and html['inline_content'] == HTML
     code = next(r for r in rows if r['artifact_kind'] == 'code')
     assert code['display_name'] == 'helper0.ts' and code['artifact_slug'] == 'code:typescript:helper0'
     assert html['artifact_key'] != code['artifact_key']
