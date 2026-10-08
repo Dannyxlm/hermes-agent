@@ -164,6 +164,78 @@ class TestFallbackTransport:
         assert [c["url_host"] for c in calls] == ["149.154.167.220", "api.telegram.org"]
         assert transport._sticky_ip is None
 
+
+class TestFallbackTransportRecoveryLogging:
+    """A path re-walk that recovers within the same request logs below WARNING (R23)."""
+
+    @staticmethod
+    def _records(caplog, level):
+        return [r for r in caplog.records if r.name == tnet.logger.name and r.levelno == level]
+
+    @pytest.mark.asyncio
+    async def test_sticky_failure_recovered_by_fallback_logs_no_warning(self, monkeypatch, caplog):
+        calls = []
+        behavior = {"api.telegram.org": "timeout", "149.154.167.220": "ok", "149.154.167.221": "ok"}
+        monkeypatch.setattr(tnet.httpx, "AsyncHTTPTransport", _fake_transport_factory(calls, behavior))
+        transport = tnet.TelegramFallbackTransport(["149.154.167.220", "149.154.167.221"])
+        await transport.handle_async_request(_telegram_request())
+        behavior["149.154.167.220"] = "connect_error"
+
+        caplog.clear()
+        caplog.set_level("DEBUG", logger=tnet.logger.name)
+        resp = await transport.handle_async_request(_telegram_request())
+
+        assert resp.status_code == 200
+        assert transport._sticky_ip == "149.154.167.221"
+        assert self._records(caplog, tnet.logging.WARNING) == []
+        info = " ".join(r.getMessage() for r in self._records(caplog, tnet.logging.INFO))
+        assert "149.154.167.220" in info and "ConnectError" in info
+
+    @pytest.mark.asyncio
+    async def test_every_path_failing_logs_one_warning(self, monkeypatch, caplog):
+        calls = []
+        behavior = {"api.telegram.org": "timeout", "149.154.167.220": "connect_error", "149.154.167.221": "timeout"}
+        monkeypatch.setattr(tnet.httpx, "AsyncHTTPTransport", _fake_transport_factory(calls, behavior))
+        transport = tnet.TelegramFallbackTransport(["149.154.167.220", "149.154.167.221"])
+        caplog.set_level("DEBUG", logger=tnet.logger.name)
+
+        with pytest.raises(httpx.ConnectTimeout):
+            await transport.handle_async_request(_telegram_request())
+
+        warnings = self._records(caplog, tnet.logging.WARNING)
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "149.154.167.220" in message and "149.154.167.221" in message and "api.telegram.org" in message
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_error_still_raises_with_prior_failures_warned(self, monkeypatch, caplog):
+        calls = []
+        behavior = {"149.154.167.220": "connect_error", "149.154.167.221": ValueError("boom")}
+        monkeypatch.setattr(tnet.httpx, "AsyncHTTPTransport", _fake_transport_factory(calls, behavior))
+        transport = tnet.TelegramFallbackTransport(["149.154.167.220", "149.154.167.221"])
+        caplog.set_level("DEBUG", logger=tnet.logger.name)
+
+        with pytest.raises(ValueError, match="boom"):
+            await transport.handle_async_request(_telegram_request())
+
+        warnings = self._records(caplog, tnet.logging.WARNING)
+        assert len(warnings) == 1
+        assert "149.154.167.220" in warnings[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_first_error_logs_nothing(self, monkeypatch, caplog):
+        calls = []
+        behavior = {"149.154.167.220": ValueError("boom")}
+        monkeypatch.setattr(tnet.httpx, "AsyncHTTPTransport", _fake_transport_factory(calls, behavior))
+        transport = tnet.TelegramFallbackTransport(["149.154.167.220"])
+        caplog.set_level("DEBUG", logger=tnet.logger.name)
+
+        with pytest.raises(ValueError, match="boom"):
+            await transport.handle_async_request(_telegram_request())
+
+        assert self._records(caplog, tnet.logging.WARNING) == []
+        assert [c["url_host"] for c in calls] == ["149.154.167.220"]
+
 class TestFallbackTransportPassthrough:
     """Requests that don't need fallback behavior."""
 
