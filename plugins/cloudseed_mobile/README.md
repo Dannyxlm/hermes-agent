@@ -407,6 +407,33 @@ missing/ill-typed query fields; 503 storage/project-registry unavailable, with e
 sanitized `{error:"Mobile storage unavailable"}`. Preserve last client snapshot on
 errors. There are no write, archive extraction, execution or arbitrary URL routes.
 
+## Hermex flight recorder (round 9 lane E)
+
+Content-free app telemetry from Hermex to this box only. Plan:
+`docs/plans/2026-10-07-1955-feat-hermex-flight-recorder-plan.md` (CloudSeed workspace).
+Module: `flight_recorder.py`. All three routes are owner-gated POSTs that take the same
+JSON body limit, and the body `profile` must equal the native request profile.
+
+- `POST /flight-recorder/batch`. The envelope is `{profile, schema:1, install_id, batch_seq, app_build, os_version, device_class, events[1..500]}`.
+  - Each event is `{kind, t (epoch ms), …}` drawn from the closed `KINDS` allowlist: `lifecycle`, `screen`, `tap`, `rpc`, `http`, `error`, `span`, `connection`, `metrickit`.
+  - Unknown kinds or keys, free text (spaces, `?` in routes), booleans posing as numbers and out-of-range values are rejected with 400.
+  - The response is `{ok, receipt_id, accepted, duplicate}`. A repeated (`install_id`, `batch_seq`) with the same content is a duplicate. Different content gets 409 `seq_conflict`, and the phone drops that segment.
+  - When the day's file reaches its cap, the server returns 507 `storage_full`.
+- `POST /flight-recorder/flag` takes `{…envelope, flag_id, t, screen, note (≤2000), events[≤1000], screenshot_jpeg_b64?}`.
+  - The screenshot is a JPEG of at most 600 KiB.
+  - The phone sends a flag only when Danny taps Send.
+  - Same duplicate and 409 rules as batches.
+- `POST /flight-recorder/delete` takes `{profile, install_id}` and removes every batch line and flag for that installation.
+
+UUIDs are accepted in either case (Swift `uuidString` is upper-case) and stored in lower case.
+
+Storage is root-scoped and private: `<Hermes root>/mobile/flight-recorder/`, with directories `0700` and files `0600`. It holds:
+- `index.sqlite3`;
+- `events/YYYY-MM-DD.jsonl`, one line per batch;
+- `flags/YYYY-MM-DD/<flag_id>/{flag.json,screenshot.jpg}`.
+
+A symlinked store path is refused. Retention is 30 days. Pruning runs at most hourly, during ingest, and matches dated names only, without following symlinks. No scheduler is added.
+
 ## Tests
 
 R3 Files & Deliverables verification uses the requested immutable interpreter and
