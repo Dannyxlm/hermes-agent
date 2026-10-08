@@ -270,7 +270,7 @@ def test_allowlists_match_the_app_schema_exactly():
     assert fr.SPAN_NAMES == {'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent',
                              'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction'}
     assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
-    assert fr.SPAN_ATTRS == {'cached', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
+    assert fr.SPAN_ATTRS == {'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                              'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
                              'should_begin_calls', 'state', 'surface', 'to', 'verified_empty'}
     assert fr.SCREENS == {'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',

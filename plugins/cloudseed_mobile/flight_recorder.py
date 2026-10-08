@@ -63,7 +63,7 @@ ERROR_DOMAINS = frozenset({'url', 'posix', 'cocoa', 'transport', 'auth', 'http',
 SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent', 'ComposerFocusToSettled',
                         'TabFirstContent', 'ScrollInteraction'})
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
-SPAN_ATTRS = frozenset({'cached', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
+SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
                         'should_begin_calls', 'state', 'surface', 'to', 'verified_empty'})
 BG_TRIGGERS = frozenset({'scheduled', 'silent_push'})
