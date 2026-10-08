@@ -1359,13 +1359,14 @@ class SessionSessionsMixin:
         order_by_last_active: bool = False, include_archived: bool = False, archived_only: bool = False,
         id_query: str = None, search_query: str = None, compact_rows: bool = False,
         include_pinned: bool = False, session_key: str = None, include_hidden: bool = False,
-        include_subagents: bool = False,
+        include_subagents: bool = False, root_ids: Sequence[str] = None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview and ``last_active`` in one query. ``order_by_last_active`` sorts
         by the chain TIP via a recursive CTE (the only path honouring ``id_query`` / ``search_query``);
         ``include_pinned`` back-fills pins the page missed, still obeying the other
         filters except archived: a pin is an explicit keep, so a pinned row stamped
-        archived must still return."""
+        archived must still return. ``root_ids`` admits only those listing rows (exact ids, the
+        sessions change-cursor delta read); every other filter still applies."""
         self.flush_token_counts()  # rows carry token/cost totals
         where_clauses, params = _session_filter_where(
             exclude_children=not include_children, source=source, sources=sources, session_key=session_key,
@@ -1378,6 +1379,10 @@ class SessionSessionsMixin:
         # it back (#90946).
         if not include_hidden and not archived_only:
             where_clauses.append("s.hidden = 0")
+        root_filter = list(dict.fromkeys(root_ids)) if root_ids is not None else None
+        if root_filter is not None:
+            where_clauses.append(f"s.id IN ({_session_ids_placeholders(root_filter) or 'NULL'})")
+            params.extend(root_filter)
         where_sql = _where_sql(where_clauses)
         # Shared projection head of the three list queries (whitespace is part of the SQL text).
         select_head = (
@@ -1452,6 +1457,9 @@ class SessionSessionsMixin:
             )
             if not include_hidden and not archived_only:
                 pinned_clauses.append("s.hidden = 0")
+            if root_filter is not None:
+                pinned_clauses.append(f"s.id IN ({_session_ids_placeholders(root_filter) or 'NULL'})")
+                pinned_params.extend(root_filter)
             pinned_clauses.append("s.pinned = 1")
             pinned_where = _where_sql(pinned_clauses)
             pinned_query = f"""

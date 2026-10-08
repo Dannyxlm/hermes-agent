@@ -48,6 +48,14 @@ def _watcher_mtime_ns(path: Path):
         return None
 
 
+def _watcher_size(path: Path):
+    """``st_size`` of ``path``, or None when it cannot be stat'ed."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
+
+
 def _home_mtime_ns(*parts: str):
     return _watcher_mtime_ns(_watcher_home().joinpath(*parts))
 
@@ -128,10 +136,10 @@ _SESSION_SIGNATURE_FIELDS = (
     "cwd", "git_branch", "git_repo_root", "title", "title_source", "profile_name",
     "archived", "pinned", "hidden", "last_read_at", "handoff_state",
 )
-# path -> (database/WAL mtime, session-table digest). The mtime guard keeps the
+# path -> ((database/WAL mtime, db size, WAL size), session-table digest). The stat guard keeps the
 # normal 0.5 s watch pass stat-only; SQLite is read only after another process
 # actually commits.
-_sessions_db_sig_cache: dict[str, tuple[int | None, tuple | None]] = {}
+_sessions_db_sig_cache: dict[str, tuple[tuple, tuple | None]] = {}
 
 
 def _session_db_content_sig(db_path: Path):
@@ -144,13 +152,16 @@ def _session_db_content_sig(db_path: Path):
     the subset of columns they have.
     """
     mtime = _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal")))
+    # Sizes join the guard: mtimes are jiffy-coarse, so two commits a few ms apart can share one,
+    # and the cursor journal must not miss the second. A WAL append always grows the file.
+    stamp = (mtime, *(_watcher_size(p) for p in (db_path, db_path.with_name(f"{db_path.name}-wal"))))
     cache_key = str(db_path)
     cached = _sessions_db_sig_cache.get(cache_key)
 
-    if cached is not None and cached[0] == mtime:
+    if cached is not None and cached[0] == stamp:
         return cached[1]
     if not db_path.exists():
-        _sessions_db_sig_cache[cache_key] = (mtime, None)
+        _sessions_db_sig_cache[cache_key] = (stamp, None)
 
         return None
 
@@ -173,10 +184,24 @@ def _session_db_content_sig(db_path: Path):
             order = " ORDER BY id" if "id" in available else ""
             rows = conn.execute(f"SELECT {', '.join(fields)} FROM sessions{order}")
             digest = hashlib.blake2b(digest_size=16)
+            # The same read feeds the per-scope change journal behind the sessions.changed cursor.
+            observed, id_at = {}, fields.index("id") if "id" in fields else None
             for row in rows:
-                digest.update(repr(tuple(row)).encode("utf-8", "backslashreplace"))
+                values = tuple(row)
+                encoded = repr(values).encode("utf-8", "backslashreplace")
+                digest.update(encoded)
                 digest.update(b"\0")
+                if id_at is not None:
+                    observed[values[id_at]] = (encoded, values)
             signature = (fields, digest.digest())
+            if id_at is not None:
+                from tui_gateway import session_change_cursor
+                try:
+                    session_change_cursor.observe(
+                        db_path, fields, observed,
+                        delegate_ids=lambda ids: _delegate_session_ids(conn, ids, available))
+                except Exception:  # noqa: BLE001 - the journal must never change the legacy signal
+                    logger.debug("session change journal update failed", exc_info=True)
     except Exception:  # noqa: BLE001 - preserve the old wake-up signal if the read probe cannot run
         # A busy/locked read after a good one keeps the last digest and leaves the cached mtime
         # stale so the next pass re-reads: digest -> mtime -> digest would broadcast twice.
@@ -187,9 +212,23 @@ def _session_db_content_sig(db_path: Path):
         if conn is not None:
             conn.close()
 
-    _sessions_db_sig_cache[cache_key] = (mtime, signature)
+    _sessions_db_sig_cache[cache_key] = (stamp, signature)
 
     return signature
+
+
+def _delegate_session_ids(conn, ids: list, available: set) -> set:
+    """Ids among ``ids`` that are delegated child runs (``_delegate_from`` marker): many inherit
+    their parent's surface as ``source``, so only the marker tells them from a conversation."""
+    if "model_config" not in available:
+        return set()
+    found = set()
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        found.update(row[0] for row in conn.execute(
+            f"SELECT id FROM sessions WHERE id IN ({','.join('?' * len(chunk))}) "
+            "AND json_extract(model_config, '$._delegate_from') IS NOT NULL", chunk))
+    return found
 
 
 def _sessions_sig():
@@ -308,8 +347,11 @@ _change_broadcast_at: dict[str, float] = {}
 def _broadcast_watched_changes(now: float | None = None) -> None:
     """One pass: recompute due signatures, broadcast events whose signature moved.
     First sighting seeds silently so a gateway boot never fires a refresh storm."""
+    from tui_gateway import session_change_cursor
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
+        if event == "sessions.changed":
+            interval = session_change_cursor.watch_interval(interval)
         if now - _change_checked_at.get(event, -interval) < interval:
             continue
         _change_checked_at[event] = now
@@ -329,6 +371,19 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
         _change_broadcast_at[event] = now
         with contextlib.suppress(Exception):
             _broadcast_global_event(event, payload_fn())
+    with _live_transports_lock:
+        live = list(_live_transports)
+    session_change_cursor.pump(_send_session_cursor_frames, live, now)
+
+
+def _send_session_cursor_frames(targets: list, payload: dict) -> None:
+    """One per-scope ``sessions.changed`` cursor frame to every cursor-aware client."""
+    frame = _event_frame("sessions.changed", "", payload)
+    for transport in targets:
+        try:
+            transport.write(frame)
+        except Exception:  # one wedged peer must not stall the rest; disconnect teardown unregisters it
+            logger.debug("sessions.changed cursor frame write failed", exc_info=True)
 
 
 _skin_watcher_started = False
@@ -344,8 +399,10 @@ def _ensure_skin_watcher() -> None:
     _note_skin_broadcast()  # seed the baseline so only a real change repaints
 
     def _loop() -> None:
+        from tui_gateway import session_change_cursor
         while True:
-            time.sleep(0.5)
+            # 0.25 s while a cursor-aware client listens (its ≤250 ms window), else the old 0.5 s.
+            time.sleep(session_change_cursor.watch_interval(0.5))
             _broadcast_skin_if_changed()
             _broadcast_watched_changes()
     threading.Thread(target=_loop, name="hermes-change-watcher", daemon=True).start()
@@ -354,3 +411,4 @@ def _ensure_skin_watcher() -> None:
 def register(server) -> None:
     """Publish this module's helpers + handlers onto ``server``, rebound to its globals."""
     bind_module(globals(), server, skip=("_",))
+    from tui_gateway import session_change_cursor  # noqa: F401 - arms its pending-request listener

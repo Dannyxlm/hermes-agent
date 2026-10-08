@@ -31,6 +31,10 @@ class ClientCapabilitiesParams(Params):
     #: error for methods it has no handler for. A WebSocket client that never says so is treated as a
     #: build older than server→client requests and every such request fails fast for it.
     server_requests: bool = False
+    #: The client consumes per-scope ``sessions.changed`` cursor frames (``profile``, ``cursor``,
+    #: ``changed``, ``tombstoned``) at most every 250 ms, and the payload-free frame is no longer
+    #: sent to it. Send only when ``mobile.capabilities`` lists ``session_change_cursor``.
+    session_change_cursor: bool = False
 
 
 class ClientCapabilitiesResult(Result):
@@ -41,6 +45,8 @@ class ClientCapabilitiesResult(Result):
     #: answer: the request settles only once every attached client declined (server_requests.py).
     #: An older backend settles on the first error, so a client sends the decline only when this is true.
     declines_not_shown: bool = False
+    #: Version of the ``sessions.changed`` cursor protocol this backend speaks (0 = none).
+    session_change_cursor: int = 0
 
 
 method("client.capabilities", params=ClientCapabilitiesParams, result=ClientCapabilitiesResult,

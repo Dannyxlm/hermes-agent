@@ -291,6 +291,25 @@ method("mobile.widget.inbox.register", params=MobileWidgetInboxParams, result=Mo
        doc="Grant the widget read-only paginated Inbox summaries for one selected profile, independent of run enrollment.")
 
 
+class MobileInboxPushRegisterParams(MobileRegistrationParams):
+    """Opt one installation/connection into content-free Inbox-changed silent pushes for a profile."""
+    profile: str
+    device_token: str
+
+
+class MobileInboxPushRegisterResult(MobileRegistrationResult):
+    #: Opaque token: the only identifier a silent push carries (``hermex.inbox.scope``).
+    scope_token: str
+    #: At most one push per lease per this many seconds; later changes send one trailing push.
+    min_interval_s: int
+
+
+method("mobile.inbox_push.register", params=MobileInboxPushRegisterParams, result=MobileInboxPushRegisterResult,
+       doc="Create or renew a lease for content-free background pushes when this profile's Inbox changes.")
+method("mobile.inbox_push.unregister", params=MobileUnregisterParams, result=MobileUnregisterResult,
+       doc="Remove Inbox silent-push leases (one by subscription_id, or every one of this connection).")
+
+
 method("mobile.capabilities", params=MobileEmptyParams, result=MobileCapabilitiesResult)
 method("mobile.bots", params=MobileBotsParams, result=MobileBotsResult)
 method("mobile.open", params=MobileOpenParams, result=MobileSnapshotResult)

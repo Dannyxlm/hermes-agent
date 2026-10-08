@@ -45,10 +45,12 @@ class APNsProvider:
             self._authorization = self._jwt.encode({"iss": self.team_id, "iat": int(now)}, self.key,
                 algorithm="ES256", headers={"kid": self.key_id})
             self._issued_at = now
-        push_type = {"activity": "liveactivity", "alert": "alert", "widget": "widgets"}.get(job["kind"])
+        push_type = {"activity": "liveactivity", "alert": "alert", "widget": "widgets",
+                     "background": "background"}.get(job["kind"])
         if push_type is None:
             return DeliveryResult("failed", "invalid_channel")
-        topic = TOPIC + (".push-type." + push_type if push_type != "alert" else "")
+        # Alert and background (content-available) pushes use the bare bundle topic.
+        topic = TOPIC + (".push-type." + push_type if push_type not in ("alert", "background") else "")
         host = "api.push.apple.com" if job["environment"] == "production" else "api.sandbox.push.apple.com"
         headers = {"authorization": "bearer " + self._authorization, "apns-topic": topic,
             "apns-push-type": push_type,
