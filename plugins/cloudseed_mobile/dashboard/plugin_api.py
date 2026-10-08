@@ -19,6 +19,7 @@ from plugins.cloudseed_mobile import provider_accounts as accounts
 from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write_memory
 from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
+from plugins.cloudseed_mobile import flight_recorder as recorder
 
 MAX_BODY = 1024 * 1024
 
@@ -277,3 +278,50 @@ def memory_read():
 @router.post('/memory/write')
 def memory_write(body: dict = Depends(payload)):
     return guarded(lambda: write_memory(body.get('section'), body.get('content')))
+
+
+# Hermex flight recorder: content-free app telemetry, owner-private on this box.
+def recorder_profile(body):
+    profile = profile_id()
+    if body.get('profile') != profile:
+        raise HTTPException(403, 'Profile not found')
+    return profile
+
+
+def recorded(fn):
+    try:
+        return fn()
+    except recorder.FlightRecorderConflict:
+        return JSONResponse({'error': 'Batch sequence reused with different content', 'code': 'seq_conflict'}, status_code=409)
+    except recorder.FlightRecorderFull:
+        return JSONResponse({'error': 'Flight recorder storage is full for today', 'code': 'storage_full'}, status_code=507)
+
+
+def flight_recorder_store():
+    return recorder.FlightRecorderStore(recorder.default_root())
+
+
+@router.post('/flight-recorder/batch')
+def flight_recorder_batch(body: dict = Depends(payload)):
+    def run():
+        profile = recorder_profile(body)
+        return recorded(lambda: flight_recorder_store().put_batch(profile, recorder.validate_batch(body)))
+    return guarded(run)
+
+
+@router.post('/flight-recorder/flag')
+def flight_recorder_flag(body: dict = Depends(payload)):
+    def run():
+        profile = recorder_profile(body)
+        return recorded(lambda: flight_recorder_store().put_flag(profile, recorder.validate_flag(body)))
+    return guarded(run)
+
+
+@router.post('/flight-recorder/delete')
+def flight_recorder_delete(body: dict = Depends(payload)):
+    def run():
+        recorder_profile(body)
+        if set(body) - {'profile', 'install_id'}:
+            raise recorder.FlightRecorderError('unknown key')
+        return flight_recorder_store().delete_install(recorder.canonical_uuid(body.get('install_id')))
+    return guarded(run)
