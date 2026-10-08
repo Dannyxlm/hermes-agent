@@ -194,6 +194,11 @@ def deliverable_content(profile: str, id: str, reveal: bool = False):
     return guarded(lambda: deliverable_store(profile).content(id, reveal))
 
 
+@router.get('/deliverables/versions')
+def deliverable_versions(profile: str, artifact_key: str):
+    return guarded(lambda: deliverable_store(profile).versions(artifact_key))
+
+
 @router.get('/workspaces')
 def file_workspaces(profile: str):
     return guarded(lambda: files.workspaces(profile))

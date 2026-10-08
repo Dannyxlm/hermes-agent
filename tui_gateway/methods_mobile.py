@@ -120,7 +120,8 @@ def _(rid, params):
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
                              "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
                              "session_change_cursor": 1, "inbox_silent_push": 1,
-                             "activity_content": 2, "push_alert_policy": 1, "push_to_start": 1},
+                             "activity_content": 2, "push_alert_policy": 1, "push_to_start": 1,
+                             "artifact_versions": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 

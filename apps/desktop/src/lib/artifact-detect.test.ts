@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import { artifactContentHash, artifactDownloadName, artifactSlug, detectArtifact } from './artifact-detect'
@@ -116,5 +119,29 @@ describe('artifactDownloadName', () => {
     expect(artifactDownloadName('svg', 'svg', 'Org Chart')).toBe('Org-Chart.svg')
     expect(artifactDownloadName('code', 'typescript', 'buildDashboard')).toBe('buildDashboard.ts')
     expect(artifactDownloadName('code', 'unknownlang', '')).toBe('artifact.txt')
+  })
+})
+
+// One rule for box, Desktop and phone (Hermex R9, KTD10): the server pytest and the
+// app XCTest run these same bytes. Expectations come from this module; regenerate
+// them, never hand-edit, and update the app copy's SHA-256 with the file.
+interface SharedFixtures {
+  detect: { code: string; expected: null | { kind: string; language: string; slug: string; title: string }; language: null | string; name: string }[]
+  slug: { expected: string; kind: 'code' | 'html' | 'svg'; language: string; name: string; title: string }[]
+}
+
+const shared = JSON.parse(
+  readFileSync(resolve(__dirname, '../../../../tests/fixtures/artifact_detect_cases.json'), 'utf8')
+) as SharedFixtures
+
+describe('shared artifact fixtures', () => {
+  it.each(shared.detect.map(c => [c.name, c] as const))('detect: %s', (_name, c) => {
+    const detection = detectArtifact(c.language ?? undefined, c.code)
+
+    expect(detection ? { ...detection, slug: artifactSlug(detection) } : null).toEqual(c.expected)
+  })
+
+  it.each(shared.slug.map(c => [c.name, c] as const))('slug: %s', (_name, c) => {
+    expect(artifactSlug(c)).toBe(c.expected)
   })
 })
