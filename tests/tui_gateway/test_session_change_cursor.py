@@ -138,6 +138,23 @@ def test_internal_sources_and_delegate_runs_never_wake_cursor_clients(watched):
     assert legacy.payloads() == [{}]  # Desktop keeps today's contract
 
 
+def test_malformed_model_config_does_not_unmask_delegate_runs(watched):
+    home, legacy, cursor = watched
+    server._broadcast_watched_changes(now=0.0)
+
+    def spawn(db):
+        db.create_session("broken", "desktop", parent_session_id="chat")
+        db._conn.execute("UPDATE sessions SET model_config = '{not json' WHERE id = 'broken'")
+        db._conn.commit()
+        db.create_session("child", "desktop", parent_session_id="chat", model_config={"_delegate_from": "chat"})
+    _write(home / "state.db", spawn)
+    server._broadcast_watched_changes(now=0.25)  # both appear; only the non-delegate one is a row
+    assert [p["changed"] for p in cursor.payloads()] == [["broken"]]
+    _write(home / "state.db", lambda db: db.append_message("child", "assistant", "delegated", finish_reason="stop"))
+    server._broadcast_watched_changes(now=0.5)
+    assert len(cursor.payloads()) == 1
+
+
 def test_cron_changes_are_quiet_until_a_loud_change(watched):
     home, legacy, cursor = watched
     with SessionDB(db_path=home / "state.db") as db:

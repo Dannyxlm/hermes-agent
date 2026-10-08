@@ -223,12 +223,13 @@ def get_sessions(
             cursor_fields: dict = {}
             if changed_since is not None:
                 from tui_gateway import session_change_cursor as changes
-                answer = ({"repair": True, "change_cursor": None} if not changes.listing_is_tracked(
-                    source=source, sources=source_list, exclude_sources=exclude_list,
-                    include_subagents=include_subagents) else changes.delta(
-                    db, changed_since, lambda ids: db.list_sessions_rich(
+                if changes.listing_is_tracked(source=source, sources=source_list, exclude_sources=exclude_list,
+                                              include_subagents=include_subagents):
+                    answer = changes.delta(db, changed_since, lambda ids: db.list_sessions_rich(
                         limit=len(ids), offset=0, order_by_last_active=order == "recent",
-                        compact_rows=not full, include_pinned=True, root_ids=ids, **scope)))
+                        compact_rows=not full, include_pinned=True, root_ids=ids, **scope))
+                else:  # the filter lists sessions the journal never tracks: a delta could miss them
+                    answer = {"repair": True, "change_cursor": None}
                 if answer["repair"]:
                     return {"sessions": [], "tombstones": [], "delta": True, "repair": True,
                             "change_cursor": None, "limit": limit, "offset": 0}

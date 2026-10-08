@@ -222,12 +222,13 @@ def _delegate_session_ids(conn, ids: list, available: set) -> set:
     their parent's surface as ``source``, so only the marker tells them from a conversation."""
     if "model_config" not in available:
         return set()
+    from hermes_state_common import _id_chunks, _placeholders
+    from hermes_state_sessions import _delegate_from_json
     found = set()
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
+    for chunk in _id_chunks(ids):
         found.update(row[0] for row in conn.execute(
-            f"SELECT id FROM sessions WHERE id IN ({','.join('?' * len(chunk))}) "
-            "AND json_extract(model_config, '$._delegate_from') IS NOT NULL", chunk))
+            f"SELECT id FROM sessions WHERE id IN ({_placeholders(chunk)}) "
+            f"AND {_delegate_from_json()} IS NOT NULL", chunk))
     return found
 
 

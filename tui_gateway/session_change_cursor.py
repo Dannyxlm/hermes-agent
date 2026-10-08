@@ -37,6 +37,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from hermes_state_common import stat_db_file_identity
+
 logger = logging.getLogger(__name__)
 
 #: Never journaled: their rows are not in any cursor client's list (they are listed only by
@@ -72,13 +74,13 @@ def _norm_source(value: Any) -> str:
 class _Row:
     __slots__ = ("full", "inbox", "source", "parent", "end_reason", "tracked")
 
-    @property
-    def quiet(self) -> bool:
-        return self.source in QUIET_SOURCES
-
     def __init__(self, full, inbox, source, parent, end_reason, tracked):
         self.full, self.inbox, self.source = full, inbox, source
         self.parent, self.end_reason, self.tracked = parent, end_reason, tracked
+
+    @property
+    def quiet(self) -> bool:
+        return self.source in QUIET_SOURCES
 
     @property
     def inbox_eligible(self) -> bool:
@@ -172,14 +174,6 @@ def _profile_for(db_path: str) -> str | None:
         return None
 
 
-def _file_identity(path: str):
-    try:
-        stat = os.stat(path)
-    except OSError:
-        return None
-    return stat.st_dev, stat.st_ino
-
-
 def _scope(key: str) -> _Scope:
     scope = _scopes.get(key)
     if scope is None:
@@ -222,7 +216,7 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
 
     inbox_at = [index[name] for name in _INBOX_FIELDS if name in index]
     key = scope_key(db_path)
-    identity = _file_identity(key)
+    identity = stat_db_file_identity(key)
     with _lock:
         scope = _scope(key)
         if scope.identity is not None and identity is not None and identity != scope.identity:
