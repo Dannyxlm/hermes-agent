@@ -8,7 +8,7 @@ from pydantic import Field
 from .base import Params, Result
 from .common import PendingApproval, TranscriptMessage
 from .media import VideoUploadLimits
-from .prompt_voice import PromptSubmitResult
+from .prompt_voice import PromptOrigin, PromptSubmitResult
 from .registry import method
 from .server_requests import ClarifyQuestion
 from .sessions import InflightTurn, OpenRequestEntry, QueuedPrompt, SessionInterruptResult, TodoState
@@ -132,6 +132,7 @@ class MobileSnapshotResult(Result):
 
 class MobileSubmitParams(MobileScopeParams):
     text: str
+    origin: PromptOrigin | None = None
 
 
 class MobileSubmitResult(PromptSubmitResult):
@@ -276,6 +277,43 @@ class MobileSessionPresenceResult(Result):
     expires_at: float
 
 
+class MobileSessionPushPolicyParams(Params):
+    installation_id: str
+    connection_id: str
+    policy: Literal["all", "opened"] | None = None  # omitted: read the current policy
+    environment: Literal["production", "sandbox"] | None = None  # required with "all"
+    device_token: str | None = None  # required with "all"
+    categories: list[Literal["attention", "completion"]] = Field(default_factory=lambda: ["attention", "completion"])
+    preview_enabled: bool = False
+
+
+class MobileSessionPushPolicyResult(Result):
+    policy: Literal["all", "opened"]
+    expires_at: float | None
+    categories: list[Literal["attention", "completion"]] | None = None
+    preview_enabled: bool | None = None
+
+
+class MobileActivityStartTokenParams(MobileRegistrationParams):
+    start_token: str  # ActivityKit pushToStartToken, hex; never logged
+
+
+class MobileActivityStartTokenResult(Result):
+    expires_at: float
+
+
+class MobileDeviceParams(Params):
+    installation_id: str
+    connection_id: str
+
+
+method("mobile.session_push.policy", params=MobileSessionPushPolicyParams, result=MobileSessionPushPolicyResult,
+       doc="Read or set this device's alert policy: \"all\" listed chats (messaging, cron, Kanban and delegate "
+           "sessions never alert) or \"opened\" (only chats with their own lease).")
+method("mobile.session_activity.start_token.register", params=MobileActivityStartTokenParams,
+       result=MobileActivityStartTokenResult,
+       doc="Register or rotate this device's Live Activity push-to-start token (iOS 17.2+).")
+method("mobile.session_activity.start_token.unregister", params=MobileDeviceParams, result=MobileUnregisterResult)
 method("mobile.session_push.register", params=MobileSessionPushRegisterParams, result=MobileSessionRegistrationResult)
 method("mobile.session_push.refresh", params=MobilePushRefreshParams, result=MobileRefreshResult)
 method("mobile.session_push.unregister", params=MobileUnregisterParams, result=MobileUnregisterResult)

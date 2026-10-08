@@ -45,7 +45,8 @@ class APNsProvider:
             self._authorization = self._jwt.encode({"iss": self.team_id, "iat": int(now)}, self.key,
                 algorithm="ES256", headers={"kid": self.key_id})
             self._issued_at = now
-        push_type = {"activity": "liveactivity", "alert": "alert", "widget": "widgets"}.get(job["kind"])
+        push_type = {"activity": "liveactivity", "activity_start": "liveactivity", "alert": "alert",
+                     "widget": "widgets"}.get(job["kind"])
         if push_type is None:
             return DeliveryResult("failed", "invalid_channel")
         topic = TOPIC + (".push-type." + push_type if push_type != "alert" else "")

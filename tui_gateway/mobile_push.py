@@ -24,6 +24,11 @@ class PushService:
         self._drain_lock = threading.Lock()
         self._thread = None
         self._closed = False
+        # Set by the owning gateway: () -> (held run ids, running run ids). Without it this
+        # process's own runs are never treated as orphans.
+        self.live_runs = None
+        self._clock = clock
+        self._reconciled_at = 0.0
 
     def register(self, principal, scope, **params):
         if params.get("environment") not in self.environments:
@@ -42,8 +47,34 @@ class PushService:
         self._wake.set()
         return receipt
 
-    def start_run(self, scope, run_id=None, event_id=None):
-        return self.store.start_run(scope, run_id, event_id)
+    def start_run(self, scope, run_id=None, event_id=None, **options):
+        run = self.store.start_run(scope, run_id, event_id, **options)
+        self._wake.set()
+        return run
+
+    def set_policy(self, principal, **params):
+        if params.get("policy") == "all" and params.get("environment") not in self.environments:
+            raise ValueError("delivery environment unavailable")
+        return self.store.set_policy(principal, **params)
+
+    def register_start_token(self, principal, **params):
+        if params.get("environment") not in self.environments:
+            raise ValueError("delivery environment unavailable")
+        return self.store.register_start_token(principal, **params)
+
+    def reconcile(self, force=False):
+        """Bounded orphan sweep, at most once a minute from the delivery loop."""
+        now = self._clock()
+        if not force and now - self._reconciled_at < 60:
+            return 0
+        self._reconciled_at = now
+        held = running = None
+        if self.live_runs is not None:
+            held, running = self.live_runs()
+        closed = self.store.reconcile_orphans(held, running)
+        if closed:
+            self._wake.set()
+        return closed
 
     def current_run(self, scope):
         run = self.store.current_run(scope)
@@ -57,6 +88,7 @@ class PushService:
     def drain_once(self):
         with self._drain_lock:
             self.store.maintain()
+            self.reconcile()
             count = 0
             for _ in range(20):
                 if self._stop.is_set():

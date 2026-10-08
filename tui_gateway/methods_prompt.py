@@ -777,6 +777,8 @@ def _(rid, params: dict) -> dict:
             rid, sid, session, text, busy_transport, queued=bool(params.get("queued")), turn_author=turn_author,
             display_kind=display_kind)
         if busy_response is not None:
+            if "result" in busy_response:
+                _mobile_push_note_submission(session, params)  # KTD7: queued input keeps its origin
             return busy_response
     raw_rebind_ids = params.get("rebind_survivor_row_ids")
     requested_rebind_ids = (
@@ -803,6 +805,7 @@ def _(rid, params: dict) -> dict:
         except Exception:
             logger.debug("finalized-session reopen before isolated dispatch failed for %s",
                          sid, exc_info=True)
+        _mobile_push_note_submission(session, params)
         isolated_response = _submit_prompt_to_compute_host(
             rid, sid, session, text, display_kind=display_kind, display_metadata=display_metadata)
         if not isolated_response.get("error"):
@@ -822,6 +825,8 @@ def _(rid, params: dict) -> dict:
             isolated_response["error"].get("message", "unknown error"))
     if (err := _persist_session_row_for_submit(rid, session, text, display_kind)) is not None:
         return err
+    # Before the worker starts: its message.start must see this submission as human (KTD7).
+    _mobile_push_note_submission(session, params)
     # Capture before starting the worker: it consumes the staging dict and may finish before the RPC returns.
     staged_user = session.get("_submit_user_row") or {}
     if isinstance(staged_user.get("_row_id"), int):

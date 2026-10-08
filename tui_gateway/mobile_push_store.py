@@ -12,7 +12,19 @@ from pathlib import Path
 
 from .mobile_push_widgets import WidgetPushStore, reader_digest
 
-from .mobile_push_payloads import ATTENTION, LABELS, TERMINAL, Scope, activity_payload, alert_payload, generic_alert
+from .mobile_push_payloads import (
+    ATTENTION, LABELS, TERMINAL, AlertPreview, Scope, activity_payload, alert_payload, generic_alert,
+    redact_content_state, redact_start, start_payload)
+
+_KINDS = frozenset({"alert", "activity", "widget", "activity_start"})
+# A duplicate message.start (pre-announced continuations emit two) reuses the open run.
+_DUPLICATE_START_WINDOW = 120
+# In-process runs no session holds close after this idle grace; held but idle ones after the longer one.
+_ORPHAN_GRACE = 120
+_HELD_IDLE_GRACE = 600
+_RUN_LIFETIME = 8 * 3600
+# Policy-made alert leases only need to outlive one run and its questions; each run renews them.
+_POLICY_LEASE = 2 * 86400
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mobile_presence (
@@ -51,7 +63,50 @@ CREATE TABLE IF NOT EXISTS outbox (
  state TEXT NOT NULL DEFAULT 'pending', reason TEXT NOT NULL DEFAULT '',
  UNIQUE(subscription_id, event_id));
 CREATE INDEX IF NOT EXISTS outbox_due ON outbox(state, next_attempt, lease_until);
+CREATE TABLE IF NOT EXISTS alert_policies (
+ principal TEXT NOT NULL, installation_id TEXT NOT NULL, connection_id TEXT NOT NULL,
+ policy TEXT NOT NULL, token TEXT NOT NULL, environment TEXT NOT NULL, categories TEXT NOT NULL,
+ preview_enabled INTEGER NOT NULL DEFAULT 0, expires_at REAL NOT NULL,
+ PRIMARY KEY(principal, installation_id, connection_id));
+CREATE TABLE IF NOT EXISTS activity_start_tokens (
+ principal TEXT NOT NULL, installation_id TEXT NOT NULL, connection_id TEXT NOT NULL,
+ token TEXT NOT NULL, environment TEXT NOT NULL, expires_at REAL NOT NULL,
+ PRIMARY KEY(principal, installation_id, connection_id));
+CREATE TABLE IF NOT EXISTS human_origins (
+ scope TEXT PRIMARY KEY, principal TEXT NOT NULL, installation_id TEXT NOT NULL,
+ connection_id TEXT NOT NULL, updated_at REAL NOT NULL);
 """
+
+_ADDED_COLUMNS = {
+    "subscriptions": (("preview_enabled", "INTEGER NOT NULL DEFAULT 0"), ("origin", "TEXT NOT NULL DEFAULT ''")),
+    "runs": (("owner", "TEXT NOT NULL DEFAULT ''"), ("closed_reason", "TEXT NOT NULL DEFAULT ''"),
+             ("presentation", "TEXT NOT NULL DEFAULT ''")),
+}
+
+
+def process_owner(pid=None):
+    """``pid:start-ticks``: a recycled PID never inherits another process's runs."""
+    pid = os.getpid() if pid is None else pid
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return f"{pid}:{stat.rsplit(')', 1)[1].split()[19]}"
+    except (OSError, IndexError):
+        return f"{pid}:"
+
+
+def _owner_alive(owner):
+    pid, _, started = owner.partition(":")
+    if not pid.isdigit():
+        return False
+    if started:
+        return process_owner(int(pid)) == owner
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def normalized_uuid(value):
@@ -69,7 +124,7 @@ def _validate_delivery(principal, token, environment, kind, categories, *, allow
         pass  # Existing alert leases may only narrow privacy without a fresh token.
     elif not isinstance(token, str) or not re.fullmatch(r"[0-9a-fA-F]{32,512}", token) or len(token) % 2:
         raise ValueError("invalid token")
-    if environment not in {"production", "sandbox"} or kind not in {"alert", "activity", "widget"}:
+    if environment not in {"production", "sandbox"} or kind not in _KINDS:
         raise ValueError("invalid delivery channel")
     if not isinstance(categories, (list, tuple)) or any(c not in {"attention", "completion"} for c in categories):
         raise ValueError("invalid notification categories")
@@ -88,6 +143,7 @@ class PushStore(WidgetPushStore):
         os.close(descriptor)
         os.chmod(self.path, 0o600)
         self._lock = threading.RLock()
+        self.owner = process_owner()
         self._db = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         try:
@@ -96,9 +152,11 @@ class PushStore(WidgetPushStore):
             self._db.executescript(_SCHEMA)
             # Serialize the additive migration across processes sharing this store.
             with self.transaction() as db:
-                columns = {row["name"] for row in db.execute("PRAGMA table_info(subscriptions)")}
-                if "preview_enabled" not in columns:
-                    db.execute("ALTER TABLE subscriptions ADD COLUMN preview_enabled INTEGER NOT NULL DEFAULT 0")
+                for table, added in _ADDED_COLUMNS.items():
+                    columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+                    for name, declaration in added:
+                        if name not in columns:
+                            db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
         except sqlite3.Error:
             self._db.close()
             raise
@@ -116,6 +174,8 @@ class PushStore(WidgetPushStore):
 
     def register(self, principal, scope, *, installation_id, connection_id, token, environment,
                  kind="alert", categories=("attention", "completion"), activity_id="", run_id="", preview_enabled=False, read_token=None):
+        if kind == "activity_start":
+            raise ValueError("push-to-start tokens use their own registration")
         if kind == "widget":
             reader_digest(read_token)
             if scope.surface not in {"chats", "native_session"}:
@@ -150,7 +210,7 @@ class PushStore(WidgetPushStore):
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
                 ON CONFLICT(id) DO UPDATE SET token=excluded.token, environment=excluded.environment,
                 categories=excluded.categories, run_id=excluded.run_id, expires_at=excluded.expires_at,
-                preview_enabled=excluded.preview_enabled,
+                preview_enabled=excluded.preview_enabled, origin='',
                 version=subscriptions.version+1""", (sid, principal, installation_id, connection_id,
                 scope.key, scope.surface, scope.profile, scope.session_id, kind, activity_id, run_id,
                 token.lower(), environment, json.dumps(sorted(set(categories))), expires, int(preview_enabled and kind == "alert")))
@@ -209,7 +269,170 @@ class PushStore(WidgetPushStore):
                 if kind == "alert":
                     receipt.update(categories=json.loads(sub["categories"]), preview_enabled=bool(sub["preview_enabled"]))
                 receipts.append(receipt)
+            if kind == "alert":
+                self._refresh_policy(db, (principal, installation_id, connection_id), environment,
+                                     None if privacy_only else token.lower(), categories, preview_enabled, now)
         return {"updated": len(receipts), "subscriptions": receipts}
+
+    def _refresh_policy(self, db, identity, environment, token, categories, preview_enabled, now):
+        policy = db.execute("""SELECT * FROM alert_policies WHERE principal=? AND installation_id=?
+            AND connection_id=? AND environment=? AND expires_at>?""", (*identity, environment, now)).fetchone()
+        if policy is None:
+            return
+        allowed = set(categories)
+        if token is None:  # privacy-only: narrow, never widen
+            allowed.intersection_update(json.loads(policy["categories"]))
+            preview_enabled = preview_enabled and bool(policy["preview_enabled"])
+        self._write_policy(db, identity, policy["policy"], token or policy["token"], environment,
+                           sorted(allowed), preview_enabled,
+                           policy["expires_at"] if token is None else now + 30 * 86400)
+
+    # ── Alert policy (R2): "all" listed chats or only chats this device opened ──────────────
+
+    def set_policy(self, principal, *, installation_id, connection_id, policy, token=None, environment,
+                   categories=("attention", "completion"), preview_enabled=False):
+        installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
+        identity = (principal, installation_id, connection_id)
+        if policy not in {"all", "opened"}:
+            raise ValueError("invalid alert policy")
+        if not isinstance(preview_enabled, bool):
+            raise ValueError("preview_enabled must be a boolean")
+        with self.transaction() as db:
+            if policy == "opened":
+                db.execute("DELETE FROM alert_policies WHERE principal=? AND installation_id=? AND connection_id=?", identity)
+                db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?
+                    AND kind='alert' AND origin='policy'""", identity)
+                return {"policy": "opened", "expires_at": None}
+            _validate_delivery(principal, token, environment, "alert", categories)
+            expires = self.clock() + 30 * 86400
+            self._write_policy(db, identity, "all", token.lower(), environment, sorted(set(categories)),
+                               preview_enabled, expires)
+        return {"policy": "all", "expires_at": expires, "categories": sorted(set(categories)),
+                "preview_enabled": preview_enabled}
+
+    def _write_policy(self, db, identity, policy, token, environment, categories, preview_enabled, expires):
+        db.execute("""INSERT INTO alert_policies VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(principal, installation_id, connection_id) DO UPDATE SET policy=excluded.policy,
+            token=excluded.token, environment=excluded.environment, categories=excluded.categories,
+            preview_enabled=excluded.preview_enabled, expires_at=excluded.expires_at""",
+            (*identity, policy, token, environment, json.dumps(categories), int(preview_enabled), expires))
+        # Leases this policy already made follow its token and privacy; explicit leases keep theirs.
+        db.execute("""UPDATE subscriptions SET token=?, environment=?, categories=?, preview_enabled=?,
+            version=version+1 WHERE principal=? AND installation_id=? AND connection_id=?
+            AND kind='alert' AND origin='policy'""",
+            (token, environment, json.dumps(categories), int(preview_enabled), *identity))
+
+    def policy(self, principal, *, installation_id, connection_id):
+        identity = (principal, normalized_uuid(installation_id), normalized_uuid(connection_id))
+        with self._lock:
+            row = self._db.execute("""SELECT * FROM alert_policies WHERE principal=? AND installation_id=?
+                AND connection_id=? AND expires_at>?""", (*identity, self.clock())).fetchone()
+        if row is None:
+            return {"policy": "opened", "expires_at": None}
+        return {"policy": row["policy"], "expires_at": row["expires_at"],
+                "categories": json.loads(row["categories"]), "preview_enabled": bool(row["preview_enabled"])}
+
+    def _materialize_policy(self, db, scope, now):
+        """Give every "all" device an alert lease for a listed chat as its run starts."""
+        for policy in db.execute("SELECT * FROM alert_policies WHERE policy='all' AND expires_at>?", (now,)).fetchall():
+            identity = (policy["principal"], policy["installation_id"], policy["connection_id"])
+            expires = min(policy["expires_at"], now + _POLICY_LEASE)
+            existing = db.execute("""SELECT id, origin FROM subscriptions WHERE principal=? AND installation_id=?
+                AND connection_id=? AND scope=? AND kind='alert' AND activity_id=''""", (*identity, scope.key)).fetchone()
+            if existing is not None:
+                if existing["origin"] == "policy":
+                    db.execute("UPDATE subscriptions SET expires_at=MAX(expires_at, ?) WHERE id=?", (expires, existing["id"]))
+                continue  # an explicit lease for this chat keeps its own preferences
+            db.execute("""INSERT INTO subscriptions
+                (id, principal, installation_id, connection_id, scope, surface, profile, session_id,
+                 kind, activity_id, run_id, token, environment, categories, expires_at, preview_enabled, version, origin)
+                VALUES (?,?,?,?,?,?,?,?,'alert','','',?,?,?,?,?,1,'policy')""",
+                (str(uuid.uuid4()), *identity, scope.key, scope.surface, scope.profile, scope.session_id,
+                 policy["token"], policy["environment"], policy["categories"], expires, policy["preview_enabled"]))
+
+    # ── Latest human origin and push-to-start tokens (KTD7, KTD8) ─────────────────────────
+
+    def set_origin(self, scope, principal=None, *, installation_id=None, connection_id=None):
+        """A phone submission records its device; any other human submission clears eligibility."""
+        with self.transaction() as db:
+            if principal is None:
+                db.execute("DELETE FROM human_origins WHERE scope=?", (scope.key,))
+                return None
+            identity = (principal, normalized_uuid(installation_id), normalized_uuid(connection_id))
+            db.execute("""INSERT INTO human_origins VALUES (?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET
+                principal=excluded.principal, installation_id=excluded.installation_id,
+                connection_id=excluded.connection_id, updated_at=excluded.updated_at""",
+                (scope.key, *identity, self.clock()))
+            return identity
+
+    def origin(self, scope):
+        with self._lock:
+            row = self._db.execute("SELECT * FROM human_origins WHERE scope=?", (scope.key,)).fetchone()
+        return dict(row) if row else None
+
+    def register_start_token(self, principal, *, installation_id, connection_id, token, environment):
+        installation_id, connection_id = normalized_uuid(installation_id), normalized_uuid(connection_id)
+        _validate_delivery(principal, token, environment, "activity_start", ())
+        expires = self.clock() + 30 * 86400
+        with self.transaction() as db:
+            db.execute("""INSERT INTO activity_start_tokens VALUES (?,?,?,?,?,?)
+                ON CONFLICT(principal, installation_id, connection_id) DO UPDATE SET token=excluded.token,
+                environment=excluded.environment, expires_at=excluded.expires_at""",
+                (principal, installation_id, connection_id, token.lower(), environment, expires))
+            # Starts queued under a rotated token must not reach Apple with the old one.
+            db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?
+                AND kind='activity_start' AND token!=?""", (principal, installation_id, connection_id, token.lower()))
+        return {"expires_at": expires}
+
+    def unregister_start_token(self, principal, *, installation_id, connection_id):
+        identity = (principal, normalized_uuid(installation_id), normalized_uuid(connection_id))
+        with self.transaction() as db:
+            count = db.execute("""DELETE FROM activity_start_tokens WHERE principal=? AND installation_id=?
+                AND connection_id=?""", identity).rowcount
+            db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?
+                AND kind='activity_start'""", identity)
+        return count
+
+    def _enqueue_remote_start(self, db, scope, run, preview):
+        origin = db.execute("SELECT * FROM human_origins WHERE scope=?", (scope.key,)).fetchone()
+        if origin is None:
+            return
+        identity = (origin["principal"], origin["installation_id"], origin["connection_id"])
+        now = self.clock()
+        start = db.execute("""SELECT * FROM activity_start_tokens WHERE principal=? AND installation_id=?
+            AND connection_id=? AND expires_at>?""", (*identity, now)).fetchone()
+        if start is None:
+            return
+        sid = str(uuid.uuid4())
+        expires = run["started_at"] + _RUN_LIFETIME
+        inserted = db.execute("""INSERT OR IGNORE INTO subscriptions
+            (id, principal, installation_id, connection_id, scope, surface, profile, session_id,
+             kind, activity_id, run_id, token, environment, categories, expires_at, preview_enabled, version, origin)
+            VALUES (?,?,?,?,?,?,?,?,'activity_start',?,?,?,?,'[]',?,0,1,'start')""",
+            (sid, *identity, scope.key, scope.surface, scope.profile, scope.session_id, run["run_id"],
+             run["run_id"], start["token"], start["environment"], expires)).rowcount
+        if not inserted:
+            return  # (installation, scope, run) already has its one start
+        sub = db.execute("SELECT * FROM subscriptions WHERE id=?", (sid,)).fetchone()
+        payload = start_payload(sub, dict(run), scope, now, preview=preview, previews=self._device_previews(db, sub))
+        db.execute("""INSERT OR IGNORE INTO outbox
+            (job_id, subscription_id, event_id, run_id, payload, urgent, collapse_id, expires_at, next_attempt, category)
+            VALUES (?,?,?,?,?,1,?,?,?,'completion')""", (str(uuid.uuid4()), sid,
+            f"{scope.key}:{run['run_id']}:remote-start", run["run_id"], json.dumps(payload, separators=(",", ":")),
+            sid, min(expires, now + 600), now))
+
+    def _device_previews(self, db, sub):
+        """The device's current preview choice: its alert lease for this chat, else its policy."""
+        identity = (sub["principal"], sub["installation_id"], sub["connection_id"])
+        now = self.clock()
+        lease = db.execute("""SELECT preview_enabled FROM subscriptions WHERE principal=? AND installation_id=?
+            AND connection_id=? AND scope=? AND kind='alert' AND expires_at>?""",
+            (*identity, sub["scope"], now)).fetchone()
+        if lease is not None:
+            return bool(lease["preview_enabled"])
+        policy = db.execute("""SELECT preview_enabled FROM alert_policies WHERE principal=? AND installation_id=?
+            AND connection_id=? AND expires_at>?""", (*identity, now)).fetchone()
+        return bool(policy and policy["preview_enabled"])
 
     def unregister(self, principal, *, installation_id, connection_id, subscription_id=None, kind=None, surface=None):
         args = [principal, normalized_uuid(installation_id), normalized_uuid(connection_id)]
@@ -226,7 +449,9 @@ class PushStore(WidgetPushStore):
         with self.transaction() as db:
             count = db.execute(query, args).rowcount
             if subscription_id is None and kind is None and surface is None:
-                db.execute("DELETE FROM widget_readers WHERE principal=? AND installation_id=? AND connection_id=?", args)
+                # Logout: nothing this device registered may outlive it.
+                for table in ("widget_readers", "alert_policies", "activity_start_tokens", "human_origins"):
+                    db.execute(f"DELETE FROM {table} WHERE principal=? AND installation_id=? AND connection_id=?", args)
             elif kind == "widget":
                 if subscription_id is None:
                     db.execute("DELETE FROM widget_inbox_grants WHERE principal=? AND installation_id=? AND connection_id=?", args[:3])
@@ -284,20 +509,92 @@ class PushStore(WidgetPushStore):
                                    (scope.key,)).fetchone()
             return dict(row) if row else None
 
-    def start_run(self, scope, run_id=None, event_id=None):
+    def start_run(self, scope, run_id=None, event_id=None, *, reuse_run_id=None, listed=False,
+                  continuation=False, preview=None):
+        """Open the scope's one run. A new start closes any older open run of the scope (R7).
+
+        ``reuse_run_id`` names the caller's current run: if it is still a fresh ``starting`` run
+        this start is the duplicate announcement of the same turn and yields that run.
+        ``listed`` materializes "All chats" alert leases; ``continuation`` may push-start a
+        Live Activity on the device whose human message is the chat's latest (KTD8).
+        """
         run_id = run_id or str(uuid.uuid4())
         if not isinstance(run_id, str) or not 1 <= len(run_id) <= 256:
             raise ValueError("invalid run identity")
         now = self.clock()
         with self.transaction() as db:
+            if reuse_run_id:
+                reused = db.execute("""SELECT * FROM runs WHERE run_id=? AND scope=? AND status='starting'
+                    AND started_at>=?""", (reuse_run_id, scope.key, now - _DUPLICATE_START_WINDOW)).fetchone()
+                if reused is not None:
+                    return dict(reused)
             existing = db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
             if existing is not None and existing["scope"] != scope.key:
                 raise ValueError("run belongs to a different scope")
-            db.execute("INSERT OR IGNORE INTO runs VALUES (?,?,?,?,?,?,?,?)",
-                (run_id, scope.key, scope.surface, scope.profile, scope.session_id, "starting", now, now))
+            db.execute("""INSERT OR IGNORE INTO runs (run_id, scope, surface, profile, session_id, status,
+                started_at, updated_at, owner, presentation) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (run_id, scope.key, scope.surface, scope.profile, scope.session_id, "starting", now, now,
+                 self.owner, preview.to_json() if preview else ""))
+            # One scope runs one turn at a time: an older open run lost its terminal event.
+            for older in db.execute("""SELECT * FROM runs WHERE scope=? AND run_id!=? AND status NOT IN
+                    ('complete','failed','cancelled')""", (scope.key, run_id)).fetchall():
+                self._close(db, older, "superseded")
+            run = db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            if existing is None:
+                if listed:
+                    self._materialize_policy(db, scope, now)
+                if continuation:
+                    self._enqueue_remote_start(db, scope, run, preview)
         self.record(scope, run_id, event_id or f"{run_id}:start", "starting")
         with self._lock:
             return dict(self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone())
+
+    def _close(self, db, run, reason):
+        """Silently close a run whose turn is gone: end its activities, never alert."""
+        now = self.clock()
+        updated = max(now, run["updated_at"])
+        db.execute("UPDATE runs SET status='cancelled', closed_reason=?, updated_at=? WHERE run_id=?",
+                   (reason, updated, run["run_id"]))
+        db.execute("DELETE FROM outbox WHERE run_id=? AND state='pending' AND lease_until<=?", (run["run_id"], now))
+        closed = {**dict(run), "status": "cancelled", "closed_reason": reason, "updated_at": updated}
+        scope = Scope(run["surface"], run["profile"], run["session_id"])
+        event_id = f"{run['scope']}:{run['run_id']}:closed:{reason}"
+        db.execute("INSERT OR IGNORE INTO events VALUES (?,?)", (event_id, now))
+        for sub in db.execute("""SELECT * FROM subscriptions WHERE scope=? AND expires_at>?
+                AND ((kind='activity' AND run_id=?) OR (kind='widget' AND ?))""",
+                (run["scope"], now, run["run_id"], reason == "orphaned")).fetchall():
+            if sub["kind"] == "widget":
+                self._enqueue_widget(db, sub, closed, event_id)
+            else:
+                self._enqueue(db, sub, closed, scope, event_id)
+        db.execute("DELETE FROM subscriptions WHERE kind='activity_start' AND run_id=?", (run["run_id"],))
+
+    def reconcile_orphans(self, held=None, running=None, limit=200):
+        """Close open runs whose turn no longer exists (R7), checked against real liveness.
+
+        ``held``: run ids a live session of this process still points at; ``running``: the
+        subset whose session is mid-turn. ``None`` means the caller cannot see sessions, so
+        this process's runs are left alone. Other processes' runs close once that process is
+        gone; legacy rows without an owner predate this code and its process.
+        """
+        now = self.clock()
+        closed = 0
+        with self.transaction() as db:
+            rows = db.execute("""SELECT * FROM runs WHERE status NOT IN ('complete','failed','cancelled')
+                ORDER BY updated_at LIMIT ?""", (limit,)).fetchall()
+            for run in rows:
+                owner = run["owner"]
+                if owner == self.owner:
+                    if held is None or run["run_id"] in (running or ()):
+                        continue
+                    idle = now - run["updated_at"]
+                    if idle < (_HELD_IDLE_GRACE if run["run_id"] in held else _ORPHAN_GRACE):
+                        continue
+                elif owner and _owner_alive(owner):
+                    continue
+                self._close(db, run, "orphaned")
+                closed += 1
+        return closed
 
     def record(self, scope, run_id, event_id, status, *, preview=None):
         if status not in LABELS or not isinstance(event_id, str) or not 1 <= len(event_id) <= 512:
@@ -305,18 +602,23 @@ class PushStore(WidgetPushStore):
         # Namespacing means a producer cannot collide with another run's request IDs.
         event_id = f"{scope.key}:{run_id}:{event_id}"
         now = self.clock()
+        presentation = preview.to_json() if preview is not None else None
         with self.transaction() as db:
             run = db.execute("SELECT * FROM runs WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
             if run is None:
                 raise ValueError("run unavailable")
             if run["status"] in TERMINAL:
                 return False
-            if status == run["status"] and status not in ATTENTION:
+            # A new step, agent count or plan progress updates only the Live Activity.
+            presented = presentation is not None and presentation != run["presentation"]
+            if status == run["status"] and status not in ATTENTION and not presented:
                 return False
             if db.execute("INSERT OR IGNORE INTO events VALUES (?,?)", (event_id, now)).rowcount == 0:
                 return False
+            if presented:
+                db.execute("UPDATE runs SET presentation=? WHERE run_id=?", (presentation, run_id))
             # Repeated deltas keep the original generic status; no disk job per token.
-            changed = status != run["status"]
+            changed = status != run["status"] or presented
             if run["status"] in ATTENTION and status not in ATTENTION:
                 # A withdrawn/answered question must not later send an alert from a retry.
                 # Already accepted Apple deliveries cannot be recalled; drop pending retries only.
@@ -324,12 +626,12 @@ class PushStore(WidgetPushStore):
                     AND category='attention' AND subscription_id IN
                     (SELECT id FROM subscriptions WHERE scope=? AND kind='alert')""",
                     (run_id, scope.key))
-            widget_changed = changed and (run["status"] == "starting" or run["status"] in ATTENTION
-                                          or status in ATTENTION or status in TERMINAL)
+            widget_changed = status != run["status"] and (run["status"] == "starting" or run["status"] in ATTENTION
+                                                          or status in ATTENTION or status in TERMINAL)
             updated = max(now, run["updated_at"]) if changed else run["updated_at"]
             db.execute("UPDATE runs SET status=?, updated_at=? WHERE run_id=?", (status, updated, run_id))
             run = dict(run)
-            run.update(status=status, updated_at=updated)
+            run.update(status=status, updated_at=updated, presentation=presentation or run["presentation"])
             rows = db.execute("""SELECT * FROM subscriptions WHERE scope=? AND expires_at>?
                 AND ((kind='activity' AND run_id=? AND ?) OR (kind='alert' AND ?) OR kind='widget')""",
                 (scope.key, now, run_id, changed, status in ATTENTION or status in TERMINAL)).fetchall()
@@ -367,7 +669,12 @@ class PushStore(WidgetPushStore):
                 due = min(due, prior_due)
             db.execute("""DELETE FROM outbox WHERE subscription_id=? AND run_id=? AND state='pending'""",
                        (sub["id"], run["run_id"]))
-        payload = activity_payload(run, scope, now) if activity else alert_payload(sub, run, scope, preview=preview)
+        if preview is None:
+            preview = AlertPreview.from_json(run.get("presentation"))
+        if activity:
+            payload = activity_payload(run, scope, now, preview=preview, previews=self._device_previews(db, sub))
+        else:
+            payload = alert_payload(sub, run, scope, preview=preview)
         if not activity:
             payload["event_id"] = hashlib.sha256(event_id.encode()).hexdigest()
             # Optional display text must never make an otherwise valid alert too large.
@@ -390,13 +697,15 @@ class PushStore(WidgetPushStore):
                   ON p.principal=s.principal AND p.installation_id=s.installation_id
                   AND p.connection_id=s.connection_id AND p.scope=s.scope
                   WHERE s.kind='alert' AND p.expires_at>?)""", (now, now))
-            row = db.execute("""SELECT o.*, s.token, s.environment, s.kind, s.preview_enabled, s.version AS token_version
+            row = db.execute("""SELECT o.*, s.token, s.environment, s.kind, s.preview_enabled, s.version AS token_version,
+                s.principal, s.installation_id, s.connection_id, s.scope, s.profile
                 FROM outbox o JOIN subscriptions s ON o.subscription_id=s.id
                 WHERE o.state='pending' AND o.next_attempt<=? AND o.lease_until<=?
                 AND o.expires_at>? AND s.expires_at>?
                 AND (s.kind!='widget' OR s.token!='')
                 AND (s.kind!='activity' OR s.last_timestamp<?)
-                AND (s.kind='activity' OR EXISTS (SELECT 1 FROM json_each(s.categories) WHERE value=o.category))
+                AND (s.kind IN ('activity','activity_start')
+                     OR EXISTS (SELECT 1 FROM json_each(s.categories) WHERE value=o.category))
                 ORDER BY o.urgent DESC, o.next_attempt LIMIT 1""",
                 (now, now, now, now, int(now))).fetchone()
             if row is None:
@@ -407,6 +716,13 @@ class PushStore(WidgetPushStore):
             # A preference change also governs alerts that were queued earlier.
             if job["kind"] == "alert" and not job["preview_enabled"]:
                 job["payload"]["aps"]["alert"] = generic_alert(job["payload"]["hermex.status"])
+            if job["kind"] in {"activity", "activity_start"} and not self._device_previews(db, job):
+                redact = redact_start if job["kind"] == "activity_start" else (
+                    lambda aps, profile: redact_content_state(aps["content-state"], profile))
+                redact(job["payload"]["aps"], job["profile"])
+            if job["kind"] == "activity_start":
+                job["payload"]["aps"]["timestamp"] = int(now)
+                job["payload"]["aps"]["stale-date"] = int(now + 120)
             job["attempts"] += 1
             if job["kind"] == "activity":
                 # Order published states rather than adding future seconds for token events.
@@ -439,6 +755,11 @@ class PushStore(WidgetPushStore):
                     db.execute("DELETE FROM outbox WHERE job_id=?", (job["job_id"],))
                     return
             if result.outcome == "invalid":
+                if job["kind"] == "activity_start":
+                    # Apple rejected the push-to-start token itself: never use it again.
+                    db.execute("""DELETE FROM activity_start_tokens WHERE principal=? AND installation_id=?
+                        AND connection_id=? AND token=?""", (job["principal"], job["installation_id"],
+                        job["connection_id"], job["token"]))
                 if job["kind"] == "widget":
                     # An invalid Apple token cannot revoke direct Inbox reads.
                     db.execute("UPDATE subscriptions SET token='', version=version+1 WHERE id=? AND version=?",
@@ -471,6 +792,9 @@ class PushStore(WidgetPushStore):
         with self.transaction() as db:
             db.execute("DELETE FROM mobile_presence WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM widget_readers WHERE expires_at<=?", (now,))
+            db.execute("DELETE FROM alert_policies WHERE expires_at<=?", (now,))
+            db.execute("DELETE FROM activity_start_tokens WHERE expires_at<=?", (now,))
+            db.execute("DELETE FROM human_origins WHERE updated_at<?", (now - 30 * 86400,))
             db.execute("DELETE FROM subscriptions WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM outbox WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM events WHERE created_at<?", (now - 30 * 86400,))

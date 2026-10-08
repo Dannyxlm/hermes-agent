@@ -2014,6 +2014,12 @@ export interface PromptSubmitParams {
   confirm_truncate?: boolean | null
   confirm_empty_truncate?: boolean | null
   rebind_survivor_row_ids?: number[] | null
+  origin?: PromptOrigin | null
+}
+/** The phone that typed this prompt (KTD7): its push installation and connection UUIDs. Honoured only on an authenticated transport; a submission without it clears the chat's phone origin, so Desktop input never lights the phone's Live Activity. */
+export interface PromptOrigin {
+  installation_id: string
+  connection_id: string
 }
 /** ``status`` is absent only on the typed-stop-phrase reply (``voice_stopped``). After a truncation the survivor row ids let the client rebind its cached ``rowId``s (``None`` map entries: drop the cached id). ``turn_isolation`` marks a compute-host dispatch. */
 export interface PromptSubmitResult {
@@ -3040,6 +3046,37 @@ export interface LlmOneshotParams {
 export interface LlmOneshotResult {
   text: string
 }
+export interface MobileSessionPushPolicyParams {
+  installation_id: string
+  connection_id: string
+  policy?: 'all' | 'opened' | null
+  environment?: 'production' | 'sandbox' | null
+  device_token?: string | null
+  categories?: ('attention' | 'completion')[]
+  preview_enabled?: boolean
+}
+export interface MobileSessionPushPolicyResult {
+  policy: 'all' | 'opened'
+  expires_at: number | null
+  categories?: ('attention' | 'completion')[] | null
+  preview_enabled?: boolean | null
+}
+export interface MobileActivityStartTokenParams {
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  start_token: string
+}
+export interface MobileActivityStartTokenResult {
+  expires_at: number
+}
+export interface MobileDeviceParams {
+  installation_id: string
+  connection_id: string
+}
+export interface MobileUnregisterResult {
+  removed: number
+}
 export interface MobileSessionPushRegisterParams {
   profile: string
   stored_session_id: string
@@ -3091,9 +3128,6 @@ export interface MobileUnregisterParams {
   installation_id: string
   connection_id: string
   subscription_id?: string | null
-}
-export interface MobileUnregisterResult {
-  removed: number
 }
 export interface MobileSessionPresenceParams {
   profile: string
@@ -3260,6 +3294,7 @@ export interface MobileSubmitParams {
   canonical_root_id: string
   session_id: string
   text: string
+  origin?: PromptOrigin | null
 }
 export interface MobileSubmitResult {
   status?: PromptSubmitStatus | null
@@ -5692,7 +5727,12 @@ export interface RpcMethods {
   'mobile.push.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
   'mobile.session_activity.refresh': { params: MobileActivityRefreshParams; result: MobileRefreshResult }
   'mobile.session_activity.register': { params: MobileSessionActivityRegisterParams; result: MobileSessionRegistrationResult }
+  /** Register or rotate this device's Live Activity push-to-start token (iOS 17.2+). */
+  'mobile.session_activity.start_token.register': { params: MobileActivityStartTokenParams; result: MobileActivityStartTokenResult }
+  'mobile.session_activity.start_token.unregister': { params: MobileDeviceParams; result: MobileUnregisterResult }
   'mobile.session_activity.unregister': { params: MobileActivityUnregisterParams; result: MobileUnregisterResult }
+  /** Read or set this device's alert policy: "all" listed chats (messaging, cron, Kanban and delegate sessions never alert) or "opened" (only chats with their own lease). */
+  'mobile.session_push.policy': { params: MobileSessionPushPolicyParams; result: MobileSessionPushPolicyResult }
   /** Renew a 60-second foreground lease for a registered ordinary destination; affects alerts only. */
   'mobile.session_push.presence': { params: MobileSessionPresenceParams; result: MobileSessionPresenceResult }
   'mobile.session_push.refresh': { params: MobilePushRefreshParams; result: MobileRefreshResult }
@@ -6133,7 +6173,10 @@ export const RPC_METHODS = [
   'mobile.push.unregister',
   'mobile.session_activity.refresh',
   'mobile.session_activity.register',
+  'mobile.session_activity.start_token.register',
+  'mobile.session_activity.start_token.unregister',
   'mobile.session_activity.unregister',
+  'mobile.session_push.policy',
   'mobile.session_push.presence',
   'mobile.session_push.refresh',
   'mobile.session_push.register',

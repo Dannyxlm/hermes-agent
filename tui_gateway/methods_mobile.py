@@ -115,9 +115,11 @@ def _(rid, params):
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
                      "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery",
-                     "video_upload"],
+                     "video_upload", "push_alert_policy", "push_to_start", "activity_content_v2",
+                     "prompt_origin"],
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
-                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1},
+                             "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
+                             "activity_content": 2, "push_alert_policy": 1, "push_to_start": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 
@@ -321,7 +323,8 @@ def _(rid, params):
         return _err(rid, 4403, "slash commands are unavailable in mobile Bot Chat")
     _profile, _home, sid, session, *_rest = _mobile_scope(params)
     response = _methods["prompt.submit"](rid, {"session_id": sid, "text": text, "queued": True,
-        "_mobile_expected_record": session, "_mobile_scope_params": params})
+        "_mobile_expected_record": session, "_mobile_scope_params": params,
+        **({"origin": params["origin"]} if params.get("origin") is not None else {})})
     if "result" in response:
         response["result"]["accepted"] = response["result"].get("status") in ("streaming", "queued")
     return response
