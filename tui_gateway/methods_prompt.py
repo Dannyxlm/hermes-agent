@@ -778,7 +778,8 @@ def _(rid, params: dict) -> dict:
             display_kind=display_kind)
         if busy_response is not None:
             if "result" in busy_response:
-                _mobile_push_note_submission(session, params)  # KTD7: queued input keeps its origin
+                # KTD7: queued input keeps its origin; steered/redirected input joins the running turn.
+                _mobile_push_note_submission(session, params, busy_response["result"].get("status"))
             return busy_response
     raw_rebind_ids = params.get("rebind_survivor_row_ids")
     requested_rebind_ids = (

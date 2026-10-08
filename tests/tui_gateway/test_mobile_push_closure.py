@@ -352,3 +352,18 @@ def test_apple_rejection_of_an_activity_does_not_touch_alerts(delivery):
     service.record(scope, run["run_id"], "done", "complete")
     service.drain_once()
     assert alerts(sender)
+
+
+def test_claimed_alert_of_a_closed_run_never_retries(delivery):
+    """Review fix: closing a run also drops leased pending rows, so a "retry" cannot resurface."""
+    service, sender, now, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "q", "waitingForClarification")
+    job = service.store.claim()
+    assert job["kind"] == "alert"
+    service.start_run(scope)  # the turn was superseded while Apple was being called
+    service.store.finish(job, DeliveryResult("retry"))
+    now[0] += 60  # past the retry backoff, well inside the alert's one-hour expiry
+    service.drain_once()
+    assert alerts(sender) == []

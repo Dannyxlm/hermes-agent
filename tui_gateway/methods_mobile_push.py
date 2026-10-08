@@ -23,8 +23,9 @@ _MOBILE_PUSH_STATUSES = {
 }
 _MOBILE_PUSH_EVENTS = frozenset(_MOBILE_PUSH_STATUSES) | {
     "message.start", "message.complete", "request.cancel", "todo.updated"}
-# A phone submission marks the next message.start as human; continuations never pass prompt.submit.
-_MOBILE_PUSH_SUBMISSION_WINDOW = 60
+# Each accepted human prompt that will run as its own turn marks one message.start as human;
+# continuations never pass prompt.submit. Markers older than this belong to turns that never ran.
+_MOBILE_PUSH_HUMAN_MARKER_TTL = 3 * 3600
 _EDIT_TOOLS = frozenset({"write_file", "patch", "apply_patch", "edit_file", "str_replace_editor"})
 _TEST_COMMAND = re.compile(r"\b(pytest|run_tests|unittest|vitest|jest|xcodebuild\s+test|go\s+test|cargo\s+test|npm\s+(?:run\s+)?test)\b")
 _STEP_LABELS = {
@@ -251,11 +252,10 @@ def _(rid, params, principal):
 
 @_mobile_push_handler("mobile.session_activity.start_token.unregister")
 def _(rid, params, principal):
-    service = _mobile_push_service()
-    if service is None:
-        return _ok(rid, {"removed": 0})  # logout (mobile.push.unregister) still clears the stored token
-    return _ok(rid, {"removed": service.store.unregister_start_token(
-        principal, installation_id=params.get("installation_id"), connection_id=params.get("connection_id"))})
+    from tui_gateway.mobile_push import unregister_start_token_for_home
+    # Revocation holds even when delivery is disabled or its credential is missing.
+    return _ok(rid, {"removed": unregister_start_token_for_home(_hermes_home, principal,
+        installation_id=params.get("installation_id"), connection_id=params.get("connection_id"))})
 
 
 def _mobile_session_refresh(rid, params, principal, kind):
@@ -458,8 +458,10 @@ def _mobile_push_capture(obj):
         if push_scope is None:
             return
         if event == "message.start":
-            submitted = session.pop("_mobile_push_submitted_at", None)
-            human = submitted is not None and time.monotonic() - submitted < _MOBILE_PUSH_SUBMISSION_WINDOW
+            now = time.monotonic()
+            pending = [t for t in session.get("_mobile_push_human_turns") or () if now - t < _MOBILE_PUSH_HUMAN_MARKER_TTL]
+            human = bool(pending)
+            session["_mobile_push_human_turns"] = pending[1:]
             # Continuations announce message.start before _run_prompt_submit announces it again.
             prior = session.get("_mobile_push_run_id") if current == "starting" else None
             session.update(_mobile_push_step="", _mobile_push_agents=_mobile_push_agent_count(session),
@@ -525,12 +527,14 @@ def _mobile_push_finish(session, status):
         logger.warning("mobile push terminal projection unavailable (%s)", type(error).__name__)
 
 
-def _mobile_push_note_submission(session, params):
+def _mobile_push_note_submission(session, params, status="streaming"):
     """KTD7: an accepted human prompt names the chat's latest human origin.
 
     A phone stamps ``origin`` {installation_id, connection_id} on an authenticated transport and
     becomes eligible for push-to-start; any other human submission (Desktop) clears eligibility.
-    Relayed or hosted turns are not human input and leave it alone.
+    Relayed or hosted turns are not human input and leave it alone. A prompt that will run as its
+    own turn (streaming, queued) marks that turn's message.start as human however long it waits in
+    the queue; steered or redirected input joins the running turn and marks nothing.
     """
     if params.get("_turn_author") is not None or params.get("_hosted_task") is not None:
         return
@@ -538,7 +542,8 @@ def _mobile_push_note_submission(session, params):
         service = _mobile_push_service()
         if service is None:
             return
-        session["_mobile_push_submitted_at"] = time.monotonic()
+        if status in {"streaming", "queued"}:
+            session["_mobile_push_human_turns"] = [*(session.get("_mobile_push_human_turns") or ()), time.monotonic()]
         push_scope = _mobile_push_scope_for_session(session)
         if push_scope is None:
             return

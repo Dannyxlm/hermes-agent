@@ -285,3 +285,71 @@ def test_tool_step_and_plan_reach_the_activity(push_service, ordinary, mobile_ho
     state = payload["aps"]["content-state"]
     assert (state["status"], state["currentStep"], state["planCompleted"], state["planTotal"]) == (
         "usingTool", "Running tests", 1, 2)
+
+
+def test_a_turn_that_ends_before_its_start_push_never_starts_an_activity(store_delivery):
+    """Review fix: terminal transitions drop the run's undelivered push-to-start."""
+    service, now, ids = store_delivery
+    run = service.start_run(ORDINARY, continuation=True)
+    service.record(ORDINARY, run["run_id"], "done", "complete")
+    service.drain_once()
+    assert [job for job in service.sender.jobs if job["kind"] == "activity_start"] == []
+
+
+def test_queued_phone_turn_is_human_however_long_it_waits(push_service, ordinary, mobile_home, peer):
+    """Review fix: a queued phone prompt is never mistaken for a continuation by wall clock."""
+    register_start_token(ordinary)
+    sid = live(mobile_home, peer)
+    session = server._sessions[sid]
+    server._mobile_push_note_submission(session, {"origin": device(ordinary)}, "queued")
+    session["_mobile_push_human_turns"] = [t - 600 for t in session["_mobile_push_human_turns"]]  # waited 10 min
+    server._emit("message.start", sid)
+    server._emit("message.start", sid)
+    push_service.drain_once()
+    assert start_jobs(push_service) == []
+
+
+def test_steered_input_does_not_mask_the_next_continuation(push_service, ordinary, mobile_home, peer):
+    register_start_token(ordinary)
+    sid = live(mobile_home, peer)
+    session = server._sessions[sid]
+    phone_submit(sid, ordinary)
+    server._emit("message.start", sid)  # the phone's own turn
+    server._mobile_push_note_submission(session, {"origin": device(ordinary)}, "steered")
+    server._emit("message.complete", sid, {"status": "complete", "text": "done"})
+    server._emit("message.start", sid)  # a later continuation
+    push_service.drain_once()
+    assert len(start_jobs(push_service)) == 1
+
+
+def test_start_token_revocation_holds_with_delivery_disabled(push_service, ordinary, mobile_home, peer, monkeypatch):
+    register_start_token(ordinary)
+    monkeypatch.setattr(server, "_mobile_push_service", lambda: None)
+    import tui_gateway.mobile_push as mobile_push
+    monkeypatch.setattr(mobile_push, "service_for_home", lambda home: None)
+    response = rpc("mobile.session_activity.start_token.unregister", **device(ordinary))
+    assert response["result"] == {"removed": 1}
+    with push_service.store._lock:
+        assert push_service.store._db.execute("SELECT COUNT(*) FROM activity_start_tokens").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("redirectable,status", [(False, "queued"), (True, "redirected")])
+def test_prompt_submit_reports_accepted_human_input_with_its_origin(monkeypatch, redirectable, status):
+    """Wiring: the busy prompt.submit path tells the push projection what it accepted."""
+    import types
+    monkeypatch.setattr(server, "_load_busy_input_mode", lambda: "interrupt")
+    noted = []
+    monkeypatch.setattr(server, "_mobile_push_note_submission",
+                        lambda session, params, status="streaming": noted.append((params.get("origin"), status)))
+    agent = types.SimpleNamespace(_supports_active_turn_redirect=redirectable,
+                                  redirect=lambda text: True, interrupt=lambda *a, **k: None)
+    session = {"agent": agent, "session_key": "k", "history": [], "history_lock": threading.Lock(),
+               "history_version": 0, "running": True, "transport": None, "attached_images": []}
+    origin = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    server._sessions["sid-origin"] = session
+    try:
+        response = server._methods["prompt.submit"]("r", {"session_id": "sid-origin", "text": "hi", "origin": origin})
+    finally:
+        server._sessions.pop("sid-origin", None)
+    assert response["result"]["status"] == status
+    assert noted == [(origin, status)]

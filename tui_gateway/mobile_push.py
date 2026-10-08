@@ -68,10 +68,15 @@ class PushService:
         if not force and now - self._reconciled_at < 60:
             return 0
         self._reconciled_at = now
-        held = running = None
-        if self.live_runs is not None:
-            held, running = self.live_runs()
-        closed = self.store.reconcile_orphans(held, running)
+        try:
+            held = running = None
+            if self.live_runs is not None:
+                held, running = self.live_runs()
+            closed = self.store.reconcile_orphans(held, running)
+        except Exception as error:
+            # The sweep is hygiene: it must never hold up deliveries in this pass.
+            logger.warning("mobile push run sweep unavailable (%s)", type(error).__name__)
+            return 0
         if closed:
             self._wake.set()
         return closed
@@ -167,16 +172,28 @@ def service_for_home(home):
         return service
 
 
-def unregister_for_home(home, principal, **params):
-    """Opt-out remains effective if delivery is disabled or its credential is missing."""
-    service = service_for_home(home)
-    if service:
-        return service.unregister(principal, **params)
+def _offline_store(home, action):
+    """Run an opt-out against the stored outbox when delivery is disabled or unconfigured."""
     path = Path(home) / "mobile-push" / "outbox.sqlite3"
     if not path.is_file():
         return 0
     store = PushStore(path, time.time)
     try:
-        return store.unregister(principal, **params)
+        return action(store)
     finally:
         store.close()
+
+
+def unregister_start_token_for_home(home, principal, **params):
+    service = service_for_home(home)
+    if service:
+        return service.store.unregister_start_token(principal, **params)
+    return _offline_store(home, lambda store: store.unregister_start_token(principal, **params))
+
+
+def unregister_for_home(home, principal, **params):
+    """Opt-out remains effective if delivery is disabled or its credential is missing."""
+    service = service_for_home(home)
+    if service:
+        return service.unregister(principal, **params)
+    return _offline_store(home, lambda store: store.unregister(principal, **params))

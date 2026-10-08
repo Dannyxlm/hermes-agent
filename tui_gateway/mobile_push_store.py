@@ -555,7 +555,8 @@ class PushStore(WidgetPushStore):
         updated = max(now, run["updated_at"])
         db.execute("UPDATE runs SET status='cancelled', closed_reason=?, updated_at=? WHERE run_id=?",
                    (reason, updated, run["run_id"]))
-        db.execute("DELETE FROM outbox WHERE run_id=? AND state='pending' AND lease_until<=?", (run["run_id"], now))
+        # Leased rows too: a claimed alert that comes back as "retry" must not resurface for a dead run.
+        db.execute("DELETE FROM outbox WHERE run_id=? AND state='pending'", (run["run_id"],))
         closed = {**dict(run), "status": "cancelled", "closed_reason": reason, "updated_at": updated}
         scope = Scope(run["surface"], run["profile"], run["session_id"])
         event_id = f"{run['scope']}:{run['run_id']}:closed:{reason}"
@@ -617,6 +618,9 @@ class PushStore(WidgetPushStore):
                 return False
             if presented:
                 db.execute("UPDATE runs SET presentation=? WHERE run_id=?", (presentation, run_id))
+            if status in TERMINAL:
+                # A push-to-start not yet delivered would open an activity for a finished turn.
+                db.execute("DELETE FROM subscriptions WHERE kind='activity_start' AND run_id=?", (run_id,))
             # Repeated deltas keep the original generic status; no disk job per token.
             changed = status != run["status"] or presented
             if run["status"] in ATTENTION and status not in ATTENTION:
