@@ -27,7 +27,7 @@ def test_http_uses_route_template_and_counts_streamed_bytes(caplog):
     with caplog.at_level("INFO", logger="hermes_cli.web_server.route_metrics"):
         metrics.emit_summary()
     row = json.loads(caplog.records[-1].message.split("route_metrics ", 1)[1])[0]
-    assert row["label"] == ["http", "/api/sessions/{id}/messages", "HermesMobile", "123", "2xx"]
+    assert row["label"] == ["http", "/api/sessions/{id}/messages", "phone", "123", "2xx"]
     assert row["count"] == 1
     assert row["bytes_total"] == 8
     assert row["p50_ms"] >= 0
@@ -89,7 +89,7 @@ def test_rpc_counts_completed_response_without_retaining_params(monkeypatch, cap
     logs = [r.message for r in caplog.records if r.name == "hermes_cli.web_server.route_metrics"]
     assert logs, "the completed RPC must produce an aggregate"
     row = json.loads(logs[-1].split("route_metrics ", 1)[1])[0]
-    expected = ["rpc", "metrics.test", "HermesMobile", "123", "success"] if known else [
+    expected = ["rpc", "metrics.test", "phone", "123", "success"] if known else [
         "rpc", "unknown_method", "unknown", "unknown", "error"]
     assert row["label"] == expected
     assert row["count"] == 1
@@ -166,12 +166,84 @@ def test_label_cap_folds_overflow_without_losing_counts(caplog):
     assert len(caplog.records) == before  # Empty intervals produce no misleading rows.
 
 
-@pytest.mark.parametrize("agent", ["HermesMobile/123 PRIVATE_UA_SENTINEL", "HermesMobile/１２３",
-                                   "HermesMobile/123\nPRIVATE_UA_SENTINEL", "HermesMobile/1234567890",
-                                   "PRIVATE_UA_SENTINEL", "HermesDesktop/7", "HermesMobile/123"])
-def test_client_labels_accept_only_the_complete_ascii_grammar(agent):
+_PHONE = "HermesMobile/2026100705 CFNetwork/3896.100.1.2.1 Darwin/27.0.0"
+_WIDGET = "HermesLiveActivityWidget/2026100705 CFNetwork/3896.100.1.2.1 Darwin/27.0.0"
+_DESKTOP = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Hermes/0.0.0 Chrome/140.0.7339.41 Electron/38.1.0 Safari/537.36")
+
+
+@pytest.mark.parametrize("agent,expected", [
+    # Round 9 U31 (R26): a bounded leading token picks the client; the suffix is never read.
+    (_PHONE, ("phone", "2026100705")),
+    ("HermesMobile/123", ("phone", "123")),
+    ("HermesMobile/123 PRIVATE_UA_SENTINEL", ("phone", "123")),
+    (_WIDGET, ("widget", "2026100705")),
+    (_DESKTOP, ("desktop", "0.0.0")),
+    ("HermesDesktop/7", ("desktop", "7")),
+    ("HermesMobile/１２３", ("unknown", "unknown")),
+    ("HermesMobile/123\nPRIVATE_UA_SENTINEL", ("unknown", "unknown")),
+    ("HermesMobile/123\n", ("unknown", "unknown")),
+    ("HermesMobile/1234567890123", ("unknown", "unknown")),
+    ("PRIVATE_UA_SENTINEL HermesMobile/123", ("unknown", "unknown")),
+    ("PRIVATE_UA_SENTINEL", ("unknown", "unknown")),
+    ("Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140.0 Safari/537.36", ("unknown", "unknown")),
+    (_PHONE + " " + "x" * 600, ("unknown", "unknown")),
+    ("Mozilla/5.0 Hermes/0.0.0" + " PRIVATE_UA_SENTINEL" * 40 + " Electron/38.1.0", ("unknown", "unknown")),
+])
+def test_client_labels_accept_only_the_bounded_leading_grammar(agent, expected):
     from hermes_cli.route_metrics import client_label
 
-    label = client_label([(b"user-agent", agent.encode("utf-8"))])
-    expected = tuple(agent.split("/")) if agent in ("HermesDesktop/7", "HermesMobile/123") else ("unknown", "unknown")
-    assert label == expected
+    assert client_label([(b"user-agent", agent.encode("utf-8"))]) == expected
+
+
+def test_summary_reports_p99_and_marks_overflow_honestly(caplog):
+    from hermes_cli.route_metrics import RouteMetrics
+
+    metrics = RouteMetrics()
+    label = ("http", "/api/x", "phone", "1", "2xx")
+    for _ in range(98):
+        metrics.record(label, 3, 10)
+    metrics.record(label, 400, 10)
+    metrics.record(label, 120_000, 10)  # past the top bucket
+    with caplog.at_level("INFO", logger="hermes_cli.web_server.route_metrics"):
+        metrics.emit_summary()
+    row = json.loads(caplog.records[-1].message.split("route_metrics ", 1)[1])[0]
+    assert (row["p50_ms"], row["p95_ms"], row["p99_ms"]) == (5, 5, 500)
+
+    for _ in range(2):
+        metrics.record(label, 120_000, 10)
+    with caplog.at_level("INFO", logger="hermes_cli.web_server.route_metrics"):
+        metrics.emit_summary()
+    row = json.loads(caplog.records[-1].message.split("route_metrics ", 1)[1])[0]
+    assert row["p99_ms"] == "overflow"
+
+
+@pytest.mark.parametrize("outcome,status", [("ok", 200), ("changed", 409)])
+def test_widget_snapshot_served_by_middleware_is_labelled(caplog, monkeypatch, outcome, status):
+    from fastapi.testclient import TestClient
+    from hermes_cli import route_metrics, web_server
+    from tui_gateway import mobile_widget_inbox, server
+
+    class Store:
+        def widget_snapshot(self, _token):
+            return {"items": []}
+
+    def inbox_snapshot(_store, _token, _cursor):
+        raise mobile_widget_inbox.WidgetInboxChanged()
+
+    monkeypatch.setattr(server, "_mobile_push_service", lambda: SimpleNamespace(store=Store()))
+    monkeypatch.setattr(mobile_widget_inbox, "inbox_snapshot", inbox_snapshot)
+    monkeypatch.setattr(web_server.app.state, "bound_host", None, raising=False)
+    route_metrics.METRICS.emit_summary()
+    query = "" if outcome == "ok" else "?inbox=1"
+    response = TestClient(web_server.app).get(
+        "/api/mobile/widgets/snapshot" + query,
+        headers={"Authorization": "Bearer PRIVATE_TOKEN_SENTINEL", "User-Agent": _WIDGET})
+    assert response.status_code == status
+    with caplog.at_level("INFO", logger="hermes_cli.web_server.route_metrics"):
+        route_metrics.METRICS.emit_summary()
+    logs = [r.message for r in caplog.records if r.name == "hermes_cli.web_server.route_metrics"]
+    rows = json.loads(logs[-1].split("route_metrics ", 1)[1])
+    assert [row["label"] for row in rows] == [
+        ["http", "/api/mobile/widgets/snapshot", "widget", "2026100705", f"{status // 100}xx"]]
+    assert "PRIVATE_" not in logs[-1]

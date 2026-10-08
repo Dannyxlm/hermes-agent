@@ -54,6 +54,9 @@ def validate_copilot_token(token: str) -> tuple[bool, str]:
     return True, "OK"
 
 
+_warned_unsupported_env: set[tuple[str, str]] = set()
+
+
 def resolve_copilot_token() -> tuple[str, str]:
     """Resolve a GitHub token suitable for Copilot API use → (token, source); ("", "") if none.
 
@@ -68,7 +71,13 @@ def resolve_copilot_token() -> tuple[str, str]:
         valid, msg = validate_copilot_token(val)
         if valid:
             return val, env_var
-        logger.warning("Token from %s is not supported: %s", env_var, msg)
+        # Every agent start probes the credential pool; warn once per process, not per probe.
+        warn_key = (env_var, msg)
+        if warn_key in _warned_unsupported_env:
+            logger.debug("Token from %s is not supported: %s", env_var, msg)
+        else:
+            _warned_unsupported_env.add(warn_key)
+            logger.warning("Token from %s is not supported: %s", env_var, msg)
     # `gh auth token` fallback ONLY when no Copilot env var was set: an exported GITHUB_TOKEN
     # (even a classic PAT) means the user intends *that* token; skipping also avoids a slow
     # subprocess (up to 5s on Windows) on every cold start.

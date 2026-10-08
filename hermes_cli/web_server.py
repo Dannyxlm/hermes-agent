@@ -1396,6 +1396,9 @@ async def _token_auth_seam(request: Request, call_next):
     from tui_gateway.mobile_widget_http import SNAPSHOT_PATH, widget_snapshot_response
     # This exact capability response terminates the middleware chain; retain the
     # dashboard's Host gate even though no general authentication is granted.
+    if request.method == "GET" and request.url.path == SNAPSHOT_PATH:
+        from hermes_cli.route_metrics import MIDDLEWARE_ROUTE_KEY
+        request.scope[MIDDLEWARE_ROUTE_KEY] = SNAPSHOT_PATH
     bound_host = getattr(app.state, "bound_host", None)
     if (request.method == "GET" and request.url.path == SNAPSHOT_PATH and bound_host
             and not _is_accepted_host(request.headers.get("host", ""), bound_host,

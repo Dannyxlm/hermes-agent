@@ -4,6 +4,7 @@ All domain IO runs in synchronous routes (FastAPI's context-copying threadpool).
 Only the bounded JSON dependency reads asynchronously. No WebUI imports/runtime.
 """
 import base64
+import contextlib
 import errno
 import hashlib
 import json
@@ -11,6 +12,7 @@ import sqlite3
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 from hermes_cli.config import load_config
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
 from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, PhotoStorageFull
@@ -20,8 +22,10 @@ from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write
 from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
 from plugins.cloudseed_mobile import flight_recorder as recorder
+from plugins.cloudseed_mobile.deliverables_warmer import DeliverablesWarmer
 
 MAX_BODY = 1024 * 1024
+CLIENT_CLOSED_REQUEST = 499
 
 
 def owner_config():
@@ -48,10 +52,15 @@ def owner(request: Request):
 
 async def payload(request: Request):
     data = bytearray()
-    async for chunk in request.stream():
-        data.extend(chunk)
-        if len(data) > MAX_BODY:
-            raise HTTPException(413, 'Mobile request too large')
+    try:
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > MAX_BODY:
+                raise HTTPException(413, 'Mobile request too large')
+    except ClientDisconnect:
+        # The phone hung up mid-body (backgrounded, network change): nothing is
+        # listening, so end quietly with nginx's client-closed status, not a 5xx.
+        raise HTTPException(CLIENT_CLOSED_REQUEST, 'Client closed request') from None
     try:
         body = json.loads(data, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, RecursionError):
@@ -61,7 +70,25 @@ async def payload(request: Request):
     return body
 
 
-router = APIRouter(dependencies=[Depends(owner)])
+def warm_indexes():
+    try:
+        return [deliverable_store(profile_id())]
+    except ValueError:  # an unverified custom home has no Files index to warm
+        return []
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    # The Files index converges in the background, bounded and bound to the dashboard.
+    warmer = DeliverablesWarmer(warm_indexes)
+    warmer.start()
+    try:
+        yield
+    finally:
+        warmer.stop()
+
+
+router = APIRouter(dependencies=[Depends(owner)], lifespan=lifespan)
 
 
 def photo_store():

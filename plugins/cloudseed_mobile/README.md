@@ -427,7 +427,9 @@ Module: `flight_recorder.py`. All three routes are owner-gated POSTs that take t
 JSON body limit, and the body `profile` must equal the native request profile.
 
 - `POST /flight-recorder/batch`. The envelope is `{profile, schema:1, install_id, batch_seq, app_build, os_version, device_class, events[1..500]}`.
-  - Each event is `{kind, t (epoch ms), …}` drawn from the closed `KINDS` allowlist: `lifecycle`, `screen`, `tap`, `rpc`, `http`, `error`, `span`, `connection`, `metrickit`.
+  - Each event is `{kind, t (epoch ms), …}` drawn from the closed `KINDS` allowlist: `lifecycle`, `screen`, `tap`, `rpc`, `http`, `error`, `span`, `connection`, `metrickit`, and the round 9 R53 kinds `bg_refresh`, `push`, `push_tap`, `live_activity`.
+  - Screens, error domains, span names, span outcomes and span `attrs` keys are closed vocabularies mirrored from `HermesMobile/Diagnostics/FlightRecorderEvent.swift` (`SCREENS`, `ERROR_DOMAINS`, `SPAN_NAMES`, `SPAN_OUTCOMES`, `SPAN_ATTRS`). `session_id` is a Hermes `YYYYMMDD_HHMMSS_<hex>` id or a UUID.
+  - MetricKit payloads keep only MetricKit's fixed top-level keys (or the app's `hermex_summary` form), lose free-text keys such as `terminationReason` at any depth, and strings over 128 characters become `[removed]`, as on the phone.
   - Unknown kinds or keys, free text (spaces, `?` in routes), booleans posing as numbers and out-of-range values are rejected with 400.
   - The response is `{ok, receipt_id, accepted, duplicate}`. A repeated (`install_id`, `batch_seq`) with the same content is a duplicate. Different content gets 409 `seq_conflict`, and the phone drops that segment.
   - When the day's file reaches its cap, the server returns 507 `storage_full`.
@@ -445,6 +447,14 @@ Storage is root-scoped and private: `<Hermes root>/mobile/flight-recorder/`, wit
 - `flags/YYYY-MM-DD/<flag_id>/{flag.json,screenshot.jpg}`.
 
 A symlinked store path is refused. Retention is 30 days. Pruning runs at most hourly, during ingest, and matches dated names only, without following symlinks. No scheduler is added.
+
+Nightly triage: `scripts/flight-recorder/flight_recorder_report.py [--day YYYY-MM-DD] [--log FILE]… [--out-dir DIR]`
+reads one UTC day (default yesterday) and writes a Markdown report: grouped error signatures,
+smoothness spans against the round 9 budgets (B2, B4, B5, B7, B9; B10 is a hitch ratio and is
+not judged), each flag joined to server WARNING/ERROR lines within two minutes (`unknown` when no
+log covers the window), the phone's `route_metrics` timings, and proposed items (a signature seen
+twice, any flag, any span over budget). It is read-only apart from the report (`0600`). The
+release that activates round 9 schedules it.
 
 ## Tests
 

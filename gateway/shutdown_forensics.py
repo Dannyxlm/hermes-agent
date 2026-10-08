@@ -197,6 +197,53 @@ def context_as_json(ctx: Dict[str, Any]) -> str:
         return "{}"
 
 
+def _own_systemd_unit() -> "tuple[Optional[str], Optional[str]]":
+    """``(unit_name, cgroup_line)`` of this process, from ``/proc/self/cgroup``
+    ("0::/user.slice/.../hermes-gateway.service"); ``(None, None)`` when undeterminable."""
+    with contextlib.suppress(OSError), open("/proc/self/cgroup", encoding="utf-8") as fh:
+        for line in fh:
+            parts = reversed(line.strip().split("/"))
+            unit_name = next((p for p in parts if p.endswith(".service")), None)
+            if unit_name:
+                return unit_name, line.strip()
+    return None, None
+
+
+def _systemd_manager_flags(cgroup_path: Optional[str]) -> "tuple[list[str], ...]":
+    """``systemctl`` manager flags to query, the cgroup's own manager first."""
+    if cgroup_path and "/system.slice/" in cgroup_path:
+        return ([],)
+    if cgroup_path and "/user.slice/" in cgroup_path:
+        return (["--user"],)
+    return (["--user"], [])
+
+
+def systemd_unit_stopping() -> bool:
+    """True when systemd itself is stopping or restarting this process's unit.
+
+    systemd moves a unit to ``ActiveState=deactivating`` before it sends the stop signal, so a
+    SIGTERM seen while the unit is deactivating came from a service-manager stop job
+    (``systemctl stop``/``restart``). An external ``kill`` leaves the unit ``active``. False when
+    not under systemd or undeterminable, so callers keep their unexpected-signal behaviour.
+    """
+    if not os.environ.get("INVOCATION_ID"):
+        return False
+    unit_name, cgroup_path = _own_systemd_unit()
+    if not unit_name:
+        return False
+    for flag in _systemd_manager_flags(cgroup_path):
+        try:
+            result = subprocess.run(
+                ["systemctl", *flag, "show", unit_name, "--property=ActiveState"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2.0,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        if result.returncode == 0 and "ActiveState=deactivating" in result.stdout.splitlines():
+            return True
+    return False
+
+
 def check_systemd_timing_alignment(
     drain_timeout: float, cron_drain_timeout: float = DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT
 ) -> Optional[Dict[str, Any]]:
@@ -208,16 +255,7 @@ def check_systemd_timing_alignment(
     """
     if not os.environ.get("INVOCATION_ID"):
         return None  # Not running under systemd (or at least not directly)
-    # /proc/self/cgroup: "0::/user.slice/.../hermes-gateway.service"
-    unit_name: Optional[str] = None
-    cgroup_path: Optional[str] = None
-    with contextlib.suppress(OSError), open("/proc/self/cgroup", encoding="utf-8") as fh:
-        for line in fh:
-            parts = reversed(line.strip().split("/"))
-            unit_name = next((p for p in parts if p.endswith(".service")), None)
-            if unit_name:
-                cgroup_path = line.strip()
-                break
+    unit_name, cgroup_path = _own_systemd_unit()
     if (timeout_us := _systemd_timeout_stop_us(unit_name, cgroup_path) if unit_name else None) is None:
         return None
     timeout_stop_sec = timeout_us / 1_000_000.0
@@ -229,13 +267,7 @@ def check_systemd_timing_alignment(
 
 def _systemd_timeout_stop_us(unit_name: str, cgroup_path: Optional[str] = None) -> Optional[int]:
     """``TimeoutStopUSec`` of ``unit_name`` in microseconds; ``--user`` first (hermes' usual)."""
-    if cgroup_path and "/system.slice/" in cgroup_path:
-        manager_flags = ([],)
-    elif cgroup_path and "/user.slice/" in cgroup_path:
-        manager_flags = (["--user"],)
-    else:
-        manager_flags = (["--user"], [])
-    for flag in manager_flags:
+    for flag in _systemd_manager_flags(cgroup_path):
         try:
             result = subprocess.run(
                 ["systemctl", *flag, "show", unit_name, "--property=TimeoutStopUSec"],

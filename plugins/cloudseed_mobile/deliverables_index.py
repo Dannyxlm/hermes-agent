@@ -387,6 +387,9 @@ class DeliverablesIndex:
         # Clients can stop polling it, while long sessions keep advancing even
         # before their first complete projection increments indexed_sessions.
         meta['refresh_pending']=source_available and (not grants_current or not source_current or not scan_current or 'scan_signature' in meta)
+        # Work the background warmer finishes on its own: a grant or scan-version change, or a
+        # started pass. Plain state.db churn is left to the next Files open (round 9 U29).
+        meta['warm_pending']=source_available and (not grants_current or not scan_current or 'scan_signature' in meta)
         meta['refresh_progress']=digest([meta.get('scan_signature'),meta.get('scan_before'),(meta.get('scan_session') or {}).get('id'),meta.get('scan_after'),meta.get('scan_cleanup'),publication])
         return meta
 

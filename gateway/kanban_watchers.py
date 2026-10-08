@@ -308,7 +308,10 @@ class GatewayKanbanWatchersMixin:
                     results = await _to_thread_process_service(dispatcher.tick_once)
                     any_spawned = _log_spawn_results(results)
                     ready_pending = await _to_thread_process_service(dispatcher.ready_nonempty)
-                    bad_ticks = bad_ticks + 1 if ready_pending and not any_spawned else 0
+                    # A tick held only by concurrency caps is busy, not stuck (R25).
+                    from hermes_cli import kanban_db_dispatch as _kbd
+                    held_by_caps = _kbd.caps_explain_hold(res for _slug, res in (results or []))
+                    bad_ticks = bad_ticks + 1 if ready_pending and not any_spawned and not held_by_caps else 0
                 now = int(time.time())
                 if bad_ticks >= _HEALTH_WINDOW and now - last_warn_at >= 300:
                     held = _kbd.describe_suppression(res for _slug, res in (results or []))

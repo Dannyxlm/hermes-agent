@@ -53,7 +53,7 @@ def events():
          'session_id': '20261007_195052_eff4cd'},
         {'kind': 'http', 't': T + 4, 'route': '/api/plugins/cloudseed_mobile/deliverables', 'verb': 'GET',
          'outcome': 'error', 'ms': 900, 'status': 503},
-        {'kind': 'error', 't': T + 5, 'domain': 'NSURLErrorDomain', 'code': -1001, 'screen': 'inbox'},
+        {'kind': 'error', 't': T + 5, 'domain': 'url', 'code': -1001, 'screen': 'inbox'},
         {'kind': 'span', 't': T + 6, 'name': 'ChatOpenContent', 'outcome': 'ok', 'ms': 180},
         {'kind': 'connection', 't': T + 7, 'state': 'disconnected', 'transport': 'ws', 'code': 1006},
         {'kind': 'metrickit', 't': T + 8, 'payload_type': 'diagnostic', 'payload': {'hangDiagnostics': []}},
@@ -227,3 +227,131 @@ def test_prune_removes_only_old_dated_entries(tmp_path):
     assert store.prune() == 2
     assert sorted(p.name for p in events_dir.iterdir()) == ['2026-10-07.jsonl', 'notes.txt']
     assert (outside / 'precious').exists()
+
+
+# ---- Round 9 U37: closed allowlists for R53 kinds, span dimensions and MetricKit keys ----
+# Mirrors HermesMobile/Diagnostics/FlightRecorderEvent.swift on feat/hx-r9-flight-recorder-20261007 (b5afd80).
+
+SESSION = '20261007_195052_eff4cd'
+
+
+def r53_events():
+    attrs = {key: 'true' for key in sorted(fr.SPAN_ATTRS)}
+    spans = [{'kind': 'span', 't': T + i, 'name': name, 'outcome': outcome, 'ms': 120, 'screen': 'inbox',
+              'attrs': attrs}
+             for i, (name, outcome) in enumerate(zip(sorted(fr.SPAN_NAMES), sorted(fr.SPAN_OUTCOMES)))]
+    return spans + [
+        {'kind': 'span', 't': T + 20, 'name': 'ScrollInteraction', 'outcome': 'superseded', 'ms': 3},
+        {'kind': 'bg_refresh', 't': T + 21, 'trigger': 'silent_push', 'outcome': 'new_data', 'ms': 812},
+        {'kind': 'bg_refresh', 't': T + 22, 'trigger': 'scheduled', 'outcome': 'expired', 'ms': 30000},
+        {'kind': 'push', 't': T + 23, 'push_type': 'live_activity', 'app_state': 'suspended', 'session_id': SESSION},
+        {'kind': 'push', 't': T + 24, 'push_type': 'background', 'app_state': 'background'},
+        {'kind': 'push_tap', 't': T + 25, 'source': 'attention_row', 'outcome': 'foreign_account', 'session_id': SESSION},
+        {'kind': 'live_activity', 't': T + 26, 'action': 'start', 'origin': 'push_to_start', 'session_id': SESSION},
+        {'kind': 'live_activity', 't': T + 27, 'action': 'end', 'origin': 'local', 'end_state': 'dismissed',
+         'session_id': '7A1C0DE5-0000-4000-8000-00000000ABCD'},
+    ]
+
+
+def test_r53_kinds_and_span_dimensions_are_accepted(client):
+    c, root = client
+    evs = r53_events()
+    response = c.post(P + '/batch', json=batch(evs=evs))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == len(evs)
+    [day] = (root / 'events').iterdir()
+    stored = json.loads(day.read_text())['events']
+    assert {e['kind'] for e in stored} == {'span', 'bg_refresh', 'push', 'push_tap', 'live_activity'}
+    assert {e['outcome'] for e in stored if e['kind'] == 'span'} == fr.SPAN_OUTCOMES
+    assert stored[0]['attrs'] == {key: 'true' for key in fr.SPAN_ATTRS}
+
+
+def test_allowlists_match_the_app_schema_exactly():
+    assert fr.SPAN_NAMES == {'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent',
+                             'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction'}
+    assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
+    assert fr.SPAN_ATTRS == {'cached', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
+                             'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
+                             'should_begin_calls', 'state', 'surface', 'to', 'verified_empty'}
+    assert fr.SCREENS == {'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',
+                          'flag', 'unknown'}
+    assert fr.ERROR_DOMAINS == {'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'}
+    assert set(fr.KINDS) == {'lifecycle', 'screen', 'tap', 'rpc', 'http', 'error', 'span', 'connection',
+                             'metrickit', 'bg_refresh', 'push', 'push_tap', 'live_activity'}
+
+
+@pytest.mark.parametrize('index,mutation', [
+    (0, {'kind': 'bg_refresh_v2'}),
+    (7, {'trigger': 'manual'}),
+    (7, {'outcome': 'partial'}),
+    (9, {'push_type': 'voip'}),
+    (9, {'title': 'hello'}),
+    (11, {'source': 'spotlight'}),
+    (12, {'origin': 'remote'}),
+    (13, {'end_state': 'gone'}),
+    (0, {'name': 'MyNewSpan'}),
+    (0, {'outcome': 'weird'}),
+    (0, {'attrs': {'title': 'true'}}),
+    (0, {'attrs': {'state': SENTINEL}}),
+    (0, {'attrs': {'state': {'nested': 'x'}}}),
+    (0, {'attrs': ['state']}),
+    (0, {'screen': 'compose'}),
+    (9, {'session_id': 'shannon-pricing-notes'}),
+])
+def test_r53_unknown_kinds_values_and_keys_fail_closed(client, index, mutation):
+    c, root = client
+    evs = r53_events()
+    evs[index].update(mutation)
+    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
+    assert not (root / 'events').exists() or not any((root / 'events').iterdir())
+
+
+def test_error_domain_and_screen_are_closed_vocabularies(client):
+    c, _ = client
+    for mutate in (lambda e: e[5].update(domain='NSURLErrorDomain'), lambda e: e[1].update(screen='Compose')):
+        evs = events()
+        mutate(evs)
+        assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
+
+
+def test_metrickit_keeps_only_fixed_keys_and_strips_free_text(client):
+    c, root = client
+    payload = {
+        'timeStampBegin': '2026-10-07 00:00', 'metaData': {'appBuildVersion': '2026100705', 'bundleIdentifier': 'x'},
+        'crashDiagnostics': [{'diagnosticMetaData': {'terminationReason': SENTINEL, 'exceptionType': 1,
+                                                     'composedMessage': SENTINEL, 'signal': 11},
+                              'callStackTree': {'frames': ['f' * 300]}}],
+        'customKey': SENTINEL,
+    }
+    evs = [{'kind': 'metrickit', 't': T, 'payload_type': 'diagnostic', 'payload': payload}]
+    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 200
+    [day] = (root / 'events').iterdir()
+    text = day.read_text()
+    stored = json.loads(text)['events'][0]['payload']
+    assert SENTINEL not in text and 'customKey' not in stored
+    assert stored['metaData'] == {'appBuildVersion': '2026100705'}
+    crash = stored['crashDiagnostics'][0]
+    assert crash['diagnosticMetaData'] == {'exceptionType': 1, 'signal': 11}
+    assert crash['callStackTree'] == {'frames': ['[removed]']}
+
+
+def test_metrickit_summary_form_keeps_only_summary_keys(client):
+    c, root = client
+    summary = {'hermex_summary': True, 'original_bytes': 400000, 'timeStampEnd': '2026-10-07 01:00',
+               'counts': {'hangDiagnostics': 3, 'customKey': 9, 'crashDiagnostics': 'many'},
+               'hangDiagnostics': [{'x': 1}], 'note': SENTINEL}
+    evs = [{'kind': 'metrickit', 't': T, 'payload_type': 'diagnostic', 'payload': summary}]
+    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 200
+    [day] = (root / 'events').iterdir()
+    stored = json.loads(day.read_text())['events'][0]['payload']
+    assert stored == {'hermex_summary': True, 'original_bytes': 400000, 'timeStampEnd': '2026-10-07 01:00',
+                      'counts': {'hangDiagnostics': 3}}
+
+
+def test_metrickit_summary_drops_a_non_integer_size(client):
+    c, root = client
+    summary = {'hermex_summary': True, 'original_bytes': SENTINEL, 'counts': {}}
+    evs = [{'kind': 'metrickit', 't': T, 'payload_type': 'metric', 'payload': summary}]
+    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 200
+    [day] = (root / 'events').iterdir()
+    assert SENTINEL not in day.read_text()

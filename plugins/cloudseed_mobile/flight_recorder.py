@@ -42,7 +42,9 @@ MAX_DAY_FILE = 50 * 1024 * 1024      # per-day events file; beyond this, 507
 PRUNE_INTERVAL = 3600.0
 
 _TOKEN = re.compile(r'[A-Za-z0-9_.:-]{1,64}', re.ASCII)
-_SESSION = re.compile(r'[A-Za-z0-9_-]{1,64}', re.ASCII)
+# A Hermes session id (YYYYMMDD_HHMMSS_<hex>) or a UUID, never a title or slug.
+_SESSION = re.compile(r'[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}',
+                      re.ASCII)
 _METHOD = re.compile(r'[a-z0-9_.]{1,64}', re.ASCII)
 _ROUTE = re.compile(r'/[A-Za-z0-9_./{}-]{0,127}', re.ASCII)
 _BUILD = re.compile(r'[0-9]{1,12}', re.ASCII)
@@ -53,12 +55,45 @@ _MIN_T = 1_577_836_800_000            # 2020-01-01 UTC, epoch milliseconds
 _MAX_T = 4_102_444_800_000            # 2100-01-01 UTC
 
 OUTCOMES = frozenset({'ok', 'error', 'cancelled', 'timeout'})
-SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned'})
+# Closed vocabularies, mirrored from FlightRecorderEvent.swift (round 9 U37, R52-R53). The span
+# names, outcomes and attributes are HermexSmoothness's; the nightly report keys budgets on them.
+SCREENS = frozenset({'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',
+                     'flag', 'unknown'})
+ERROR_DOMAINS = frozenset({'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'})
+SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent', 'ComposerFocusToSettled',
+                        'TabFirstContent', 'ScrollInteraction'})
+SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
+SPAN_ATTRS = frozenset({'cached', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
+                        'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
+                        'should_begin_calls', 'state', 'surface', 'to', 'verified_empty'})
+BG_TRIGGERS = frozenset({'scheduled', 'silent_push'})
+BG_OUTCOMES = frozenset({'new_data', 'no_data', 'failed', 'expired'})
+PUSH_TYPES = frozenset({'alert', 'background', 'live_activity'})
+APP_STATES = frozenset({'active', 'inactive', 'background', 'suspended'})
+TAP_SOURCES = frozenset({'banner', 'live_activity', 'widget', 'attention_row', 'snooze_reminder'})
+TAP_OUTCOMES = frozenset({'opened', 'foreign_account', 'recoverable', 'rejected'})
+LIVE_ACTIONS = frozenset({'start', 'end'})
+LIVE_ORIGINS = frozenset({'local', 'push_to_start'})
+LIVE_END_STATES = frozenset({'complete', 'failed', 'cancelled', 'stale', 'dismissed'})
 LIFECYCLE = frozenset({'launch', 'foreground', 'background', 'terminate_hint', 'memory_warning'})
 CONNECTION = frozenset({'connecting', 'connected', 'disconnected', 'failed'})
 TRANSPORTS = frozenset({'ws', 'rest'})
 HTTP_METHODS = frozenset({'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'})
 METRICKIT_TYPES = frozenset({'metric', 'diagnostic'})
+# MetricKit: the app's fixed top-level keys (HermexMetricKitSubscriber.topLevelKeys); the server
+# re-applies the same filtering so an older or modified client cannot store more.
+METRICKIT_KEYS = frozenset({
+    'timeStampBegin', 'timeStampEnd', 'metaData', 'includesMultipleApplicationVersions', 'latestApplicationVersion',
+    'applicationLaunchMetrics', 'applicationResponsivenessMetrics', 'applicationTimeMetrics', 'applicationExitMetrics',
+    'cellularConditionMetrics', 'cpuMetrics', 'gpuMetrics', 'diskIOMetrics', 'displayMetrics',
+    'locationActivityMetrics', 'memoryMetrics', 'networkTransferMetrics', 'animationMetrics', 'signpostMetrics',
+    'crashDiagnostics', 'hangDiagnostics', 'cpuExceptionDiagnostics', 'diskWriteExceptionDiagnostics',
+    'appLaunchDiagnostics'})
+METRICKIT_SUMMARY_KEYS = frozenset({'hermex_summary', 'original_bytes', 'counts', 'timeStampBegin', 'timeStampEnd',
+                                    'metaData', 'includesMultipleApplicationVersions', 'latestApplicationVersion'})
+METRICKIT_REMOVED_KEYS = frozenset({'terminationReason', 'virtualMemoryRegionInfo', 'composedMessage', 'formatString',
+                                    'arguments', 'exceptionReason', 'regionFormat', 'bundleIdentifier', 'pid'})
+METRICKIT_MAX_STRING = 128
 
 
 class FlightRecorderError(ValueError):
@@ -105,11 +140,40 @@ def _one_of(choices):
     return check
 
 
+def _metrickit_clean(value):
+    """Drop free-text keys at any depth and replace long strings, as the app does."""
+    if isinstance(value, dict):
+        return {k: _metrickit_clean(v) for k, v in value.items() if k not in METRICKIT_REMOVED_KEYS}
+    if isinstance(value, list):
+        return [_metrickit_clean(v) for v in value]
+    if isinstance(value, str) and len(value) > METRICKIT_MAX_STRING:
+        return '[removed]'
+    return value
+
+
 def _metrickit_payload(value):
     if not isinstance(value, dict):
         _fail('metrickit payload must be an object')
     if len(json.dumps(value, separators=(',', ':'))) > MAX_METRICKIT:
         _fail('metrickit payload too large')
+    if value.get('hermex_summary') is True:
+        kept = {k: v for k, v in value.items() if k in METRICKIT_SUMMARY_KEYS - {'counts', 'original_bytes'}}
+        if type(value.get('original_bytes')) is int:
+            kept['original_bytes'] = value['original_bytes']
+        counts = value.get('counts')
+        if isinstance(counts, dict):
+            kept['counts'] = {k: n for k, n in counts.items()
+                              if k in METRICKIT_KEYS and type(n) is int and 0 <= n <= 2**31}
+    else:
+        kept = {k: v for k, v in value.items() if k in METRICKIT_KEYS}
+    return _metrickit_clean(kept)
+
+
+def _span_attrs(value):
+    if not isinstance(value, dict) or set(value) - SPAN_ATTRS:
+        _fail('invalid span attributes')
+    for attr in value.values():
+        _match(_TOKEN, attr)
     return value
 
 
@@ -124,20 +188,26 @@ _session = lambda v: _match(_SESSION, v)
 # one side without the other must fail closed (unknown keys are rejected).
 KINDS = {
     'lifecycle': ({'state': _one_of(LIFECYCLE)}, {}),
-    'screen': ({'screen': _token}, {'session_id': _session}),
-    'tap': ({'control': _token, 'screen': _token}, {'session_id': _session}),
+    'screen': ({'screen': _one_of(SCREENS)}, {'session_id': _session}),
+    'tap': ({'control': _token, 'screen': _one_of(SCREENS)}, {'session_id': _session}),
     'rpc': ({'method': lambda v: _match(_METHOD, v), 'outcome': _one_of(OUTCOMES), 'ms': _ms},
             {'bytes': _bytes, 'code': _code, 'session_id': _session}),
     'http': ({'route': lambda v: _match(_ROUTE, v), 'verb': _one_of(HTTP_METHODS),
               'outcome': _one_of(OUTCOMES), 'ms': _ms},
              {'status': lambda v: _int(v, 0, 999), 'bytes': _bytes, 'session_id': _session}),
-    'error': ({'domain': _token, 'code': _code},
-              {'screen': _token, 'context': _token, 'session_id': _session}),
-    'span': ({'name': _token, 'outcome': _one_of(SPAN_OUTCOMES), 'ms': _ms},
-             {'screen': _token, 'session_id': _session}),
+    'error': ({'domain': _one_of(ERROR_DOMAINS), 'code': _code},
+              {'screen': _one_of(SCREENS), 'context': _token, 'session_id': _session}),
+    'span': ({'name': _one_of(SPAN_NAMES), 'outcome': _one_of(SPAN_OUTCOMES), 'ms': _ms},
+             {'screen': _one_of(SCREENS), 'session_id': _session, 'attrs': _span_attrs}),
     'connection': ({'state': _one_of(CONNECTION), 'transport': _one_of(TRANSPORTS)},
                    {'code': _code}),
     'metrickit': ({'payload_type': _one_of(METRICKIT_TYPES), 'payload': _metrickit_payload}, {}),
+    # R53: lane A and E lifecycle events, so they can be verified on the phone.
+    'bg_refresh': ({'trigger': _one_of(BG_TRIGGERS), 'outcome': _one_of(BG_OUTCOMES), 'ms': _ms}, {}),
+    'push': ({'push_type': _one_of(PUSH_TYPES), 'app_state': _one_of(APP_STATES)}, {'session_id': _session}),
+    'push_tap': ({'source': _one_of(TAP_SOURCES), 'outcome': _one_of(TAP_OUTCOMES)}, {'session_id': _session}),
+    'live_activity': ({'action': _one_of(LIVE_ACTIONS), 'origin': _one_of(LIVE_ORIGINS)},
+                      {'end_state': _one_of(LIVE_END_STATES), 'session_id': _session}),
 }
 
 
@@ -152,13 +222,14 @@ def validate_event(event):
     if unknown:
         _fail('unknown event key')
     _int(event.get('t'), _MIN_T, _MAX_T)
+    # Validators return the value to store (MetricKit payloads come back filtered).
     for key, check in required.items():
         if key not in event:
             _fail('missing event key')
-        check(event[key])
+        event[key] = check(event[key])
     for key, check in optional.items():
         if key in event and event[key] is not None:
-            check(event[key])
+            event[key] = check(event[key])
     return event
 
 
@@ -203,7 +274,7 @@ def validate_flag(body):
     meta = _envelope(body, {'flag_id', 't', 'screen', 'note', 'screenshot_jpeg_b64'})
     meta['flag_id'] = canonical_uuid(body.get('flag_id'))
     meta['t'] = _int(body.get('t'), _MIN_T, _MAX_T)
-    meta['screen'] = _token(body.get('screen'))
+    meta['screen'] = _one_of(SCREENS)(body.get('screen'))
     note = body.get('note', '')
     if not isinstance(note, str) or len(note) > MAX_NOTE:
         _fail('note too long')
