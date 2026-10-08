@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from tui_gateway.mobile_push import PushService, Scope
+from tui_gateway.mobile_push_payloads import generic_alert
 from tui_gateway.mobile_push_provider import DeliveryResult
 
 
@@ -408,7 +409,8 @@ def test_reply_previews_are_per_device_and_survive_delivery_restart(delivery, su
         jobs = [restarted.claim(), restarted.claim()]
         alerts = {j["token"]: j["payload"]["aps"]["alert"] for j in jobs}
         assert alerts["aa" * 32]["title"] == "Hermex Ava"
-        assert alerts["bb" * 32] == {"title": "Weekly briefing", "body": "Ready The brief is ready."}
+        # R10: a completion body carries only the reply's first line, never a flattened transcript.
+        assert alerts["bb" * 32] == {"title": "Weekly briefing", "body": "Ready"}
         assert all(j["payload"]["aps"]["mutable-content"] == 1 for j in jobs)
     finally:
         restarted.close()
@@ -574,7 +576,8 @@ def test_activity_attention_cue_honors_current_scoped_alert_preference(delivery,
     assert aps['relevance-score'] == 100
     assert ('alert' in aps) == (policy == 'enabled')
     if policy == 'enabled':
-        assert 'Open the app' in aps['alert']['body']
+        # Generic attention copy is calm (R9 DECISIONS §1): it names the ask, never "open the app".
+        assert aps['alert']['body'] == generic_alert(status)['body']
         assert 'stored' not in json.dumps(aps['alert'])
     service.record(scope, run['run_id'], 'resumed', 'thinking')
     now[0] += 11

@@ -23,6 +23,15 @@ class ClientSurface(WireEnum):
     voice_live = "voice-live"
 
 
+class PromptOrigin(Params):
+    """The phone that typed this prompt (KTD7): its push installation and connection UUIDs.
+    Honoured only on an authenticated transport; a submission without it clears the chat's
+    phone origin, so Desktop input never lights the phone's Live Activity."""
+
+    installation_id: str
+    connection_id: str
+
+
 class PromptSubmitParams(SessionParams):
     """``text`` is normally a string; the relay / hosted paths may hand a structured (parts list)
     payload, and the busy path renders it. Truncation (rewind / edit / regenerate) needs explicit
@@ -43,6 +52,7 @@ class PromptSubmitParams(SessionParams):
     confirm_truncate: bool | None = None
     confirm_empty_truncate: bool | None = None
     rebind_survivor_row_ids: list[int] | None = None
+    origin: PromptOrigin | None = None
     # In-process only: injected by the hosted-room / bot-relay handlers, never accepted from a
     # client (a client dict for ``_turn_author`` answers 4124). Excluded from the rendered wire.
     hosted_task: JsonValue | None = Field(default=None, exclude=True, alias="_hosted_task")
