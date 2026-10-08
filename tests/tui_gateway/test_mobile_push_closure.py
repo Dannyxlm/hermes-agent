@@ -246,10 +246,12 @@ def test_working_run_projects_title_step_agents_and_plan(delivery):
     now[0] += 11
     service.drain_once()
     state = activity_jobs(sender)[-1]["payload"]["aps"]["content-state"]
-    assert {k: state[k] for k in ("sessionTitle", "currentStep", "currentActivity", "agentCount", "planCompleted",
-                                  "planTotal", "contentVersion", "previewsEnabled", "agentID")} == {
-        "sessionTitle": "Ship round 9", "currentStep": "Running tests", "currentActivity": "Running tests",
-        "agentCount": 2, "planCompleted": 2, "planTotal": 5, "contentVersion": 2, "previewsEnabled": True,
+    # Keys and shapes the app's U1 decoder reads (R9-20 HANDOFF): agentCount, plan {completed, total};
+    # title and step on the v1 sessionTitle/currentActivity keys.
+    assert {k: state[k] for k in ("sessionTitle", "currentActivity", "agentCount", "plan",
+                                  "contentVersion", "previewsEnabled", "agentID")} == {
+        "sessionTitle": "Ship round 9", "currentActivity": "Running tests",
+        "agentCount": 2, "plan": {"completed": 2, "total": 5}, "contentVersion": 2, "previewsEnabled": True,
         "agentID": "atlas"}
     # v1 keys every shipped app decodes are all still present.
     assert {"sessionID", "status", "responseExcerpt", "startedAt", "updatedAt", "isStale", "isFinal"} <= set(state)
@@ -268,7 +270,7 @@ def test_step_change_updates_only_the_activity(delivery):
     now[0] += 11
     service.drain_once()
     assert [job["kind"] for job in sender.jobs] == ["activity", "activity"]
-    assert sender.jobs[-1]["payload"]["aps"]["content-state"]["currentStep"] == "Editing b.py"
+    assert sender.jobs[-1]["payload"]["aps"]["content-state"]["currentActivity"] == "Editing b.py"
 
 
 def test_exact_ask_appears_verbatim_with_previews_on(delivery):
@@ -336,7 +338,7 @@ def test_preview_opt_out_while_pending_redacts_queued_activity(delivery):
     service.drain_once()
     state = activity_jobs(sender)[0]["payload"]["aps"]["content-state"]
     assert "Private" not in json.dumps(state) and "secret" not in json.dumps(state)
-    assert state["previewsEnabled"] is False and "currentStep" not in state
+    assert state["previewsEnabled"] is False and state["currentActivity"] == "Ava is working"
 
 
 def test_apple_rejection_of_an_activity_does_not_touch_alerts(delivery):

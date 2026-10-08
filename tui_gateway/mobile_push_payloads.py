@@ -22,7 +22,7 @@ LABELS = {
 }
 CONTENT_VERSION = 2
 GENERIC_TITLE = "Hermex Ava"
-INPUT_KINDS = {"waitingForApproval": "approval", "waitingForClarification": "clarification"}
+INPUT_KINDS = {"waitingForApproval": "approval", "waitingForClarification": "answer"}  # app AgentRunInputKind
 # Allowlisted orb identities. Anything else carries no agent id and the app shows Ava's orb.
 AGENT_IDS = {"default": "ava", "ava": "ava", "matisse": "matisse", "atlas": "atlas",
              "iris": "iris", "nuru": "nuru", "vox": "vox"}
@@ -169,7 +169,13 @@ def alert_payload(subscription, run, scope, preview=None):
 
 
 def content_state(run, scope, *, preview=None, previews=False):
-    """Content-state v1 keys (decodable by every shipped app) plus optional v2 keys."""
+    """Content-state v1 keys (decodable by every shipped app) plus optional v2 keys.
+
+    The app's U1 decoder (AgentRunActivityAttributes.ContentState) reads ``agentCount`` and
+    ``plan`` {completed, total}; title and step ride the v1 ``sessionTitle``/``currentActivity``.
+    ``contentVersion``, ``previewsEnabled``, ``agentID`` and ``inputKind`` are additive extras
+    that decoder ignores; ``previewsEnabled`` also marks a payload dispatch must redact.
+    """
     status = run["status"]
     final = status in TERMINAL
     preview = preview or AlertPreview()
@@ -185,15 +191,13 @@ def content_state(run, scope, *, preview=None, previews=False):
     if not final and (agents := _count(preview.agents)):
         content["agentCount"] = agents
     if (total := _count(preview.plan_total)):
-        content["planTotal"] = total
-        content["planCompleted"] = min(_count(preview.plan_done), total)
+        content["plan"] = {"completed": min(_count(preview.plan_done), total), "total": total}
     if previews:
         if title := preview_text(preview.title, 80):
             content["sessionTitle"] = title
         if status in ATTENTION and (ask := preview_text(preview.ask, 64)):
             content["currentActivity"] = ask
         elif not final and (step := preview_text(preview.step, 40)):
-            content["currentStep"] = step
             content["currentActivity"] = step
         if status == "complete":
             content["responseExcerpt"] = first_line(preview.reply, 140)
@@ -212,7 +216,6 @@ def redact_content_state(content, profile):
         return
     status = content.get("status")
     content.update(sessionTitle=GENERIC_TITLE, responseExcerpt="", previewsEnabled=False)
-    content.pop("currentStep", None)
     if status in LABELS and content.get("currentActivity") not in CLOSED_LINES.values():
         content["currentActivity"] = generic_activity_line(status, profile)
 

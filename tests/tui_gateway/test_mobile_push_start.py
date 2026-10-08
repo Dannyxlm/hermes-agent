@@ -283,8 +283,8 @@ def test_tool_step_and_plan_reach_the_activity(push_service, ordinary, mobile_ho
             "SELECT payload FROM outbox o JOIN subscriptions s ON o.subscription_id=s.id "
             "WHERE s.kind='activity' AND o.state='pending'").fetchone()[0])
     state = payload["aps"]["content-state"]
-    assert (state["status"], state["currentStep"], state["planCompleted"], state["planTotal"]) == (
-        "usingTool", "Running tests", 1, 2)
+    assert (state["status"], state["currentActivity"], state["plan"]) == (
+        "usingTool", "Running tests", {"completed": 1, "total": 2})
 
 
 def test_a_turn_that_ends_before_its_start_push_never_starts_an_activity(store_delivery):
