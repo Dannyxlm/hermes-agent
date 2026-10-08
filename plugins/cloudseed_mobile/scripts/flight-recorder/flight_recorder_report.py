@@ -76,7 +76,11 @@ def parse_log_time(stamp: str, millis: str) -> float:
 
 
 def load_logs(paths):
-    """``[(path, first_ts, last_ts, [(ts, level, logger, message)])]`` for readable logs."""
+    """``[(path, first_ts, last_ts, lines)]`` for readable logs.
+
+    ``lines`` keeps only what the report joins (WARNING and above, ``route_metrics``
+    summaries); the first/last timestamps still cover every line, so coverage is honest.
+    """
     logs = []
     for path in paths:
         try:
@@ -92,7 +96,8 @@ def load_logs(paths):
                 ts = parse_log_time(match[1], match[2])
                 first = ts if first is None else min(first, ts)
                 last = ts if last is None else max(last, ts)
-                lines.append((ts, match[3], match[4], match[5].rstrip('\n')))
+                if match[3] in _SERIOUS or match[4].endswith('route_metrics'):
+                    lines.append((ts, match[3], match[4], match[5].rstrip('\n')))
         if first is not None:
             logs.append((str(path), first, last, lines))
     return logs

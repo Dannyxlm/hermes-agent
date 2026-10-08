@@ -193,7 +193,6 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
                     await self._reset_primary(transport)
                 else:
                     await self._reset_fallback(ip)
-                continue
         if last_error is None:
             raise RuntimeError("All Telegram fallback IPs exhausted but no error was recorded")
         logger.warning("[Telegram] Every Telegram API path failed: %s", "; ".join(failures))
