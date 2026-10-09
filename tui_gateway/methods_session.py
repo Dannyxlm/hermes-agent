@@ -1584,6 +1584,22 @@ def _(rid, params: dict, session: dict) -> dict:
     return _ok(rid, usage)
 
 
+@method("session.info")
+@_profile_scoped
+def _(rid, params: dict) -> dict:
+    """Read-only ``session.info``: the snapshot the ``session.info`` event carries, on demand (native clients
+    read ``yolo`` / ``approval_mode`` back after ``config.set yolo``). Never builds, waits on or mutates the
+    agent and emits nothing; a not-yet-built session answers its lazy route, as ``session.create`` does."""
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    agent = session.get("agent")
+    info = _session_info(agent, session)
+    if agent is None and not _metadata_mirror(session):
+        info.update(_lazy_info_route(session, session.get("model_override") or {}), tools={}, skills={}, lazy=True)
+    return _ok(rid, info)
+
+
 def _account_usage_lines(session: dict) -> list[str]:
     """Rendered account-limit lines for the session's route: the live agent's provider/endpoint when
     built, else the configured ``model.provider`` (on-disk credentials suffice, e.g. Codex OAuth)."""

@@ -2845,6 +2845,10 @@ export interface SessionUsageResult {
   credits_lines?: string[] | null
   [key: string]: unknown
 }
+export interface SessionInfoParams {
+  session_id: string
+  profile?: string | null
+}
 export interface SessionContextBreakdownParams {
   session_id: string
   profile?: string | null
@@ -5942,6 +5946,8 @@ export interface RpcMethods {
   'session.foreign.preview': { params: SessionForeignIdParams; result: SessionForeignPreviewResult }
   /** The durable display transcript (ancestors included, row ids attached). */
   'session.history': { params: SessionHistoryParams; result: SessionHistoryResult }
+  /** Read-only snapshot of the ``session.info`` event payload (``server._session_info``); a not-yet-built session answers its lazy route. The approval-bypass readback (``yolo`` / ``approval_mode``). */
+  'session.info': { params: SessionInfoParams; result: SessionLiveInfo }
   /** Stop the running turn (and streaming TTS); retires the crash-recovery marker. */
   'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult }
   /** Human-facing stored sessions, most recent first (sub-agent / kanban sources denied). */
@@ -6304,6 +6310,7 @@ export const RPC_METHODS = [
   'session.foreign.list',
   'session.foreign.preview',
   'session.history',
+  'session.info',
   'session.interrupt',
   'session.list',
   'session.most_recent',
