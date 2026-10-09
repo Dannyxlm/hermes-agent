@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS runs (
  run_id TEXT PRIMARY KEY, scope TEXT NOT NULL, surface TEXT NOT NULL, profile TEXT NOT NULL,
  session_id TEXT NOT NULL, status TEXT NOT NULL, started_at REAL NOT NULL, updated_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS runs_scope ON runs(scope, started_at);
+CREATE TABLE IF NOT EXISTS run_state (
+ run_id TEXT PRIMARY KEY, owner TEXT NOT NULL DEFAULT '', closed_reason TEXT NOT NULL DEFAULT '',
+ presentation TEXT NOT NULL DEFAULT '');
+CREATE VIEW IF NOT EXISTS runs_ext AS SELECT r.run_id, r.scope, r.surface, r.profile, r.session_id, r.status,
+ r.started_at, r.updated_at, r.rowid AS run_rowid, COALESCE(s.owner, '') AS owner,
+ COALESCE(s.closed_reason, '') AS closed_reason, COALESCE(s.presentation, '') AS presentation
+ FROM runs r LEFT JOIN run_state s ON s.run_id=r.run_id;
 CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, created_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS outbox (
  job_id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
@@ -77,11 +84,15 @@ CREATE TABLE IF NOT EXISTS human_origins (
  connection_id TEXT NOT NULL, updated_at REAL NOT NULL);
 """
 
+# ``runs`` keeps exactly the predecessor's 8 columns: it inserts them positionally, so a
+# wider table breaks every run after a rollback. Newer per-run state lives in ``run_state``
+# and is read through ``runs_ext``; a run without a side row reads as legacy ('' owner).
 _ADDED_COLUMNS = {
     "subscriptions": (("preview_enabled", "INTEGER NOT NULL DEFAULT 0"), ("origin", "TEXT NOT NULL DEFAULT ''")),
-    "runs": (("owner", "TEXT NOT NULL DEFAULT ''"), ("closed_reason", "TEXT NOT NULL DEFAULT ''"),
-             ("presentation", "TEXT NOT NULL DEFAULT ''")),
 }
+_RUN_STATE = ("owner", "closed_reason", "presentation")
+_RUN_KEYS = "run_id, scope, surface, profile, session_id, status, started_at, updated_at, " + ", ".join(_RUN_STATE)
+_RUNS = f"SELECT {_RUN_KEYS} FROM runs_ext"
 
 
 def process_owner(pid=None):
@@ -157,6 +168,11 @@ class PushStore(WidgetPushStore):
                     for name, declaration in added:
                         if name not in columns:
                             db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+                # A store the first hxr9 build widened keeps its values; the side table wins once written.
+                if set(_RUN_STATE) <= {row["name"] for row in db.execute("PRAGMA table_info(runs)")}:
+                    db.execute("""INSERT OR IGNORE INTO run_state (run_id, owner, closed_reason, presentation)
+                        SELECT run_id, owner, closed_reason, presentation FROM runs
+                        WHERE owner!='' OR closed_reason!='' OR presentation!=''""")
         except sqlite3.Error:
             self._db.close()
             raise
@@ -192,7 +208,7 @@ class PushStore(WidgetPushStore):
         with self.transaction() as db:
             run = None
             if kind == "activity":
-                run = db.execute("SELECT * FROM runs WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
+                run = db.execute(f"{_RUNS} WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
                 if run is None or run["started_at"] + 8 * 3600 - 120 <= now:
                     raise ValueError("run unavailable")
             expires = min(now + 8 * 3600, run["started_at"] + 8 * 3600) if run else now + 30 * 86400
@@ -262,7 +278,7 @@ class PushStore(WidgetPushStore):
                     continue
                 sub = db.execute("SELECT * FROM subscriptions WHERE id=?", (row["id"],)).fetchone()
                 if kind == "activity":
-                    run = db.execute("SELECT * FROM runs WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
+                    run = db.execute(f"{_RUNS} WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
                     if run:
                         self._enqueue(db, sub, run, scope, f"{run_id}:refreshed:{sub['version']}")
                 receipt = {"subscription_id": row["id"], "expires_at": expiry}
@@ -497,7 +513,12 @@ class PushStore(WidgetPushStore):
         db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
         try:
             db.row_factory = sqlite3.Row
-            row = db.execute("SELECT * FROM runs WHERE scope=? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            # A store no hxr9 process has opened yet has no view: its runs are all legacy.
+            legacy = db.execute("SELECT 1 FROM sqlite_master WHERE type='view' AND name='runs_ext'").fetchone() is None
+            source = ("(SELECT run_id, scope, surface, profile, session_id, status, started_at, updated_at,"
+                      " rowid AS run_rowid, '' AS owner, '' AS closed_reason, '' AS presentation FROM runs)"
+                      if legacy else "runs_ext")
+            row = db.execute(f"SELECT {_RUN_KEYS} FROM {source} WHERE scope=? ORDER BY started_at DESC, run_rowid DESC LIMIT 1",
                              (scope.key,)).fetchone()
             return dict(row) if row else None
         finally:
@@ -505,7 +526,7 @@ class PushStore(WidgetPushStore):
 
     def current_run(self, scope):
         with self._lock:
-            row = self._db.execute("SELECT * FROM runs WHERE scope=? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            row = self._db.execute(f"{_RUNS} WHERE scope=? ORDER BY started_at DESC, run_rowid DESC LIMIT 1",
                                    (scope.key,)).fetchone()
             return dict(row) if row else None
 
@@ -524,22 +545,25 @@ class PushStore(WidgetPushStore):
         now = self.clock()
         with self.transaction() as db:
             if reuse_run_id:
-                reused = db.execute("""SELECT * FROM runs WHERE run_id=? AND scope=? AND status='starting'
+                reused = db.execute(f"""{_RUNS} WHERE run_id=? AND scope=? AND status='starting'
                     AND started_at>=?""", (reuse_run_id, scope.key, now - _DUPLICATE_START_WINDOW)).fetchone()
                 if reused is not None:
                     return dict(reused)
-            existing = db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            existing = db.execute(f"{_RUNS} WHERE run_id=?", (run_id,)).fetchone()
             if existing is not None and existing["scope"] != scope.key:
                 raise ValueError("run belongs to a different scope")
-            db.execute("""INSERT OR IGNORE INTO runs (run_id, scope, surface, profile, session_id, status,
-                started_at, updated_at, owner, presentation) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (run_id, scope.key, scope.surface, scope.profile, scope.session_id, "starting", now, now,
-                 self.owner, preview.to_json() if preview else ""))
+            inserted = db.execute("""INSERT OR IGNORE INTO runs (run_id, scope, surface, profile, session_id, status,
+                started_at, updated_at) VALUES (?,?,?,?,?,?,?,?)""",
+                (run_id, scope.key, scope.surface, scope.profile, scope.session_id, "starting", now, now)).rowcount
+            if inserted:
+                # Replace, not merge: a side row left by a run the predecessor pruned is not this run's.
+                db.execute("""INSERT OR REPLACE INTO run_state (run_id, owner, closed_reason, presentation)
+                    VALUES (?,?,'',?)""", (run_id, self.owner, preview.to_json() if preview else ""))
             # One scope runs one turn at a time: an older open run lost its terminal event.
-            for older in db.execute("""SELECT * FROM runs WHERE scope=? AND run_id!=? AND status NOT IN
+            for older in db.execute(f"""{_RUNS} WHERE scope=? AND run_id!=? AND status NOT IN
                     ('complete','failed','cancelled')""", (scope.key, run_id)).fetchall():
                 self._close(db, older, "superseded")
-            run = db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            run = db.execute(f"{_RUNS} WHERE run_id=?", (run_id,)).fetchone()
             if existing is None:
                 if listed:
                     self._materialize_policy(db, scope, now)
@@ -547,14 +571,14 @@ class PushStore(WidgetPushStore):
                     self._enqueue_remote_start(db, scope, run, preview)
         self.record(scope, run_id, event_id or f"{run_id}:start", "starting")
         with self._lock:
-            return dict(self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone())
+            return dict(self._db.execute(f"{_RUNS} WHERE run_id=?", (run_id,)).fetchone())
 
     def _close(self, db, run, reason):
         """Silently close a run whose turn is gone: end its activities, never alert."""
         now = self.clock()
         updated = max(now, run["updated_at"])
-        db.execute("UPDATE runs SET status='cancelled', closed_reason=?, updated_at=? WHERE run_id=?",
-                   (reason, updated, run["run_id"]))
+        db.execute("UPDATE runs SET status='cancelled', updated_at=? WHERE run_id=?", (updated, run["run_id"]))
+        self._set_run_state(db, run["run_id"], "closed_reason", reason)
         # Leased rows too: a claimed alert that comes back as "retry" must not resurface for a dead run.
         db.execute("DELETE FROM outbox WHERE run_id=? AND state='pending'", (run["run_id"],))
         closed = {**dict(run), "status": "cancelled", "closed_reason": reason, "updated_at": updated}
@@ -570,6 +594,13 @@ class PushStore(WidgetPushStore):
                 self._enqueue(db, sub, closed, scope, event_id)
         db.execute("DELETE FROM subscriptions WHERE kind='activity_start' AND run_id=?", (run["run_id"],))
 
+    @staticmethod
+    def _set_run_state(db, run_id, column, value):
+        if column not in _RUN_STATE:
+            raise ValueError("unknown run state")
+        db.execute(f"""INSERT INTO run_state (run_id, {column}) VALUES (?,?)
+            ON CONFLICT(run_id) DO UPDATE SET {column}=excluded.{column}""", (run_id, value))
+
     def reconcile_orphans(self, held=None, running=None, limit=200):
         """Close open runs whose turn no longer exists (R7), checked against real liveness.
 
@@ -581,7 +612,7 @@ class PushStore(WidgetPushStore):
         now = self.clock()
         closed = 0
         with self.transaction() as db:
-            rows = db.execute("""SELECT * FROM runs WHERE status NOT IN ('complete','failed','cancelled')
+            rows = db.execute(f"""{_RUNS} WHERE status NOT IN ('complete','failed','cancelled')
                 ORDER BY updated_at LIMIT ?""", (limit,)).fetchall()
             for run in rows:
                 owner = run["owner"]
@@ -605,7 +636,7 @@ class PushStore(WidgetPushStore):
         now = self.clock()
         presentation = preview.to_json() if preview is not None else None
         with self.transaction() as db:
-            run = db.execute("SELECT * FROM runs WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
+            run = db.execute(f"{_RUNS} WHERE run_id=? AND scope=?", (run_id, scope.key)).fetchone()
             if run is None:
                 raise ValueError("run unavailable")
             if run["status"] in TERMINAL:
@@ -617,7 +648,7 @@ class PushStore(WidgetPushStore):
             if db.execute("INSERT OR IGNORE INTO events VALUES (?,?)", (event_id, now)).rowcount == 0:
                 return False
             if presented:
-                db.execute("UPDATE runs SET presentation=? WHERE run_id=?", (presentation, run_id))
+                self._set_run_state(db, run_id, "presentation", presentation)
             if status in TERMINAL:
                 # A push-to-start not yet delivered would open an activity for a finished turn.
                 db.execute("DELETE FROM subscriptions WHERE kind='activity_start' AND run_id=?", (run_id,))
@@ -788,7 +819,7 @@ class PushStore(WidgetPushStore):
                 event_id = f"{sub['id']}:lifetime-end"
                 if db.execute("INSERT OR IGNORE INTO events VALUES (?,?)", (event_id, now)).rowcount == 0:
                     continue
-                run = db.execute("SELECT * FROM runs WHERE run_id=?", (sub["run_id"],)).fetchone()
+                run = db.execute(f"{_RUNS} WHERE run_id=?", (sub["run_id"],)).fetchone()
                 if run is not None:
                     projected = {**dict(run), "status": "cancelled", "updated_at": max(now, run["updated_at"]),
                                  "activity_expired": True}
@@ -803,6 +834,8 @@ class PushStore(WidgetPushStore):
             db.execute("DELETE FROM outbox WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM events WHERE created_at<?", (now - 30 * 86400,))
             db.execute("DELETE FROM runs WHERE updated_at<?", (now - 30 * 86400,))
+            # Also the side rows of runs the predecessor pruned while it was rolled back to.
+            db.execute("DELETE FROM run_state WHERE run_id NOT IN (SELECT run_id FROM runs)")
 
     def close(self):
         with self._lock:

@@ -17,7 +17,7 @@ from tui_gateway.mobile_push_provider import DeliveryResult
 def runs(service, scope):
     with service.store._lock:
         return [dict(r) for r in service.store._db.execute(
-            "SELECT * FROM runs WHERE scope=? ORDER BY started_at, rowid", (scope.key,))]
+            "SELECT * FROM runs_ext WHERE scope=? ORDER BY started_at, run_rowid", (scope.key,))]
 
 
 def activity_jobs(sender):
@@ -27,7 +27,10 @@ def activity_jobs(sender):
 def set_run(service, run_id, **columns):
     with service.store.transaction() as db:
         for key, value in columns.items():
-            db.execute(f"UPDATE runs SET {key}=? WHERE run_id=?", (value, run_id))
+            if key in ("owner", "closed_reason", "presentation"):  # the run_state side table
+                service.store._set_run_state(db, run_id, key, value)
+            else:
+                db.execute(f"UPDATE runs SET {key}=? WHERE run_id=?", (value, run_id))
 
 
 # ── U13 run closure ─────────────────────────────────────────────────────────────

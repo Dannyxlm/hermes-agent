@@ -27,7 +27,7 @@ def start_jobs(service):
 def scope_runs(service, scope):
     with service.store._lock:
         return [dict(r) for r in service.store._db.execute(
-            "SELECT * FROM runs WHERE scope=? ORDER BY started_at, rowid", (scope.key,))]
+            "SELECT * FROM runs_ext WHERE scope=? ORDER BY started_at, run_rowid", (scope.key,))]
 
 
 ORDINARY = Scope("native_session", "ops", "ordinary-root")
