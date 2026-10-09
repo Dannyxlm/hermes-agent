@@ -571,6 +571,15 @@ method("session.usage", params=SessionUsageParams, result=SessionUsageResult,
        doc="Token / context / cost counters for the session (+ Nous credit lines when available).")
 
 
+class SessionInfoParams(SessionParams):
+    pass
+
+
+method("session.info", params=SessionInfoParams, result=SessionLiveInfo,
+       doc="Read-only snapshot of the ``session.info`` event payload (``server._session_info``); a not-yet-built "
+           "session answers its lazy route. The approval-bypass readback (``yolo`` / ``approval_mode``).")
+
+
 class SessionContextBreakdownParams(SessionParams):
     pass
 

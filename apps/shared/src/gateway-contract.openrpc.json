@@ -3949,6 +3949,24 @@
       }
     },
     {
+      "name": "session.info",
+      "summary": "Read-only snapshot of the ``session.info`` event payload (``server._session_info``); a not-yet-built session answers its lazy route. The approval-bypass readback (``yolo`` / ``approval_mode``).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionInfoParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionLiveInfo"
+        }
+      }
+    },
+    {
       "name": "session.interrupt",
       "summary": "Stop the running turn (and streaming TTS); retires the crash-recovery marker.",
       "params": [
@@ -34565,6 +34583,32 @@
           "messages"
         ],
         "title": "SessionHistoryResult",
+        "type": "object"
+      },
+      "SessionInfoParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionInfoParams",
         "type": "object"
       },
       "SessionInterruptParams": {
