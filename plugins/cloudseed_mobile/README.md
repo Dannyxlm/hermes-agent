@@ -309,6 +309,7 @@ Paths append to `/api/plugins/cloudseed_mobile`; query defaults are listed here.
 | GET `/workspaces` | `profile` | `{items:[{id,name,root_path,quick_folders:{outputs,plans,reports}}],partial}`; quick-folder values are booleans |
 | GET `/deliverables` | `profile, workspace_id?, session_id?, kind?, q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,coverage,index_revision,updated_at,partial,refresh_status}` |
 | GET `/deliverables/content` | `profile, id, reveal=0` | `{id,profile,content,version_hash,display_type,not_saved_to_workspace:true}`; inline content only |
+| GET `/deliverables/versions` | `profile, artifact_key` | `{items:[{id,version_index,version_hash,observed_at,stored_session_id,message_id,byte_size}],version_count,partial}`; inline artifacts only, message order, newest 20 kept; unknown key is an empty list |
 | GET `/workspace-files` | `profile, workspace_id, path="", q="", cursor?, limit=50, reveal=0` | `{items,next_cursor,partial,workspace_id,path}` |
 | GET `/workspace-files/read` | `profile, workspace_id + path` **or** `profile + id`; `reveal=0` | `{path,text,binary,truncated,byteSize,mime}`; `text:null` for binary/invalid UTF-8 |
 | GET `/workspace-files/download` | same target as read **or** `profile + media_path` | original streamed attachment bytes, MIME, Content-Length, `Cache-Control:no-store` |
@@ -332,6 +333,10 @@ Deliverable items carry `schema_version:1`, opaque `id`, `profile`, `kind`
 `outcome`, `provenance`, `occurrences`, `occurrences_partial`. File items carry
 `private` and optionally `availability:"deleted"`; remote items carry `url`;
 inline items carry `version_hash` but **never content in metadata lists**.
+Inline artifacts (`scan_version` 6, advertised as `mobile.capabilities`
+`feature_versions.artifact_versions: 1`) also carry `artifact_key`, `artifact_kind`
+(`html|svg|code`), `artifact_title`, `artifact_slug`, `version_index` (1-based, message
+order) and `version_count`, and their `display_name` is the title plus an extension.
 Occurrences carry `id,stored_session_id,message_id,observed_at,action,outcome,
 provenance,source_chat_title`. Actions/outcomes are
 `delivered|created|edited|read|referenced|write_failed|pending`. Unknown timestamps
@@ -340,8 +345,15 @@ are null, never request-time or filesystem timestamps. Unknown types stay visibl
 Write/patch/edit/move/delete/read intent is joined to tool results by tool_call_id;
 missing/unrecognized success stays pending and explicit errors never become
 production. Native untrusted-result wrappers are bounded. Assistant MEDIA,
-markdown local links, producer structured output and qualifying finished HTML/SVG/
-code fences are recognized. User imports, reasoning fields/blocks and terminal
+markdown local links, producer structured output and fences that pass Desktop's
+artifact rule (`artifact_detect.py`, a port of `apps/desktop/src/lib/artifact-detect.ts`
+checked against `tests/fixtures/artifact_detect_cases.json`, which Desktop vitest and
+the app XCTest also run) are recognized. An artifact is `(profile, compression-lineage
+root, kind:language:title-slug)`: a compressed continuation keeps it, a delegate child
+starts its own. Its versions are distinct bodies ordered by first appearance (message
+time, then message id), so a repeated body keeps its place and a backfilled older
+message never becomes the latest. Default Recent lists one row per artifact, its
+newest version that matches the same filters; `session_id` lists every version. User imports, reasoning fields/blocks and terminal
 prose are excluded. File identities fold cross-chat rows but retain occurrences;
 last successful production/delivery drives recency. Default Recent includes explicit
 deliveries plus successful production under `outputs`, `docs/plans`, `docs/reports`,
@@ -406,6 +418,43 @@ unsupported stream MIME; 416 invalid Range (empty body plus Content-Range); 422 
 missing/ill-typed query fields; 503 storage/project-registry unavailable, with existing
 sanitized `{error:"Mobile storage unavailable"}`. Preserve last client snapshot on
 errors. There are no write, archive extraction, execution or arbitrary URL routes.
+
+## Hermex flight recorder (round 9 lane E)
+
+Content-free app telemetry from Hermex to this box only. Plan:
+`docs/plans/2026-10-07-1955-feat-hermex-flight-recorder-plan.md` (CloudSeed workspace).
+Module: `flight_recorder.py`. All three routes are owner-gated POSTs that take the same
+JSON body limit, and the body `profile` must equal the native request profile.
+
+- `POST /flight-recorder/batch`. The envelope is `{profile, schema:1, install_id, batch_seq, app_build, os_version, device_class, events[1..500]}`.
+  - Each event is `{kind, t (epoch ms), …}` drawn from the closed `KINDS` allowlist: `lifecycle`, `screen`, `tap`, `rpc`, `http`, `error`, `span`, `connection`, `metrickit`, and the round 9 R53 kinds `bg_refresh`, `push`, `push_tap`, `live_activity`.
+  - Screens, error domains, span names, span outcomes and span `attrs` keys are closed vocabularies mirrored from `HermesMobile/Diagnostics/FlightRecorderEvent.swift` (`SCREENS`, `ERROR_DOMAINS`, `SPAN_NAMES`, `SPAN_OUTCOMES`, `SPAN_ATTRS`). `session_id` is a Hermes `YYYYMMDD_HHMMSS_<hex>` id or a UUID.
+  - MetricKit payloads keep only MetricKit's fixed top-level keys (or the app's `hermex_summary` form), lose free-text keys such as `terminationReason` at any depth, and strings over 128 characters become `[removed]`, as on the phone.
+  - Unknown kinds or keys, free text (spaces, `?` in routes), booleans posing as numbers and out-of-range values are rejected with 400.
+  - The response is `{ok, receipt_id, accepted, duplicate}`. A repeated (`install_id`, `batch_seq`) with the same content is a duplicate. Different content gets 409 `seq_conflict`, and the phone drops that segment.
+  - When the day's file reaches its cap, the server returns 507 `storage_full`.
+- `POST /flight-recorder/flag` takes `{…envelope, flag_id, t, screen, note (≤2000), events[≤1000], screenshot_jpeg_b64?}`.
+  - The screenshot is a JPEG of at most 600 KiB.
+  - The phone sends a flag only when Danny taps Send.
+  - Same duplicate and 409 rules as batches.
+- `POST /flight-recorder/delete` takes `{profile, install_id}` and removes every batch line and flag for that installation.
+
+UUIDs are accepted in either case (Swift `uuidString` is upper-case) and stored in lower case.
+
+Storage is root-scoped and private: `<Hermes root>/mobile/flight-recorder/`, with directories `0700` and files `0600`. It holds:
+- `index.sqlite3`;
+- `events/YYYY-MM-DD.jsonl`, one line per batch;
+- `flags/YYYY-MM-DD/<flag_id>/{flag.json,screenshot.jpg}`.
+
+A symlinked store path is refused. Retention is 30 days. Pruning runs at most hourly, during ingest, and matches dated names only, without following symlinks. No scheduler is added.
+
+Nightly triage: `scripts/flight-recorder/flight_recorder_report.py [--day YYYY-MM-DD] [--log FILE]… [--out-dir DIR]`
+reads one UTC day (default yesterday) and writes a Markdown report: grouped error signatures,
+smoothness spans against the round 9 budgets (B2, B4, B5, B7, B9; B10 is a hitch ratio and is
+not judged), each flag joined to server WARNING/ERROR lines within two minutes (`unknown` when no
+log covers the window), the phone's `route_metrics` timings, and proposed items (a signature seen
+twice, any flag, any span over budget). It is read-only apart from the report (`0600`). The
+release that activates round 9 schedules it.
 
 ## Tests
 

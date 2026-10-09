@@ -3380,6 +3380,7 @@ class GatewayRunner(
     _cron_drain_timeout: float = DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT
     _signal_interrupt_grace_timeout: float = DEFAULT_GATEWAY_SIGNAL_INTERRUPT_GRACE_TIMEOUT
     _exit_code: Optional[int] = None
+    _stop_drain_timed_out: bool = False
     _draining: bool = False
     _external_drain_active: bool = False
     _restart_requested: bool = False

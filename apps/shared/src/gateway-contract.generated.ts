@@ -1923,10 +1923,12 @@ export interface GatewayCapabilitiesResult {
 }
 export interface ClientCapabilitiesParams {
   server_requests?: boolean
+  session_change_cursor?: boolean
 }
 export interface ClientCapabilitiesResult {
   server_requests: string[]
   declines_not_shown?: boolean
+  session_change_cursor?: number
 }
 export interface MediaUploadBeginParams {
   session_id: string
@@ -2014,6 +2016,12 @@ export interface PromptSubmitParams {
   confirm_truncate?: boolean | null
   confirm_empty_truncate?: boolean | null
   rebind_survivor_row_ids?: number[] | null
+  origin?: PromptOrigin | null
+}
+/** The phone that typed this prompt (KTD7): its push installation and connection UUIDs. Honoured only on an authenticated transport; a submission without it clears the chat's phone origin, so Desktop input never lights the phone's Live Activity. */
+export interface PromptOrigin {
+  installation_id: string
+  connection_id: string
 }
 /** ``status`` is absent only on the typed-stop-phrase reply (``voice_stopped``). After a truncation the survivor row ids let the client rebind its cached ``rowId``s (``None`` map entries: drop the cached id). ``turn_isolation`` marks a compute-host dispatch. */
 export interface PromptSubmitResult {
@@ -2571,9 +2579,14 @@ export interface SessionListParams {
   title?: string | null
   limit?: number | null
   include_hidden?: boolean
+  change_cursor?: boolean
+  changed_since?: string | null
 }
 export interface SessionListResult {
   sessions: SessionListRow[]
+  change_cursor?: string | null
+  tombstones?: string[] | null
+  repair?: boolean | null
 }
 /** ``methods_session._session_row_summary``; ``resolved_id`` only on a title lookup that followed a compression lineage to its tip. */
 export interface SessionListRow {
@@ -3040,6 +3053,37 @@ export interface LlmOneshotParams {
 export interface LlmOneshotResult {
   text: string
 }
+export interface MobileSessionPushPolicyParams {
+  installation_id: string
+  connection_id: string
+  policy?: 'all' | 'opened' | null
+  environment?: 'production' | 'sandbox' | null
+  device_token?: string | null
+  categories?: ('attention' | 'completion')[]
+  preview_enabled?: boolean
+}
+export interface MobileSessionPushPolicyResult {
+  policy: 'all' | 'opened'
+  expires_at: number | null
+  categories?: ('attention' | 'completion')[] | null
+  preview_enabled?: boolean | null
+}
+export interface MobileActivityStartTokenParams {
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  start_token: string
+}
+export interface MobileActivityStartTokenResult {
+  expires_at: number
+}
+export interface MobileDeviceParams {
+  installation_id: string
+  connection_id: string
+}
+export interface MobileUnregisterResult {
+  removed: number
+}
 export interface MobileSessionPushRegisterParams {
   profile: string
   stored_session_id: string
@@ -3091,9 +3135,6 @@ export interface MobileUnregisterParams {
   installation_id: string
   connection_id: string
   subscription_id?: string | null
-}
-export interface MobileUnregisterResult {
-  removed: number
 }
 export interface MobileSessionPresenceParams {
   profile: string
@@ -3150,6 +3191,20 @@ export interface MobileWidgetInboxResult {
   grant_id: string
   snapshot_path: '/api/mobile/widgets/snapshot'
   protocol_version: 2
+}
+/** Opt one installation/connection into content-free Inbox-changed silent pushes for a profile. */
+export interface MobileInboxPushRegisterParams {
+  installation_id: string
+  connection_id: string
+  environment: 'production' | 'sandbox'
+  profile: string
+  device_token: string
+}
+export interface MobileInboxPushRegisterResult {
+  subscription_id: string
+  expires_at: number
+  scope_token: string
+  min_interval_s: number
 }
 export type MobileEmptyParams = Record<string, never>
 export interface MobileCapabilitiesResult {
@@ -3260,6 +3315,7 @@ export interface MobileSubmitParams {
   canonical_root_id: string
   session_id: string
   text: string
+  origin?: PromptOrigin | null
 }
 export interface MobileSubmitResult {
   status?: PromptSubmitStatus | null
@@ -5458,6 +5514,15 @@ export interface PetHatchProgressPayload {
 }
 /** ``change_watcher._CHANGE_WATCHES`` payload fn — ``{}`` for every watch except pet.changed. */
 export type ChangeSignalPayload = Record<string, unknown>
+/** ``{}`` for clients without the cursor capability (refetch the list). A client that sent ``client.capabilities {session_change_cursor: true}`` instead gets one frame per changed scope: ``changed`` / ``tombstoned`` are lineage-root hints (bounded; ``truncated`` when cut), and the authoritative delta is a list read with ``changed_since=<cursor>``. */
+export interface SessionsChangedPayload {
+  profile?: string | null
+  cursor?: string | null
+  changed?: string[] | null
+  tombstoned?: string[] | null
+  truncated?: boolean | null
+  [key: string]: unknown
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY'
 
 // ── Client→server methods ──
@@ -5685,6 +5750,10 @@ export interface RpcMethods {
   'mobile.bots': { params: MobileBotsParams; result: MobileBotsResult }
   'mobile.capabilities': { params: MobileEmptyParams; result: MobileCapabilitiesResult }
   'mobile.clarify.respond': { params: MobileClarifyParams; result: MobileClarifyResult }
+  /** Create or renew a lease for content-free background pushes when this profile's Inbox changes. */
+  'mobile.inbox_push.register': { params: MobileInboxPushRegisterParams; result: MobileInboxPushRegisterResult }
+  /** Remove Inbox silent-push leases (one by subscription_id, or every one of this connection). */
+  'mobile.inbox_push.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
   'mobile.open': { params: MobileOpenParams; result: MobileSnapshotResult }
   'mobile.push.refresh': { params: MobilePushRefreshParams; result: MobileRefreshResult }
   'mobile.push.register': { params: MobilePushRegisterParams; result: MobileRegistrationResult }
@@ -5692,7 +5761,12 @@ export interface RpcMethods {
   'mobile.push.unregister': { params: MobileUnregisterParams; result: MobileUnregisterResult }
   'mobile.session_activity.refresh': { params: MobileActivityRefreshParams; result: MobileRefreshResult }
   'mobile.session_activity.register': { params: MobileSessionActivityRegisterParams; result: MobileSessionRegistrationResult }
+  /** Register or rotate this device's Live Activity push-to-start token (iOS 17.2+). */
+  'mobile.session_activity.start_token.register': { params: MobileActivityStartTokenParams; result: MobileActivityStartTokenResult }
+  'mobile.session_activity.start_token.unregister': { params: MobileDeviceParams; result: MobileUnregisterResult }
   'mobile.session_activity.unregister': { params: MobileActivityUnregisterParams; result: MobileUnregisterResult }
+  /** Read or set this device's alert policy: "all" listed chats (messaging, cron, Kanban and delegate sessions never alert) or "opened" (only chats with their own lease). */
+  'mobile.session_push.policy': { params: MobileSessionPushPolicyParams; result: MobileSessionPushPolicyResult }
   /** Renew a 60-second foreground lease for a registered ordinary destination; affects alerts only. */
   'mobile.session_push.presence': { params: MobileSessionPresenceParams; result: MobileSessionPresenceResult }
   'mobile.session_push.refresh': { params: MobilePushRefreshParams; result: MobileRefreshResult }
@@ -6126,6 +6200,8 @@ export const RPC_METHODS = [
   'mobile.bots',
   'mobile.capabilities',
   'mobile.clarify.respond',
+  'mobile.inbox_push.register',
+  'mobile.inbox_push.unregister',
   'mobile.open',
   'mobile.push.refresh',
   'mobile.push.register',
@@ -6133,7 +6209,10 @@ export const RPC_METHODS = [
   'mobile.push.unregister',
   'mobile.session_activity.refresh',
   'mobile.session_activity.register',
+  'mobile.session_activity.start_token.register',
+  'mobile.session_activity.start_token.unregister',
   'mobile.session_activity.unregister',
+  'mobile.session_push.policy',
   'mobile.session_push.presence',
   'mobile.session_push.refresh',
   'mobile.session_push.register',
@@ -6453,8 +6532,8 @@ export interface BackendGatewayEventMap {
   'session.title': SessionTitlePayload
   /** Mid-turn usage tick; message.complete carries the authoritative final usage. */
   'session.usage': SessionUsagePayload
-  /** state.db moved; refetch the session list. */
-  'sessions.changed': ChangeSignalPayload
+  /** Session list changed. Cursor-aware clients get a per-scope cursor; others refetch. */
+  'sessions.changed': SessionsChangedPayload
   /** The free-tier bootstrap finished (broadcast); the desktop's setup gate reads the record. */
   'setup.ready': SetupReadyPayload
   /** The active skin moved (name switch or live colour edit); repaint from this palette. */

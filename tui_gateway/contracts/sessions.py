@@ -244,6 +244,11 @@ class SessionListParams(ProfileParams):
     title: str | None = None  # exact-title lookup (title as identity); windowless
     limit: int | None = None
     include_hidden: bool = False
+    #: Add the scope's ``change_cursor`` (taken before the rows are read).
+    change_cursor: bool = False
+    #: Delta read: only rows of lineages touched since this cursor, plus ``tombstones``; ``repair``
+    #: means the cursor is lost/foreign/expired or too far behind -- do one full read.
+    changed_since: str | None = None
 
 
 class SessionListRow(Result):
@@ -265,6 +270,10 @@ class SessionListRow(Result):
 
 class SessionListResult(Result):
     sessions: list[SessionListRow]
+    # Present only when the request asked for a cursor (``change_cursor`` / ``changed_since``).
+    change_cursor: str | None = None
+    tombstones: list[str] | None = None
+    repair: bool | None = None
 
 
 method("session.list", params=SessionListParams, result=SessionListResult,

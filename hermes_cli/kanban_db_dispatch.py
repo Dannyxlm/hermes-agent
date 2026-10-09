@@ -152,6 +152,12 @@ class DispatchResult:
     """Memory pressure that restricted this tick: ``"critical"`` (no new
     workers), ``"elevated"`` (at most one), ``None`` (no restriction).
     Reclaim/promotion bookkeeping still ran; deferred tasks stay queued."""
+    held_by_cap: Optional[str] = None
+    """``"max_spawn"`` / ``"max_in_progress"`` when that concurrency cap left
+    no spawn slot this tick, so every ready card waits on capacity."""
+    ready_unexplained: int = 0
+    """Ready-lane rows this tick neither spawned nor deferred by the
+    per-profile cap (unassigned, guarded, nonspawnable, claim lost...)."""
 
 
 def describe_suppression(results: Iterable[Optional["DispatchResult"]]) -> str:
@@ -177,10 +183,32 @@ def describe_suppression(results: Iterable[Optional["DispatchResult"]]) -> str:
             counts["skipped_locked"] = counts.get("skipped_locked", 0) + 1
         if res.memory_pressure:
             pressure = res.memory_pressure
+        if res.skipped_per_profile_capped:
+            counts["profile_cap"] = counts.get("profile_cap", 0) + len(res.skipped_per_profile_capped)
+        if res.held_by_cap:
+            counts[res.held_by_cap] = counts.get(res.held_by_cap, 0) + 1
     parts = [f"{k}={v}" for k, v in sorted(counts.items())]
     if pressure:
         parts.append(f"memory_pressure={pressure}")
     return ", ".join(parts)
+
+
+def caps_explain_hold(results: Iterable[Optional["DispatchResult"]]) -> bool:
+    """True when a concurrency cap explains every ready card the tick(s) held back.
+
+    A profile or host at its cap is busy, not stuck, so the "dispatcher stuck"
+    warnings skip it. Any ready card no cap explains (unassigned, guarded, a
+    lost claim), a lock contention or memory pressure keeps the warning.
+    """
+    saw_cap = False
+    for res in results:
+        if res is None:
+            continue
+        if res.skipped_locked or res.memory_pressure or res.ready_unexplained:
+            return False
+        if res.held_by_cap or res.skipped_per_profile_capped:
+            saw_cap = True
+    return saw_cap
 
 
 # Bounded registry of recently-reaped worker exits, filled by the reap loop in
@@ -2232,12 +2260,14 @@ def _tick_spawn_budget(
     # Both ready and review loops consume from the same budget.
     if max_spawn is not None:
         if running_count >= max_spawn:
+            result.held_by_cap = "max_spawn"
             return False, None
         spawn_budget = max_spawn - running_count
 
     if max_in_progress is not None:
         total_running = running_count + count_running_tasks_other_boards(board)
         if total_running >= max_in_progress:
+            result.held_by_cap = "max_in_progress"
             return False, None
         remaining = max_in_progress - total_running
         if spawn_budget is None or spawn_budget > remaining:
@@ -2408,11 +2438,15 @@ def _dispatch_once_locked(
                 conn, row["id"], default_assignee, dry_run=dry_run,
             ):
                 result.skipped_unassigned.append(row["id"])
+                result.ready_unexplained += 1
                 continue
             row_assignee = default_assignee
             result.auto_assigned_default.append(row["id"])
+        capped_before = len(result.skipped_per_profile_capped)
         if _dispatch_lane_task(conn, row, row_assignee, result, lane="ready", **lane_kwargs):
             spawned += 1
+        elif len(result.skipped_per_profile_capped) == capped_before:
+            result.ready_unexplained += 1
 
     # A review agent (sdlc-review) approves (→ done) or requests changes
     # (→ ready/todo). Review spawns share max_spawn with ready tasks. The loop

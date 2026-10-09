@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from hermes_state_holders import read_only_db_uri
-from plugins.cloudseed_mobile.deliverables import project, decode, MAX_STRING
+from plugins.cloudseed_mobile.deliverables import delegate_child, earliest, project, decode, MAX_STRING
 from plugins.cloudseed_mobile.workspace_files import digest
 
 LOG=logging.getLogger(__name__)
@@ -30,6 +30,12 @@ REFRESH_SECONDS=0.75
 # many candidates per requested row before handing back a cursor.
 RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
+# Any parser or admission change bumps this so published rows rebuild (v6: Desktop's
+# artifact rule and artifact identity on inline rows).
+SCAN_VERSION=6
+# Desktop keeps at most this many versions of one artifact; the versions route matches.
+MAX_ARTIFACT_VERSIONS=20
+MAX_LINEAGE_HOPS=64
 _LOCKS={}
 _LOCK_GUARD=threading.Lock()
 
@@ -42,6 +48,15 @@ def source_signature(home):
             st=path.stat(); values.append((name,st.st_ino,st.st_size,st.st_mtime_ns))
         except FileNotFoundError: values.append((name,None))
     return digest(values)
+
+
+def superseded(row,versions,q):
+    """Files › Recent shows one row per artifact: its newest version that the same
+    Recent filters would list. Older versions stay queryable by id and by chat."""
+    if not versions: return False
+    query=q.casefold()
+    listed=[(v['index'],r['first'],r['id']) for v in versions for r in v['rows'] if r['recent'] and query in r['search']]
+    return bool(listed) and max(listed)[2]!=row['id']
 
 
 class DeliverablesIndex:
@@ -69,6 +84,8 @@ class DeliverablesIndex:
                     search TEXT, data TEXT, inline_content TEXT,
                     PRIMARY KEY(sid,id));
                 CREATE INDEX IF NOT EXISTS entries_page ON entries(generation,sort_time,id);
+                CREATE INDEX IF NOT EXISTS entries_artifact ON entries(generation,json_extract(data,'$.artifact_key'))
+                    WHERE kind='inline_content';
                 CREATE TABLE IF NOT EXISTS staged(sid TEXT,id TEXT,data TEXT,inline_content TEXT,
                     PRIMARY KEY(sid,id));
                 CREATE TABLE IF NOT EXISTS publication(sid TEXT PRIMARY KEY,after_id TEXT,fingerprint TEXT);
@@ -114,6 +131,23 @@ class DeliverablesIndex:
                 JOIN session_nodes child ON child.parent_id=parent.sid
         ) SELECT sid FROM lineage''',(sid,))}
 
+    def _lineage_root(self,source,columns,session,nodes):
+        """Oldest compression ancestor, read from the source so scan order cannot change
+        it. A delegate child is its own root: its parent's compression is not its own."""
+        if not {'parent_session_id','end_reason'}<=columns: return session['id']
+        selection=','.join(c for c in ('parent_session_id','end_reason','source') if c in columns)
+        if 'model_config' in columns: selection+=",instr(coalesce(model_config,''),'\"_delegate_from\"')>0 AS delegate_child"
+        node=session; sid=session['id']; seen={sid}
+        while not delegate_child(node) and node.get('parent_session_id') and len(seen)<=MAX_LINEAGE_HOPS:
+            parent=node['parent_session_id']
+            if parent in seen: break
+            if parent not in nodes:
+                row=source.execute('SELECT '+selection+' FROM sessions WHERE id=?',(parent,)).fetchone()
+                nodes[parent]=dict(row) if row else None
+            if not nodes[parent] or nodes[parent].get('end_reason')!='compression': break
+            node=nodes[parent]; sid=parent; seen.add(sid)
+        return sid
+
     def _reconcile_session(self,cache,source,selection,sid,meta):
         current=source.execute('SELECT '+selection+' FROM sessions WHERE id=?',(sid,)).fetchone()
         if current:
@@ -141,7 +175,9 @@ class DeliverablesIndex:
                 history={o['id']:o for o in previous['occurrences']}
                 history.update({o['id']:o for o in row['occurrences']})
                 rank=lambda r:(r['action'] in {'delivered','created','edited'},r.get('observed_at') is not None,r.get('observed_at') or 0)
+                first=earliest(previous,row)
                 if rank(previous)>rank(row): row,inline=previous,old[1]
+                if first: row['artifact_first_seen']=first
                 row['occurrences']=list(history.values())[-100:]
                 row['occurrences_partial']=previous.get('occurrences_partial',False) or len(history)>100
             cache.execute('INSERT OR REPLACE INTO staged VALUES(?,?,?,?)',(sid,row['id'],json.dumps(row),inline))
@@ -221,14 +257,14 @@ class DeliverablesIndex:
                 # Old runtimes upsert metadata without removing unknown keys.
                 # Their lineage write is the signal to rebuild after rollback.
                 legacy=cache.execute("SELECT 1 FROM meta WHERE key='lineage'").fetchone() is not None
-                if (not legacy and meta.get('scan_version')==5 and meta.get('source_signature')==signature
+                if (not legacy and meta.get('scan_version')==SCAN_VERSION and meta.get('source_signature')==signature
                     and meta.get('grant_signature')==grant_signature and 'scan_signature' not in meta
                     and meta.get('refresh_status') in {'ready','partial'}): return
-                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=5:
-                    reconcile_legacy=legacy or meta.get('scan_version')!=5
+                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=SCAN_VERSION:
+                    reconcile_legacy=legacy or meta.get('scan_version')!=SCAN_VERSION
                     generation=meta.get('generation') if meta.get('grant_signature')==grant_signature else None
                     epoch=cache.execute('SELECT COALESCE(MAX(scan_epoch),0) FROM session_nodes').fetchone()[0]
-                    meta={'scan_version':5,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+                    meta={'scan_version':SCAN_VERSION,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
                     if reconcile_legacy and cache.execute('SELECT 1 FROM segments LIMIT 1').fetchone():
                         meta['legacy_after']=None
                     cache.execute('DELETE FROM staged')
@@ -266,7 +302,7 @@ class DeliverablesIndex:
                         cache.execute('DELETE FROM publication'); cache.execute('DELETE FROM prepared_entries')
                         meta.pop('scan_session',None); meta.pop('scan_after',None)
                     columns={r[1] for r in source.execute('PRAGMA table_info(messages)')}
-                    units=0
+                    units=0; lineage_nodes={}
                     for session in sessions[:budget]:
                         if time.monotonic()>deadline or (cancel and cancel.is_set()): break
                         sid=session['id']; units+=1
@@ -278,8 +314,11 @@ class DeliverablesIndex:
                             meta['index_revision']=digest([meta.get('index_revision'),sid,time.time_ns()])
                         messages,last=([],meta['scan_after']) if session.get('archived') or session.get('hidden') else self._messages(source,columns,sid,meta['scan_after'])
                         status={}
+                        # Outside the projection guard: a source read error must abort
+                        # this refresh, never publish the session as empty.
+                        root=self._lineage_root(source,session_columns,session,lineage_nodes)
                         try:
-                            rows=project(self.profile,session,messages,self.workspaces,status=status,reference_limit=None)
+                            rows=project(self.profile,{**session,'lineage_root':root},messages,self.workspaces,status=status,reference_limit=None)
                         except Exception as exc:
                             LOG.warning('deliverables projection skipped one message segment: %s',type(exc).__name__)
                             rows=[]; status['partial']=True
@@ -339,7 +378,7 @@ class DeliverablesIndex:
         source_available=(self.home/'state.db').is_file() and not (self.home/'state.db').is_symlink()
         grants_current=meta.get('grant_signature')==digest(self.workspaces)
         source_current=meta.get('source_signature')==source_signature(self.home)
-        scan_current=not legacy and meta.get('scan_version')==5
+        scan_current=not legacy and meta.get('scan_version')==SCAN_VERSION
         if not grants_current or not source_available:
             meta.update(partial=True,refresh_status='refresh_pending',generation=None)
         elif not source_current or not scan_current:
@@ -348,6 +387,9 @@ class DeliverablesIndex:
         # Clients can stop polling it, while long sessions keep advancing even
         # before their first complete projection increments indexed_sessions.
         meta['refresh_pending']=source_available and (not grants_current or not source_current or not scan_current or 'scan_signature' in meta)
+        # Work the background warmer finishes on its own: a grant or scan-version change, or a
+        # started pass. Plain state.db churn is left to the next Files open (round 9 U29).
+        meta['warm_pending']=source_available and (not grants_current or not scan_current or 'scan_signature' in meta)
         meta['refresh_progress']=digest([meta.get('scan_signature'),meta.get('scan_before'),(meta.get('scan_session') or {}).get('id'),meta.get('scan_after'),meta.get('scan_cleanup'),publication])
         return meta
 
@@ -373,6 +415,43 @@ class DeliverablesIndex:
             return target.is_file()
         except (OSError,ValueError,RuntimeError):
             return False
+
+    def _artifacts(self,db,generation,keys):
+        """Every published version row of each artifact, as {key: [version, ...]} in
+        message order. One version per body: a re-emitted body keeps its first place."""
+        keys=sorted({k for k in keys if isinstance(k,str)})
+        if not keys: return {}
+        found={key:{} for key in keys}
+        # Served by the partial index entries_artifact; never reads inline bodies.
+        sql=("SELECT id,sid,recent,search,json_extract(data,'$.byte_size'),json_extract(data,'$.artifact_key'),"
+             "json_extract(data,'$.version_hash'),json_extract(data,'$.artifact_first_seen') FROM entries "
+             "WHERE generation=? AND kind='inline_content' AND json_extract(data,'$.artifact_key') IN ("+','.join('?' for _ in keys)+')')
+        for rid,sid,recent,search,size,key,version_hash,first in db.execute(sql,(generation,*keys)):
+            first=json.loads(first) if first else None
+            if not isinstance(first,list) or len(first)!=4: continue
+            found[key].setdefault(version_hash,[]).append({'id':rid,'sid':sid,'recent':bool(recent),'search':search or '','byte_size':size or 0,'first':first})
+        place=lambda r:(r['first'],r['id'])
+        result={}
+        for key,bodies in found.items():
+            # A version sits where its body first appeared; every row of the body is kept.
+            ordered=sorted(({**min(rows,key=place),'version_hash':version_hash,'rows':rows} for version_hash,rows in bodies.items()),key=place)
+            for index,version in enumerate(ordered,1): version['index']=index
+            result[key]=ordered
+        return result
+
+    def versions(self,artifact_key):
+        """Versions of one inline artifact in message order, newest 20 kept (Desktop's cap)."""
+        if not isinstance(artifact_key,str) or not 1<=len(artifact_key)<=128:
+            raise HTTPException(400,'Invalid artifact key')
+        meta=self.snapshot()
+        deadline=time.monotonic()+REFRESH_SECONDS
+        with self.connection() as db:
+            db.set_progress_handler(lambda:int(time.monotonic()>deadline),1000)
+            ordered=self._artifacts(db,meta.get('generation'),[artifact_key]).get(artifact_key,[])
+        kept=ordered[-MAX_ARTIFACT_VERSIONS:]
+        items=[{'id':v['id'],'version_index':v['index'],'version_hash':v['version_hash'],'observed_at':v['first'][0] or None,
+                'stored_session_id':v['sid'],'message_id':v['first'][3],'byte_size':v['byte_size']} for v in kept]
+        return {'items':items,'version_count':len(ordered),'partial':len(kept)<len(ordered) or bool(meta.get('partial',True))}
 
     def query(self,workspace_id=None,session_id=None,kind=None,q='',cursor=None,limit=50,reveal=False):
         if not 1<=limit<=200 or len(q)>256 or kind not in (None,'file','remote_media','inline_content'):
@@ -412,12 +491,14 @@ class DeliverablesIndex:
                 window=limit*RECENT_SCAN_FACTOR if validates else limit
                 candidates=list(db.execute(sql,(*params,window+1)))
                 fetched=[]; last=None; more=len(candidates)>window
-                for rid,sort_time,data in candidates[:window]:
+                parsed=[(rid,sort_time,data,json.loads(data)) for rid,sort_time,data in candidates[:window]]
+                artifacts=self._artifacts(db,meta.get('generation'),[row.get('artifact_key') for *_,row in parsed])
+                for rid,sort_time,data,row in parsed:
                     if len(fetched)>=limit:
                         more=True; break
                     last=(sort_time,rid)
-                    if validates and not self._exists(json.loads(data)): continue
-                    fetched.append((rid,sort_time,data))
+                    if validates and (not self._exists(row) or superseded(row,artifacts.get(row.get('artifact_key')),q)): continue
+                    fetched.append((rid,sort_time,row))
                 items=[]
                 histories={rid: [] for rid, _, _ in fetched[:limit]}
                 if histories:
@@ -428,8 +509,7 @@ class DeliverablesIndex:
                     history_sql='WITH requested(id,ordinal) AS (VALUES '+values+') SELECT requested.id,e.data FROM requested JOIN entries e ON e.rowid IN (SELECT rowid FROM entries WHERE generation=? AND id=requested.id ORDER BY sort_time LIMIT 21) ORDER BY requested.ordinal,e.sort_time,e.rowid'
                     for rid,data in db.execute(history_sql,(*args,meta.get('generation'))):
                         histories[rid].append((data,))
-                for rid,sort_time,data in fetched[:limit]:
-                    row=json.loads(data)
+                for rid,sort_time,row in fetched[:limit]:
                     # Occurrence history is bounded independently of file count.
                     history={}
                     history_rows=histories[rid]
@@ -439,6 +519,11 @@ class DeliverablesIndex:
                             if len(history)<100: history[occurrence['id']]=occurrence
                     row['occurrences']=list(history.values())
                     row['occurrences_partial']=row.get('occurrences_partial',False) or len(history)>=100 or len(history_rows)>20
+                    versions=artifacts.get(row.get('artifact_key'))
+                    if versions:
+                        row['version_count']=len(versions)
+                        row['version_index']=next((v['index'] for v in versions if v['version_hash']==row.get('version_hash')),None)
+                    row.pop('artifact_first_seen',None)
                     items.append(row)
         except sqlite3.OperationalError as exc:
             if 'interrupt' not in str(exc): raise

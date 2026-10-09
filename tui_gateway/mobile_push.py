@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import mobile_inbox_invalidation
 from .mobile_push_payloads import Scope
 from .mobile_push_provider import APNsProvider
 from .mobile_push_store import PushStore
@@ -24,6 +25,11 @@ class PushService:
         self._drain_lock = threading.Lock()
         self._thread = None
         self._closed = False
+        # Set by the owning gateway: () -> (held run ids, running run ids). Without it this
+        # process's own runs are never treated as orphans.
+        self.live_runs = None
+        self._clock = clock
+        self._reconciled_at = 0.0
 
     def register(self, principal, scope, **params):
         if params.get("environment") not in self.environments:
@@ -42,8 +48,39 @@ class PushService:
         self._wake.set()
         return receipt
 
-    def start_run(self, scope, run_id=None, event_id=None):
-        return self.store.start_run(scope, run_id, event_id)
+    def start_run(self, scope, run_id=None, event_id=None, **options):
+        run = self.store.start_run(scope, run_id, event_id, **options)
+        self._wake.set()
+        return run
+
+    def set_policy(self, principal, **params):
+        if params.get("policy") == "all" and params.get("environment") not in self.environments:
+            raise ValueError("delivery environment unavailable")
+        return self.store.set_policy(principal, **params)
+
+    def register_start_token(self, principal, **params):
+        if params.get("environment") not in self.environments:
+            raise ValueError("delivery environment unavailable")
+        return self.store.register_start_token(principal, **params)
+
+    def reconcile(self, force=False):
+        """Bounded orphan sweep, at most once a minute from the delivery loop."""
+        now = self._clock()
+        if not force and now - self._reconciled_at < 60:
+            return 0
+        self._reconciled_at = now
+        try:
+            held = running = None
+            if self.live_runs is not None:
+                held, running = self.live_runs()
+            closed = self.store.reconcile_orphans(held, running)
+        except Exception as error:
+            # The sweep is hygiene: it must never hold up deliveries in this pass.
+            logger.warning("mobile push run sweep unavailable (%s)", type(error).__name__)
+            return 0
+        if closed:
+            self._wake.set()
+        return closed
 
     def current_run(self, scope):
         run = self.store.current_run(scope)
@@ -57,6 +94,8 @@ class PushService:
     def drain_once(self):
         with self._drain_lock:
             self.store.maintain()
+            self.reconcile()
+            mobile_inbox_invalidation.process(self.store)  # Inbox-changed silent hints (KTD9)
             count = 0
             for _ in range(20):
                 if self._stop.is_set():
@@ -135,16 +174,28 @@ def service_for_home(home):
         return service
 
 
-def unregister_for_home(home, principal, **params):
-    """Opt-out remains effective if delivery is disabled or its credential is missing."""
-    service = service_for_home(home)
-    if service:
-        return service.unregister(principal, **params)
+def _offline_store(home, action):
+    """Run an opt-out against the stored outbox when delivery is disabled or unconfigured."""
     path = Path(home) / "mobile-push" / "outbox.sqlite3"
     if not path.is_file():
         return 0
     store = PushStore(path, time.time)
     try:
-        return store.unregister(principal, **params)
+        return action(store)
     finally:
         store.close()
+
+
+def unregister_start_token_for_home(home, principal, **params):
+    service = service_for_home(home)
+    if service:
+        return service.store.unregister_start_token(principal, **params)
+    return _offline_store(home, lambda store: store.unregister_start_token(principal, **params))
+
+
+def unregister_for_home(home, principal, **params):
+    """Opt-out remains effective if delivery is disabled or its credential is missing."""
+    service = service_for_home(home)
+    if service:
+        return service.unregister(principal, **params)
+    return _offline_store(home, lambda store: store.unregister(principal, **params))

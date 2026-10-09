@@ -144,17 +144,25 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
         if request.url.host != _TELEGRAM_API_HOST or not self._fallback_ips:
             return await self._primary.handle_async_request(request)
         last_error: Exception | None = None
+        # Path failures of this request: logged at INFO when another path recovers it, and as one
+        # WARNING only when the request fails (R23).
+        failures: list[str] = []
         for ip in self._attempt_order():
             candidate = request if ip is None else _rewrite_request_for_ip(request, ip)
             transport = self._primary if ip is None else await self._get_fallback(ip)
+            path = ip or _TELEGRAM_API_HOST
             try:
                 response = await transport.handle_async_request(candidate)
-                if self._last_failure is not None:
+                if failures:
+                    self._last_failure = None
+                    logger.info("[Telegram] Telegram API transport recovered via %s after re-walk: %s",
+                                path, "; ".join(failures))
+                elif self._last_failure is not None:
                     failed_path, failure = self._last_failure
                     self._last_failure = None
                     logger.info(
                         "[Telegram] Telegram API transport recovered via %s after %s failed: %s",
-                        ip or _TELEGRAM_API_HOST,
+                        path,
                         failed_path,
                         failure,
                     )
@@ -163,32 +171,31 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
                         if self._sticky_ip is _UNSET or self._sticky_ip != ip:
                             self._sticky_ip = ip
                             if ip is not None:
-                                log = logger.warning if last_error is not None else logger.info
-                                log("[Telegram] Using sticky IPv4 Telegram API path %s (dual-stack hostname tried last — #87015)", ip)
+                                logger.info("[Telegram] Using sticky IPv4 Telegram API path %s (dual-stack hostname tried last — #87015)", ip)
                 return response
             except Exception as exc:
-                last_error = exc
                 if not _is_retryable_connect_error(exc):
+                    if failures:
+                        logger.warning("[Telegram] Telegram API paths failed before a non-retryable error: %s",
+                                       "; ".join(failures))
                     raise
-                path = ip or _TELEGRAM_API_HOST
+                last_error = exc
                 failure = _describe_transport_error(exc)
                 self._last_failure = (path, failure)
+                sticky = False
                 if self._sticky_ip is not _UNSET and ip == self._sticky_ip:
                     async with self._sticky_lock:
                         if self._sticky_ip is not _UNSET and self._sticky_ip == ip:
                             self._sticky_ip = _UNSET
-                            logger.warning(
-                                "[Telegram] Sticky Telegram path %s failed; re-walking IPv4 literals before the hostname",
-                                ip if ip is not None else "api.telegram.org")
+                            sticky = True
+                failures.append(f"{path}{' (sticky)' if sticky else ''} failed: {failure}")
                 if ip is None:
                     await self._reset_primary(transport)
-                    logger.warning("[Telegram] Dual-stack api.telegram.org path failed (%s)", failure)
-                    continue
-                logger.warning("[Telegram] IPv4 Telegram API IP %s failed: %s", ip, failure)
-                await self._reset_fallback(ip)
-                continue
+                else:
+                    await self._reset_fallback(ip)
         if last_error is None:
             raise RuntimeError("All Telegram fallback IPs exhausted but no error was recorded")
+        logger.warning("[Telegram] Every Telegram API path failed: %s", "; ".join(failures))
         raise last_error
 
     async def aclose(self) -> None:

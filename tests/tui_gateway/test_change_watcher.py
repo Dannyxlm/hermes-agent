@@ -445,3 +445,29 @@ def test_broken_probe_never_kills_the_pass(watcher_home, monkeypatch):
 
     # The broken cron probe is skipped; sessions still broadcasts.
     assert ("sessions.changed", {}) in events
+
+
+def test_commit_sharing_an_mtime_tick_is_still_read(watcher_home):
+    """mtimes are jiffy-coarse: two WAL commits a few ms apart can share one. The stat guard also
+    compares sizes, so the second commit is read (the sessions change cursor must not miss it)."""
+    home, events = watcher_home
+    db = home / "state.db"
+    wal = home / "state.db-wal"
+    writer = sqlite3.connect(db)  # held open so the WAL survives between commits
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, message_count INTEGER)")
+        writer.execute("INSERT INTO sessions VALUES ('s1', 'hello', 1)")
+        writer.commit()
+        server._broadcast_watched_changes(now=0.0)
+        stamps = {path: path.stat().st_mtime_ns for path in (db, wal)}
+
+        writer.execute("INSERT INTO sessions VALUES ('s2', 'second', 1)")
+        writer.commit()
+        for path, mtime in stamps.items():  # the same coarse tick as the previous read
+            os.utime(path, ns=(mtime, mtime))
+        server._broadcast_watched_changes(now=10.0)
+    finally:
+        writer.close()
+
+    assert ("sessions.changed", {}) in events

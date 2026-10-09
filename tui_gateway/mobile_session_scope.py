@@ -73,3 +73,39 @@ def resolve_destination(profile, home, stored_id):
         if not root or not tip or any(r.get("title") == SessionDB.CANONICAL_BOT_CHAT_TITLE for r in (root, tip)):
             raise ValueError("Bot Chat requires canonical registration")
         return Scope("native_session", profile, root["id"]), tip["id"], tip.get("title") or "Hermex Ava"
+
+
+# Desktop's Chats split (apps/desktop: SIDEBAR_EXCLUDED_SOURCES + MESSAGING_SESSION_SOURCE_IDS in
+# lib/session-source.ts). Copied, not invented: a chat alerts under "All chats" only if it is listed.
+UNLISTED_SOURCES = frozenset({
+    "acp", "cron", "kanban", "oneshot", "subagent", "delegate", "tool",
+    "telegram", "discord", "slack", "mattermost", "matrix", "signal", "whatsapp", "bluebubbles",
+    "photon", "homeassistant", "email", "sms", "webhook", "api_server", "weixin", "wecom", "qqbot",
+    "yuanbao", "dingtalk", "feishu",
+})
+
+
+def listed_chat(home, root_id):
+    """True when a lineage root is a human chat Danny's Chats list shows (R2).
+
+    Messaging platforms, cron, Kanban workers, tool sessions and delegate children never are;
+    a delegate child is recognised by its source or by the ``_delegate_from`` creation marker,
+    because children spawned under a Desktop turn inherit ``desktop`` as their source.
+    """
+    import json
+    path = Path(home) / "state.db"
+    if not path.is_file():
+        return False
+    with SessionDB(db_path=path, read_only=True) as db:
+        row = db.get_session(root_id)
+    if not row:
+        return False
+    if str(row.get("source") or "").strip().lower() in UNLISTED_SOURCES:
+        return False
+    config = row.get("model_config") or {}
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except ValueError:
+            return False
+    return not (isinstance(config, dict) and config.get("_delegate_from"))

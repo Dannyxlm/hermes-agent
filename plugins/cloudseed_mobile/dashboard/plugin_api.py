@@ -4,6 +4,7 @@ All domain IO runs in synchronous routes (FastAPI's context-copying threadpool).
 Only the bounded JSON dependency reads asynchronously. No WebUI imports/runtime.
 """
 import base64
+import contextlib
 import errno
 import hashlib
 import json
@@ -11,6 +12,7 @@ import sqlite3
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 from hermes_cli.config import load_config
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
 from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, PhotoStorageFull
@@ -19,8 +21,11 @@ from plugins.cloudseed_mobile import provider_accounts as accounts
 from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write_memory
 from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
+from plugins.cloudseed_mobile import flight_recorder as recorder
+from plugins.cloudseed_mobile.deliverables_warmer import DeliverablesWarmer
 
 MAX_BODY = 1024 * 1024
+CLIENT_CLOSED_REQUEST = 499
 
 
 def owner_config():
@@ -47,10 +52,15 @@ def owner(request: Request):
 
 async def payload(request: Request):
     data = bytearray()
-    async for chunk in request.stream():
-        data.extend(chunk)
-        if len(data) > MAX_BODY:
-            raise HTTPException(413, 'Mobile request too large')
+    try:
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > MAX_BODY:
+                raise HTTPException(413, 'Mobile request too large')
+    except ClientDisconnect:
+        # The phone hung up mid-body (backgrounded, network change): nothing is
+        # listening, so end quietly with nginx's client-closed status, not a 5xx.
+        raise HTTPException(CLIENT_CLOSED_REQUEST, 'Client closed request') from None
     try:
         body = json.loads(data, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, RecursionError):
@@ -60,7 +70,25 @@ async def payload(request: Request):
     return body
 
 
-router = APIRouter(dependencies=[Depends(owner)])
+def warm_indexes():
+    try:
+        return [deliverable_store(profile_id())]
+    except ValueError:  # an unverified custom home has no Files index to warm
+        return []
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    # The Files index converges in the background, bounded and bound to the dashboard.
+    warmer = DeliverablesWarmer(warm_indexes)
+    warmer.start()
+    try:
+        yield
+    finally:
+        warmer.stop()
+
+
+router = APIRouter(dependencies=[Depends(owner)], lifespan=lifespan)
 
 
 def photo_store():
@@ -193,6 +221,11 @@ def deliverable_content(profile: str, id: str, reveal: bool = False):
     return guarded(lambda: deliverable_store(profile).content(id, reveal))
 
 
+@router.get('/deliverables/versions')
+def deliverable_versions(profile: str, artifact_key: str):
+    return guarded(lambda: deliverable_store(profile).versions(artifact_key))
+
+
 @router.get('/workspaces')
 def file_workspaces(profile: str):
     return guarded(lambda: files.workspaces(profile))
@@ -277,3 +310,50 @@ def memory_read():
 @router.post('/memory/write')
 def memory_write(body: dict = Depends(payload)):
     return guarded(lambda: write_memory(body.get('section'), body.get('content')))
+
+
+# Hermex flight recorder: content-free app telemetry, owner-private on this box.
+def recorder_profile(body):
+    profile = profile_id()
+    if body.get('profile') != profile:
+        raise HTTPException(403, 'Profile not found')
+    return profile
+
+
+def recorded(fn):
+    try:
+        return fn()
+    except recorder.FlightRecorderConflict:
+        return JSONResponse({'error': 'Batch sequence reused with different content', 'code': 'seq_conflict'}, status_code=409)
+    except recorder.FlightRecorderFull:
+        return JSONResponse({'error': 'Flight recorder storage is full for today', 'code': 'storage_full'}, status_code=507)
+
+
+def flight_recorder_store():
+    return recorder.FlightRecorderStore(recorder.default_root())
+
+
+@router.post('/flight-recorder/batch')
+def flight_recorder_batch(body: dict = Depends(payload)):
+    def run():
+        profile = recorder_profile(body)
+        return recorded(lambda: flight_recorder_store().put_batch(profile, recorder.validate_batch(body)))
+    return guarded(run)
+
+
+@router.post('/flight-recorder/flag')
+def flight_recorder_flag(body: dict = Depends(payload)):
+    def run():
+        profile = recorder_profile(body)
+        return recorded(lambda: flight_recorder_store().put_flag(profile, recorder.validate_flag(body)))
+    return guarded(run)
+
+
+@router.post('/flight-recorder/delete')
+def flight_recorder_delete(body: dict = Depends(payload)):
+    def run():
+        recorder_profile(body)
+        if set(body) - {'profile', 'install_id'}:
+            raise recorder.FlightRecorderError('unknown key')
+        return flight_recorder_store().delete_install(recorder.canonical_uuid(body.get('install_id')))
+    return guarded(run)

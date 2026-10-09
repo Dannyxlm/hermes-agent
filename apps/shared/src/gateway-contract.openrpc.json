@@ -2077,6 +2077,42 @@
       }
     },
     {
+      "name": "mobile.inbox_push.register",
+      "summary": "Create or renew a lease for content-free background pushes when this profile's Inbox changes.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileInboxPushRegisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileInboxPushRegisterResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.inbox_push.unregister",
+      "summary": "Remove Inbox silent-push leases (one by subscription_id, or every one of this connection).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileUnregisterParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
       "name": "mobile.open",
       "summary": "",
       "params": [
@@ -2203,6 +2239,42 @@
       }
     },
     {
+      "name": "mobile.session_activity.start_token.register",
+      "summary": "Register or rotate this device's Live Activity push-to-start token (iOS 17.2+).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileActivityStartTokenParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileActivityStartTokenResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_activity.start_token.unregister",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileDeviceParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
       "name": "mobile.session_activity.unregister",
       "summary": "",
       "params": [
@@ -2217,6 +2289,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/MobileUnregisterResult"
+        }
+      }
+    },
+    {
+      "name": "mobile.session_push.policy",
+      "summary": "Read or set this device's alert policy: \"all\" listed chats (messaging, cron, Kanban and delegate sessions never alert) or \"opened\" (only chats with their own lease).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/MobileSessionPushPolicyParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MobileSessionPushPolicyResult"
         }
       }
     },
@@ -8500,6 +8590,11 @@
             "default": false,
             "title": "Server Requests",
             "type": "boolean"
+          },
+          "session_change_cursor": {
+            "default": false,
+            "title": "Session Change Cursor",
+            "type": "boolean"
           }
         },
         "title": "ClientCapabilitiesParams",
@@ -8519,6 +8614,11 @@
             "default": false,
             "title": "Declines Not Shown",
             "type": "boolean"
+          },
+          "session_change_cursor": {
+            "default": 0,
+            "title": "Session Change Cursor",
+            "type": "integer"
           }
         },
         "required": [
@@ -20210,6 +20310,53 @@
         "title": "MobileActivityRegisterParams",
         "type": "object"
       },
+      "MobileActivityStartTokenParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "start_token": {
+            "title": "Start Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "environment",
+          "start_token"
+        ],
+        "title": "MobileActivityStartTokenParams",
+        "type": "object"
+      },
+      "MobileActivityStartTokenResult": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "expires_at"
+        ],
+        "title": "MobileActivityStartTokenResult",
+        "type": "object"
+      },
       "MobileActivityUnregisterParams": {
         "additionalProperties": false,
         "properties": {
@@ -20661,6 +20808,25 @@
         "title": "MobileClarifyResult",
         "type": "object"
       },
+      "MobileDeviceParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id"
+        ],
+        "title": "MobileDeviceParams",
+        "type": "object"
+      },
       "MobileEmptyParams": {
         "additionalProperties": false,
         "properties": {},
@@ -20699,6 +20865,74 @@
           "before_row_id"
         ],
         "title": "MobileHistory",
+        "type": "object"
+      },
+      "MobileInboxPushRegisterParams": {
+        "additionalProperties": false,
+        "description": "Opt one installation/connection into content-free Inbox-changed silent pushes for a profile.",
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "environment": {
+            "enum": [
+              "production",
+              "sandbox"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "device_token": {
+            "title": "Device Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id",
+          "environment",
+          "profile",
+          "device_token"
+        ],
+        "title": "MobileInboxPushRegisterParams",
+        "type": "object"
+      },
+      "MobileInboxPushRegisterResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "scope_token": {
+            "title": "Scope Token",
+            "type": "string"
+          },
+          "min_interval_s": {
+            "title": "Min Interval S",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "expires_at",
+          "scope_token",
+          "min_interval_s"
+        ],
+        "title": "MobileInboxPushRegisterResult",
         "type": "object"
       },
       "MobileNotificationRun": {
@@ -21270,6 +21504,146 @@
         "title": "MobileSessionPresenceResult",
         "type": "object"
       },
+      "MobileSessionPushPolicyParams": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "all",
+                  "opened"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Policy"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "enum": [
+                  "production",
+                  "sandbox"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Environment"
+          },
+          "device_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Device Token"
+          },
+          "categories": {
+            "items": {
+              "enum": [
+                "attention",
+                "completion"
+              ],
+              "type": "string"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "preview_enabled": {
+            "default": false,
+            "title": "Preview Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id"
+        ],
+        "title": "MobileSessionPushPolicyParams",
+        "type": "object"
+      },
+      "MobileSessionPushPolicyResult": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "enum": [
+              "all",
+              "opened"
+            ],
+            "title": "Policy",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "categories": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "attention",
+                    "completion"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Categories"
+          },
+          "preview_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview Enabled"
+          }
+        },
+        "required": [
+          "policy",
+          "expires_at"
+        ],
+        "title": "MobileSessionPushPolicyResult",
+        "type": "object"
+      },
       "MobileSessionPushRegisterParams": {
         "additionalProperties": false,
         "properties": {
@@ -21560,6 +21934,17 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -29253,6 +29638,26 @@
         "title": "ProjectsUpdateParams",
         "type": "object"
       },
+      "PromptOrigin": {
+        "additionalProperties": false,
+        "description": "The phone that typed this prompt (KTD7): its push installation and connection UUIDs.\nHonoured only on an authenticated transport; a submission without it clears the chat's\nphone origin, so Desktop input never lights the phone's Live Activity.",
+        "properties": {
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "connection_id"
+        ],
+        "title": "PromptOrigin",
+        "type": "object"
+      },
       "PromptSubmitParams": {
         "additionalProperties": false,
         "description": "``text`` is normally a string; the relay / hosted paths may hand a structured (parts list)\npayload, and the busy path renders it. Truncation (rewind / edit / regenerate) needs explicit\nconsent: ``confirm_truncate`` plus one durable target (``truncate_before_row_id`` preferred,\n``truncate_before_message_id``, or the legacy ``truncate_before_user_ordinal``).",
@@ -29423,6 +29828,17 @@
             ],
             "default": null,
             "title": "Rebind Survivor Row Ids"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -34269,6 +34685,23 @@
             "default": false,
             "title": "Include Hidden",
             "type": "boolean"
+          },
+          "change_cursor": {
+            "default": false,
+            "title": "Change Cursor",
+            "type": "boolean"
+          },
+          "changed_since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Changed Since"
           }
         },
         "title": "SessionListParams",
@@ -34283,6 +34716,45 @@
             },
             "title": "Sessions",
             "type": "array"
+          },
+          "change_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Cursor"
+          },
+          "tombstones": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tombstones"
+          },
+          "repair": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Repair"
           }
         },
         "required": [
@@ -35974,6 +36446,80 @@
           "cwd"
         ],
         "title": "SessionWorkspaceMoveResult",
+        "type": "object"
+      },
+      "SessionsChangedPayload": {
+        "additionalProperties": true,
+        "description": "``{}`` for clients without the cursor capability (refetch the list). A client that sent\n``client.capabilities {session_change_cursor: true}`` instead gets one frame per changed scope:\n``changed`` / ``tombstoned`` are lineage-root hints (bounded; ``truncated`` when cut), and the\nauthoritative delta is a list read with ``changed_since=<cursor>``.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "changed": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Changed"
+          },
+          "tombstoned": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tombstoned"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Truncated"
+          }
+        },
+        "title": "SessionsChangedPayload",
         "type": "object"
       },
       "SetupReadyPayload": {
@@ -44471,12 +45017,12 @@
     },
     {
       "name": "sessions.changed",
-      "summary": "state.db moved; refetch the session list.",
+      "summary": "Session list changed. Cursor-aware clients get a per-scope cursor; others refetch.",
       "params": [
         {
           "name": "payload",
           "schema": {
-            "$ref": "#/components/schemas/ChangeSignalPayload"
+            "$ref": "#/components/schemas/SessionsChangedPayload"
           }
         }
       ]
