@@ -104,6 +104,61 @@ def _usage_cache_for(profile: Optional[str]):
         return cache
 
 
+# Aux counter -> the totals key it adds to. Aux calls never write the sessions
+# counters (record_auxiliary_usage), so totals/daily summed from sessions alone
+# leave out spend that by_model already shows, and the per-model rows add up to
+# more than the stated total (Hermex Usage G-4). Sessions are not counted: an aux
+# call happens inside a session the sessions query already counted.
+_AUX_TOTALS_KEYS = {
+    "input_tokens": "total_input",
+    "output_tokens": "total_output",
+    "cache_read_tokens": "total_cache_read",
+    "reasoning_tokens": "total_reasoning",
+    "estimated_cost": "total_estimated_cost",
+    "api_calls": "total_api_calls",
+}
+
+
+def _add_aux_to_totals(totals: Dict[str, Any], aux_rows: List[Dict[str, Any]]) -> None:
+    """Add aux usage onto a sessions-derived totals row, in place."""
+    for aux in aux_rows:
+        for key, total_key in _AUX_TOTALS_KEYS.items():
+            totals[total_key] = (totals.get(total_key) or 0) + (aux.get(key) or 0)
+
+
+def _aux_daily_rows(db, cutoff: float) -> List[Dict[str, Any]]:
+    """Aux usage per local calendar day of the owning session's start, the same
+    day key the sessions-derived ``daily`` rows use. [] on a pre-task-column DB."""
+    try:
+        return _rows(db, """
+            SELECT date(s.started_at, 'unixepoch', 'localtime') as day,
+                   SUM(u.input_tokens) as input_tokens,
+                   SUM(u.output_tokens) as output_tokens,
+                   SUM(u.cache_read_tokens) as cache_read_tokens,
+                   SUM(u.reasoning_tokens) as reasoning_tokens,
+                   COALESCE(SUM(u.estimated_cost_usd), 0) as estimated_cost,
+                   SUM(COALESCE(u.api_call_count, 0)) as api_calls
+            FROM session_model_usage u
+            JOIN sessions s ON s.id = u.session_id
+            WHERE s.started_at > ? AND u.task != ''
+            GROUP BY day
+        """, cutoff)
+    except sqlite3.OperationalError:
+        return []
+
+
+def _add_aux_to_daily(daily: List[Dict[str, Any]], aux_daily: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    index = {row.get("day"): row for row in daily}
+    for aux in aux_daily:
+        row = index.get(aux.get("day"))
+        if row is None:  # defensive: every aux row joins a session, so its day already exists
+            row = index[aux.get("day")] = {"day": aux.get("day"), "actual_cost": 0, "sessions": 0}
+            daily.append(row)
+        for key in _AUX_TOTALS_KEYS:
+            row[key] = (row.get(key) or 0) + (aux.get(key) or 0)
+    return sorted(daily, key=lambda r: r.get("day") or "")
+
+
 def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
     from agent.insights import InsightsEngine
 
@@ -154,6 +209,9 @@ def _get_usage_analytics(days: int = 30, profile: Optional[str] = None):
                    SUM(COALESCE(api_call_count, 0)) as total_api_calls
             FROM sessions WHERE started_at > ?
         """, cutoff)[0]
+        aux_daily = _aux_daily_rows(db, cutoff)
+        daily = _add_aux_to_daily(daily, aux_daily)
+        _add_aux_to_totals(totals, aux_daily)
         usage = InsightsEngine(db).get_usage_breakdown(days=days, cache=_usage_cache_for(profile))
 
         return {
@@ -395,7 +453,8 @@ def _get_models_analytics(days: int = 30, profile: Optional[str] = None):
         # the main card, and their session counts summed past
         # totals.total_sessions (#89631). Only a pair with no sessions-derived
         # row becomes a new row, carrying its own session count.
-        _merge_aux_into_rows(raw_rows, _aux_usage_rows(db, cutoff))
+        aux_rows = _aux_usage_rows(db, cutoff)
+        _merge_aux_into_rows(raw_rows, aux_rows)
 
         rows = _fold_session_only_rows(raw_rows)
         rows.sort(
@@ -424,6 +483,8 @@ def _get_models_analytics(days: int = 30, profile: Optional[str] = None):
                    SUM(COALESCE(api_call_count, 0)) as total_api_calls
             FROM sessions WHERE started_at > ? AND model IS NOT NULL AND model != ''
         """, cutoff)[0]
+        # The cards already carry aux usage; the header must add up to them (G-4).
+        _add_aux_to_totals(totals, aux_rows)
         # Counted over the same merged row set the cards come from, so a model
         # reached only through auxiliary usage is in the header as well as on
         # the page (#89631).
