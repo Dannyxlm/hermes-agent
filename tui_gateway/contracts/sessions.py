@@ -73,6 +73,56 @@ class LiveSessionStatus(WireEnum):
     resuming = "resuming"  # deferred hydration in flight
 
 
+class StreamTextPart(Result):
+    kind: Literal["text"]
+    text: str
+
+
+class StreamReasoningPart(Result):
+    kind: Literal["reasoning"]
+    text: str
+    complete: bool | None = None
+
+
+class StreamToolPart(Result):
+    kind: Literal["tool"]
+    tool_id: str
+    name: str
+    status: Literal["running", "complete"]
+    context: str | None = None
+    preview: str | None = None
+    args_text: str | None = None
+    labels: list[JsonValue] | None = None
+    duration_s: float | None = None
+    summary: str | None = None
+    error: bool | None = None
+    inline_diff: str | None = None
+    todos: list[JsonValue] | None = None
+
+
+class SessionStreamProjection(Result):
+    """Event-published turn only; rich parts are additive, bounded and publication ordered."""
+    parts: list[StreamTextPart | StreamReasoningPart | StreamToolPart] | None = None
+    thinking: str | None = None
+    parts_incomplete: bool | None = None
+    start_seq: int
+    segments: list[str]
+    assistant: str
+    status: str
+    start: dict[str, JsonValue]
+    terminal: dict[str, JsonValue] | None = None
+    reasoning: str | None = None
+    todo_state: dict[str, JsonValue] | None = None
+
+
+class SessionStreamSnapshotResult(Result):
+    session_id: str  # runtime ID attached to this connection
+    stored_session_id: str | None = None
+    epoch: str
+    baseline_seq: int
+    stream: SessionStreamProjection | None
+
+
 class LiveSessionSnapshot(Result):
     """Union of ``server._live_session_payload``, ``methods_session._resume_response`` and the
     live-unpersisted resume path; keys only some paths produce are optional."""
@@ -789,56 +839,6 @@ class TerminalResizeResult(Result):
 
 method("terminal.resize", params=TerminalResizeParams, result=TerminalResizeResult,
        doc="Record the client's column width for server-side rendering.")
-
-
-class StreamTextPart(Result):
-    kind: Literal["text"]
-    text: str
-
-
-class StreamReasoningPart(Result):
-    kind: Literal["reasoning"]
-    text: str
-    complete: bool | None = None
-
-
-class StreamToolPart(Result):
-    kind: Literal["tool"]
-    tool_id: str
-    name: str
-    status: Literal["running", "complete"]
-    context: str | None = None
-    preview: str | None = None
-    args_text: str | None = None
-    labels: list[JsonValue] | None = None
-    duration_s: float | None = None
-    summary: str | None = None
-    error: bool | None = None
-    inline_diff: str | None = None
-    todos: list[JsonValue] | None = None
-
-
-class SessionStreamProjection(Result):
-    """Event-published turn only; rich parts are additive, bounded and publication ordered."""
-    parts: list[StreamTextPart | StreamReasoningPart | StreamToolPart] | None = None
-    thinking: str | None = None
-    parts_incomplete: bool | None = None
-    start_seq: int
-    segments: list[str]
-    assistant: str
-    status: str
-    start: dict[str, JsonValue]
-    terminal: dict[str, JsonValue] | None = None
-    reasoning: str | None = None
-    todo_state: dict[str, JsonValue] | None = None
-
-
-class SessionStreamSnapshotResult(Result):
-    session_id: str  # runtime ID attached to this connection
-    stored_session_id: str | None = None
-    epoch: str
-    baseline_seq: int
-    stream: SessionStreamProjection | None
 
 
 class SessionStreamSnapshotParams(SessionParams):
