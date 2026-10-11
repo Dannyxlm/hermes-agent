@@ -493,7 +493,7 @@ def test_native_dashboard_discovery_mount_and_disable(client, monkeypatch):
     assert len(entries) == 1
     # Native importer/mount path, with server shell isolated (not a runtime boot).
     app = FastAPI()
-    monkeypatch.setitem(sys.modules, 'hermes_cli.web_server', SimpleNamespace(app=app, _get_dashboard_plugins=lambda: entries))
+    monkeypatch.setitem(sys.modules, 'hermes_cli.web_server', SimpleNamespace(app=app, _get_dashboard_plugins=lambda *, force_rescan=False: entries))
     monkeypatch.setitem(sys.modules, 'hermes_cli.plugins_cmd', SimpleNamespace(_get_enabled_set=lambda: set(), _get_disabled_set=lambda: set()))
     async def scope():
         yield
@@ -503,7 +503,7 @@ def test_native_dashboard_discovery_mount_and_disable(client, monkeypatch):
         assert mounted.get(P+'/memory').status_code == 401  # plugin auth, not 404
     # Explicit disable must prevent backend mounting even though it is bundled.
     disabled_app = FastAPI()
-    monkeypatch.setitem(sys.modules, 'hermes_cli.web_server', SimpleNamespace(app=disabled_app, _get_dashboard_plugins=lambda: entries))
+    monkeypatch.setitem(sys.modules, 'hermes_cli.web_server', SimpleNamespace(app=disabled_app, _get_dashboard_plugins=lambda *, force_rescan=False: entries))
     monkeypatch.setitem(sys.modules, 'hermes_cli.plugins_cmd', SimpleNamespace(_get_enabled_set=lambda: set(), _get_disabled_set=lambda: {'cloudseed_mobile'}))
     dashboard._mount_plugin_api_routes()
     with TestClient(disabled_app) as disabled:

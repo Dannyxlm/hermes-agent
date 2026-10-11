@@ -286,7 +286,7 @@ def _real_profile_snapshot_error(err: str) -> str:
 
 
 def _launch_real_profile_chrome(real_binary: str, copy_dir: str, *, scope_key: str = "",
-                                copy_root: str = "") -> Tuple[Optional[int], Optional[str]]:
+                                copy_root: str = "") -> tuple[Optional[int], Optional[str]]:
     """Launch the user's REAL browser binary on the profile COPY; return (debug_port, error).
 
     agent-browser's own launch force-adds --use-mock-keychain / --password-store=basic, which makes
@@ -328,7 +328,7 @@ def _launch_real_profile_chrome(real_binary: str, copy_dir: str, *, scope_key: s
 
 
 def _attach_agent_browser_to_real_profile(port: int, copy_dir: str,
-                                           session_name: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+                                           session_name: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     """Make agent-browser ATTACH to the running Chrome (never launch its own); returns ``(http_cdp, error)``.
 
     The daemon may answer with the endpoint of a browser IT spawned (throwaway temp profile);
