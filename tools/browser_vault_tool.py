@@ -334,11 +334,30 @@ _TAB_PROBES["otp"] = ("!!document.querySelector('input[autocomplete=one-time-cod
                       "input[id*=otp i], input[id*=code i], input[name*=totp i], input[aria-label*=code i]')")
 
 
+def _email_code(backend, handle: str, site: str) -> Optional[str]:
+    """The code from the site's email in the inbox that receives this login's identifier
+    (``vault.email_codes``), or None. Read server-side; the email never reaches the model."""
+    from agent import vault_email_codes
+
+    try:
+        meta = backend.get_meta(handle)
+    except Exception:
+        meta = None
+    if meta is None or not meta.identifier:
+        return None
+    try:
+        return vault_email_codes.wait_for_email_code(site, meta.identifier, site_label=meta.label or "")
+    except Exception as exc:
+        logger.info("vault enter_code: email source failed (%s)", type(exc).__name__)
+        return None
+
+
 def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) -> str:
     """Second factor: fill the one-time code the CURRENT page asks for. If the saved login (``handle``) has an
-    authenticator seed, the code is minted server-side and nobody is asked; otherwise the user is prompted on
-    their surface for the code their phone/email/app shows. The code goes into the page over the supervisor
-    socket and never enters the conversation."""
+    authenticator seed, the code is minted server-side and nobody is asked; else, when ``vault.email_codes``
+    maps the login's identifier to a readable inbox, the code is read server-side from the site's email; otherwise
+    the user is prompted on their surface for the code their phone/email/app shows. The code goes into the page
+    over the supervisor socket and never enters the conversation."""
     from agent.redact import register_vault_redaction_value
     from agent.vault_backends import backend_for_handle
     from agent.vault_backends.unlock import can_prompt_here, get_code_prompt_callback
@@ -372,12 +391,17 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
             code = None
         if code:
             source = backend.name
+    if not code and backend is not None:
+        code = _email_code(backend, handle, site)
+        if code:
+            source = "email"
     if not code:
         prompt = get_code_prompt_callback()
         if prompt is None or not can_prompt_here():
             return json.dumps({"success": False, "error_type": "prompt_unavailable",
-                               "error": (f"{site} asks for a one-time code and this session cannot ask the user (headless/cron/API). "
-                                         "Save an authenticator key for this login so codes can be generated automatically.")})
+                               "error": (f"{site} asks for a one-time code, no code arrived by email in an inbox Hermes can read, "
+                                         "and this session cannot ask the user (headless/cron/API). Save an authenticator key "
+                                         "for this login so codes can be generated automatically.")})
         code = (prompt(site, "") or "").strip().replace(" ", "").replace("-", "")
         if not code:
             return json.dumps({"success": False, "error_type": "code_declined",
@@ -687,15 +711,18 @@ BROWSER_VAULT_ENTER_CODE_SCHEMA = {
     "name": "browser_vault_enter_code",
     "description": (
         "The page asks for a one-time / verification / 2FA code after the password: call this. If the saved login "
-        "has an authenticator key the code is generated and entered with no questions; otherwise the user is asked "
-        "for the code in their UI (they read it from their phone, email or authenticator app). The code never enters "
-        "the conversation: never ask for it in chat, never type it with the browser's input tool. no_code_field means "
+        "has an authenticator key the code is generated and entered with no questions. When the site lets you choose "
+        "where the code goes, choose email and call this right after the site sends it: if the login's address is an "
+        "inbox Hermes can read, the code is taken from that email and entered (it waits up to about a minute; "
+        "source='email'). Otherwise the user is asked for the code in their UI. The code never enters "
+        "the conversation: never ask for it in chat, never read it from email yourself, never type it with the "
+        "browser's input tool. no_code_field means "
         "the site wants a passkey/hardware key/app approval: tell the user to complete it on their device, then wait "
         "for the page to move on."
     ),
     "parameters": {
         "type": "object",
-        "properties": {"handle": {"type": "string", "description": "The login handle you just filled (lets Hermes generate the code when an authenticator key is saved)."}},
+        "properties": {"handle": {"type": "string", "description": "The login handle you just filled (lets Hermes generate the code when an authenticator key is saved, or read it from that login's email inbox)."}},
         "required": [],
     },
 }

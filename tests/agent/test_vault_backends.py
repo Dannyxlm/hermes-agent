@@ -292,3 +292,17 @@ def test_onepassword_backend_env_forwards_config_directory(monkeypatch):
     backend = OnePasswordLoginBackend({"enabled": True})
 
     assert backend._env(None)["OP_CONFIG_DIR"] == "/tmp/op-config"
+
+
+def test_onepassword_read_reference_resolves_one_op_uri_through_the_backends_auth():
+    """Email-code inboxes keep their IMAP app password in 1Password: one `op read -- <ref>` through the
+    same service-account / session plumbing as logins; only op:// references are accepted."""
+    from agent.vault_backends.onepassword import OnePasswordLoginBackend
+
+    backend = OnePasswordLoginBackend({"enabled": True})
+    calls = []
+    with patch.object(backend, "_run", side_effect=lambda *a: calls.append(a) or "app-pw\n"):
+        assert backend.read_reference("op://vlt/itm/credential") == "app-pw"
+        with pytest.raises(ValueError):
+            backend.read_reference("--account=evil")
+    assert calls == [("read", "--", "op://vlt/itm/credential")]

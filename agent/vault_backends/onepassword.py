@@ -115,6 +115,12 @@ class OnePasswordLoginBackend(LoginBackend):
             raise RuntimeError(f"op failed: {err[:200]}")
         return proc.stdout or ""
 
+    def read_reference(self, reference: str) -> str:
+        """One ``op://vault/item/field`` value (an email-code inbox's app password), resolved in process."""
+        if not reference.startswith("op://"):
+            raise ValueError("only op:// references can be read")
+        return self._run("read", "--", reference).rstrip("\r\n")
+
     def _item_get(self, handle: str, *args: str) -> str:
         """``op item get`` scoped to the item's vault: service accounts refuse it without a vault query."""
         item_id = handle[len(self.prefix):]
