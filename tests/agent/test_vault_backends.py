@@ -223,6 +223,67 @@ def test_onepassword_multi_url_item_binds_every_saved_web_origin():
     assert _web_origins(["androidapp://com.x"]) == ("androidapp://com.x",)
 
 
+def test_onepassword_reads_are_scoped_to_the_items_vault():
+    """Service accounts refuse `op item get` without a vault query: every read passes the vault id
+    remembered from the listing (looked up on demand when the handle was never listed)."""
+    from agent.vault_backends.onepassword import OnePasswordLoginBackend
+
+    backend = OnePasswordLoginBackend({"enabled": True})
+    listing = json.dumps([{"id": "itm", "title": "Shop", "category": "LOGIN", "vault": {"id": "vlt"},
+                           "urls": [{"href": "https://shop.example.com"}]}])
+    calls = []
+
+    def fake_run(*args):
+        calls.append(args)
+        return listing if args[:2] == ("item", "list") else "pw\n"
+
+    with patch.object(OnePasswordLoginBackend, "is_unlocked", return_value=True), \
+         patch.object(backend, "_run", side_effect=fake_run):
+        assert backend.resolve_password("op:itm") == "pw"
+    assert calls[0][:2] == ("item", "list")  # cold handle → listing first
+    assert calls[1][:5] == ("item", "get", "itm", "--vault", "vlt")
+    assert calls[0][3] == "Login"  # cards stay out unless opted in
+
+
+def test_onepassword_cards_are_opt_in_unbound_payment_items():
+    """With payment_cards on, Credit Card items list as unbound payment handles and resolve to the
+    canonical card payload (1Password's YYYYMM expiry → MM + YYYY)."""
+    from agent.vault_backends.onepassword import OnePasswordLoginBackend, card_payload, parse_expiry
+
+    listing = json.dumps([{"id": "crd", "title": "Expense Card", "category": "CREDIT_CARD", "vault": {"id": "vlt"},
+                           "additional_information": "4111 **** 1111"}])
+    card = json.dumps({"category": "CREDIT_CARD", "fields": [
+        {"id": "cardholder", "value": "A User"}, {"id": "ccnum", "value": "4111 1111 1111 1111"},
+        {"id": "cvv", "value": "123"}, {"id": "expiry", "value": "202907"}, {"id": "pin", "value": ""}]})
+
+    off = OnePasswordLoginBackend({"enabled": True})
+    with patch.object(OnePasswordLoginBackend, "is_unlocked", return_value=True), \
+         patch.object(off, "_run", return_value=listing):
+        assert off.list_items() == []
+
+    on = OnePasswordLoginBackend({"enabled": True, "payment_cards": True})
+    calls = []
+
+    def fake_run(*args):
+        calls.append(args)
+        return listing if args[:2] == ("item", "list") else card
+
+    with patch.object(OnePasswordLoginBackend, "is_unlocked", return_value=True), \
+         patch.object(on, "_run", side_effect=fake_run):
+        [meta] = on.list_items()
+        secret = on.resolve_secret("op:crd")
+    assert calls[0][3] == "Login,Credit Card"
+    assert (meta.kind, meta.origin, meta.any_origin, meta.identifier) == ("payment", None, True, None)
+    assert secret == {"cardholder_name": "A User", "card_number": "4111111111111111", "cvc": "123",
+                      "exp_month": "07", "exp_year": "2029"}
+    assert calls[-1][:5] == ("item", "get", "crd", "--vault", "vlt")
+    assert parse_expiry("7/29") == ("07", "2029") and parse_expiry("12/2030") == ("12", "2030")
+    assert parse_expiry("202913") is None and parse_expiry("soon") is None
+    with pytest.raises(RuntimeError) as exc:
+        card_payload([{"id": "ccnum", "value": "4111111111111111"}])
+    assert "4111" not in str(exc.value) and "cvc" in str(exc.value)
+
+
 def test_onepassword_backend_env_forwards_config_directory(monkeypatch):
     """Vault reads use the same explicit 1Password CLI config location."""
     from agent.vault_backends.onepassword import OnePasswordLoginBackend

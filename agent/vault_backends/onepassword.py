@@ -1,10 +1,18 @@
-"""1Password Login items as a vault backend (``op`` CLI).
+"""1Password Login (and, opt-in, Credit Card) items as a vault backend (``op`` CLI).
 
 Unlock: ``op signin --raw`` with the master password on stdin (desktop-app
 integration or account-level auth) mints an ``OP_SESSION_<account>`` token.
 A configured service-account token skips the prompt entirely (headless).
 List: ``op item list --categories Login --format json`` → title, urls,
-username. Resolve: ``op item get <id> --fields label=password --reveal``.
+username. Resolve: ``op item get <id> --vault <vault> --fields label=password --reveal``.
+
+Service accounts refuse ``op item get`` without a vault query, so the vault id
+seen at list time is remembered per item and passed on every read.
+
+With ``vault.onepassword.payment_cards: true`` Credit Card items are listed as
+``payment`` handles. 1Password cards carry no website, so they are unbound
+(``any_origin``): the fill tool binds each fill to the current https page only
+after the user approves that exact site.
 """
 
 from __future__ import annotations
@@ -12,9 +20,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 from agent.secret_sources.base import run_cli
 from agent.secret_sources.onepassword import _OP_ENV_ALLOWLIST, _scrub, find_op
@@ -25,6 +34,9 @@ from agent.vault_store import VaultItemMeta, normalize_origin
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 30.0
+
+# 1Password built-in Credit Card field ids → canonical PAYMENT_FIELDS names.
+_CARD_FIELD_IDS = {"ccnum": "card_number", "cvv": "cvc", "cardholder": "cardholder_name"}
 
 
 class OnePasswordLoginBackend(LoginBackend):
@@ -38,6 +50,12 @@ class OnePasswordLoginBackend(LoginBackend):
         from agent.secret_scope import get_secret
         env_name = str(self.cfg.get("service_account_token_env") or "OP_SERVICE_ACCOUNT_TOKEN")
         self._service_token = get_secret(env_name, "") or ""
+        self._vaults: dict[str, str] = {}  # item id → vault id, filled by list_items
+
+    @property
+    def payment_cards(self) -> bool:
+        """Opt-in: list Credit Card items as unbound payment handles (vault.onepassword.payment_cards)."""
+        return self.cfg.get("payment_cards") is True
 
     # ── auth ────────────────────────────────────────────────────────────────
 
@@ -97,20 +115,39 @@ class OnePasswordLoginBackend(LoginBackend):
             raise RuntimeError(f"op failed: {err[:200]}")
         return proc.stdout or ""
 
+    def _item_get(self, handle: str, *args: str) -> str:
+        """``op item get`` scoped to the item's vault: service accounts refuse it without a vault query."""
+        item_id = handle[len(self.prefix):]
+        if item_id not in self._vaults:
+            self.list_items()
+        vault = self._vaults.get(item_id)
+        return self._run("item", "get", item_id, *(("--vault", vault) if vault else ()), *args)
+
     # ── backend contract ───────────────────────────────────────────────────
     def list_items(self) -> list[VaultItemMeta]:
         if not self.is_unlocked():
             return []
-        raw = json.loads(self._run("item", "list", "--categories", "Login", "--format", "json") or "[]")
+        categories = "Login,Credit Card" if self.payment_cards else "Login"
+        raw = json.loads(self._run("item", "list", "--categories", categories, "--format", "json") or "[]")
         out: list[VaultItemMeta] = []
         for item in raw if isinstance(raw, list) else []:
+            item_id = str(item.get("id") or "")
+            vault = item.get("vault")
+            if isinstance(vault, dict) and vault.get("id"):
+                self._vaults[item_id] = str(vault["id"])
+            if str(item.get("category") or "").upper() == "CREDIT_CARD":
+                if self.payment_cards:
+                    out.append(VaultItemMeta(
+                        id=f"{self.prefix}{item_id}", kind="payment", label=str(item.get("title") or "Card"),
+                        origin=None, created_at=str(item.get("created_at") or ""), any_origin=True))
+                continue
             urls = [str(u["href"]) for u in item.get("urls") or [] if isinstance(u, dict) and u.get("href")]
             origins = _all_origins(urls)
             if not origins:
                 continue
             username = str(item.get("additional_information") or "").strip() or None
             out.append(VaultItemMeta(
-                id=f"{self.prefix}{item.get('id')}", kind="login", label=str(item.get("title") or origins[0]),
+                id=f"{self.prefix}{item_id}", kind="login", label=str(item.get("title") or origins[0]),
                 origin=origins[0], created_at=str(item.get("created_at") or ""),
                 identifier_type="username" if username else None, identifier=username,
                 allowed_origins=_web_origins(origins)))
@@ -120,16 +157,59 @@ class OnePasswordLoginBackend(LoginBackend):
         return next((m for m in self.list_items() if m.id == handle), None)
 
     def resolve_password(self, handle: str) -> str:
-        item_id = handle[len(self.prefix):]
-        return self._run("item", "get", item_id, "--fields", "label=password", "--reveal").rstrip("\r\n")
+        return self._item_get(handle, "--fields", "label=password", "--reveal").rstrip("\r\n")
 
     def resolve_otp(self, handle: str) -> Optional[str]:
         # `--otp` mints the current TOTP from the item's one-time-password field; items without one error out.
         try:
-            code = self._run("item", "get", handle[len(self.prefix):], "--otp").strip()
+            code = self._item_get(handle, "--otp").strip()
         except Exception:
             return None
         return code if code.isdigit() else None
+
+    def resolve_secret(self, handle: str) -> dict[str, str]:
+        """Card payload for a Credit Card item (server-side only); the password shape otherwise."""
+        if not self.payment_cards:
+            return super().resolve_secret(handle)
+        item = json.loads(self._item_get(handle, "--format", "json", "--reveal") or "{}")
+        if str(item.get("category") or "").upper() != "CREDIT_CARD":
+            return super().resolve_secret(handle)
+        return card_payload(item.get("fields") or [])
+
+
+def card_payload(fields: list) -> dict[str, str]:
+    """Map 1Password Credit Card fields to PAYMENT_FIELDS names. Raises with a value-free message
+    when a required field is missing or the expiry cannot be parsed."""
+    out: dict[str, str] = {}
+    for f in fields:
+        if not isinstance(f, dict):
+            continue
+        fid, value = str(f.get("id") or ""), str(f.get("value") or "").strip()
+        if not value:
+            continue
+        if fid in _CARD_FIELD_IDS:
+            out[_CARD_FIELD_IDS[fid]] = re.sub(r"[\s-]", "", value) if fid == "ccnum" else value
+        elif fid == "expiry" and (parsed := parse_expiry(value)):
+            out["exp_month"], out["exp_year"] = parsed
+    missing = [k for k in ("card_number", "exp_month", "exp_year", "cvc") if k not in out]
+    if missing:
+        raise RuntimeError(f"1Password card item is missing {', '.join(missing)}")
+    return out
+
+
+def parse_expiry(value: str) -> Optional[tuple[str, str]]:
+    """1Password MONTH_YEAR values: ``YYYYMM`` (CLI JSON), also ``MM/YYYY`` / ``MM/YY``. → (MM, YYYY)."""
+    v = value.strip()
+    if re.fullmatch(r"\d{6}", v):
+        year, month = v[:4], v[4:]
+    elif m := re.fullmatch(r"(\d{1,2})\s*/\s*(\d{2}|\d{4})", v):
+        month, year = m.group(1), m.group(2)
+        year = f"20{year}" if len(year) == 2 else year
+    else:
+        return None
+    if not 1 <= int(month) <= 12:
+        return None
+    return f"{int(month):02d}", year
 
 
 def _web_origins(origins: list[str]) -> tuple:
