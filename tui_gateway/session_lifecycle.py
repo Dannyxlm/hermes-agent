@@ -590,6 +590,7 @@ def _teardown_popped_session(session: dict | None, *, end_reason: str = "tui_clo
 # lease_id -> REAL lease of a closed session whose isolated child turn has not settled yet. Still live
 # authority for the orphan sweep (``_own_live_lease_ids``); released by ``_release_deferred_active_session_lease``.
 _deferred_active_session_leases: dict[str, Any] = {}
+_deferred_compute_host_turns: dict[str, tuple[Any, str]] = {}
 
 
 def _settle_isolated_turn_before_close(session: dict) -> None:
@@ -600,6 +601,7 @@ def _settle_isolated_turn_before_close(session: dict) -> None:
     grace timer, else a second backend acquires the stored session while the child is still writing."""
     if not session.get("_compute_host_turn_id") or not _session_uses_compute_host(session):
         return
+    supervisor = _get_compute_host_supervisor()
     with contextlib.suppress(Exception):
         _interrupt_session_turn(_lifecycle_own_sid(session), session)
     deadline = time.monotonic() + _TURN_SETTLE_BEFORE_CLOSE_SECONDS
@@ -611,6 +613,7 @@ def _settle_isolated_turn_before_close(session: dict) -> None:
         session["_deferred_active_session_lease"] = lease
         _deferred_active_session_leases[str(lease.lease_id)] = lease
         _deferred_active_session_lease_ages[str(lease.lease_id)] = time.time()
+        _deferred_compute_host_turns[str(lease.lease_id)] = (supervisor, session["_compute_host_turn_id"])
     logger.warning("isolated turn still live after %.1fs close grace; holding lease for %s until the child settles",
                    _TURN_SETTLE_BEFORE_CLOSE_SECONDS, session.get("session_key"))
 
@@ -621,14 +624,14 @@ def _settle_isolated_turn_before_close(session: dict) -> None:
 # a dropped completion — the lease sits in the registry FOREVER: _own_live_lease_ids
 # vouches for it, so the orphan sweep never reclaims it, and the concurrency cap treats
 # the dead session as active (#62823 zombie slot). A deferred lease past this generous
-# ceiling (the longest legitimate isolated turn is the compression ceiling, minutes) is
-# force-released by the reaper tick instead of leaking the slot until process exit.
+# ceiling is reconciled against the owning supervisor. A live child must stop before
+# its lease can be released; elapsed time alone does not establish writer death.
 _DEFERRED_ACTIVE_SESSION_LEASE_TTL_SECONDS = 1800.0
 _deferred_active_session_lease_ages: dict[str, float] = {}
 
 
 def _reap_stale_deferred_leases(now: float | None = None) -> int:
-    """Force-release deferred leases whose settlement callback never arrived. Returns the count."""
+    """Reconcile stale isolated writers, then release proven settled leases."""
     now = time.time() if now is None else now
     stale = [
         lease_id for lease_id, deferred_at in list(_deferred_active_session_lease_ages.items())
@@ -636,6 +639,14 @@ def _reap_stale_deferred_leases(now: float | None = None) -> int:
     ]
     reaped = 0
     for lease_id in stale:
+        if owned := _deferred_compute_host_turns.get(lease_id):
+            reconcile = getattr(owned[0], "reconcile_turn", None)
+            if not callable(reconcile) or not reconcile(owned[1]):
+                continue
+            _deferred_compute_host_turns.pop(lease_id, None)
+            if lease_id not in _deferred_active_session_leases:
+                reaped += 1  # The authoritative callback released it during reconciliation.
+                continue
         _deferred_active_session_lease_ages.pop(lease_id, None)
         lease = _deferred_active_session_leases.pop(lease_id, None)
         if lease is None:
@@ -658,6 +669,7 @@ def _release_deferred_active_session_lease(session: dict) -> None:
         return
     _deferred_active_session_leases.pop(str(lease.lease_id), None)
     _deferred_active_session_lease_ages.pop(str(lease.lease_id), None)
+    _deferred_compute_host_turns.pop(str(lease.lease_id), None)
     if (err := _lease_retry(3, lease.release)) is not None:
         logger.warning("Failed to release deferred active session slot", exc_info=err)
 
@@ -701,18 +713,25 @@ def _interrupt_session_turn(
     compressing = bool(session.get("_manual_compress_active"))
     should_interrupt = bool(session.get("running")) and not compressing
     run_thread_alive = False
-    if use_compute_host:
-        # The host owns the live turn (parent `running` can lag a blocked tool), so let it decide. Gate on
-        # `_compute_host_active`: HostSupervisor.interrupt() calls start(), so a lazy session would spawn a child to interrupt.
-        if should_interrupt or session.get("_compute_host_active"):
-            _get_compute_host_supervisor().interrupt(sid, request_id=request_id)
-    else:
+    if not use_compute_host:
         run_thread_alive = (rt := session.get("_run_thread")) is not None and rt.is_alive()
     with session["history_lock"]:
         session["_turn_cancel_requested"] = True
+        cancelled = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
         session["queued_prompt"] = None
         session.pop("queued_prompts", None)
         session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
+    for envelope in cancelled:
+        if selection := envelope.get("_attachment_queue"):
+            for operation_id in selection["ids"]:
+                try:
+                    selection["store"].reconcile_queue(operation_id, set(), sid, cancelled_id=selection["id"])
+                except (ValueError, OSError):
+                    logger.warning("cancelled attachment queue requires receipt reconciliation", exc_info=True)
+    if use_compute_host and (should_interrupt or session.get("_compute_host_active")):
+        # Queue cancellation must survive a failed control write. A lazy idle
+        # session has no child to interrupt and must not spawn one for Stop.
+        _get_compute_host_supervisor().interrupt(sid, request_id=request_id)
     if should_interrupt:
         # Sibling of gateway/run_agent_cache.py::_interrupt_and_clear_session: a user-initiated stop of a
         # live TUI/desktop turn is the same "loop is gone" event for plugins holding per-turn external

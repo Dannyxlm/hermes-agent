@@ -174,7 +174,7 @@ def _admit_prompt_turn(
     return images, agent
 
 
-def _record_turn_marker(session: dict, text: Any, *, auto_continue: bool = True,
+def _record_turn_marker(session: dict, text: Any, *, auto_continue: bool = True, strict: bool = False,
                         notification_category: str | None = None) -> str:
     """Write the durable crash marker; returns the session key it was written under (compression
     can rotate session_key mid-turn).  A surviving marker means the process died mid-turn.
@@ -184,11 +184,15 @@ def _record_turn_marker(session: dict, text: Any, *, auto_continue: bool = True,
     marker_key = str(session.get("session_key") or "")
     marker_attempt = int(session.pop("_auto_continue_attempt", 0) or 0)
     marker_text = session.pop("_auto_continue_prompt", None) or text
+    if strict:
+        if not marker_key:
+            raise ValueError("attachment operation requires a durable turn marker identity")
+        marker_text = _coerce_message_text(marker_text).strip() or "[Attachment operation turn]"
     if isinstance(marker_text, str) and marker_text.strip():
         with session["history_lock"]:
             session["_active_turn_marker_key"] = marker_key
         record_turn_start(marker_home, marker_key, marker_text, attempts=marker_attempt,
-                          auto_continue=auto_continue,
+                          auto_continue=auto_continue, **({"strict": True} if strict else {}),
                           **({"notification_category": "diagnostic"}
                              if notification_category == "diagnostic" else {}))
         with session["history_lock"]:
@@ -1122,6 +1126,7 @@ def _run_prompt_submit(
     rid, sid: str, session: dict, text: Any, *, display_kind: str | None = None,
     display_metadata: dict | None = None, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
+    auto_continue: bool = True,
     terminal_callback: Callable[[dict[str, Any]], None] | None = None,
     turn_author: dict | None = None) -> bool:
     # Every dispatch binds the session's own row (session_key, real source) before the turn writes:
@@ -1169,10 +1174,12 @@ def _run_prompt_submit(
         st = _TurnRun(
             session["agent"], session.pop("one_turn_model_restore", None), terminal_callback,
             receipt_committed=terminal_callback is None)
-        st.marker_key = _record_turn_marker(session, text, auto_continue=terminal_callback is None,
-            notification_category=(display_metadata or {}).get("notification_category"))
         goal_followup = None
         try:
+            st.marker_key = _record_turn_marker(
+                session, text, auto_continue=auto_continue and terminal_callback is None,
+                strict=not auto_continue and terminal_callback is None,
+                notification_category=(display_metadata or {}).get("notification_category"))
             prepared = _prepare_turn_input(sid, session, st, text, images)
             if prepared is None:
                 if st.terminal_callback is not None and not st.receipt_attempted:

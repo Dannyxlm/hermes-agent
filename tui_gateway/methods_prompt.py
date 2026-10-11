@@ -604,7 +604,8 @@ def _persist_session_row_for_submit(rid, session, text=None, display_kind=None):
 
 
 def _run_after_agent_ready(
-    rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author=None
+    rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author=None,
+    image_paths=None, auto_continue=True,
 ):
     """Turn thread body: patient wait for a deferred build (a slow build must not eat the
     accepted in-flight message), then run."""
@@ -635,7 +636,8 @@ def _run_after_agent_ready(
             return
     _run_prompt_submit(
         rid, sid, session, text, display_kind=display_kind, display_metadata=display_metadata,
-        terminal_callback=hosted_terminal_callback, turn_author=turn_author)
+        terminal_callback=hosted_terminal_callback, turn_author=turn_author, image_paths=image_paths,
+        auto_continue=auto_continue)
 
 
 _TRUNCATION_PARAMS = (
@@ -680,6 +682,177 @@ _CLIENT_SURFACES = frozenset({"hud", "voice-live"})
 
 @method("prompt.submit")
 def _(rid, params: dict) -> dict:
+    if params.get("image_paths") is None and params.get("attachment_operation_ids") is None:
+        return _submit_prompt(rid, params)
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    try:
+        store = _attachment_operation_store(session, params)
+        raw_paths = [] if params.get("image_paths") is None else params["image_paths"]
+        operation_ids = [] if params.get("attachment_operation_ids") is None else params["attachment_operation_ids"]
+        if (not isinstance(raw_paths, list) or not all(isinstance(p, str) for p in raw_paths)
+                or not isinstance(operation_ids, list) or not all(isinstance(o, str) for o in operation_ids)):
+            raise ValueError("image_paths and attachment_operation_ids must be string arrays")
+        for operation_id in operation_ids:
+            _reconcile_attachment_queue(session, params, store, operation_id)
+        try:
+            with store.selection(operation_ids) as receipts:
+                response = _submit_selected_attachments(rid, params, session, store, receipts, raw_paths)
+        finally:
+            _release_attachment_queue_admission(rid, params, session, store, operation_ids)
+        return response
+    except (ValueError, OSError) as exc:
+        return _attachment_operation_error(rid, exc)
+
+
+def _submit_selected_attachments(rid, params, session, store, receipts, raw_paths):
+    with session["history_lock"]:
+        queued = session.get("attached_images", [])
+        if any(path not in queued for path in raw_paths):
+            raise ValueError("image_paths may select only this session's queued images")
+        remaining = list(queued)
+        for path in raw_paths:
+            remaining.remove(path)
+        claimed = list(raw_paths)
+        session["attached_images"] = remaining
+    images = list(dict.fromkeys([*raw_paths, *(path for r in receipts for path in r["image_paths"])]))
+    admission = {"dispatch_started": False}
+    try:
+        response = _submit_prompt(rid, params, image_paths=images, operations=store, receipts=receipts,
+                                  expected_session=session, attachment_admission=admission)
+        if admission["dispatch_started"] and "result" in response and response["result"].get("status"):
+            store.accepted(receipts, response["result"])
+        return response
+    finally:
+        if claimed and not admission["dispatch_started"]:
+            with session["history_lock"]:
+                session["attached_images"] = claimed + list(session.get("attached_images", []))
+
+
+def _rebind_submit_transport(rid, sid, session, params):
+    # Re-bind to the current transport: streaming must stay on the active websocket even
+    # if a disconnect/fallback moved the session to stdio. Through _rebind_live_transport so a
+    # socket that already closed cannot cancel the orphan reap without coming back (#116464).
+    with _session_resume_lock:
+        if params.get("_mobile_expected_record") is not None:
+            try:
+                mobile_session = _mobile_scope(params["_mobile_scope_params"])[3]
+                if mobile_session is not session or params["_mobile_expected_record"] is not session:
+                    raise ValueError("runtime changed")
+            except (ValueError, FileNotFoundError, KeyError):
+                return None, _err(rid, 4400, "mobile runtime changed; reopen canonical Bot Chat")
+        if (refusal := _reattach_refusal(rid, sid, session)) is not None:
+            return None, refusal
+        if (t := current_transport()) is not None:
+            _rebind_live_transport(sid, session, t)
+    return t, None
+
+
+def _submit_busy_prompt(
+    rid, sid, session, params, text, transport, display_kind, turn_author,
+    internal_hosted_submit, has_truncation, image_paths, operations, receipts, attachment_admission,
+):
+    # Claim the turn against a possibly-running session (busy/queued reply, else fall
+    # through once ``running`` is observed False).  The provider interrupt happens after
+    # history_lock is released (a non-interruptible tool may hold it); if the old turn
+    # finished between the two acquisitions, retry the claim rather than strand this
+    # prompt in a queue whose drain already ran.
+    while True:
+        with session["history_lock"]:
+            if not session.get("running"):
+                return None
+            if internal_hosted_submit:
+                return _err(rid, 4091, "hosted room member session is busy")
+            busy_transport = transport or session.get("transport")
+        if has_truncation:
+            # A rewind/edit/restore/regenerate must land as a truncation, never as a
+            # steered correction or a plain follow-up queued to run after the live
+            # turn — either would silently drop the history cut the user asked for.
+            # Signal busy so the caller's own interrupt-then-retry loop (already
+            # built for exactly this race — see desktop's `runRewindSubmit`) waits
+            # for `running` to clear and resubmits with the truncation intact.
+            return _err(rid, 4009, "session busy")
+        try:
+            if operations is not None:
+                operations.dispatch(receipts)
+        except OSError as exc:
+            return _attachment_operation_error(rid, exc)
+        if attachment_admission is not None:
+            attachment_admission["dispatch_started"] = True
+        busy_response = _handle_busy_submit(
+            rid, sid, session, text, busy_transport, queued=bool(params.get("queued")), turn_author=turn_author,
+            display_kind=display_kind, image_paths=image_paths, auto_continue=not bool(receipts),
+            **({"attachment_queue": {"store": operations, "ids": [r["operation_id"] for r in receipts],
+                                     "id": uuid.uuid4().hex, "sid": sid, "accepting": True}} if receipts else {}))
+        if busy_response is not None:
+            if "result" in busy_response:
+                # KTD7: queued input keeps its origin; steered/redirected input joins the running turn.
+                _mobile_push_note_submission(session, params, busy_response["result"].get("status"))
+            return busy_response
+        if attachment_admission is not None:
+            attachment_admission["dispatch_started"] = False
+        if operations is not None:
+            try:
+                operations.restore_staged(receipts)
+            except OSError as exc:
+                return _attachment_operation_error(rid, exc)
+
+
+def _dispatch_submit_isolated(
+    rid, sid, session, params, text, display_kind, display_metadata, image_paths,
+    turn_author, survivor_fields, auto_continue=True,
+):
+    if turn_author:
+        logger.debug("isolated compute turns carry no author yet; the turn from %s runs unattributed",
+                     turn_author.get("id"))
+    # The isolated dispatch returns BELOW before the inline persist, so the reopen
+    # cannot live only in _persist_session_row_for_submit: the turn is already
+    # admitted here (running, in flight, active-slot lease claimed, truncation
+    # applied inline), and the child's transcript writes must land in a live row
+    # (#85303 review: the early return made _reopen_if_finalized unreachable on
+    # this path). Best-effort like the helper: a failed read never blocks the send.
+    try:
+        with _session_db(session) as db:
+            if db is not None:
+                _reopen_if_finalized(db, str(session.get("session_key") or ""))
+    except Exception:
+        logger.debug("finalized-session reopen before isolated dispatch failed for %s",
+                     sid, exc_info=True)
+    _mobile_push_note_submission(session, params)
+    isolated_response = _submit_prompt_to_compute_host(
+        rid, sid, session, text, display_kind=display_kind, display_metadata=display_metadata,
+        image_paths=image_paths, auto_continue=auto_continue)
+    if not isolated_response.get("error"):
+        # The truncation already happened inline above (memory + DB).
+        isolated_response["result"].update(survivor_fields)
+        return isolated_response
+    if not auto_continue or isolated_response["error"].get("data", {}).get("delivery_uncertain"):
+        # A pipe write/flush failure does not prove the child refused the turn.
+        # Operation receipts own reconciliation; inline fallback could run it twice.
+        return isolated_response
+    logger.warning(
+        "compute-host dispatch failed for session %s; falling back inline: %s", sid,
+        isolated_response["error"].get("message", "unknown error"))
+    return None
+
+
+def _fence_submit_attachments(rid, session, operations, receipts):
+    if operations is None:
+        return None
+    try:
+        operations.dispatch(receipts)
+    except OSError as exc:
+        with session["history_lock"]:
+            session["running"] = False
+            _clear_inflight_turn(session)
+            _release_active_session_slot(session)
+        return _attachment_operation_error(rid, exc)
+    return None
+
+
+def _submit_prompt(rid, params: dict, image_paths=None, operations=None, receipts=(), expected_session=None,
+                   attachment_admission=None) -> dict:
     from hermes_cli.input_sanitize import sanitize_user_prompt_text
     sid = params.get("session_id", "")
     raw_text = params.get("text", "")
@@ -703,6 +876,8 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    if expected_session is not None and session is not expected_session:
+        return _err(rid, 4001, "attachment operation session changed; reopen the conversation")
     from tools.bot_relay import DeliveryAuthor
 
     # Only the relay handler can build a DeliveryAuthor. A dict here is a client claiming a sender.
@@ -739,49 +914,14 @@ def _(rid, params: dict) -> dict:
     turn_isolation = _session_uses_compute_host(session, _load_dashboard_process_isolation_config())
     if internal_hosted_submit and turn_isolation:
         return _err(rid, 4121, "hosted room turns do not support isolated compute workers yet")
-    # Re-bind to the current transport: streaming must stay on the active websocket even
-    # if a disconnect/fallback moved the session to stdio. Through _rebind_live_transport so a
-    # socket that already closed cannot cancel the orphan reap without coming back (#116464).
-    with _session_resume_lock:
-        if params.get("_mobile_expected_record") is not None:
-            try:
-                mobile_session = _mobile_scope(params["_mobile_scope_params"])[3]
-                if mobile_session is not session or params["_mobile_expected_record"] is not session:
-                    raise ValueError("runtime changed")
-            except (ValueError, FileNotFoundError, KeyError):
-                return _err(rid, 4400, "mobile runtime changed; reopen canonical Bot Chat")
-        if (refusal := _reattach_refusal(rid, sid, session)) is not None:
-            return refusal
-        if (t := current_transport()) is not None:
-            _rebind_live_transport(sid, session, t)
-    # Claim the turn against a possibly-running session (busy/queued reply, else fall
-    # through once ``running`` is observed False).  The provider interrupt happens after
-    # history_lock is released (a non-interruptible tool may hold it); if the old turn
-    # finished between the two acquisitions, retry the claim rather than strand this
-    # prompt in a queue whose drain already ran.
-    while True:
-        with session["history_lock"]:
-            if not session.get("running"):
-                break
-            if internal_hosted_submit:
-                return _err(rid, 4091, "hosted room member session is busy")
-            busy_transport = t or session.get("transport")
-        if has_truncation:
-            # A rewind/edit/restore/regenerate must land as a truncation, never as a
-            # steered correction or a plain follow-up queued to run after the live
-            # turn — either would silently drop the history cut the user asked for.
-            # Signal busy so the caller's own interrupt-then-retry loop (already
-            # built for exactly this race — see desktop's `runRewindSubmit`) waits
-            # for `running` to clear and resubmits with the truncation intact.
-            return _err(rid, 4009, "session busy")
-        busy_response = _handle_busy_submit(
-            rid, sid, session, text, busy_transport, queued=bool(params.get("queued")), turn_author=turn_author,
-            display_kind=display_kind)
-        if busy_response is not None:
-            if "result" in busy_response:
-                # KTD7: queued input keeps its origin; steered/redirected input joins the running turn.
-                _mobile_push_note_submission(session, params, busy_response["result"].get("status"))
-            return busy_response
+    t, err = _rebind_submit_transport(rid, sid, session, params)
+    if err is not None:
+        return err
+    busy_response = _submit_busy_prompt(
+        rid, sid, session, params, text, t, display_kind, turn_author,
+        internal_hosted_submit, has_truncation, image_paths, operations, receipts, attachment_admission)
+    if busy_response is not None:
+        return busy_response
     raw_rebind_ids = params.get("rebind_survivor_row_ids")
     requested_rebind_ids = (
         {r for r in raw_rebind_ids if isinstance(r, int) and not isinstance(r, bool)}
@@ -790,42 +930,33 @@ def _(rid, params: dict) -> dict:
         rid, sid, session, text, params, has_truncation, requested_rebind_ids, hosted_task, display_kind)
     if err is not None:
         return err
+    return _dispatch_admitted_submit(
+        rid, sid, session, params, text, display_kind, display_metadata, image_paths, operations, receipts,
+        attachment_admission, turn_isolation, turn_author, survivor_fields, hosted_terminal_callback)
+
+
+def _dispatch_admitted_submit(
+    rid, sid, session, params, text, display_kind, display_metadata, image_paths, operations, receipts,
+    attachment_admission, turn_isolation, turn_author, survivor_fields, hosted_terminal_callback,
+):
     if turn_isolation:
-        if turn_author:
-            logger.debug("isolated compute turns carry no author yet; the turn from %s runs unattributed",
-                         turn_author.get("id"))
-        # The isolated dispatch returns BELOW before the inline persist, so the reopen
-        # cannot live only in _persist_session_row_for_submit: the turn is already
-        # admitted here (running, in flight, active-slot lease claimed, truncation
-        # applied inline), and the child's transcript writes must land in a live row
-        # (#85303 review: the early return made _reopen_if_finalized unreachable on
-        # this path). Best-effort like the helper: a failed read never blocks the send.
-        try:
-            with _session_db(session) as db:
-                if db is not None:
-                    _reopen_if_finalized(db, str(session.get("session_key") or ""))
-        except Exception:
-            logger.debug("finalized-session reopen before isolated dispatch failed for %s",
-                         sid, exc_info=True)
-        _mobile_push_note_submission(session, params)
-        isolated_response = _submit_prompt_to_compute_host(
-            rid, sid, session, text, display_kind=display_kind, display_metadata=display_metadata)
-        if not isolated_response.get("error"):
-            # The truncation already happened inline above (memory + DB).
-            isolated_response["result"].update(survivor_fields)
+        if (err := _fence_submit_attachments(rid, session, operations, receipts)) is not None:
+            return err
+        if attachment_admission is not None:
+            attachment_admission["dispatch_started"] = True
+        isolated_response = _dispatch_submit_isolated(
+            rid, sid, session, params, text, display_kind, display_metadata, image_paths,
+            turn_author, survivor_fields, auto_continue=not bool(receipts))
+        if isolated_response is not None:
+            if isolated_response.get("error", {}).get("data", {}).get("dispatch_refused"):
+                if operations is not None:
+                    operations.restore_staged(receipts)
+                if attachment_admission is not None:
+                    attachment_admission["dispatch_started"] = False
             return isolated_response
-        # An ordinal/id alone is not consent. A client that carries a leftover ordinal into an ORDINARY
-        # submit sends a request that is indistinguishable, field by field, from a real rewind — same
-        # method, same shape, an in-range target — and the cut it asks for is a destructive
-        # replace_messages() the user never requested (#80763: 296 -> 52 messages, 244 durable rows gone).
-        # Only the client knows whether this submit is a rewind/edit/regenerate, so it has to say so; refuse
-        # the cut when it doesn't. Consent is checked BEFORE target resolution: an unconfirmed
-        # (leaked-state) request must refuse with 4029 without paying the durable transcript read or
-        # heal-stamping live history dicts that row-id resolution performs.
-        logger.warning(
-            "compute-host dispatch failed for session %s; falling back inline: %s", sid,
-            isolated_response["error"].get("message", "unknown error"))
     if (err := _persist_session_row_for_submit(rid, session, text, display_kind)) is not None:
+        return err
+    if (err := _fence_submit_attachments(rid, session, operations, receipts)) is not None:
         return err
     # Before the worker starts: its message.start must see this submission as human (KTD7).
     _mobile_push_note_submission(session, params)
@@ -836,12 +967,16 @@ def _(rid, params: dict) -> dict:
     # A completed FAILED build must not wedge the session: rebuild, don't replay it.
     if not _restart_completed_failed_agent_build(sid, session, session.get("agent_ready")):
         _start_agent_build(sid, session)
-    run_thread = threading.Thread(
+    from agent.memory_provider import spawn_context_thread
+    run_thread = spawn_context_thread(
         target=lambda: _run_after_agent_ready(
-            rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author),
-        daemon=True)
+            rid, sid, session, text, display_kind, display_metadata, hosted_terminal_callback, turn_author,
+            image_paths=image_paths, auto_continue=not bool(receipts)),
+        name=f"prompt-{sid}", daemon=True)
     # Handle lets session.interrupt tell a live turn from a stuck `running` flag.
     session["_run_thread"] = run_thread
+    if attachment_admission is not None:
+        attachment_admission["dispatch_started"] = True
     run_thread.start()
     return _ok(rid, {"status": "streaming", **survivor_fields})
 
@@ -902,7 +1037,8 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     """Attach an image from base64 bytes (remote client); reply mirrors ``image.attach``.
     ``filename``/``ext`` hint the extension, else magic bytes decide (fallback ``.png``)."""
-    session, err = _sess_building(params, rid)
+    resolver = _sess_nowait if params.get("operation_id") is not None else _sess_building
+    session, err = resolver(params, rid)
     if err:
         return err
     raw_b64 = str(params.get("content_base64") or params.get("data") or "").strip()
@@ -921,7 +1057,17 @@ def _(rid, params: dict) -> dict:
     if ext not in _allowed_image_extensions():
         return _err(rid, 4016, f"unsupported image extension: {ext}")
     try:
+        if params.get("operation_id") is not None:
+            store = _attachment_operation_store(session, params)
+            fingerprint = _attachment_fingerprint(img_bytes, "image", ext)
+            result = store.stage(params["operation_id"], fingerprint, [(img_bytes, ext)],
+                lambda paths: {"attached": True, "path": paths[0], "count": len(session.get("attached_images", [])),
+                    **_image_meta(Path(paths[0])), "remainder": "",
+                    "text": f"[User attached image: {Path(paths[0]).name}]", "bytes": len(img_bytes)})
+            return _ok(rid, result)
         img_path = _queue_attached_image(session, img_bytes, ext, prefix="upload")
+    except (ValueError, OSError) as e:
+        return _attachment_operation_error(rid, e)
     except Exception as e:
         return _err(rid, 5027, f"write failed: {e}")
     return _ok(rid, _attached_image_result(
@@ -931,12 +1077,20 @@ def _(rid, params: dict) -> dict:
 
 @method("pdf.attach")
 def _(rid, params: dict) -> dict:
+    try:
+        return _attach_pdf(rid, params)
+    except (ValueError, OSError) as exc:
+        return _attachment_operation_error(rid, exc)
+
+
+def _attach_pdf(rid, params: dict) -> dict:
     """Attach a PDF by rendering each page to PNG (``pdftoppm``; 5028 if missing) and
     queuing the pages as images.  Host ``path`` or base64 ``content_base64``."""
     import shutil
     import subprocess
     import tempfile
-    session, err = _sess_building(params, rid)
+    resolver = _sess_nowait if params.get("operation_id") is not None else _sess_building
+    session, err = resolver(params, rid)
     if err:
         return err
     if shutil.which("pdftoppm") is None:
@@ -953,6 +1107,13 @@ def _(rid, params: dict) -> dict:
         first_page, last_page, err = _pdf_page_range(rid, params)
         if err is not None:
             return err
+        store = None
+        if params.get("operation_id") is not None:
+            store = _attachment_operation_store(session, params)
+            fingerprint = _attachment_fingerprint(pdf_path.read_bytes(), "pdf", first_page, last_page)
+            existing = store.read(params["operation_id"])
+            if existing["state"] == "staged" and existing.get("fingerprint") == fingerprint:
+                return _ok(rid, existing["result"])
         argv = [
             "pdftoppm", "-png", "-r", "150", "-f", str(first_page), "-l", str(last_page),
             str(pdf_path), str(td_path / "page")]
@@ -971,6 +1132,10 @@ def _(rid, params: dict) -> dict:
         rendered = sorted(td_path.glob("page-*.png"))
         if not rendered:
             return _err(rid, 5028, "pdftoppm produced no pages (corrupt PDF?)")
+        if store is not None:
+            return _ok(rid, store.stage(params["operation_id"], fingerprint,
+                [(src, ".png") for src in rendered], lambda paths: _identified_pdf_result(
+                    session, display_name, first_page, rendered, paths)))
         attached_pages = []
         for src in rendered:
             page_num = src.stem.split("-", 1)[-1]
@@ -985,6 +1150,69 @@ def _(rid, params: dict) -> dict:
             "attached": True, "filename": display_name, "pages_attached": len(attached_pages),
             "pages": attached_pages, "count": len(session["attached_images"]),
             "text": f"[User attached PDF: {display_name} ({len(attached_pages)} page(s))]"})
+
+
+def _identified_pdf_result(session, display_name, first_page, rendered, paths):
+    pages = []
+    for index, (src, path) in enumerate(zip(rendered, paths)):
+        try:
+            page = int(src.stem.split("-", 1)[-1])
+        except ValueError:
+            page = first_page + index
+        pages.append({"path": path, "page": page, **_image_meta(Path(path))})
+    return {"attached": True, "filename": display_name, "pages_attached": len(pages), "pages": pages,
+            "count": len(session.get("attached_images", [])),
+            "text": f"[User attached PDF: {display_name} ({len(pages)} page(s))]"}
+
+
+@method("attachment.operation.status")
+def _(rid, params: dict) -> dict:
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    try:
+        store = _attachment_operation_store(session, params)
+        return _ok(rid, store.public(_reconcile_attachment_queue(session, params, store, params.get("operation_id"))))
+    except (ValueError, OSError) as exc:
+        return _attachment_operation_error(rid, exc)
+
+
+@method("attachment.operation.detach")
+def _(rid, params: dict) -> dict:
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    try:
+        store = _attachment_operation_store(session, params)
+        _reconcile_attachment_queue(session, params, store, params.get("operation_id"))
+        return _ok(rid, store.detach(params.get("operation_id")))
+    except (ValueError, OSError) as exc:
+        return _attachment_operation_error(rid, exc)
+
+
+def _reconcile_attachment_queue(session, params, store, operation_id):
+    with session["history_lock"]:
+        entries = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
+        live_ids = {entry["_attachment_queue"]["id"] for entry in entries if entry.get("_attachment_queue")}
+        return store.reconcile_queue(operation_id, live_ids, str(params.get("session_id") or ""))
+
+
+def _release_attachment_queue_admission(rid, params, session, store, operation_ids):
+    if not operation_ids:
+        return
+    with session["history_lock"]:
+        entries = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
+        released = False
+        for entry in entries:
+            selection = entry.get("_attachment_queue")
+            if selection and selection["store"] is store and selection.pop("accepting", False):
+                released = True
+        drain = released and not session.get("running") and not session.get("_closing")
+    for operation_id in operation_ids:
+        _reconcile_attachment_queue(session, params, store, operation_id)
+    if drain:
+        _start_session_work(lambda: _drain_queued_prompt(rid, params["session_id"], session),
+                            name=f"attachment-queue-{params['session_id']}", session=session)
 
 
 @method("file.attach")

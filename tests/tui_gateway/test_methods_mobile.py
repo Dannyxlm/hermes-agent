@@ -212,6 +212,30 @@ def test_mobile_submit_always_queues_at_real_busy_dispatch(mobile_home, peer, mo
     assert session["queued_prompt"]["text"] == "next request"
 
 
+def test_mobile_owned_attachment_selection_uses_same_backend_as_desktop(mobile_home, peer, monkeypatch):
+    import base64
+    opened = open_bot()
+    owned = scope(opened)
+    session = server._sessions[opened["session_id"]]
+    monkeypatch.setattr(server, "_start_agent_build", lambda *_: None)
+    staged = rpc("image.attach_bytes", session_id=owned["session_id"], profile=owned["profile"],
+                 operation_id="mobile-upload", filename="shot.png",
+                 content_base64=base64.b64encode(b"image bytes").decode())["result"]
+    assert str(mobile_home / "profiles" / "ops" / "images") in staged["path"]
+    session.update(running=True, attached_images=["desktop-image"])
+    monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *_: None)
+    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", dict)
+    response = rpc("mobile.submit", **owned, text="inspect", image_paths=[],
+                   attachment_operation_ids=["mobile-upload"])
+    assert response["result"]["accepted"] is True
+    assert session["queued_prompt"]["image_paths"] == [staged["path"]]
+    assert session["attached_images"] == ["desktop-image"]
+    status = rpc("attachment.operation.status", session_id=owned["session_id"], profile=owned["profile"],
+                 operation_id="mobile-upload")["result"]
+    assert status["state"] == "submitted"
+    assert status["submission_result"]["status"] == "queued"
+
+
 def test_exact_approval_rejects_other_profile_stale_and_persistent_choice(mobile_home, peer, monkeypatch):
     import tools.approval as approvals
     opened = open_bot()
