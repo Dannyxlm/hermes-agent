@@ -26,7 +26,7 @@ def kanban(monkeypatch):
         if mod.startswith("hermes_cli") or mod.startswith("hermes_state") or mod == "hermes_constants":
             del sys.modules[mod]
     from hermes_cli import kanban_db, kanban_db_connect, kanban_db_dispatch
-    with kanban_db_connect.connect_closing() as conn:
+    with kanban_db_connect.connect_closing():
         kanban_db.create_board(slug="default", name="Test")
     return kanban_db, kanban_db_connect, kanban_db_dispatch
 

@@ -193,7 +193,7 @@ def describe_suppression(results: Iterable[Optional[DispatchResult]]) -> str:
     return ", ".join(parts)
 
 
-def caps_explain_hold(results: Iterable[Optional["DispatchResult"]]) -> bool:
+def caps_explain_hold(results: Iterable[Optional[DispatchResult]]) -> bool:
     """True when a concurrency cap explains every ready card the tick(s) held back.
 
     A profile or host at its cap is busy, not stuck, so the "dispatcher stuck"

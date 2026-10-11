@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from tests.tui_gateway.test_mobile_push import delivery as delivery
+from tests.tui_gateway.test_mobile_push import delivery as delivery  # noqa: PLC0414 - imported pytest fixtures
 from tui_gateway.mobile_push import Scope
 from tui_gateway.mobile_push_payloads import AlertPreview
 from tui_gateway.mobile_push_provider import DeliveryResult

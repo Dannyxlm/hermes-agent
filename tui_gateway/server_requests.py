@@ -132,10 +132,10 @@ def add_attention_listener(listener: Callable[[str], None]) -> None:
 def _attention_changed(req: ServerRequest) -> None:
     if req.method not in _INBOX_KINDS:
         return
-    for listener in list(_attention_listeners):
+    for listener in list(_attention_listeners):  # noqa: PERF101 - listeners may mutate registration
         try:
             listener(req.sid)
-        except Exception:  # noqa: BLE001 - attention projections never break a request
+        except Exception:
             logger.debug("attention listener failed for %s", req.method, exc_info=True)
 
 

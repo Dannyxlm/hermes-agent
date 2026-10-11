@@ -102,7 +102,7 @@ def _run_dispatcher_ticks(results_per_tick, caplog):
             runner._running = False
 
     runner._sleep_between_ticks = between_ticks
-    boot = (lambda: {}, MagicMock(), {})
+    boot = (dict, MagicMock(), {})
     caplog.set_level(logging.WARNING, logger=kw.logger.name)
     with patch.object(GatewayRunner, "_kanban_dispatcher_boot", return_value=boot), \
             patch.object(kw, "_KanbanDispatcher", FakeDispatcher), \

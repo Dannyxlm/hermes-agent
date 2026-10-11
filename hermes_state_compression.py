@@ -577,7 +577,7 @@ class SessionCompressionMixin:
     def _assert_session_turn_lease_holder_on_conn(
         self,
         conn,
-        session_ids: List[str],
+        session_ids: list[str],
         holder: str,
         *,
         ttl_seconds: float = 300.0,
@@ -886,7 +886,7 @@ class SessionCompressionMixin:
         return reverse_lineage
 
 
-    def get_compression_family(self, session_id: str) -> List[str]:
+    def get_compression_family(self, session_id: str) -> list[str]:
         """Return every compression alias, with the selected live tip last.
 
         Races can leave stale continuation siblings. They must not become part

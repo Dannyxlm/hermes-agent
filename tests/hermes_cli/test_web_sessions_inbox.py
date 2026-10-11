@@ -36,7 +36,7 @@ def test_summary_fields_do_not_change_old_session_metadata(inbox):
 
 
 def test_multiple_pending_requests_revision_and_precedence(inbox):
-    clarify = request("ops", "clarify")
+    request("ops", "clarify")
     first = row(inbox, "ops")["attention"]
     approval = request("ops", "approval")
     second = row(inbox, "ops")["attention"]

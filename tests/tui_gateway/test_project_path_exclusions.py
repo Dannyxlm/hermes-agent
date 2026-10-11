@@ -20,7 +20,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv('HERMES_DISABLE_LAZY_INSTALLS', '1')
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
-    import tui_gateway.server as server
+    from tui_gateway import server
     from hermes_state import SessionDB
     token = set_hermes_home_override(state)
     monkeypatch.setattr(server, '_hermes_home', state)
@@ -100,7 +100,7 @@ def test_recovered_excluded_repo_stays_out_of_tree(env, tmp_path):
 
 
 def test_remote_scan_keeps_excluded_symlink_root_out(env, tmp_path):
-    server, state, db = env
+    server, _state, _db = env
     repo = init_repo(tmp_path / 'actual')
     excluded = tmp_path / 'releases'
     excluded.mkdir()

@@ -23,7 +23,7 @@ class TurnFacadeMixin:
         self,
         *,
         expected_tip_id: Optional[str] = None,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> Optional[list[dict[str, Any]]]:
         """Rebind every session-bound subsystem to a live compression tip."""
         session_db = getattr(self, "_session_db", None)
         parent_session_id = str(getattr(self, "session_id", None) or "")

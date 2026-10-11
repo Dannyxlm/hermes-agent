@@ -13,7 +13,7 @@ from collections import deque
 import hmac
 import json
 import stat
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 import logging
 import os
 import re
@@ -565,7 +565,7 @@ _MANAGED_UPDATE_TRACKED_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _managed_update_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _managed_update_max_age_seconds() -> int:
@@ -595,7 +595,7 @@ def _managed_source_base(
     availability: str,
     *,
     status_error: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "schema_version": _MANAGED_UPDATE_SCHEMA,
         "availability": availability,
@@ -633,15 +633,15 @@ def _managed_timestamp(value: Any) -> Optional[datetime]:
     if text is None:
         return None
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
     if parsed.tzinfo is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
-def _managed_read_bounded_json(path: Path) -> Tuple[Optional[Dict[str, Any]], str]:
+def _managed_read_bounded_json(path: Path) -> tuple[Optional[dict[str, Any]], str]:
     """Read one exact status file without following links or leaking content."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     fd: Optional[int] = None
@@ -663,7 +663,7 @@ def _managed_read_bounded_json(path: Path) -> Tuple[Optional[Dict[str, Any]], st
         if hasattr(os, "geteuid") and st.st_uid not in {0, os.geteuid()}:
             return None, "status_owner_invalid"
 
-        chunks: List[bytes] = []
+        chunks: list[bytes] = []
         total = 0
         while total <= _MANAGED_UPDATE_MAX_BYTES:
             chunk = os.read(fd, min(8192, _MANAGED_UPDATE_MAX_BYTES + 1 - total))
@@ -698,7 +698,7 @@ def _managed_nonnegative_int(value: Any) -> Optional[int]:
     return value
 
 
-def _read_managed_update_source() -> Dict[str, Any]:
+def _read_managed_update_source() -> dict[str, Any]:
     raw, read_error = _managed_read_bounded_json(_MANAGED_UPDATE_STATUS_PATH)
     if raw is None:
         availability = "missing" if read_error == "status_missing" else (
@@ -735,7 +735,7 @@ def _read_managed_update_source() -> Dict[str, Any]:
     )
     install_mode = _managed_safe_string(raw.get("install_mode"), maximum=64)
     overlay_ids_raw = raw.get("overlay_ids")
-    overlay_ids: Optional[List[str]] = None
+    overlay_ids: Optional[list[str]] = None
     if isinstance(overlay_ids_raw, list) and len(overlay_ids_raw) <= 100:
         parsed_overlay_ids = [
             _managed_safe_string(item, maximum=80) for item in overlay_ids_raw
@@ -778,7 +778,7 @@ def _read_managed_update_source() -> Dict[str, Any]:
         raw.get("next_action"), maximum=500, allow_empty=True
     )
     blockers_raw = raw.get("blockers")
-    blockers: Optional[List[str]] = None
+    blockers: Optional[list[str]] = None
     if isinstance(blockers_raw, list) and len(blockers_raw) <= 20:
         parsed_blockers = [
             _managed_safe_string(item, maximum=300) for item in blockers_raw
@@ -944,7 +944,7 @@ def _managed_marker_destination_available(path: Path) -> bool:
 
 
 def _write_managed_update_marker(
-    path: Path, payload: Dict[str, Any], *, replace_existing: bool = True
+    path: Path, payload: dict[str, Any], *, replace_existing: bool = True
 ) -> bool:
     """Atomically publish one exact content-free broker marker."""
     if not _managed_marker_destination_available(path):
@@ -1014,7 +1014,7 @@ def _write_managed_update_marker(
             os.close(parent_fd)
 
 
-def _request_managed_source_refresh() -> Dict[str, Any]:
+def _request_managed_source_refresh() -> dict[str, Any]:
     requested = _write_managed_update_marker(
         _MANAGED_UPDATE_REFRESH_REQUEST_PATH,
         {
@@ -1029,7 +1029,7 @@ def _request_managed_source_refresh() -> Dict[str, Any]:
 
 
 def _managed_candidate_request_matches(
-    payload: Optional[Dict[str, Any]], source: Dict[str, Any]
+    payload: Optional[dict[str, Any]], source: dict[str, Any]
 ) -> bool:
     return bool(
         payload
@@ -1039,7 +1039,7 @@ def _managed_candidate_request_matches(
     )
 
 
-def _managed_update_check_payload(*, request_refresh: bool) -> Dict[str, Any]:
+def _managed_update_check_payload(*, request_refresh: bool) -> dict[str, Any]:
     source = _read_managed_update_source()
     if request_refresh:
         source["refresh_request"] = _request_managed_source_refresh()
@@ -1083,7 +1083,7 @@ def _managed_update_check_payload(*, request_refresh: bool) -> Dict[str, Any]:
     }
 
 
-def _request_managed_candidate() -> Dict[str, Any]:
+def _request_managed_candidate() -> dict[str, Any]:
     source = _read_managed_update_source()
     if not source.get("can_build_candidate"):
         error = (

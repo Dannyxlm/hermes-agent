@@ -83,7 +83,7 @@ def _rows(db, sql: str, cutoff: float) -> list[dict[str, Any]]:
 # file's identity so a replaced or restored state.db starts cold. Persisted to a
 # sidecar beside state.db (cache/usage-tallies.json) so a dashboard restart does
 # not put the first Usage open back on a full message scan.
-_usage_caches: Dict[tuple, Any] = {}
+_usage_caches: dict[tuple, Any] = {}
 _usage_caches_lock = threading.Lock()
 
 
@@ -119,14 +119,14 @@ _AUX_TOTALS_KEYS = {
 }
 
 
-def _add_aux_to_totals(totals: Dict[str, Any], aux_rows: List[Dict[str, Any]]) -> None:
+def _add_aux_to_totals(totals: dict[str, Any], aux_rows: list[dict[str, Any]]) -> None:
     """Add aux usage onto a sessions-derived totals row, in place."""
     for aux in aux_rows:
         for key, total_key in _AUX_TOTALS_KEYS.items():
             totals[total_key] = (totals.get(total_key) or 0) + (aux.get(key) or 0)
 
 
-def _aux_daily_rows(db, cutoff: float) -> List[Dict[str, Any]]:
+def _aux_daily_rows(db, cutoff: float) -> list[dict[str, Any]]:
     """Aux usage per local calendar day of the owning session's start, the same
     day key the sessions-derived ``daily`` rows use. [] on a pre-task-column DB."""
     try:
@@ -147,7 +147,7 @@ def _aux_daily_rows(db, cutoff: float) -> List[Dict[str, Any]]:
         return []
 
 
-def _add_aux_to_daily(daily: List[Dict[str, Any]], aux_daily: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _add_aux_to_daily(daily: list[dict[str, Any]], aux_daily: list[dict[str, Any]]) -> list[dict[str, Any]]:
     index = {row.get("day"): row for row in daily}
     for aux in aux_daily:
         row = index.get(aux.get("day"))

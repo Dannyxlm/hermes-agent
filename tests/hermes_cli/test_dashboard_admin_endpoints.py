@@ -7,7 +7,7 @@ contract and the CLI-config parity (servers/keys written via the API are
 visible to the CLI data layer), not specific catalog values.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 import json
 
 import pytest
@@ -908,7 +908,7 @@ class TestUpdateCheckEndpoint:
 
     @staticmethod
     def _managed_status(*, generated_at=None, **overrides):
-        generated_at = generated_at or datetime.now(timezone.utc).isoformat()
+        generated_at = generated_at or datetime.now(UTC).isoformat()
         status = {
             "schema_version": "hermes-update-status.v2",
             "running_release": "ava-converge-p1-f22a217b8dab",
@@ -1161,7 +1161,7 @@ class TestUpdateCheckEndpoint:
 
         status_path, _, _ = self._managed_paths(monkeypatch, tmp_path)
         monkeypatch.setenv("HERMES_MANAGED_UPDATE_MAX_AGE_SECONDS", "10800")
-        now = datetime(2026, 7, 27, 18, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 7, 27, 18, 0, tzinfo=UTC)
         monkeypatch.setattr(ws, "_managed_update_now", lambda: now)
 
         at_boundary = now - timedelta(seconds=10800)
@@ -1213,7 +1213,7 @@ class TestUpdateCheckEndpoint:
         import hermes_cli.web_server as ws
 
         status_path, _, candidate_path = self._managed_paths(monkeypatch, tmp_path)
-        now = datetime(2026, 7, 27, 18, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 7, 27, 18, 0, tzinfo=UTC)
         monkeypatch.setattr(ws, "_managed_update_now", lambda: now)
         status_path.write_text(
             json.dumps(

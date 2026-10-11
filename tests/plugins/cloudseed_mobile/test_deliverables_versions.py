@@ -5,7 +5,7 @@ import pytest
 
 from plugins.cloudseed_mobile import deliverables_index as ix
 from plugins.cloudseed_mobile.dashboard import plugin_api as api
-from tests.plugins.test_cloudseed_mobile import client, P  # noqa: F401  (fixture)
+from tests.plugins.test_cloudseed_mobile import client, P
 
 
 def page(title, body='<p>row</p>'):
@@ -76,7 +76,7 @@ def test_versions_group_in_message_order_and_recent_collapses(client):
 
 
 def test_compressed_continuation_keeps_one_artifact_across_scan_order(client):
-    c, home = client
+    _c, home = client
     # The newest session is scanned first, before its compressed parent is known.
     store(home, [('a', None, 'compression', None, None), ('b', 'a', 'compression', None, None), ('c', 'b', None, None, None)],
           [(1, 'a', fence(V1), 100.0), (2, 'b', fence(V2), 200.0), (3, 'c', fence(V3), 300.0)])
@@ -91,7 +91,7 @@ def test_compressed_continuation_keeps_one_artifact_across_scan_order(client):
 
 
 def test_delegate_child_and_unrelated_chats_are_separate_artifacts(client):
-    c, home = client
+    _c, home = client
     store(home, [('p', None, 'compression', None, None), ('d', 'p', None, 'desktop', '{"_delegate_from":"p"}'),
                  ('x', None, None, None, None)],
           [(1, 'p', fence(V1), 100.0), (2, 'd', fence(V2), 200.0), (3, 'x', fence(V3), 300.0)])
@@ -103,7 +103,7 @@ def test_delegate_child_and_unrelated_chats_are_separate_artifacts(client):
 
 
 def test_backfilled_older_message_sorts_by_message_order(client):
-    c, home = client
+    _c, home = client
     store(home, [('s', None, None, None, None)], [(1, 's', fence(V2), 200.0), (2, 's', fence(V3), 300.0)])
     built = index(home)
     assert inline(built.query())[0]['version_count'] == 2
@@ -118,7 +118,7 @@ def test_backfilled_older_message_sorts_by_message_order(client):
 
 
 def test_repeated_body_keeps_its_first_place(client):
-    c, home = client
+    _c, home = client
     store(home, [('a', None, 'compression', None, None), ('b', 'a', None, None, None)],
           [(1, 'a', fence(V1), 100.0), (2, 'a', fence(V2), 200.0), (3, 'b', fence(V1), 300.0)])
     built = index(home)
@@ -131,7 +131,7 @@ def test_repeated_body_keeps_its_first_place(client):
 
 
 def test_recent_search_lists_newest_matching_version(client):
-    c, home = client
+    _c, home = client
     store(home, [('a', None, 'compression', None, None), ('b', 'a', None, None, None)],
           [(1, 'a', fence(V1), 100.0), (2, 'b', fence(V2), 200.0)])
     with sqlite3.connect(home/'state.db') as db:
@@ -165,7 +165,7 @@ def test_versions_route_caps_at_twenty_and_guards_owner_and_input(client, monkey
 
 
 def test_scan_version_bump_rebuilds_a_v5_cache(client):
-    c, home = client
+    _c, home = client
     store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0)])
     built = index(home)
     with built.connection() as db:
@@ -187,7 +187,7 @@ def test_capability_advertises_artifact_versions():
 
 @pytest.mark.parametrize('segment', [None, 1], ids=['one-segment', 'message-per-segment'])
 def test_body_repeated_in_one_chat_keeps_its_first_place(client, monkeypatch, segment):
-    c, home = client
+    _c, home = client
     if segment: monkeypatch.setattr(ix, 'MAX_MESSAGES', segment)
     store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0), (2, 's', fence(V2), 200.0), (3, 's', fence(V1), 300.0)])
     built = index(home)
@@ -198,7 +198,7 @@ def test_body_repeated_in_one_chat_keeps_its_first_place(client, monkeypatch, se
 
 
 def test_artifact_lookup_uses_its_partial_index_not_a_generation_scan(client):
-    c, home = client
+    _c, home = client
     store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0)])
     built = index(home)
     key = inline(built.query())[0]['artifact_key']
@@ -223,7 +223,7 @@ def test_two_versions_in_one_message_keep_their_fence_order(client):
 
 
 def test_source_error_while_finding_lineage_keeps_published_rows(client, monkeypatch):
-    c, home = client
+    _c, home = client
     store(home, [('s', None, None, None, None)], [(1, 's', fence(V1), 100.0)])
     built = index(home)
     before = inline(built.query())

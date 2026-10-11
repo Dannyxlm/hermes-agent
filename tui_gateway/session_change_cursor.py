@@ -72,7 +72,7 @@ def _norm_source(value: Any) -> str:
 
 
 class _Row:
-    __slots__ = ("full", "inbox", "source", "parent", "end_reason", "tracked")
+    __slots__ = ("end_reason", "full", "inbox", "parent", "source", "tracked")
 
     def __init__(self, full, inbox, source, parent, end_reason, tracked):
         self.full, self.inbox, self.source = full, inbox, source
@@ -90,7 +90,7 @@ class _Row:
 class Change:
     """One observed diff of a scope, handed to listeners (``mobile_inbox_invalidation``)."""
 
-    __slots__ = ("db_path", "profile", "changed", "removed", "inbox_changed", "activity")
+    __slots__ = ("activity", "changed", "db_path", "inbox_changed", "profile", "removed")
 
     def __init__(self, db_path, profile, changed, removed, inbox_changed, activity):
         self.db_path, self.profile = db_path, profile
@@ -103,8 +103,19 @@ class Change:
 
 
 class _Scope:
-    __slots__ = ("key", "profile", "tag", "epoch", "seq", "rows", "log", "identity",
-                 "sent_seq", "sent_at", "replaced")
+    __slots__ = (
+        "epoch",
+        "identity",
+        "key",
+        "log",
+        "profile",
+        "replaced",
+        "rows",
+        "sent_at",
+        "sent_seq",
+        "seq",
+        "tag",
+    )
 
     def __init__(self, key: str, profile: str | None):
         self.key = key
@@ -174,7 +185,7 @@ def _profile_for(db_path: str) -> str | None:
     try:
         from hermes_constants import profile_name_for_home
         return profile_name_for_home(Path(db_path).parent)
-    except Exception:  # noqa: BLE001 - a label only; the cursor tag carries scope identity
+    except Exception:
         return None
 
 
@@ -192,10 +203,10 @@ def add_listener(listener: Callable[[Change], None]) -> None:
 
 
 def _notify(change: Change) -> None:
-    for listener in list(_listeners):
+    for listener in list(_listeners):  # noqa: PERF101 - listeners may mutate registration
         try:
             listener(change)
-        except Exception:  # noqa: BLE001 - a listener must never break the watcher
+        except Exception:
             logger.debug("session change listener failed", exc_info=True)
 
 
@@ -235,7 +246,7 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
     if new_children and delegate_ids is not None:
         try:
             delegates = set(delegate_ids(new_children))
-        except Exception:  # noqa: BLE001 - unknown class: treat as visible (over-notify, never miss)
+        except Exception:
             logger.debug("delegate classification failed", exc_info=True)
     rows: dict[str, _Row] = {}
     for sid, (encoded, values) in observed.items():
@@ -330,7 +341,7 @@ def refresh(db_path) -> bool:
         return False
     try:
         probe(Path(db_path))
-    except Exception:  # noqa: BLE001 - an unreadable store simply cannot issue a cursor
+    except Exception:
         logger.debug("session change refresh failed", exc_info=True)
         return False
     return True
@@ -388,7 +399,7 @@ def lineage_candidates(db, session_ids: Iterable[str]) -> set | None:
         candidates.add(sid)
         try:
             candidates.update(db.get_compression_lineage(sid) or ())
-        except Exception:  # noqa: BLE001 - unreadable lineage: the caller repairs instead
+        except Exception:
             logger.debug("lineage expansion failed", exc_info=True)
             return None
     return candidates
@@ -498,7 +509,7 @@ def pump(send: Callable[[list, dict], None], live: Iterable | None = None, now: 
     for payload in frames:
         try:
             send(targets, payload)
-        except Exception:  # noqa: BLE001 - one bad write must not stop the watcher
+        except Exception:
             logger.debug("sessions.changed cursor frame failed", exc_info=True)
     return len(frames)
 

@@ -13,7 +13,7 @@ from plugins.cloudseed_mobile import flight_recorder as fr
 
 SCRIPT = Path(__file__).resolve().parents[3] / 'plugins/cloudseed_mobile/scripts/flight-recorder/flight_recorder_report.py'
 DAY = '2026-10-09'
-T = int(dt.datetime(2026, 10, 9, 12, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)
+T = int(dt.datetime(2026, 10, 9, 12, 0, tzinfo=dt.UTC).timestamp() * 1000)
 INSTALL = str(uuid.UUID('7a1c0de5-0000-4000-8000-00000000abcd'))
 
 
@@ -27,7 +27,7 @@ def report():
 
 def store(root, events, seq=0, flags=()):
     """Write through the real ingest so the report reads exactly what the server stores."""
-    recorder = fr.FlightRecorderStore(root, now=lambda: dt.datetime(2026, 10, 9, 13, 0, tzinfo=dt.timezone.utc))
+    recorder = fr.FlightRecorderStore(root, now=lambda: dt.datetime(2026, 10, 9, 13, 0, tzinfo=dt.UTC))
     body = {'profile': 'default', 'schema': 1, 'install_id': INSTALL, 'batch_seq': seq, 'app_build': '2026100801',
             'os_version': '27.0', 'device_class': 'iPhone18,1', 'events': events}
     recorder.put_batch('default', fr.validate_batch(body))

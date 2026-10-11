@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,7 +37,7 @@ class AccountControlError(Exception):
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _digest(value):
@@ -151,7 +151,7 @@ def _cached_usage(home, provider, entry):
 
 def _section(provider, profile_id, home, auth):
     from plugins.cloudseed_mobile.account_render import _entry_is_pool_exhausted, _entry_pool_retry_after, _safe_entry_label
-    entries, rows, store, owner, strategy, reason, revision = _pool_state(provider, profile_id, home, auth)
+    entries, _rows, _store, owner, strategy, reason, revision = _pool_state(provider, profile_id, home, auth)
     shared = owner.resolve() != (home / "auth.json").resolve() or auth._global_auth_file_path() is None
     accounts = []
     for i, entry in enumerate(entries):
@@ -199,7 +199,7 @@ def set_primary(body):
             raise AccountControlError("Profile changed. Reload Accounts & Usage and try again.", 409)
         # Same canonical lock used by native writers, reentrant when move_entry persists.
         with auth._auth_store_lock(target_path=home / "auth.json"):
-            entries, rows, store, owner, strategy, reason, revision = _pool_state(provider, profile_id, home, auth)
+            entries, rows, store, _owner, _strategy, reason, revision = _pool_state(provider, profile_id, home, auth)
             if reason:
                 raise AccountControlError(reason, 403)
             if revision != body["revision"]:
@@ -268,7 +268,7 @@ def _probe_usage(provider, entry):
                                   usage._codex_headers(token, account_id), timeout=5.0)
         rate_limit = payload.get("rate_limit") or {}
         windows = usage._usage_windows(rate_limit, usage._codex_window_labels(rate_limit), "used_percent", "reset_at")
-    snapshot = SimpleNamespace(provider=provider, windows=windows, fetched_at=datetime.now(timezone.utc))
+    snapshot = SimpleNamespace(provider=provider, windows=windows, fetched_at=datetime.now(UTC))
     rendered = _serialize_account_usage_snapshot(snapshot)["windows"]
     for window in rendered:
         if not isinstance(window["used_percent"], (int, float)) or not math.isfinite(window["used_percent"]):

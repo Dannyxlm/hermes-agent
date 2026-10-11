@@ -184,7 +184,7 @@ def _ws_origin_matches_dashboard_public_url(origin: str) -> bool:
 
         public_url = resolve_public_url()
         parsed_public = urllib.parse.urlparse(public_url)
-    except Exception:  # noqa: BLE001 - malformed optional config must fail closed
+    except Exception:
         _log.debug("failed to resolve dashboard public_url for WS Origin", exc_info=True)
         return False
     if parsed_public.scheme not in {"http", "https"} or not parsed_public.netloc:

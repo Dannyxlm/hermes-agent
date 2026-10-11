@@ -51,7 +51,7 @@ def unwrap(value):
 
 
 def visible(text):
-    return re.sub(r'<(think|thinking|reasoning|scratchpad)\b[^>]*>.*?(?:</\1>|$)','',text,flags=re.S|re.I)
+    return re.sub(r'<(think|thinking|reasoning|scratchpad)\b[^>]*>.*?(?:</\1>|$)','',text,flags=re.DOTALL|re.IGNORECASE)
 
 
 def strings(value,status=None):
@@ -119,7 +119,7 @@ def references(text, assistant=False):
         elif marker:
             fence = marker[1]; fenced.add(offset)
         offset += len(line)
-    code_spans = iter(re.finditer(r'(?<!`)(`+)(?!`)(.*?)\1(?!`)', text, re.S))
+    code_spans = iter(re.finditer(r'(?<!`)(`+)(?!`)(.*?)\1(?!`)', text, re.DOTALL))
     span = next(code_spans, None)
     for match, value in media_candidates(text):
         while span is not None and span.end() <= match.start():

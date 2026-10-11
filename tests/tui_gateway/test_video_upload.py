@@ -220,7 +220,7 @@ def _upload(call, reg, payload, sid="live-1", filename="Screen Recording.mov"):
 
 
 def test_video_attach_stores_in_session_attachments_and_starts_evidence(rpc, reg, tmp_path):
-    call, session, started, _ = rpc
+    call, _session, started, _ = rpc
     payload = MP4_HEAD + b"v" * 200
     upload_id = _upload(call, reg, payload)
     result = call("video.attach", session_id="live-1", upload_id=upload_id)["result"]

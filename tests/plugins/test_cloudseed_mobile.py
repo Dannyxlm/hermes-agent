@@ -158,7 +158,7 @@ def test_catalog_cycle_search_tombstone(client, monkeypatch):
 
 @pytest.mark.parametrize('domain', ['photo-catalog', 'iphone-reminders'])
 def test_auth_unknown_and_explicit_rebind(client, domain):
-    c, home = client
+    c, _home = client
     c.headers.pop('authorization')
     assert post(c, domain, 'register').status_code == 401
     c.headers['authorization'] = 'Bearer fixture'
@@ -173,7 +173,7 @@ def test_auth_unknown_and_explicit_rebind(client, domain):
 
 
 def test_reminder_idempotency_expiry_disconnect(client):
-    c, home = client
+    c, _home = client
     assert post(c, 'iphone-reminders', 'register').status_code == 200
     store = api.reminder_store()
     rid = str(uuid.uuid4())
@@ -301,9 +301,9 @@ def test_account_primary_cas_uses_native_store(client):
 
 
 def test_owner_profile_payload_boundaries(client, monkeypatch):
-    c, home = client
+    c, _home = client
     assert post(c, 'photo-catalog', 'register', profile='other').status_code == 403
-    monkeypatch.setattr(api, 'owner_config', lambda: {})
+    monkeypatch.setattr(api, 'owner_config', dict)
     assert c.get(P+'/memory').status_code == 403
     monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'other', 'owner_provider': 'basic'})
     assert c.get(P+'/memory').status_code == 403
@@ -428,7 +428,7 @@ def test_relocated_clis_use_retained_stores(client, monkeypatch):
     env = {**os.environ, 'HERMES_HOME': str(home), 'TMPDIR': str(home)}
     def run(name, *args):
         command = [sys.executable, str(root/'plugins/cloudseed_mobile/scripts'/name), '--state-dir', str(home/'webui'), '--profile', 'default', *args]
-        result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=15)
+        result = subprocess.run(command, check=False, env=env, text=True, capture_output=True, timeout=15)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
     assert run('photo-catalog', 'devices')['devices'][0]['id'] == DEVICE
@@ -486,7 +486,7 @@ def test_usage_identity_bound_and_no_exception_leak(client, monkeypatch):
 def test_native_dashboard_discovery_mount_and_disable(client, monkeypatch):
     import sys
     from hermes_cli import web_server_dashboard as dashboard
-    c, _ = client
+    _c, _ = client
     root = Path(__file__).resolve().parents[2]
     monkeypatch.setattr(dashboard, '_dashboard_plugin_search_dirs', lambda: [(root/'plugins', 'bundled')])
     entries = [p for p in dashboard._discover_dashboard_plugins() if p['name'] == 'cloudseed_mobile']

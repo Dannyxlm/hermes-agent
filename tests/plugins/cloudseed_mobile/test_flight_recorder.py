@@ -171,7 +171,7 @@ def test_flag_stores_screenshot_and_note_privately(client):
 
 
 def test_flag_without_screenshot_and_bad_images(client):
-    c, root = client
+    c, _root = client
     assert c.post(P + '/flag', json=flag(shot=None)).status_code == 200
     assert c.post(P + '/flag', json=flag(shot=b'\x89PNG\r\n\x1a\n')).status_code == 400
     assert c.post(P + '/flag', json=flag(shot=None, screenshot_jpeg_b64='***')).status_code == 400
@@ -213,7 +213,7 @@ def test_symlinked_store_is_refused(client, tmp_path_factory):
 
 
 def test_prune_removes_only_old_dated_entries(tmp_path):
-    now = dt.datetime(2026, 10, 7, 20, 0, tzinfo=dt.timezone.utc)
+    now = dt.datetime(2026, 10, 7, 20, 0, tzinfo=dt.UTC)
     store = fr.FlightRecorderStore(tmp_path / 'mobile' / 'flight-recorder', now=lambda: now)
     store.put_batch('default', fr.validate_batch(batch()))
     events_dir, flags_dir = store.root / 'events', store.root / 'flags'

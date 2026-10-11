@@ -11,8 +11,8 @@ import time
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_inbox_summaries import inbox  # noqa: F401 - fixture
-from tests.tui_gateway.test_methods_mobile import mobile_home, rpc  # noqa: F401 - fixture
+from tests.tui_gateway.test_inbox_summaries import inbox
+from tests.tui_gateway.test_methods_mobile import mobile_home, rpc
 from tui_gateway import server, server_requests, session_change_cursor
 
 PHONE_EXCLUDES = "acp,cron,kanban,oneshot,subagent,tool,telegram"
@@ -108,7 +108,7 @@ def test_cursor_clients_coalesce_at_250ms_while_legacy_keeps_2s_floor(watched):
 
 
 def test_watch_interval_and_frames_follow_subscription(watched, monkeypatch):
-    home, legacy, cursor = watched
+    home, _legacy, cursor = watched
     assert session_change_cursor.watch_interval(0.5) == 0.25
     session_change_cursor.subscribe(cursor, False)
     assert session_change_cursor.watch_interval(0.5) == 0.5
@@ -119,7 +119,7 @@ def test_watch_interval_and_frames_follow_subscription(watched, monkeypatch):
 
 
 def test_disconnected_subscriber_is_pruned(watched, monkeypatch):
-    home, legacy, cursor = watched
+    _home, legacy, cursor = watched
     monkeypatch.setattr(server, "_live_transports", {legacy})
     server._broadcast_watched_changes(now=0.0)
     assert not session_change_cursor.is_subscribed(cursor)
@@ -139,7 +139,7 @@ def test_internal_sources_and_delegate_runs_never_wake_cursor_clients(watched):
 
 
 def test_malformed_model_config_does_not_unmask_delegate_runs(watched):
-    home, legacy, cursor = watched
+    home, _legacy, cursor = watched
     server._broadcast_watched_changes(now=0.0)
 
     def spawn(db):
@@ -157,7 +157,7 @@ def test_malformed_model_config_does_not_unmask_delegate_runs(watched):
 
 
 def test_replaced_store_tells_subscribers_at_once(watched):
-    home, legacy, cursor = watched
+    home, _legacy, cursor = watched
     server._broadcast_watched_changes(now=0.0)
     session_change_cursor.refresh(home / "state.db")
     before = session_change_cursor.current_cursor(home / "state.db")
@@ -171,7 +171,7 @@ def test_replaced_store_tells_subscribers_at_once(watched):
 
 
 def test_cron_changes_are_quiet_until_a_loud_change(watched):
-    home, legacy, cursor = watched
+    home, _legacy, cursor = watched
     with SessionDB(db_path=home / "state.db") as db:
         db.create_session("cron-run", "cron")
     server._broadcast_watched_changes(now=0.0)
@@ -381,7 +381,7 @@ def test_rpc_session_list_delta(inbox, mobile_home):
 def test_client_capabilities_opt_in(mobile_home, monkeypatch):
     peer = Peer()
     monkeypatch.setattr(server, "_caller_transport", lambda: peer, raising=False)
-    from tui_gateway import methods_voice  # noqa: F401 - handler registered on import
+    from tui_gateway import methods_voice
     result = rpc("client.capabilities", server_requests=True, session_change_cursor=True)["result"]
     assert result["session_change_cursor"] == 1
     assert session_change_cursor.is_subscribed(peer)

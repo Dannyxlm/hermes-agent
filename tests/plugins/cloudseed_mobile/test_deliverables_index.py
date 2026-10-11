@@ -53,7 +53,7 @@ def test_index_keyset_source_edits_deletion_and_bounds(client):
 
 
 def test_missing_corrupt_no_create_and_inline_authorization(client):
-    c,home=client; root,wid=setup_root(c,home)
+    c,home=client; _root,_wid=setup_root(c,home)
     index=ix.DeliverablesIndex(home,'default',[])
     index.refresh()
     assert not (home/'state.db').exists() and index.query()['partial']
@@ -86,7 +86,7 @@ def test_profile_registry_roots_secondary_folders_and_no_migration(client):
 
 
 def test_generation_root_and_authorized_file_id(client):
-    c,home=client; root,wid=setup_root(c,home)
+    c,home=client; root,_wid=setup_root(c,home)
     generation=root.parent.parent/('Generated-'+home.name); generation.mkdir()
     (generation/'voice.mp3').write_bytes(b'original')
     (home/'config.yaml').write_text('cloudseed_mobile:\n  workspace_root: '+str(root.parent)+'\n  generation_roots:\n    - '+str(generation)+'\n')
@@ -101,7 +101,7 @@ def test_generation_root_and_authorized_file_id(client):
 
 
 def test_inline_http_authorization_and_bounded_query(client):
-    c,home=client; root,wid=setup_root(c,home); store(home,root,1)
+    c,home=client; root,_wid=setup_root(c,home); store(home,root,1)
     body='<html>'+('x'*300)+'</html>'
     with sqlite3.connect(home/'state.db') as db:
         db.execute('UPDATE messages SET content=?',('```html\n'+body+'\n```',))
@@ -160,7 +160,7 @@ def test_cold_coverage_never_invents_total_or_imports_private(client):
 
 
 def test_source_store_symlink_never_crosses_profile(client):
-    c,home=client; root,wid=setup_root(c,home)
+    c,home=client; root,_wid=setup_root(c,home)
     b=home/'profiles/b'; b.mkdir(parents=True); (b/'config.yaml').write_text('{}')
     store(b,root,1)
     (home/'state.db').symlink_to(b/'state.db')

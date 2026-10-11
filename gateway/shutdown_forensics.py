@@ -197,7 +197,7 @@ def context_as_json(ctx: dict[str, Any]) -> str:
         return "{}"
 
 
-def _own_systemd_unit() -> "tuple[Optional[str], Optional[str]]":
+def _own_systemd_unit() -> tuple[Optional[str], Optional[str]]:
     """``(unit_name, cgroup_line)`` of this process, from ``/proc/self/cgroup``
     ("0::/user.slice/.../hermes-gateway.service"); ``(None, None)`` when undeterminable."""
     with contextlib.suppress(OSError), open("/proc/self/cgroup", encoding="utf-8") as fh:
@@ -209,7 +209,7 @@ def _own_systemd_unit() -> "tuple[Optional[str], Optional[str]]":
     return None, None
 
 
-def _systemd_manager_flags(cgroup_path: Optional[str]) -> "tuple[list[str], ...]":
+def _systemd_manager_flags(cgroup_path: Optional[str]) -> tuple[list[str], ...]:
     """``systemctl`` manager flags to query, the cgroup's own manager first."""
     if cgroup_path and "/system.slice/" in cgroup_path:
         return ([],)
@@ -235,7 +235,7 @@ def systemd_unit_stopping() -> bool:
         try:
             result = subprocess.run(
                 ["systemctl", *flag, "show", unit_name, "--property=ActiveState"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2.0,
+                check=False, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2.0,
             )
         except (subprocess.TimeoutExpired, OSError):
             continue

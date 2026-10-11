@@ -1095,7 +1095,7 @@ def _entry_ids(entries: Iterable[Any]) -> dict[str, dict[str, Any]]:
 _POOL_ORDER_SECTION = "credential_pool_order"
 
 
-def read_pool_order_generation(provider_id: str, auth_store: Optional[Dict[str, Any]] = None) -> int:
+def read_pool_order_generation(provider_id: str, auth_store: Optional[dict[str, Any]] = None) -> int:
     """Monotonic per-provider ordering generation (0 when never reordered deliberately)."""
     store = auth_store if auth_store is not None else _load_auth_store()
     section = store.get(_POOL_ORDER_SECTION)
@@ -1115,7 +1115,7 @@ class PoolOrderState:
     ``generation`` is the generation now on disk and ``adopted_disk_order`` tells the caller
     its own priorities were discarded in favour of a newer deliberate reorder on disk."""
 
-    __slots__ = ("base", "bump", "generation", "adopted_disk_order")
+    __slots__ = ("adopted_disk_order", "base", "bump", "generation")
 
     def __init__(self, base: int = 0, *, bump: bool = False):
         self.base, self.bump = max(0, int(base or 0)), bool(bump)
@@ -1123,8 +1123,8 @@ class PoolOrderState:
 
 
 def _arbitrate_pool_order(
-    provider_id: str, auth_store: Dict[str, Any], merged: List[Dict[str, Any]],
-    existing_by_id: Dict[str, Dict[str, Any]], order: Optional[PoolOrderState],
+    provider_id: str, auth_store: dict[str, Any], merged: list[dict[str, Any]],
+    existing_by_id: dict[str, dict[str, Any]], order: Optional[PoolOrderState],
 ) -> None:
     """Keep a newer deliberate ``hermes auth priority`` ordering over a stale routine flush.
 

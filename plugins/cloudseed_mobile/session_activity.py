@@ -27,7 +27,7 @@ def _lineages(home, ids):
     db = sqlite3.connect(read_only_db_uri(path), uri=True, timeout=1)
     try:
         sql = """
-            WITH RECURSIVE roots(root) AS (VALUES %s),
+            WITH RECURSIVE roots(root) AS (VALUES {}),
             ancestors(root,id) AS (
                 SELECT root,root FROM roots
                 UNION
@@ -45,7 +45,7 @@ def _lineages(home, ids):
                 WHERE parent.end_reason='compression'
             )
             SELECT root,id FROM ancestors UNION SELECT root,id FROM descendants
-        """ % ','.join('(?)' for _ in ids)
+        """.format(','.join('(?)' for _ in ids))
         parents = {sid: [] for sid in ids}
         for root, member in db.execute(sql, ids):
             parents[root].append(member)

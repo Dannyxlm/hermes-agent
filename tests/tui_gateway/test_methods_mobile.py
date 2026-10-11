@@ -203,7 +203,7 @@ def test_mobile_submit_always_queues_at_real_busy_dispatch(mobile_home, peer, mo
     session = server._sessions[opened["session_id"]]
     session["running"] = True
     monkeypatch.setattr(server, "_ensure_active_session_slot", lambda *a: None)
-    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", lambda: {})
+    monkeypatch.setattr(server, "_load_dashboard_process_isolation_config", dict)
     # Queue policy is server-owned; strict wire validation rejects a client override.
     assert "error" in rpc("mobile.submit", **scope(opened), text="next request", queued=False)
     response = rpc("mobile.submit", **scope(opened), text="next request")

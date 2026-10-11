@@ -36,7 +36,7 @@ def old(tmp_path):
     (root / "__init__.py").write_text("")
     for name in _MODULES:
         shown = subprocess.run(["git", "-C", str(repo), "show", f"{PREDECESSOR}:tui_gateway/{name}.py"],
-                               capture_output=True, text=True)
+                               check=False, capture_output=True, text=True)
         if shown.returncode:
             pytest.skip(f"predecessor {PREDECESSOR} unavailable in this checkout")
         (root / f"{name}.py").write_text(shown.stdout)

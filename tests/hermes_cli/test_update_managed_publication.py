@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_cli import main as cli_main, update_cmd
-from tests.hermes_cli.test_update_target_identity import git, update_tree  # noqa: F401
+from tests.hermes_cli.test_update_target_identity import git, update_tree
 
 
 @pytest.mark.parametrize("case", ["behind", "current", "ahead", "diverged", "moved", "invalid", "branch", "merge-noop"])

@@ -78,7 +78,7 @@ def test_recent_pages_past_missing_rows_without_gaps_or_repeats(client):
 
 def test_recent_route_applies_the_same_check(client):
     c, home = client
-    root, wid = setup_root(c, home)
+    root, _wid = setup_root(c, home)
     (root/'outputs/real.md').write_text('saved')
     seed(home, root, [('assistant', 'MEDIA: ' + str(root/'outputs/real.md') + '\nMEDIA: ' + str(root/'outputs/ghost.md'), None)])
     c.get(P + '/deliverables?profile=default')

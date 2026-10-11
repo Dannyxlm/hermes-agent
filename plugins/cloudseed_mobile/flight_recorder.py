@@ -336,7 +336,7 @@ _last_prune = {}
 class FlightRecorderStore:
     def __init__(self, root: Path, now=None):
         self.root = Path(root)
-        self._now = now or (lambda: dt.datetime.now(dt.timezone.utc))
+        self._now = now or (lambda: dt.datetime.now(dt.UTC))
 
     # Layout ----------------------------------------------------------------
     def _ensure(self):

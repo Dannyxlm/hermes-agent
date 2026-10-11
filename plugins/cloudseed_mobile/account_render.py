@@ -2,7 +2,7 @@
 import base64
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from agent.account_usage import _parse_dt
 
 
@@ -16,7 +16,7 @@ def _until(entry):
 
 def _entry_is_pool_exhausted(entry):
     until = _until(entry)
-    return until is not None and datetime.now(timezone.utc) < until
+    return until is not None and datetime.now(UTC) < until
 
 
 def _entry_pool_retry_after(entry):

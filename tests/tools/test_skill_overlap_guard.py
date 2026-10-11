@@ -91,7 +91,7 @@ def test_review_create_is_first_shown_the_closest_skill_then_allowed_on_repeat(s
 
     first, created_after_first, second = _in_review(run)
     assert first["success"] is False
-    assert [m["name"] for m in first["overlap_candidates"]][0] == "personal-records-vault"
+    assert next(m["name"] for m in first["overlap_candidates"]) == "personal-records-vault"
     assert "kubernetes-rollouts" not in first["error"]
     assert created_after_first is False
     assert second["success"] is True

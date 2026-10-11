@@ -1,9 +1,9 @@
 """Tokenless privacy refresh crosses the authenticated dispatcher without attaching runtimes."""
 import pytest
 
-from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc, open_bot
-from tests.tui_gateway.test_methods_mobile_push import push_service as push_service, registration
-from tests.tui_gateway.test_mobile_session_parity import ordinary as ordinary
+from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc, open_bot  # noqa: PLC0414 - imported pytest fixtures
+from tests.tui_gateway.test_methods_mobile_push import push_service as push_service, registration  # noqa: PLC0414 - imported pytest fixtures
+from tests.tui_gateway.test_mobile_session_parity import ordinary as ordinary  # noqa: PLC0414 - imported pytest fixtures
 from tui_gateway import server
 
 

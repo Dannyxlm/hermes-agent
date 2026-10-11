@@ -39,25 +39,25 @@ def _stem(word: str) -> str:
     return word
 
 
-def _tokens(text: str) -> List[str]:
+def _tokens(text: str) -> list[str]:
     return [_stem(w) for w in _TOKEN_RE.findall(text.lower())
             if len(w) > 1 and not w.isdigit() and w not in _STOPWORDS]
 
 
-def _skill_document(name: str, description: str, body: str) -> List[str]:
+def _skill_document(name: str, description: str, body: str) -> list[str]:
     # The name is the strongest class signal and the shortest field, so it counts twice.
     spaced = name.replace("-", " ").replace("_", " ")
     return _tokens(f"{spaced} {spaced} {description} {body[:_BODY_CHARS]}")
 
 
 def _excerpt(description: str, body: str) -> str:
-    match = re.search(r"^#+\s*When to Use\s*$\n+(.+?)(?=^#|\Z)", body, re.M | re.S | re.I)
+    match = re.search(r"^#+\s*When to Use\s*$\n+(.+?)(?=^#|\Z)", body, re.MULTILINE | re.DOTALL | re.IGNORECASE)
     text = " ".join((match.group(1) if match else body).split())
     text = text or description
     return text[:_EXCERPT_CHARS] + ("…" if len(text) > _EXCERPT_CHARS else "")
 
 
-def _installed_skills(exclude: Iterable[str]) -> List[Dict[str, str]]:
+def _installed_skills(exclude: Iterable[str]) -> list[dict[str, str]]:
     """Every installed SKILL.md (local dir + skills.external_dirs), first copy of each name wins."""
     from agent.skill_utils import get_all_skills_dirs, parse_frontmatter
     from tools.skill_manager_tool import _iter_skill_dirs
@@ -81,7 +81,7 @@ def _installed_skills(exclude: Iterable[str]) -> List[Dict[str, str]]:
 
 
 def nearest_skills(name: str, content: str, *, limit: int = 3,
-                   exclude: Iterable[str] = ()) -> List[Dict[str, object]]:
+                   exclude: Iterable[str] = ()) -> list[dict[str, object]]:
     """Up to ``limit`` installed skills most similar to the proposed SKILL.md ``content``, best first:
     ``{"name", "description", "score", "excerpt"}``. Empty when nothing clears ``_MIN_SCORE``."""
     from agent.skill_utils import parse_frontmatter
@@ -95,7 +95,7 @@ def nearest_skills(name: str, content: str, *, limit: int = 3,
     df = Counter(term for doc in docs for term in set(doc))
     total = len(docs)
 
-    def _vector(terms: List[str]) -> Dict[str, float]:
+    def _vector(terms: list[str]) -> dict[str, float]:
         # Keep shared terms informative even in a one-skill library.
         weights = {t: (1 + math.log(c)) * (1 + math.log((total + 1) / (df.get(t, 0) + 1)))
                    for t, c in Counter(terms).items()}
@@ -114,7 +114,7 @@ def nearest_skills(name: str, content: str, *, limit: int = 3,
              "excerpt": _excerpt(s["description"], s["body"])} for score, s in scored[:limit]]
 
 
-def format_overlap_refusal(name: str, matches: List[Dict[str, object]]) -> str:
+def format_overlap_refusal(name: str, matches: list[dict[str, object]]) -> str:
     lines = "\n".join(f"  • {m['name']} — {m['description'] or m['excerpt']}" for m in matches)
     return (
         f"Not created yet: before adding '{name}' autonomously, compare it with the closest existing "
@@ -124,7 +124,7 @@ def format_overlap_refusal(name: str, matches: List[Dict[str, object]]) -> str:
         f"same create once and it will go through.")
 
 
-def overlap_candidates_or_none(name: str, content: str) -> Optional[List[Dict[str, object]]]:
+def overlap_candidates_or_none(name: str, content: str) -> Optional[list[dict[str, object]]]:
     """``nearest_skills`` that never raises: a ranking failure must not block a create."""
     try:
         return nearest_skills(name, content) or None

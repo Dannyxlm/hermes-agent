@@ -38,7 +38,7 @@ def test_files_preview_original_and_stream(client):
 @pytest.mark.parametrize('path', ['../outside','/etc/passwd','outputs/../../outside','%2e%2e/outside','%252e%252e/outside','a\x00b','.SSH/key','Credentials/key','.ENV','state.db','auth.json','outputs/private/x'])
 def test_sensitive_and_traversal_denied(client, path):
     c, home = client
-    root, wid = setup_root(c, home)
+    _root, wid = setup_root(c, home)
     for route in ['read','download','stream']:
         assert c.get(P+'/workspace-files/'+route, params={'profile':'default','workspace_id':wid,'path':path}).status_code in (400,403,404)
 
@@ -100,7 +100,7 @@ def test_default_cwd_does_not_grant_unrelated_siblings(client):
 
 
 def test_sensitive_native_credential_floor(client):
-    c,home=client; root,wid=setup_root(c,home)
+    c,home=client; _root,_wid=setup_root(c,home)
     from plugins.cloudseed_mobile.workspace_files import parts
     for path in ['MCP-TOKENS/a.json','Pairing/a.json','Google_Token.json','BWS_CACHE.ENC.JSON','.anthropic_oauth.json','webhook_subscriptions.json']:
         with pytest.raises(HTTPException): parts(path,True)

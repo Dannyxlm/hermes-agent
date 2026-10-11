@@ -9,7 +9,7 @@ from plugins.cloudseed_mobile import deliverables_index as ix
 from plugins.cloudseed_mobile.deliverables_warmer import BACKOFF, IDLE, WORKING, DeliverablesWarmer
 from tests.plugins.cloudseed_mobile.test_deliverables_index import store
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
-from tests.plugins.test_cloudseed_mobile import client  # noqa: F401  (fixture)
+from tests.plugins.test_cloudseed_mobile import client
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +18,7 @@ def _paths_exist(monkeypatch):
 
 
 @pytest.fixture
-def home_index(client):  # noqa: F811
+def home_index(client):
     c, home = client
     root, wid = setup_root(c, home)
     store(home, root, 5)
@@ -55,7 +55,7 @@ def test_version_bump_converges_without_a_files_request(home_index):
 
 
 def test_source_churn_alone_is_left_to_files_opens(home_index):
-    home, root, grants = home_index
+    home, _root, grants = home_index
     index = ix.DeliverablesIndex(home, 'default', grants)
     warmer = DeliverablesWarmer(lambda: [index], max_sessions=10)
     converge(warmer)

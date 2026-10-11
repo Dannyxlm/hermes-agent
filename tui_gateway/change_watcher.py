@@ -201,9 +201,9 @@ def _session_db_content_sig(db_path: Path):
                     session_change_cursor.observe(
                         db_path, fields, observed,
                         delegate_ids=lambda ids: _delegate_session_ids(conn, ids, available))
-                except Exception:  # noqa: BLE001 - the journal must never change the legacy signal
+                except Exception:
                     logger.debug("session change journal update failed", exc_info=True)
-    except Exception:  # noqa: BLE001 - preserve the old wake-up signal if the read probe cannot run
+    except Exception:
         # A busy/locked read after a good one keeps the last digest and leaves the cached mtime
         # stale so the next pass re-reads: digest -> mtime -> digest would broadcast twice.
         if cached is not None and cached[1] is not None and cached[1][0] != "mtime-fallback":
@@ -413,4 +413,4 @@ def _ensure_skin_watcher() -> None:
 def register(server) -> None:
     """Publish this module's helpers + handlers onto ``server``, rebound to its globals."""
     bind_module(globals(), server, skip=("_",))
-    from tui_gateway import session_change_cursor  # noqa: F401 - arms its pending-request listener
+    from tui_gateway import session_change_cursor

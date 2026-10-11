@@ -73,7 +73,7 @@ def account_label(agent: Any, entry_id: Optional[str] = None) -> Optional[str]:
         return None
 
 
-def effective_reasoning(agent: Any) -> Dict[str, Any]:
+def effective_reasoning(agent: Any) -> dict[str, Any]:
     """Best-effort description of the reasoning level actually on the wire for the active route.
 
     ``state``: ``explicit`` (an effort goes on the wire), ``disabled`` (a disable goes on the
@@ -87,7 +87,7 @@ def effective_reasoning(agent: Any) -> Dict[str, Any]:
     requested = cfg.get("effort")
     requested = str(requested).lower() if requested else None
     enabled = cfg.get("enabled") is not False
-    out: Dict[str, Any] = {"requested": requested, "enabled": enabled, "effort": None, "state": "unknown", "source": "configured"}
+    out: dict[str, Any] = {"requested": requested, "enabled": enabled, "effort": None, "state": "unknown", "source": "configured"}
     model = str(getattr(agent, "model", "") or "")
     provider = str(getattr(agent, "provider", "") or "")
     api_mode = str(getattr(agent, "api_mode", "") or "")
@@ -135,7 +135,7 @@ def effective_reasoning(agent: Any) -> Dict[str, Any]:
     return out
 
 
-def serving_snapshot(agent: Any) -> Dict[str, Any]:
+def serving_snapshot(agent: Any) -> dict[str, Any]:
     """Credential-free description of the route currently bound to *agent*."""
     route = getattr(agent, "_provider_fallback_route", None)
     primary = getattr(agent, "_primary_runtime", None)
@@ -152,7 +152,7 @@ def serving_snapshot(agent: Any) -> Dict[str, Any]:
     }
 
 
-def _emit(agent: Any, event_type: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _emit(agent: Any, event_type: str, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Send one typed event through ``status_callback(kind="routing", json)``; never raises."""
     event = {"schema": SCHEMA_VERSION, "type": event_type, **payload}
     event["session_id"] = getattr(agent, "session_id", None)
@@ -177,7 +177,7 @@ def _emit(agent: Any, event_type: str, payload: Dict[str, Any]) -> Optional[Dict
 
 
 def emit_provider_switched(agent: Any, *, reason: Any, old_model: str, old_provider: str,
-                           new_model: str, new_provider: str, retry_eligible_in: Optional[int] = None) -> Optional[Dict[str, Any]]:
+                           new_model: str, new_provider: str, retry_eligible_in: Optional[int] = None) -> Optional[dict[str, Any]]:
     return _emit(agent, "provider_switched", {
         "from_model": old_model, "from_provider": old_provider,
         "to_model": new_model, "to_provider": new_provider,
@@ -187,7 +187,7 @@ def emit_provider_switched(agent: Any, *, reason: Any, old_model: str, old_provi
     })
 
 
-def emit_primary_restored(agent: Any, *, previous_model: str, previous_provider: str) -> Optional[Dict[str, Any]]:
+def emit_primary_restored(agent: Any, *, previous_model: str, previous_provider: str) -> Optional[dict[str, Any]]:
     return _emit(agent, "primary_restored", {
         "from_model": previous_model, "from_provider": previous_provider,
         "to_model": str(getattr(agent, "model", "") or ""), "to_provider": str(getattr(agent, "provider", "") or ""),
@@ -196,7 +196,7 @@ def emit_primary_restored(agent: Any, *, previous_model: str, previous_provider:
 
 
 def emit_account_switched(agent: Any, *, from_account: Optional[str], to_account: Optional[str],
-                          reason: Any = None, cause: str = "rotation") -> Optional[Dict[str, Any]]:
+                          reason: Any = None, cause: str = "rotation") -> Optional[dict[str, Any]]:
     """``cause``: ``rotation`` (failure bench), ``refresh`` (pre-request resolver picked another
     pooled account), ``revert`` (benched account available again)."""
     if not to_account or from_account == to_account:
@@ -210,7 +210,7 @@ def emit_account_switched(agent: Any, *, from_account: Optional[str], to_account
     })
 
 
-def emit_serving_if_changed(agent: Any) -> Optional[Dict[str, Any]]:
+def emit_serving_if_changed(agent: Any) -> Optional[dict[str, Any]]:
     """After a successful API call: publish the serving snapshot when it differs from the last one."""
     snap = serving_snapshot(agent)
     key = (snap["model"], snap["provider"], snap["account"], snap["fallback_active"],

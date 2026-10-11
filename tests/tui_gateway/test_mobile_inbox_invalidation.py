@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc  # noqa: F401 - fixtures
+from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
 from tests.tui_gateway.test_mobile_push import Sender
 from tui_gateway import mobile_inbox_invalidation as hints
 from tui_gateway import server, server_requests, session_change_cursor

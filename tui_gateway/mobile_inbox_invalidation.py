@@ -294,13 +294,13 @@ def process(store, now=None) -> int:
                 if _new_reply(db_path, sorted(ids)):
                     profiles.add(profile)
                 activity.pop(db_path)
-            except Exception as error:  # noqa: BLE001 - one unreadable store must not drop the others
+            except Exception as error:
                 logger.warning("Inbox reply check unavailable (%s)", type(error).__name__)
         sent = schedule(store, profiles & leased, now) if profiles & leased else 0
         profiles = set()  # scheduled: a later failure must not re-queue them
         _requeue(set(), activity)  # reply checks that failed retry next pass
         return sent + flush_trailing(store, now)
-    except Exception as error:  # noqa: BLE001 - hints are best effort and must not stall deliveries
+    except Exception as error:
         logger.warning("Inbox hint scheduling unavailable (%s)", type(error).__name__)
         _requeue(profiles, activity)
         return 0

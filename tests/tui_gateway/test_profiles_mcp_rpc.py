@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import hermes_yaml as yaml
 
-import tui_gateway.server as server
+from tui_gateway import server
 from hermes_cli.config import read_user_config_raw
 from hermes_cli.tools_config import enabled_mcp_server_names
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override

@@ -4966,7 +4966,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(), timeout=90,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if proc is not None:
                 proc.kill()
                 await proc.wait()
@@ -5134,7 +5134,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
             await msg.reply_text(f"Usage: /s{verb} <draft_id>")
             return True
 
-        success, result_text = await self._run_slack_approval_action(
+        _success, result_text = await self._run_slack_approval_action(
             verb,
             draft_id,
             actor_id=caller_id,

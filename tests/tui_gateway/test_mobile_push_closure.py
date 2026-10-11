@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from tests.tui_gateway.test_mobile_push import Sender, delivery as delivery  # noqa: F401
+from tests.tui_gateway.test_mobile_push import Sender, delivery as delivery  # noqa: PLC0414 - imported pytest fixtures
 from tui_gateway.mobile_push import Scope
 from tui_gateway.mobile_push_payloads import AlertPreview
 from tui_gateway.mobile_push_provider import DeliveryResult
@@ -146,7 +146,7 @@ def alerts(sender):
 
 
 def test_all_chats_policy_alerts_listed_chats_only(delivery):
-    service, sender, now, ids, _ = delivery
+    service, sender, _now, ids, _ = delivery
     service.set_policy("p", **ids, policy="all", token="aa" * 32, environment="production")
     listed, unlisted = Scope("native_session", "ops", "listed"), Scope("native_session", "ops", "telegram")
     for scope, flag in ((listed, True), (unlisted, False)):

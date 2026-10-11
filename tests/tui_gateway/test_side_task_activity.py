@@ -39,7 +39,6 @@ def test_spawn_failure_is_terminal(tmp_path, monkeypatch, start):
     def spawn(*a, **kw):
         if start == 'raised':
             raise RuntimeError('thread failure')
-        return None
     monkeypatch.setattr(server, '_start_session_work', spawn)
     session = {'profile_home': str(tmp_path), 'session_key': 'stored'}
     result = server._spawn_side_agent('r', session, 'task', 'live', 'background.complete', lambda: '')

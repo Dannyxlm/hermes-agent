@@ -8,9 +8,9 @@ import uuid
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc  # noqa: F401
-from tests.tui_gateway.test_methods_mobile_push import push_service as push_service  # noqa: F401
-from tests.tui_gateway.test_mobile_session_parity import live, ordinary as ordinary  # noqa: F401
+from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc  # noqa: PLC0414 - imported pytest fixtures
+from tests.tui_gateway.test_methods_mobile_push import push_service as push_service  # noqa: PLC0414 - imported pytest fixtures
+from tests.tui_gateway.test_mobile_session_parity import live, ordinary as ordinary  # noqa: PLC0414 - imported pytest fixtures
 from tui_gateway import server
 from tui_gateway.mobile_push import PushService, Scope
 from tui_gateway.mobile_push_provider import DeliveryResult
@@ -147,7 +147,7 @@ def store_delivery(tmp_path):
 def test_one_remote_start_per_installation_scope_and_run(store_delivery):
     """KTD8 dedupe: replayed announcements of one run never push-start twice; a phone-sent
     turn (not a continuation) is the app's local start, never a remote one."""
-    service, now, ids = store_delivery
+    service, _now, _ids = store_delivery
     phone_turn = service.start_run(ORDINARY)
     service.store.start_run(ORDINARY, run_id=phone_turn["run_id"], continuation=True)
     later = service.start_run(ORDINARY, continuation=True)
@@ -173,7 +173,7 @@ def test_revoked_or_rotated_start_token_is_never_used(store_delivery):
 
 
 def test_apple_rejected_start_token_is_dropped(store_delivery):
-    service, now, ids = store_delivery
+    service, now, _ids = store_delivery
     service.sender.result = DeliveryResult("invalid", "token_invalid")
     service.start_run(ORDINARY, continuation=True)
     service.drain_once()
@@ -188,13 +188,13 @@ def test_apple_rejected_start_token_is_dropped(store_delivery):
 
 def test_start_respects_previews_at_enqueue_and_dispatch(store_delivery):
     from tui_gateway.mobile_push_payloads import AlertPreview
-    service, now, ids = store_delivery
+    service, _now, ids = store_delivery
     service.register("p", ORDINARY, **ids, token="aa" * 32, environment="production", preview_enabled=True)
     service.start_run(ORDINARY, continuation=True, preview=AlertPreview(title="Private title"))
     service.refresh("p", **ids, token=None, environment="production", preview_enabled=False,
                     accepts_scope=lambda _: True)
     service.drain_once()
-    aps = [job for job in service.sender.jobs if job["kind"] == "activity_start"][0]["payload"]["aps"]
+    aps = next(job for job in service.sender.jobs if job["kind"] == "activity_start")["payload"]["aps"]
     assert "Private" not in json.dumps(aps)
     assert aps["attributes"]["sessionTitle"] == "Hermex Ava" and aps["alert"]["title"] == "Ava"
 
@@ -289,7 +289,7 @@ def test_tool_step_and_plan_reach_the_activity(push_service, ordinary, mobile_ho
 
 def test_a_turn_that_ends_before_its_start_push_never_starts_an_activity(store_delivery):
     """Review fix: terminal transitions drop the run's undelivered push-to-start."""
-    service, now, ids = store_delivery
+    service, _now, _ids = store_delivery
     run = service.start_run(ORDINARY, continuation=True)
     service.record(ORDINARY, run["run_id"], "done", "complete")
     service.drain_once()
@@ -325,7 +325,7 @@ def test_steered_input_does_not_mask_the_next_continuation(push_service, ordinar
 def test_start_token_revocation_holds_with_delivery_disabled(push_service, ordinary, mobile_home, peer, monkeypatch):
     register_start_token(ordinary)
     monkeypatch.setattr(server, "_mobile_push_service", lambda: None)
-    import tui_gateway.mobile_push as mobile_push
+    from tui_gateway import mobile_push
     monkeypatch.setattr(mobile_push, "service_for_home", lambda home: None)
     response = rpc("mobile.session_activity.start_token.unregister", **device(ordinary))
     assert response["result"] == {"removed": 1}

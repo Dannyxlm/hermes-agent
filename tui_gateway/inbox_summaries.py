@@ -185,7 +185,7 @@ def reply_preview(text, limit=REPLY_PREVIEW_CHARS):
     if not isinstance(text, str):
         return None
 
-    body = re.sub(r"```.*?(```|$)", " ", text, flags=re.S)  # drop fenced code
+    body = re.sub(r"```.*?(```|$)", " ", text, flags=re.DOTALL)  # drop fenced code
     body = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", body)  # images
     body = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)  # links -> text
     body = re.sub(r"(?m)^\s*MEDIA:[^\n]*$", "", body)

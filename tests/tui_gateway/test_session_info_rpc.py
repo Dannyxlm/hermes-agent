@@ -16,7 +16,7 @@ from unittest.mock import patch
 import hermes_yaml as yaml
 import pytest
 
-import tui_gateway.server as server
+from tui_gateway import server
 from tui_gateway.contracts.common import SessionLiveInfo
 from tui_gateway.contracts.registry import METHODS
 
@@ -131,7 +131,7 @@ def test_read_is_side_effect_free_for_a_not_yet_built_session(homes, emitted):
 
 def test_approval_mode_is_read_from_the_session_profile(homes, emitted):
     """approvals.mode=off in the session's profile reads back yolo, while the launch profile stays manual."""
-    launch, worker = homes
+    _launch, worker = homes
     _write_cfg(worker, "off")
     session = _session(None, key="worker-key", profile_home=str(worker))
     with patch.dict(server._sessions, {"s-worker": session, "s-launch": _session(None, key="session-key")},

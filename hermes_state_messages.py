@@ -2061,7 +2061,7 @@ class SessionMessagesMixin:
 
     def archive_session_messages(
         self,
-        session_ids: List[str],
+        session_ids: list[str],
         turn_lease_holder: Optional[str] = None,
     ) -> int:
         """Soft-retire active messages for several compression segments."""

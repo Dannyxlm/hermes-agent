@@ -489,7 +489,7 @@ class MemoryManager:
         # Load schemas BEFORE mutating any manager state: a provider whose schema
         # load raises must leave `_providers` / `_has_external` untouched, otherwise
         # it blocks every later external provider in this process (#9948).
-        schemas = list(provider.get_tool_schemas())
+        list(provider.get_tool_schemas())
 
         if provider.name != "builtin":
             from hermes_cli.config import load_config
@@ -530,7 +530,7 @@ class MemoryManager:
 
         _core_tool_names = set(_HERMES_CORE_TOOLS)
 
-        routes: Dict[str, MemoryProvider] = {}
+        routes: dict[str, MemoryProvider] = {}
         for provider in self._providers:
             try:
                 raw_schemas = provider.get_tool_schemas()

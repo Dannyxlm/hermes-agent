@@ -68,13 +68,13 @@ _ASSISTANT_CALLS = (
 
 
 class _SessionTally:
-    __slots__ = ("fingerprint", "tool_names", "call_names", "skills")
+    __slots__ = ("call_names", "fingerprint", "skills", "tool_names")
 
-    def __init__(self, fingerprint: Tuple[Any, Any]):
+    def __init__(self, fingerprint: tuple[Any, Any]):
         self.fingerprint = fingerprint
         self.tool_names: Counter = Counter()  # role='tool' rows (gateway)
         self.call_names: Counter = Counter()  # assistant tool_calls JSON (CLI)
-        self.skills: Dict[str, List[Any]] = {}  # name -> [views, manages, last_ts]
+        self.skills: dict[str, list[Any]] = {}  # name -> [views, manages, last_ts]
 
 
 def _count_assistant_calls(tally: _SessionTally, raw_calls: Any, timestamp: Any) -> None:
@@ -108,9 +108,9 @@ class SessionUsageCache:
     SAVE_INTERVAL_S = 60.0
 
     def __init__(self, max_entries: int = 50_000, *, store_path: Optional[str] = None,
-                 db_identity: Optional[Tuple[int, int]] = None):
+                 db_identity: Optional[tuple[int, int]] = None):
         self._lock = threading.Lock()
-        self._entries: Dict[str, _SessionTally] = {}
+        self._entries: dict[str, _SessionTally] = {}
         self.max_entries = max_entries
         self.last_refreshed = 0  # sessions re-read by the most recent collect
         self._store_path = store_path
@@ -119,7 +119,7 @@ class SessionUsageCache:
         self._dirty = False
         self._saved_at = 0.0
 
-    def collect(self, conn, cutoff: float, source: Optional[str] = None) -> Tuple[List[Dict], List[Dict]]:
+    def collect(self, conn, cutoff: float, source: Optional[str] = None) -> tuple[list[dict], list[dict]]:
         """``(tool_usage, skill_usage)`` in the shapes of ``InsightsEngine._get_tool_usage``
         and ``_get_skill_usage`` for sessions started at or after ``cutoff``."""
         with self._lock:
@@ -146,7 +146,7 @@ class SessionUsageCache:
 
     def _load(self) -> None:
         try:
-            with open(self._store_path, encoding="utf-8") as f:
+            with open(self._store_path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             if data.get("version") != self.STORE_VERSION or data.get("db") != self._db_identity:
                 return
@@ -195,7 +195,7 @@ class SessionUsageCache:
                 except OSError:
                     pass
 
-    def _tally_chunk(self, conn, chunk: Dict[str, Tuple[Any, Any]]) -> None:
+    def _tally_chunk(self, conn, chunk: dict[str, tuple[Any, Any]]) -> None:
         fresh = {sid: _SessionTally(fp) for sid, fp in chunk.items()}
         ids = list(chunk)
         marks = ",".join("?" * len(ids))
@@ -206,9 +206,9 @@ class SessionUsageCache:
         # Stored per chunk: an abandoned (client hung up) cold request still warms the cache.
         self._entries.update(fresh)
 
-    def _aggregate(self, window: Dict[str, Any]) -> Tuple[List[Dict], List[Dict]]:
+    def _aggregate(self, window: dict[str, Any]) -> tuple[list[dict], list[dict]]:
         tool_counts: Counter = Counter()
-        skills: Dict[str, Dict[str, Any]] = {}
+        skills: dict[str, dict[str, Any]] = {}
         for sid in window:
             tally = self._entries[sid]
             for name in tally.tool_names.keys() | tally.call_names.keys():

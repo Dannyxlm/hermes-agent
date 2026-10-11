@@ -1,7 +1,7 @@
 """Managed upstream counts remain readable by Dashboard and remote Desktop."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +21,7 @@ def managed_status(tmp_path, monkeypatch):
     monkeypatch.setattr(
         server, "get_version_info", lambda: SimpleNamespace(derived_version="1.2.3+gabcdef12")
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     receipt = {
         "schema_version": "hermes-update-status.v2",
         "count_basis": "recorded_official_base",
@@ -59,7 +59,7 @@ def test_managed_route_returns_version_and_monitor_count(managed_status, behind,
     if stale:
         age = server._managed_update_max_age_seconds() + 60
         receipt["last_fetched_at"] = receipt["generated_at"] = (
-            datetime.now(timezone.utc) - timedelta(seconds=age)
+            datetime.now(UTC) - timedelta(seconds=age)
         ).isoformat()
     status_path.write_text(json.dumps(receipt))
     status_path.chmod(0o600)

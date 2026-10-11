@@ -69,7 +69,7 @@ def preview_text(value, limit):
     if not isinstance(value, str):
         return ""
     value = value[:8192]
-    value = re.sub(r"```.*?(?:```|$)", " ", value, flags=re.S)
+    value = re.sub(r"```.*?(?:```|$)", " ", value, flags=re.DOTALL)
     value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
     value = re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+)", "", value)
     value = re.sub(r"(\*\*|__|~~|`)(.+?)\1", r"\2", value)
@@ -82,7 +82,7 @@ def first_line(value, limit):
     """The first non-empty display line of a reply (code fences never count)."""
     if not isinstance(value, str):
         return ""
-    value = re.sub(r"```.*?(?:```|$)", "\n", value[:8192], flags=re.S)
+    value = re.sub(r"```.*?(?:```|$)", "\n", value[:8192], flags=re.DOTALL)
     for line in value.splitlines():
         text = preview_text(line, limit)
         if text:

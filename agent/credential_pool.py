@@ -917,7 +917,7 @@ def persist_pool_entries(
     removed_ids: Optional[Iterable[str]] = None,
     status_cleared_ids: Optional[Iterable[str]] = None,
     token_bases: Optional[dict[str, tuple[Any, Any]]] = None,
-    order: Optional["auth_mod.PoolOrderState"] = None,
+    order: Optional[auth_mod.PoolOrderState] = None,
 ) -> Optional[list[dict[str, Any]]]:
     """Persist a provider's pool rows to the store that OWNS them.
 
@@ -947,7 +947,7 @@ def persist_pool_entries(
                     provider, exc,
                 )
             return None
-    kwargs: Dict[str, Any] = dict(
+    kwargs: dict[str, Any] = dict(
         removed_ids=removed_ids, status_cleared_ids=status_cleared_ids, token_bases=token_bases,
     )
     if order is not None:

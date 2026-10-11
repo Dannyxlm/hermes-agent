@@ -43,7 +43,7 @@ def validate_request(operation, payload):
     if payload.get("due_at"):
         from datetime import datetime
         try:
-            parsed = datetime.fromisoformat(payload["due_at"].replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(payload["due_at"])
             if parsed.tzinfo is None:
                 raise ValueError()
         except ValueError as exc:

@@ -68,7 +68,7 @@ def load_day(root: Path, day: str):
             record = entry / 'flag.json'
             if entry.is_dir() and not entry.is_symlink() and record.is_file():
                 try:
-                    flag = json.loads(record.read_text())
+                    flag = json.loads(record.read_text(encoding="utf-8-sig"))
                 except (OSError, ValueError):
                     flag = None
                 if isinstance(flag, dict):
@@ -92,7 +92,7 @@ def load_logs(paths):
     logs = []
     for path in paths:
         try:
-            handle = open(path, encoding='utf-8', errors='replace')
+            handle = open(path, encoding='utf-8-sig', errors='replace')
         except OSError:
             continue
         lines, first, last = [], None, None
@@ -223,13 +223,13 @@ def _worse(current, value):
 # ------------------------------------------------------------------ report
 
 def _utc(ms):
-    return dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).strftime('%H:%M:%S') if ms else '-'
+    return dt.datetime.fromtimestamp(ms / 1000, dt.UTC).strftime('%H:%M:%S') if ms else '-'
 
 
 def build_report(root: Path, day: str, log_paths) -> str:
     batches, flags, unreadable = load_day(root, day)
     logs = load_logs(log_paths)
-    day_start = dt.datetime.strptime(day, '%Y-%m-%d').replace(tzinfo=dt.timezone.utc).timestamp()
+    day_start = dt.datetime.strptime(day, '%Y-%m-%d').replace(tzinfo=dt.UTC).timestamp()
     sigs = signatures(batches)
     spans = span_budgets(batches)
     events = sum(len(b.get('events', ())) for b in batches)
@@ -310,7 +310,7 @@ def main(argv=None) -> int:
     parser.add_argument('--out-dir', type=Path, help='write <day>.md here (0600); default prints to stdout')
     args = parser.parse_args(argv)
     root = args.root or _hermes_root() / 'mobile' / 'flight-recorder'
-    day = args.day or (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).strftime('%Y-%m-%d')
+    day = args.day or (dt.datetime.now(dt.UTC) - dt.timedelta(days=1)).strftime('%Y-%m-%d')
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day):
         parser.error('--day must be YYYY-MM-DD')
     logs = args.logs or [_hermes_root() / 'logs' / name for name in DEFAULT_LOGS]

@@ -48,7 +48,7 @@ def read_section(section):
             info = checked_stat(fd, name)
             if info is None:
                 return '', None
-            with os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd), 'rb') as source:
+            with os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd), 'rb') as source:  # windows-footgun: ok - explicit binary mode
                 if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
                     raise ValueError('Memory file must be regular')
                 data = source.read(MAX_MEMORY + 1)
@@ -79,7 +79,7 @@ def write_memory(section, content):
         checked_stat(fd, name)
         temporary = '.mobile-'+uuid.uuid4().hex
         try:
-            with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd), 'wb') as output:
+            with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd), 'wb') as output:  # windows-footgun: ok - explicit binary mode
                 output.write(data)
                 output.flush()
                 os.fsync(output.fileno())

@@ -87,7 +87,7 @@ def delivery(tmp_path):
 
 
 def test_token_rotation_invalid_old_token_does_not_delete_new_registration(delivery):
-    service, sender, now, ids, scope = delivery
+    service, sender, _now, ids, scope = delivery
     receipt = service.register("p", scope, **ids, token="aa" * 32, environment="production")
     run = service.start_run(scope)
     service.record(scope, run["run_id"], "attention", "waitingForApproval")
@@ -161,7 +161,7 @@ def test_activity_is_permission_independent_scoped_coalesced_and_ended(delivery)
 
 
 def test_unsubscribe_removes_pending_jobs_and_categories_control_alerts(delivery):
-    service, sender, now, ids, scope = delivery
+    service, sender, _now, ids, scope = delivery
     service.register("p", scope, **ids, token="aa" * 32, environment="production", categories=["attention"])
     run = service.start_run(scope)
     service.record(scope, run["run_id"], "attention", "waitingForApproval")
@@ -395,7 +395,7 @@ def test_detached_activity_refresh_never_recreates_and_replays_terminal(delivery
 @pytest.mark.parametrize("surface", ["native", "chats"])
 def test_reply_previews_are_per_device_and_survive_delivery_restart(delivery, surface):
     from tui_gateway.mobile_push_payloads import AlertPreview
-    service, sender, now, ids, _ = delivery
+    service, _sender, now, ids, _ = delivery
     scope = Scope(surface, "ops", "preview-session")
     service.register("p", scope, **ids, token="aa" * 32, environment="production")
     preview_ids = {**ids, "installation_id": str(uuid.uuid4())}
@@ -418,7 +418,7 @@ def test_reply_previews_are_per_device_and_survive_delivery_restart(delivery, su
 
 def test_preview_opt_out_controls_already_queued_notification(delivery):
     from tui_gateway.mobile_push_payloads import AlertPreview
-    service, sender, now, ids, scope = delivery
+    service, sender, _now, ids, scope = delivery
     service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
     run = service.start_run(scope)
     service.record(scope, run["run_id"], "done", "complete", preview=AlertPreview("Private title", "Private reply"))
@@ -431,7 +431,7 @@ def test_preview_opt_out_controls_already_queued_notification(delivery):
 
 def test_preview_migration_keeps_old_subscriptions_generic(delivery):
     from tui_gateway.mobile_push_store import PushStore
-    service, sender, now, ids, scope = delivery
+    service, _sender, now, ids, scope = delivery
     receipt = service.register("p", scope, **ids, token="aa" * 32, environment="production")
     with service.store.transaction() as db:
         db.execute("ALTER TABLE subscriptions DROP COLUMN preview_enabled")
@@ -463,7 +463,7 @@ def test_preview_bounds_unicode_and_never_uses_error_as_reply():
 
 
 def test_widget_reads_are_scoped_monotonic_revocable_and_credential_free(delivery):
-    service, sender, now, ids, _ = delivery
+    service, sender, _now, ids, _ = delivery
     scope = Scope("chats", "ops", "chat")
     cap = "12" * 32
     service.register("owner", scope, **ids, token="", environment="production", kind="widget", read_token=cap)

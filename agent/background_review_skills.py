@@ -13,7 +13,7 @@ _WRITE_ACTIONS = frozenset({"create", "edit", "patch", "write_file", "remove_fil
 _ACTOR_LABELS = {"curator": "a background review", "agent": "the conversation", "user": "the user"}
 
 
-def _session_rows(session_ids: Iterable[Optional[str]]) -> List[Dict[str, Any]]:
+def _session_rows(session_ids: Iterable[Optional[str]]) -> list[dict[str, Any]]:
     from tools import skill_ledger
 
     wanted = {sid for sid in session_ids if sid}
@@ -32,7 +32,7 @@ def session_skill_activity_block(session_ids: Iterable[Optional[str]]) -> str:
     """Prompt block listing skills written in this conversation (newest first), or ``""``."""
     from tools.skill_manager_tool import _find_skill
 
-    touched: Dict[str, Dict[str, set]] = {}
+    touched: dict[str, dict[str, set]] = {}
     for row in _session_rows(session_ids):
         name = row["skill"]
         if name not in touched:

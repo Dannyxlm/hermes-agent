@@ -117,7 +117,7 @@ def test_gateway_process_requires_durable_conversation_not_routing_key(client, w
 
 def test_old_unknown_provenance_cannot_authorize_empty_worker_evidence(client, workers):
     from tools.process_registry import ProcessSession
-    c, home = client
+    c, _home = client
     delegates, processes = workers
     delegates._active_subagents['old'] = {'subagent_id': 'old', 'status': 'running',
                                          'owner_agent_session_id': 'root'}
