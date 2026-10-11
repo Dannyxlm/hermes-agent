@@ -2457,6 +2457,9 @@ DEFAULT_CONFIG = {
             "binary_path": "",      # absolute path to op; empty = PATH.
             # Env var holding a service-account token (headless auth, no unlock prompt). Unset = prompt.
             "service_account_token_env": "OP_SERVICE_ACCOUNT_TOKEN",
+            # Opt-in: list Credit Card items as payment handles. They carry no website, so each fill
+            # binds to the current https page only after the user approves that exact site.
+            "payment_cards": False,
         },
         "bitwarden": {
             "enabled": True,        # `bw` CLI (Password Manager, not Secrets Manager); run `bw login` once first.

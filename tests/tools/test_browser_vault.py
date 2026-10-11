@@ -592,6 +592,74 @@ class TestBrowserVaultTools:
             redact.clear_vault_redaction_values()
 
 
+    def test_unbound_manager_card_binds_to_the_approved_https_page(self):
+        """A password-manager card has no website: the approval prompt names the CURRENT page, the fill is
+        bound to exactly that origin, a decline writes nothing, and plain-http pages are refused unasked."""
+        from tools import browser_vault_tool
+        from agent import redact
+        from agent.vault_store import VaultItemMeta
+
+        meta = VaultItemMeta(id="op:crd", kind="payment", label="Expense Card", origin=None, created_at="",
+                             any_origin=True)
+
+        class FakeBackend:
+            name, display_name, needs_unlock = "onepassword", "1Password", True
+
+            def is_unlocked(self):
+                return True
+
+            def get_meta(self, handle):
+                return meta
+
+            def resolve_secret(self, handle):
+                return dict(_CARD)
+
+        controls = [{"autocomplete": "cc-number", "index": 0, "type": "text"},
+                    {"autocomplete": "cc-csc", "index": 1, "type": "text"}]
+        page = {"href": "https://store.test/checkout"}
+
+        def fake_eval(task_id, expression):
+            if "location.href" in expression:
+                return {"success": True, "result": page["href"]}
+            return {"success": True, "result": json.dumps(controls)}
+
+        secret_exprs, prompts = [], []
+
+        def fake_eval_secret(task_id, expression):
+            secret_exprs.append(expression)
+            return {"success": True, "result": json.dumps({"filled": 2})}
+
+        def run(decision):
+            def consent(message, description, **kw):
+                prompts.append((message, description))
+                return decision
+            with patch("agent.vault_backends.backend_for_handle", return_value=FakeBackend()), \
+                 patch.object(browser_vault_tool, "_focus_bound_origin", return_value=None), \
+                 patch.object(browser_vault_tool, "_eval_js", side_effect=fake_eval), \
+                 patch.object(browser_vault_tool, "_eval_js_secret", side_effect=fake_eval_secret), \
+                 patch("tools.approval_prompt.request_elicitation_consent", side_effect=consent):
+                return browser_vault_tool.browser_vault_fill("op:crd")
+
+        try:
+            declined = json.loads(run("decline"))
+            assert declined["error_type"] == "payment_declined" and secret_exprs == []
+            assert "https://store.test" in prompts[-1][0] and "not tied to one website" in prompts[-1][1]
+
+            raw = run("accept")
+            out = json.loads(raw)
+            assert out["success"] is True and out["origin"] == "https://store.test"
+            assert _CARD["card_number"] not in raw
+            assert len(secret_exprs) == 1 and "https://store.test" in secret_exprs[0]  # in-script origin assert
+
+            page["href"] = "http://store.test/checkout"
+            n_prompts = len(prompts)
+            insecure = json.loads(run("accept"))
+            assert insecure["error_type"] == "insecure_origin" and len(prompts) == n_prompts
+            assert len(secret_exprs) == 1
+        finally:
+            redact.clear_vault_redaction_values()
+
+
 class TestVaultHardening:
     """Read-deny, backup perms-tightening, canonical dir securing.
 

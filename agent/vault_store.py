@@ -171,6 +171,9 @@ class VaultItemMeta:
     # ``origin`` is the first/primary one). Fill matching stays exact-origin against
     # this list — no wildcard or subdomain inference is ever derived from it.
     allowed_origins: tuple = ()
+    # Unbound payment item from a password manager (cards carry no website): it may fill the current https
+    # page, but only after the user approves that exact page origin, per fill.
+    any_origin: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -187,6 +190,8 @@ class VaultItemMeta:
             out["has_otp"] = True
         if len(self.allowed_origins) > 1:
             out["allowed_origins"] = list(self.allowed_origins)
+        if self.any_origin:
+            out["any_origin"] = True
         return out
 
 

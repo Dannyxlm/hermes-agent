@@ -239,10 +239,12 @@ def browser_vault_list() -> str:
             continue
         for meta in metas:
             entry = {"handle": meta.id, "backend": backend.name, "label": meta.label, "kind": meta.kind,
-                     "origin": meta.origin, "available": meta.kind == "login" or bool(meta.origin)}
+                     "origin": meta.origin, "available": meta.kind == "login" or bool(meta.origin) or meta.any_origin}
             if len(meta.allowed_origins) > 1:
                 entry["allowed_origins"] = list(meta.allowed_origins)
-            if meta.has_otp or backend.needs_unlock:
+            if meta.any_origin:
+                entry["fill_scope"] = "current https checkout page; the user approves that exact site on every fill"
+            if meta.kind == "login" and (meta.has_otp or backend.needs_unlock):
                 entry["two_factor"] = "automatic" if meta.has_otp else "automatic if the manager stores a TOTP seed, else the user is asked"
             if meta.identifier:
                 entry["identifier"] = meta.identifier
@@ -442,10 +444,10 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
                 ),
             }
         )
-    if meta.kind != "login" and not meta.origin:
+    if meta.kind != "login" and not meta.origin and not meta.any_origin:
         return json.dumps({"success": False, "error_type": "no_origin",
                            "error": f"Vault item {handle!r} has no bound origin; {meta.kind} items are filled only on the site they were saved for."})
-    if meta.kind == "payment" and not _confirm_payment_fill(meta.label, str(meta.origin)):
+    if meta.kind == "payment" and not meta.any_origin and not _confirm_payment_fill(meta.label, str(meta.origin)):
         return json.dumps({"success": False, "error_type": "payment_declined",
                            "error": "The user did not confirm filling this payment card. Do not retry; ask them instead."})
 
@@ -454,13 +456,28 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
     # Manager items can bind several websites (e.g. amazon.co.uk + www.amazon.co.uk);
     # every saved origin is a valid fill target. Matching stays exact-origin —
     # nothing wildcard/parent-domain is ever inferred.
-    allowed = list(meta.allowed_origins) or ([str(meta.origin)] if meta.origin else [])
-    page_origin = None
-    for candidate in allowed:
-        page_origin = _focus_bound_origin(effective_task_id, candidate, meta.kind)
-        if page_origin:
-            break
-    page_origin = page_origin or _current_page_origin(effective_task_id)
+    if meta.any_origin:
+        # Unbound manager card: the user's approval of THIS page's exact origin is the binding. The fill
+        # script re-asserts that origin atomically, so a navigation after approval writes nothing.
+        _focus_bound_origin(effective_task_id, "", meta.kind)
+        page_origin = _current_page_origin(effective_task_id)
+        if not page_origin:
+            return json.dumps({"success": False, "error": "Could not determine the current page origin. Open the checkout page first."})
+        if not page_origin.startswith("https://"):
+            return json.dumps({"success": False, "error_type": "insecure_origin",
+                               "error": f"Refused: cards from a password manager are filled only on https pages, not {page_origin}."})
+        if not _confirm_payment_fill(meta.label, page_origin, unbound=True):
+            return json.dumps({"success": False, "error_type": "payment_declined",
+                               "error": "The user did not confirm filling this payment card. Do not retry; ask them instead."})
+        allowed = [page_origin]
+    else:
+        allowed = list(meta.allowed_origins) or ([str(meta.origin)] if meta.origin else [])
+        page_origin = None
+        for candidate in allowed:
+            page_origin = _focus_bound_origin(effective_task_id, candidate, meta.kind)
+            if page_origin:
+                break
+        page_origin = page_origin or _current_page_origin(effective_task_id)
     if not page_origin:
         return json.dumps(
             {"success": False, "error": "Could not determine the current page origin. Navigate to the login page first."}
@@ -569,16 +586,20 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
     return json.dumps(out)
 
 
-def _confirm_payment_fill(label: str, origin: str) -> bool:
+def _confirm_payment_fill(label: str, origin: str, *, unbound: bool = False) -> bool:
     """Human confirmation before a card is written into a page: a prompt injection that reaches a checkout
     must not be able to spend. Routes through the approval surface of the active session (gateway button
-    round-trip or CLI panel); headless sessions cannot confirm and the fill is refused."""
+    round-trip or CLI panel); headless sessions cannot confirm and the fill is refused. For an unbound
+    password-manager card this approval is the only site binding, so the prompt says so."""
     from tools.approval_prompt import request_elicitation_consent
 
+    description = ("The agent wants to enter your saved card details into this checkout page. The card number and "
+                   "CVC never enter the conversation. Approve only if you intend to pay here.")
+    if unbound:
+        description += (f" This card is not tied to one website: check that {origin} is the store you mean "
+                        "before approving.")
     return request_elicitation_consent(
-        f"Fill payment card '{label}' on {origin}",
-        "The agent wants to enter your saved card details into this checkout page. The card number and "
-        "CVC never enter the conversation. Approve only if you intend to pay here.",
+        f"Fill payment card '{label}' on {origin}", description,
         surface="vault-payment", title="Confirm payment card fill?") == "accept"
 
 
@@ -626,7 +647,8 @@ BROWSER_VAULT_FILL_SCHEMA = {
         "payment item fills card number/name/expiry/CVC after the user confirms in their UI; an address item "
         "fills the address fields. Values are resolved server-side and never appear in the conversation. "
         "Refused unless the page origin exactly matches the item's bound origin (re-checked atomically at "
-        "fill time). If a password manager is locked the user is prompted to unlock first. Never retry a "
+        "fill time); a password-manager card with no bound site (fill_scope in the list) fills the current https "
+        "page only after the user approves that exact site. If a password manager is locked the user is prompted to unlock first. Never retry a "
         "payment_declined result."
     ),
     "parameters": {
