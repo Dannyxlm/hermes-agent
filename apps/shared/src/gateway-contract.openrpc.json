@@ -79,6 +79,42 @@
       }
     },
     {
+      "name": "attachment.operation.detach",
+      "summary": "Cancel only this operation; a durable tombstone fences delayed uploads. Dispatched media is retained.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AttachmentOperationParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AttachmentOperationResult"
+        }
+      }
+    },
+    {
+      "name": "attachment.operation.status",
+      "summary": "Read an image/PDF operation's durable staging/dispatch receipt for the admitted conversation.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AttachmentOperationParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AttachmentOperationResult"
+        }
+      }
+    },
+    {
       "name": "billing.auto_reload",
       "summary": "Enable/disable auto top-up with its threshold and reload amount (billing:manage).",
       "params": [
@@ -1538,7 +1574,7 @@
     },
     {
       "name": "image.attach_bytes",
-      "summary": "Queue an image uploaded as base64 (remote client); reply mirrors image.attach.",
+      "summary": "Upload an image; identified operations require explicit selection, untagged uploads retain the legacy queue.",
       "params": [
         {
           "name": "params",
@@ -2690,7 +2726,7 @@
     },
     {
       "name": "pdf.attach",
-      "summary": "Render a PDF's pages to PNG and queue them as images for the next turn.",
+      "summary": "Render PDF pages; identified uploads require operation selection and retain partial staging receipts.",
       "params": [
         {
           "name": "params",
@@ -6046,7 +6082,7 @@
       },
       "AttachedImageResult": {
         "additionalProperties": false,
-        "description": "``methods_prompt.py::_attached_image_result``: the image is queued for the next turn.",
+        "description": "Legacy uploads queue for the next turn. Identified uploads require explicit operation selection.",
         "properties": {
           "name": {
             "anyOf": [
@@ -6171,6 +6207,18 @@
             ],
             "default": null,
             "title": "Message"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
           }
         },
         "required": [
@@ -6178,6 +6226,115 @@
         ],
         "title": "AttachedImageResult",
         "type": "object"
+      },
+      "AttachmentOperationParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "operation_id"
+        ],
+        "title": "AttachmentOperationParams",
+        "type": "object"
+      },
+      "AttachmentOperationResult": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AttachmentOperationState"
+          },
+          "image_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Image Paths",
+            "type": "array"
+          },
+          "completed_images": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Completed Images"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttachedImageResult"
+              },
+              {
+                "$ref": "#/components/schemas/PdfAttachResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Result"
+          },
+          "submission_result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptSubmitResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "operation_id",
+          "state",
+          "image_paths"
+        ],
+        "title": "AttachmentOperationResult",
+        "type": "object"
+      },
+      "AttachmentOperationState": {
+        "enum": [
+          "missing",
+          "staging",
+          "partial",
+          "staged",
+          "dispatching",
+          "submitted",
+          "detaching",
+          "detached"
+        ],
+        "title": "AttachmentOperationState",
+        "type": "string"
       },
       "AutoContinue": {
         "additionalProperties": false,
@@ -17107,7 +17264,7 @@
       },
       "ImageAttachBytesParams": {
         "additionalProperties": false,
-        "description": "``content_base64`` (or the ``data`` alias) carries the bytes; ``filename`` / ``ext`` only hint\nthe extension \u2014 magic bytes decide.",
+        "description": "``content_base64`` (or the ``data`` alias) carries the bytes; ``filename`` / ``ext`` only hint\nthe extension \u2014 magic bytes decide. ``operation_id`` makes this upload durable and idempotent;\nit stays outside the implicit queue and requires ``attachment_operation_ids`` at submit.",
         "properties": {
           "session_id": {
             "title": "Session Id",
@@ -17172,6 +17329,18 @@
             ],
             "default": null,
             "title": "Ext"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
           }
         },
         "required": [
@@ -22079,6 +22248,36 @@
               }
             ],
             "default": null
+          },
+          "image_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Image Paths"
+          },
+          "attachment_operation_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachment Operation Ids"
           }
         },
         "required": [
@@ -23431,7 +23630,7 @@
       },
       "PdfAttachParams": {
         "additionalProperties": false,
-        "description": "Host ``path`` or base64 ``content_base64`` / ``data``; ``first_page`` / ``last_page`` bound the\nrender (per-call page cap enforced server-side).",
+        "description": "Host ``path`` or base64 ``content_base64`` / ``data``; ``first_page`` / ``last_page`` bound the\nrender (per-call page cap enforced server-side). ``operation_id`` isolates the staged pages\nfrom the implicit queue and provides durable partial-write reconciliation.",
         "properties": {
           "session_id": {
             "title": "Session Id",
@@ -23520,6 +23719,18 @@
             ],
             "default": null,
             "title": "Last Page"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
           }
         },
         "required": [
@@ -23557,6 +23768,18 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
           }
         },
         "required": [
@@ -29903,6 +30126,36 @@
               }
             ],
             "default": null
+          },
+          "image_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Image Paths"
+          },
+          "attachment_operation_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Attachment Operation Ids"
           }
         },
         "required": [

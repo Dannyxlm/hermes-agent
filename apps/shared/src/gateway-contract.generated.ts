@@ -2022,6 +2022,8 @@ export interface PromptSubmitParams {
   confirm_empty_truncate?: boolean | null
   rebind_survivor_row_ids?: number[] | null
   origin?: PromptOrigin | null
+  image_paths?: string[] | null
+  attachment_operation_ids?: string[] | null
 }
 /** The phone that typed this prompt (KTD7): its push installation and connection UUIDs. Honoured only on an authenticated transport; a submission without it clears the chat's phone origin, so Desktop input never lights the phone's Live Activity. */
 export interface PromptOrigin {
@@ -2042,7 +2044,7 @@ export interface ClipboardPasteParams {
   session_id: string
   profile?: string | null
 }
-/** ``methods_prompt.py::_attached_image_result``: the image is queued for the next turn. */
+/** Legacy uploads queue for the next turn. Identified uploads require explicit operation selection. */
 export interface AttachedImageResult {
   name?: string | null
   width?: number | null
@@ -2055,13 +2057,14 @@ export interface AttachedImageResult {
   text?: string | null
   bytes?: number | null
   message?: string | null
+  operation_id?: string | null
 }
 export interface ImageAttachParams {
   session_id: string
   profile?: string | null
   path: string
 }
-/** ``content_base64`` (or the ``data`` alias) carries the bytes; ``filename`` / ``ext`` only hint the extension — magic bytes decide. */
+/** ``content_base64`` (or the ``data`` alias) carries the bytes; ``filename`` / ``ext`` only hint the extension — magic bytes decide. ``operation_id`` makes this upload durable and idempotent; it stays outside the implicit queue and requires ``attachment_operation_ids`` at submit. */
 export interface ImageAttachBytesParams {
   session_id: string
   profile?: string | null
@@ -2069,8 +2072,9 @@ export interface ImageAttachBytesParams {
   data?: string | null
   filename?: string | null
   ext?: string | null
+  operation_id?: string | null
 }
-/** Host ``path`` or base64 ``content_base64`` / ``data``; ``first_page`` / ``last_page`` bound the render (per-call page cap enforced server-side). */
+/** Host ``path`` or base64 ``content_base64`` / ``data``; ``first_page`` / ``last_page`` bound the render (per-call page cap enforced server-side). ``operation_id`` isolates the staged pages from the implicit queue and provides durable partial-write reconciliation. */
 export interface PdfAttachParams {
   session_id: string
   profile?: string | null
@@ -2080,6 +2084,7 @@ export interface PdfAttachParams {
   filename?: string | null
   first_page?: number | null
   last_page?: number | null
+  operation_id?: string | null
 }
 export interface PdfAttachResult {
   attached: boolean
@@ -2088,6 +2093,7 @@ export interface PdfAttachResult {
   pages: PdfPage[]
   count: number
   text: string
+  operation_id?: string | null
 }
 export interface PdfPage {
   name?: string | null
@@ -2097,6 +2103,20 @@ export interface PdfPage {
   path: string
   page: number
 }
+export interface AttachmentOperationParams {
+  session_id: string
+  profile?: string | null
+  operation_id: string
+}
+export interface AttachmentOperationResult {
+  operation_id: string
+  state: AttachmentOperationState
+  image_paths: string[]
+  completed_images?: number | null
+  result?: AttachedImageResult | PdfAttachResult | null
+  submission_result?: PromptSubmitResult | null
+}
+export type AttachmentOperationState = 'missing' | 'staging' | 'partial' | 'staged' | 'dispatching' | 'submitted' | 'detaching' | 'detached'
 /** ``path`` when the file is gateway-visible, else ``data_url`` carries the bytes; ``name`` labels an uploaded file. */
 export interface FileAttachParams {
   session_id: string
@@ -3350,6 +3370,8 @@ export interface MobileSubmitParams {
   session_id: string
   text: string
   origin?: PromptOrigin | null
+  image_paths?: string[] | null
+  attachment_operation_ids?: string[] | null
 }
 export interface MobileSubmitResult {
   status?: PromptSubmitStatus | null
@@ -5581,6 +5603,10 @@ export interface RpcMethods {
   'approval.received': { params: ApprovalReceivedParams; result: ApprovalReceivedResult }
   /** Deliver the user's decision on a dangerous command (falls back to durable identity on a stale sid). */
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult }
+  /** Cancel only this operation; a durable tombstone fences delayed uploads. Dispatched media is retained. */
+  'attachment.operation.detach': { params: AttachmentOperationParams; result: AttachmentOperationResult }
+  /** Read an image/PDF operation's durable staging/dispatch receipt for the admitted conversation. */
+  'attachment.operation.status': { params: AttachmentOperationParams; result: AttachmentOperationResult }
   /** Enable/disable auto top-up with its threshold and reload amount (billing:manage). */
   'billing.auto_reload': { params: BillingAutoReloadParams; result: BillingMutationResult }
   /** Start a one-off top-up charge (billing:manage, idempotent). */
@@ -5743,7 +5769,7 @@ export interface RpcMethods {
   'i18n.languages': { params: ProfileParams; result: I18nLanguagesResult }
   /** Queue a gateway-visible image file for the next turn. */
   'image.attach': { params: ImageAttachParams; result: AttachedImageResult }
-  /** Queue an image uploaded as base64 (remote client); reply mirrors image.attach. */
+  /** Upload an image; identified operations require explicit selection, untagged uploads retain the legacy queue. */
   'image.attach_bytes': { params: ImageAttachBytesParams; result: AttachedImageResult }
   /** Drop a queued image before the turn is sent. */
   'image.detach': { params: ImageDetachParams; result: ImageDetachResult }
@@ -5844,7 +5870,7 @@ export interface RpcMethods {
   'onboarding.state': { params: Params; result: OnboardingStateResult }
   /** Spill a large paste to a file and hand back the inline placeholder. */
   'paste.collapse': { params: PasteCollapseParams; result: PasteCollapseResult }
-  /** Render a PDF's pages to PNG and queue them as images for the next turn. */
+  /** Render PDF pages; identified uploads require operation selection and retain partial staging receipts. */
   'pdf.attach': { params: PdfAttachParams; result: PdfAttachResult }
   /** Stop an in-flight pet generate/hatch by token (idempotent). */
   'pet.cancel': { params: PetCancelParams; result: PetCancelResult }
@@ -6143,6 +6169,8 @@ export const RPC_METHODS = [
   'approval.pending',
   'approval.received',
   'approval.respond',
+  'attachment.operation.detach',
+  'attachment.operation.status',
   'billing.auto_reload',
   'billing.charge',
   'billing.charge_status',

@@ -3,8 +3,9 @@ lives only in process memory (the agent flushes to SQLite at turn end), so a mar
 start and cleared on any conclusion — only a process death leaves one behind, and ``session.resume``
 reads it (``_maybe_schedule_auto_continue``). Stored per ``HERMES_HOME`` (profile-aware); writes prune
 entries older than ``_MAX_AGE_SECS`` and cap the count so a crash streak can't grow the file. Every
-function is best-effort — marker bookkeeping must never break a turn — so I/O errors degrade to "no
-marker" instead of raising. A marker also carries its writer's pid + start time (``marker_writer_state``): "a
+ordinary turn is best-effort. Operation-owned turns require a durable suppression marker before
+invoking the agent, so a failed replacement cannot revive an older recoverable request. A marker
+also carries its writer's pid + start time (``marker_writer_state``): "a
 marker exists" only implies the writer died when no live sibling backend wrote it (#94778)."""
 
 from __future__ import annotations
@@ -100,7 +101,7 @@ def _store(path: Path, entries: dict[str, dict]) -> None:
     atomic_json_write(path, entries, indent=None, mode=0o600)
 
 
-def _update(home: Path | str, session_key: str, mutate, what: str) -> None:
+def _update(home: Path | str, session_key: str, mutate, what: str, *, strict: bool = False) -> None:
     """Load → ``mutate(entries)`` → store under the lock; ``mutate`` returns None to skip the write."""
     try:
         with _lock:
@@ -108,12 +109,19 @@ def _update(home: Path | str, session_key: str, mutate, what: str) -> None:
             entries = mutate(_load(path))
             if entries is not None:
                 _store(path, entries)
+                if strict:
+                    from tui_gateway.attachment_operations import _sync_directory
+                    _sync_directory(path.parent)
+                    _sync_directory(path.parent.parent)
     except Exception:
+        if strict:
+            raise
         logger.debug("failed to %s turn marker for %s", what, session_key, exc_info=True)
 
 
 def record_turn_start(home: Path | str, session_key: str, prompt: str, *, attempts: int = 0,
-                      auto_continue: bool = True, notification_category: str | None = None) -> None:
+                      auto_continue: bool = True, notification_category: str | None = None,
+                      strict: bool = False) -> None:
     """Persist the marker for a turn that is about to run. ``attempts`` = how many auto-continues led to
     this run (0 for a user-initiated turn); the crash-loop breaker reads it back on the next resume."""
     if not session_key or not prompt:
@@ -125,7 +133,7 @@ def record_turn_start(home: Path | str, session_key: str, prompt: str, *, attemp
         entry["notification_category"] = notification_category
     # Identity only — never the prompt: this log is read on crash triage and must not carry turn content.
     logger.debug("turn marker recorded for session %s by writer pid %s", session_key, entry["writer_pid"])
-    _update(home, session_key, lambda entries: {**_prune(entries, now), session_key: entry}, "record")
+    _update(home, session_key, lambda entries: {**_prune(entries, now), session_key: entry}, "record", strict=strict)
 
 
 def clear_turn_marker(home: Path | str, session_key: str) -> None:

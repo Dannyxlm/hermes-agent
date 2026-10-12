@@ -50,7 +50,7 @@ def _get_compute_host_supervisor(cfg: dict | None = None):
 def _compute_host_turn_frame(
     rid: str, sid: str, session: dict, text: Any, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None, display_kind: str | None = None,
-    display_metadata: dict | None = None) -> dict:
+    display_metadata: dict | None = None, auto_continue: bool = True) -> dict:
     with session["history_lock"]:
         history = list(session.get("history", []))
         history_version = int(session.get("history_version", 0))
@@ -77,6 +77,7 @@ def _compute_host_turn_frame(
         "source": _session_source(session), "attached_images": attached_images,
         "auth_user_id": _session_auth_user_id(session),
         "queued_prompt_generation": queued_prompt_generation,
+        **({"auto_continue": False} if not auto_continue else {}),
         # #101416: vouch that this process already holds the registry lease for this session, so
         # the child adopts it as an inert token instead of re-claiming and being fenced out by
         # our own entry ("Session ... already has a live owner"). No lease held = no vouch, and
@@ -268,36 +269,63 @@ def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -
 def _submit_prompt_to_compute_host(
     rid: str, sid: str, session: dict, text: Any, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None, display_kind: str | None = None,
-    display_metadata: dict | None = None) -> dict:
+    display_metadata: dict | None = None, auto_continue: bool = True,
+    queued_prompt: dict | None = None) -> dict:
     cfg = _load_dashboard_process_isolation_config()
     frame = _compute_host_turn_frame(rid, sid, session, text, image_paths=image_paths,
                                      queued_prompt_generation=queued_prompt_generation,
-                                     display_kind=display_kind, display_metadata=display_metadata)
+                                     display_kind=display_kind, display_metadata=display_metadata,
+                                     auto_continue=auto_continue)
     # Caller JSON-RPC ids may repeat across sockets and turns. Use an opaque
     # dispatch lifetime token, installed before a fast child can send activity.
     turn_id = frame["turn_id"] = frame["request_id"] = uuid.uuid4().hex
     with session["history_lock"]:
+        was_active = session.get("_compute_host_active", False)
         session["_compute_host_turn_id"] = turn_id
+        session["_compute_host_active"] = True
         session.pop("_compute_host_activity_ns", None)
 
     def _complete(done: dict) -> None:
-        # submit_turn reports a synchronous pipe failure via the callback before re-raising;
-        # leave the session untouched so prompt.submit can fail open to the in-process path.
-        if done.get("reason") != "send_failed":
-            with session["history_lock"]:
-                if session.get("_compute_host_turn_id") != turn_id:
-                    return
-                session.pop("_compute_host_turn_id", None)
-                session.pop("_compute_host_activity_ns", None)
-            _on_compute_host_turn_done(rid, sid, session, done)
-    try:
-        _get_compute_host_supervisor(cfg).submit_turn(frame, on_complete=_complete)
-    except Exception as exc:
         with session["history_lock"]:
-            if session.get("_compute_host_turn_id") == turn_id:
-                session.pop("_compute_host_turn_id", None)
-                session.pop("_compute_host_activity_ns", None)
-        return _err(rid, 5019, f"compute-host dispatch failed: {exc}")
+            if session.get("_compute_host_turn_id") != turn_id:
+                return
+            session.pop("_compute_host_turn_id", None)
+            session.pop("_compute_host_activity_ns", None)
+        try:
+            # Interrupted after start is not proof of non-invocation. Only the
+            # child's explicit correlated admission refusal releases this queue's receipts.
+            if queued_prompt is not None and done.get("dispatch_refused") is True:
+                _restore_refused_queued_attachments(queued_prompt, sid)
+        except (ValueError, OSError):
+            logger.warning("failed to restore refused queued attachment receipts", exc_info=True)
+            _emit("error", sid, {"message": "The attachment send was refused before invocation, but its receipt "
+                                "could not be restored. Retain the originals and reconcile before retrying."})
+        finally:
+            _on_compute_host_turn_done(rid, sid, session, done)
+    from tui_gateway.host_supervisor import TurnDispatchRefused
+    try:
+        try:
+            supervisor = _get_compute_host_supervisor(cfg)
+        except Exception as exc:
+            logger.debug("compute-host acquisition refused before turn dispatch", exc_info=True)
+            raise TurnDispatchRefused(str(exc)) from exc
+        supervisor.submit_turn(frame, on_complete=_complete)
+    except Exception as exc:
+        logger.debug("compute-host turn dispatch failed", exc_info=True)
+        refused = isinstance(exc, TurnDispatchRefused)
+        if refused:
+            with session["history_lock"]:
+                if session.get("_compute_host_turn_id") == turn_id:
+                    session.pop("_compute_host_turn_id", None)
+                    session.pop("_compute_host_activity_ns", None)
+                    if not was_active:
+                        session.pop("_compute_host_active", None)
+                    if not auto_continue:
+                        session["running"] = False
+                        _clear_inflight_turn(session)
+                        _release_active_session_slot(session)
+        return _err(rid, 5019, f"compute-host dispatch failed: {exc}",
+                    data={"dispatch_refused": refused, "delivery_uncertain": not refused})
     with session["history_lock"]:
         session["_compute_host_active"] = True
         if image_paths is None:
