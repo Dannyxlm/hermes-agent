@@ -23,7 +23,8 @@ _MOBILE_PUSH_STATUSES = {
     "clarify.request": "waitingForClarification",
 }
 _MOBILE_PUSH_EVENTS = frozenset(_MOBILE_PUSH_STATUSES) | {
-    "message.start", "message.complete", "request.cancel", "todo.updated"}
+    "message.start", "message.complete", "request.cancel", "todo.updated",
+    "human_input.request", "request.updated", "connection.request", "connection.update"}
 # Each accepted human prompt that will run as its own turn marks one message.start as human;
 # continuations never pass prompt.submit. Markers older than this belong to turns that never ran.
 _MOBILE_PUSH_HUMAN_MARKER_TTL = 3 * 3600
@@ -180,7 +181,7 @@ def _mobile_session_register(rid, params, principal, kind):
     receipt = service.register(principal, destination, **options)
     receipt.update(destination={"surface": destination.surface, "profile": destination.profile,
                                 "session_id": destination.session_id}, resolved_session_id=tip,
-                   notification_run=service.current_run(destination))
+                   notification_run=_mobile_push_run_snapshot(service, destination))
     if kind == "widget":
         from tui_gateway.mobile_widget_http import SNAPSHOT_PATH
         receipt["snapshot_path"] = SNAPSHOT_PATH
@@ -384,10 +385,23 @@ def _mobile_notification_run(profile, root_id):
     from tui_gateway.mobile_push import Scope
     try:
         service = _mobile_push_service()
-        return service.current_run(Scope("native", profile, root_id)) if service else None
+        return _mobile_push_run_snapshot(service, Scope("native", profile, root_id)) if service else None
     except Exception as error:
         logger.warning("mobile push snapshot unavailable (%s)", type(error).__name__)
         return None
+
+
+def _mobile_push_run_snapshot(service, scope):
+    from tui_gateway.mobile_push_payloads import AlertPreview, ATTENTION
+    run = service.store.current_run(scope)
+    if not run:
+        return None
+    result = {key: run[key] for key in ("run_id", "status", "started_at", "updated_at")}
+    preview = AlertPreview.from_json(run.get("presentation"))
+    if run["status"] in ATTENTION and preview and preview.attention:
+        result.update(pending_count=preview.attention["count"], pending_input=preview.attention["primary"],
+                      nearest_expires_at=preview.attention["nearest_expires_at"])
+    return result
 
 
 def _mobile_push_step(payload):
@@ -432,43 +446,88 @@ def _mobile_push_plan(session):
     return sum(1 for state in states if state == "completed"), len(states)
 
 
-def _mobile_push_ask(event, payload):
-    if event == "approval.request":
-        return str(payload.get("description") or payload.get("command") or "")
-    questions = payload.get("questions")
-    if isinstance(questions, list) and questions and isinstance(questions[0], dict):
-        return str(questions[0].get("question") or "")
-    return str(payload.get("question") or "")
-
-
-def _mobile_push_presentation(session, push_scope, *, reply="", ask=""):
+def _mobile_push_presentation(session, push_scope, *, reply="", ask="", attention=None):
     from tui_gateway.mobile_push_payloads import AlertPreview
     done, total = session.get("_mobile_push_plan") or (0, 0)
+    if attention and attention["primary"]["category"] == "HERMEX_SECURE_INPUT_V1":
+        return AlertPreview(attention=attention)
     return AlertPreview(title=session.get("_mobile_push_title") or push_scope.profile, reply=reply, ask=ask,
                         step=session.get("_mobile_push_step") or "", agents=session.get("_mobile_push_agents") or 0,
-                        plan_done=done, plan_total=total)
+                        plan_done=done, plan_total=total, attention=attention)
 
 
 def _mobile_push_capture(obj):
-    """Persist before transport write, including detached sessions. Never await Apple here."""
+    """Share event publication ordering with request cuts; never await Apple."""
+    from tui_gateway.session_stream_cut import publication_lock
+    params = obj.get("params")
+    session = _sessions.get(params.get("session_id")) if isinstance(params, dict) else None
+    if session is not None:
+        with publication_lock(session):
+            return _mobile_push_capture_ordered(obj)
+    return _mobile_push_capture_ordered(obj)
+
+
+def _mobile_push_event_status(session, event, payload, current, attention):
+    from tui_gateway.human_input import HUMAN_METHODS
+    from tui_gateway.mobile_push_attention import status_for
+    if attention is not None and event != "message.complete":
+        return status_for(attention)
+    if event == "todo.updated":
+        if current is None or current in {"complete", "failed", "cancelled"}:
+            return None
+        session["_mobile_push_plan"] = _mobile_push_plan({"todo_state": payload})
+        return current
+    if event == "request.cancel":
+        return "thinking" if payload.get("method") in HUMAN_METHODS else None
+    if event in {"connection.request", "connection.update", "human_input.request", "request.updated"}:
+        return "thinking"
+    if event == "message.complete":
+        return {"error": "failed", "interrupted": "cancelled"}.get(payload.get("status"), "complete")
+    return _MOBILE_PUSH_STATUSES[event]
+
+
+def _mobile_push_frame(obj):
+    from tui_gateway.human_input import HUMAN_METHODS
     params = obj.get("params")
     if not isinstance(params, dict):
-        return
+        return None
     method = obj.get("method")
     if method == "event":
         event = params.get("type")
         payload = params.get("payload") or {}
-    elif method in {"approval", "clarify"} and isinstance(obj.get("id"), str):
-        event = f"{method}.request"
+    elif method in HUMAN_METHODS and isinstance(obj.get("id"), str):
+        event = (f"{method}.request" if method in {"approval", "clarify"} and not params.get("request_epoch")
+                 else "human_input.request")
         payload = {**params, "request_id": obj["id"]}
     else:
-        return
+        return None
     if not isinstance(payload, dict) or event not in _MOBILE_PUSH_EVENTS:
+        return None
+    return params, method, event, payload
+
+
+def _mobile_push_capture_ordered(obj):
+    from tui_gateway.human_input import HUMAN_METHODS
+    from tui_gateway.mobile_push_attention import attention_state, note_connection, note_update, pending_projection, question_preview
+    parsed = _mobile_push_frame(obj)
+    if parsed is None:
         return
+    params, method, event, payload = parsed
     try:
-        session = _sessions.get(params.get("session_id"))
-        if not session:
+        if event in {"connection.request", "connection.update", "request.updated"} or method in HUMAN_METHODS:
+            from tui_gateway.mobile_inbox_invalidation import note_runtime_session
+            note_runtime_session(params.get("session_id", ""))
+        if not params.get("session_id"):
+            from tui_gateway.mobile_push_attention import project_connection_attention
+            service = _mobile_push_service()
+            if service is not None:
+                project_connection_attention(service)
             return
+        session = _sessions.get(params.get("session_id"))
+        if not session or obj.get("id") in session.get("_mobile_push_retired_requests", set()):
+            return
+        note_connection(session, event, payload, time.time())
+        note_update(session, event, payload)
         current = session.get("_mobile_push_status")
         # Token streams: nothing changes after the first delta of a phase, so skip all work.
         if (event, current) in {("message.delta", "responding"), ("thinking.delta", "thinking")}:
@@ -498,21 +557,10 @@ def _mobile_push_capture(obj):
         run_id = session.get("_mobile_push_run_id")
         if not run_id:
             return  # do not bind an old run to an unrelated runtime after restart
-        if event == "todo.updated":
-            if current is None or current in {"complete", "failed", "cancelled"}:
-                return
-            status = current
-            session["_mobile_push_plan"] = _mobile_push_plan({"todo_state": payload})
-        elif event == "request.cancel":
-            if payload.get("method") not in {"approval", "clarify"}:
-                return
-            from tui_gateway.server_requests import pending_kind
-            kind = pending_kind(params.get("session_id"))
-            status = {"approval": "waitingForApproval", "clarify": "waitingForClarification"}.get(kind, "thinking")
-        elif event == "message.complete":
-            status = {"error": "failed", "interrupted": "cancelled"}.get(payload.get("status"), "complete")
-        else:
-            status = _MOBILE_PUSH_STATUSES[event]
+        attention = attention_state(pending_projection(session, params.get("session_id"), time.time()))
+        status = _mobile_push_event_status(session, event, payload, current, attention)
+        if status is None:
+            return
         if event == "tool.start":
             session["_mobile_push_step"] = _mobile_push_step(payload)
         elif event != "todo.updated" and status != "usingTool":
@@ -521,16 +569,18 @@ def _mobile_push_capture(obj):
             session["_mobile_push_agents"] = _mobile_push_agent_count(session)
         preview = _mobile_push_presentation(
             session, push_scope, reply=payload.get("text", "") if status == "complete" else "",
-            ask=_mobile_push_ask(event, payload) if event in {"approval.request", "clarify.request"} else "")
+            ask=question_preview(session, params.get("session_id"), attention),
+            attention=attention)
         signature = preview.to_json()
-        if (status == current and signature == session.get("_mobile_push_sig")
-                and event not in {"approval.request", "clarify.request"}):
+        if status == current and signature == session.get("_mobile_push_sig"):
             return
         request_id = payload.get("id") if event == "request.cancel" else payload.get("request_id")
-        event_id = f"{event}:{request_id}" if request_id else f"{event}:{params.get('seq', 0)}"
+        import hashlib
+        cut = hashlib.sha256(signature.encode()).hexdigest()[:24]
+        event_id = f"{event}:{request_id or params.get('seq', 0)}:{cut}"
         service.record(push_scope, run_id, event_id, status, preview=preview)
         session.update(_mobile_push_status=status, _mobile_push_sig=signature)
-    except Exception as error:
+    except Exception as error:  # health: allow BLE001 -- projection is best-effort; traceback text can expose private inputs
         # Delivery is a projection. A disk/provider problem must not terminate the turn,
         # and exception messages may contain a path or token, so log only their class.
         logger.warning("mobile push event projection unavailable (%s)", type(error).__name__)
@@ -590,6 +640,21 @@ def _mobile_push_live_runs():
     sessions = list(_sessions.values())
     held = {s.get("_mobile_push_run_id") for s in sessions if s.get("_mobile_push_run_id")}
     running = {s.get("_mobile_push_run_id") for s in sessions if s.get("_mobile_push_run_id") and s.get("running")}
+    service = _mobile_push_service()
+    if service is not None:
+        # Sessionless host setup has no chat runtime to hold its short-lived projection.
+        from tui_gateway.mobile_push_attention import deadline
+        from tui_gateway.mobile_push_payloads import AlertPreview
+        with service.store._lock:
+            rows = service.store._db.execute("""SELECT r.run_id, s.presentation FROM runs r
+                JOIN run_state s ON s.run_id=r.run_id WHERE r.surface='connection'
+                AND r.status IN ('waitingForApproval','waitingForClarification') AND s.owner=?""",
+                (service.store.owner,)).fetchall()
+        for row in rows:
+            expires = deadline(AlertPreview.from_json(row["presentation"]))
+            if expires is not None and expires > time.time():
+                held.add(row["run_id"])
+                running.add(row["run_id"])
     return held, running
 
 

@@ -444,6 +444,9 @@ def lock_answer(request_id: str, question_id: str, answer: str | None, *,
         _deliver(req, status)
     else:
         _attention_changed(req)
+        _emit("request.updated", req.sid, {"id": req.id, "method": req.method,
+            "request_epoch": inbox_epoch(), "request_revision": req.revision,
+            "remaining_question_ids": [qid for qid in req.qids if qid not in req.locked]})
     return remaining
 
 
@@ -589,6 +592,9 @@ def scoped_respond(body: dict, *, scope: tuple) -> dict:
                 _receipts[key]['receipt'] = receipt
     elif req is not None and status == 'accepted':
         _attention_changed(req)
+        _emit("request.updated", req.sid, {"id": req.id, "method": req.method,
+            "request_epoch": inbox_epoch(), "request_revision": req.revision,
+            "remaining_question_ids": [qid for qid in req.qids if qid not in req.locked]})
     return dict(receipt)
 
 
@@ -612,7 +618,9 @@ def inbox_epoch() -> str:
 
 
 def attention_summaries(sids: list[str]) -> dict[str, dict]:
-    """Atomic metadata-only cut. GUI reads/tours are not human-input evidence.
+    """Metadata-only cut of local requests plus canonical connector/compute owners.
+
+    Local requests are read atomically; GUI reads/tours are not human-input evidence.
 
     Revision is an opaque equality token for the supported request set, not an
     ordering watermark. Request ids keep it distinct across process restarts.
@@ -622,8 +630,12 @@ def attention_summaries(sids: list[str]) -> dict[str, dict]:
     with _lock:
         grouped: dict[str, list] = {}
         for req in _open.values():
-            if req.sid in admitted and req.method in _INBOX_KINDS:
+            if req.sid in admitted and req.method in _INBOX_KINDS and not req.expired():
                 grouped.setdefault(req.sid, []).append((req.id, _INBOX_KINDS[req.method]))
+    from .mobile_push_attention import external_attention
+    for sid, entries in external_attention(admitted).items():
+        existing = {ident for ident, _kind in grouped.get(sid, [])}
+        grouped.setdefault(sid, []).extend((ident, kind) for ident, kind in entries if ident not in existing)
     priority = {"approval": 0, "clarify": 1, "input": 2}
     return {sid: {
         "kind": min((kind for _, kind in reqs), key=priority.__getitem__),

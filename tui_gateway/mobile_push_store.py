@@ -654,15 +654,15 @@ class PushStore(WidgetPushStore):
                 db.execute("DELETE FROM subscriptions WHERE kind='activity_start' AND run_id=?", (run_id,))
             # Repeated deltas keep the original generic status; no disk job per token.
             changed = status != run["status"] or presented
-            if run["status"] in ATTENTION and status not in ATTENTION:
+            if run["status"] in ATTENTION and (status not in ATTENTION or presented):
                 # A withdrawn/answered question must not later send an alert from a retry.
                 # Already accepted Apple deliveries cannot be recalled; drop pending retries only.
                 db.execute("""DELETE FROM outbox WHERE run_id=? AND state='pending'
                     AND category='attention' AND subscription_id IN
-                    (SELECT id FROM subscriptions WHERE scope=? AND kind='alert')""",
-                    (run_id, scope.key))
-            widget_changed = status != run["status"] and (run["status"] == "starting" or run["status"] in ATTENTION
-                                                          or status in ATTENTION or status in TERMINAL)
+                    (SELECT id FROM subscriptions WHERE kind='alert')""",
+                    (run_id,))
+            widget_changed = (status != run["status"] or (presented and status in ATTENTION)) and (
+                run["status"] == "starting" or run["status"] in ATTENTION or status in ATTENTION or status in TERMINAL)
             updated = max(now, run["updated_at"]) if changed else run["updated_at"]
             db.execute("UPDATE runs SET status=?, updated_at=? WHERE run_id=?", (status, updated, run_id))
             run = dict(run)
@@ -683,7 +683,7 @@ class PushStore(WidgetPushStore):
             return True
 
     def _enqueue(self, db, sub, run, scope, event_id, *, preview=None):
-        if sub["kind"] == "alert" and self._foreground(db, sub):
+        if sub["kind"] == "alert" and sub["scope"] == scope.key and self._foreground(db, sub):
             return  # this device is already displaying the destination
         run = dict(run)
         now = self.clock()
@@ -715,7 +715,12 @@ class PushStore(WidgetPushStore):
             # Optional display text must never make an otherwise valid alert too large.
             if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 4000:
                 payload["aps"]["alert"] = generic_alert(run["status"])
+        from .mobile_push_attention import deadline
         expires = min(sub["expires_at"], now + (3600 if urgent else 120))
+        if run["status"] in ATTENTION and (request_deadline := deadline(preview)) is not None:
+            expires = min(expires, request_deadline)
+        if expires <= now:
+            return
         category = _notification_category(run["status"])
         db.execute("""INSERT OR IGNORE INTO outbox
             (job_id, subscription_id, event_id, run_id, payload, urgent, collapse_id, expires_at, next_attempt, category)
@@ -728,6 +733,7 @@ class PushStore(WidgetPushStore):
             # Presence can arrive after enqueue or between retries. Drop only
             # unclaimed alerts; an APNs send already in flight cannot be recalled.
             db.execute("""DELETE FROM outbox WHERE state='pending' AND lease_until<=?
+                AND json_extract(payload, '$."hermex.destination".surface') IS NOT 'connection'
                 AND subscription_id IN (SELECT s.id FROM subscriptions s JOIN mobile_presence p
                   ON p.principal=s.principal AND p.installation_id=s.installation_id
                   AND p.connection_id=s.connection_id AND p.scope=s.scope
@@ -756,8 +762,20 @@ class PushStore(WidgetPushStore):
                     lambda aps, profile: redact_content_state(aps["content-state"], profile))
                 redact(job["payload"]["aps"], job["profile"])
             if job["kind"] == "activity_start":
-                job["payload"]["aps"]["timestamp"] = int(now)
-                job["payload"]["aps"]["stale-date"] = int(now + 120)
+                # A delayed start must open the current waiting state, not its original working state.
+                from .mobile_push_attention import deadline, freshness
+                live = dict(db.execute(f"{_RUNS} WHERE run_id=?", (job["run_id"],)).fetchone())
+                preview = AlertPreview.from_json(live["presentation"])
+                scope = Scope(live["surface"], live["profile"], live["session_id"])
+                job["payload"] = start_payload(job, live, scope, now, preview=preview,
+                                               previews=self._device_previews(db, job))
+                job["payload"]["aps"]["stale-date"] = freshness(job["payload"]["aps"], now)
+                if live["status"] in ATTENTION and (expires := deadline(preview)) is not None:
+                    job["expires_at"] = min(job["expires_at"], expires)
+                    db.execute("UPDATE outbox SET expires_at=? WHERE job_id=?", (job["expires_at"], job["job_id"]))
+                    if job["expires_at"] <= now:
+                        db.execute("DELETE FROM outbox WHERE job_id=?", (job["job_id"],))
+                        return None
             job["attempts"] += 1
             if job["kind"] == "activity":
                 # Order published states rather than adding future seconds for token events.
@@ -775,7 +793,9 @@ class PushStore(WidgetPushStore):
                     if alert is not None and not self._foreground(db, alert):
                         aps["alert"] = generic_alert(aps["content-state"]["status"])
                 aps["timestamp"] = int(now)
-                aps["dismissal-date" if aps["event"] == "end" else "stale-date"] = int(now + (300 if aps["event"] == "end" else 120))
+                from .mobile_push_attention import freshness
+                aps["dismissal-date" if aps["event"] == "end" else "stale-date"] = (
+                    int(now + 300) if aps["event"] == "end" else freshness(aps, now))
                 db.execute("UPDATE subscriptions SET last_timestamp=? WHERE id=?", (int(now), job["subscription_id"]))
             return job
 

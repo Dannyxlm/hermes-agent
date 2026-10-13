@@ -43,7 +43,7 @@ class Scope:
     session_id: str
 
     def __post_init__(self):
-        if self.surface not in {"native", "chats", "native_session"}:
+        if self.surface not in {"native", "chats", "native_session", "connection"}:
             raise ValueError("invalid surface")
         for value in (self.profile, self.session_id):
             if not isinstance(value, str) or not value or len(value) > 256 or any(ord(c) < 32 for c in value):
@@ -104,6 +104,7 @@ class AlertPreview:
     agents: int = 0
     plan_done: int = 0
     plan_total: int = 0
+    attention: dict | None = None
 
     def alert(self, status):
         alert = generic_alert(status)
@@ -150,7 +151,8 @@ def destination(subscription, scope, run_id):
     target = {"version": 1, "surface": scope.surface,
               "installation_id": subscription["installation_id"], "connection_id": subscription["connection_id"],
               "profile": scope.profile, "run_id": run_id}
-    target["canonical_root_id" if scope.surface == "native" else "session_id"] = scope.session_id
+    if scope.surface != "connection":
+        target["canonical_root_id" if scope.surface == "native" else "session_id"] = scope.session_id
     return target
 
 
@@ -161,6 +163,15 @@ def alert_payload(subscription, run, scope, preview=None):
     payload = {"aps": aps, "hermex.destination": destination(subscription, scope, run["run_id"]),
                "hermex.status": run["status"], "hermex.run_started_at": run["started_at"],
                "hermex.updated_at": run["updated_at"]}
+    if preview and preview.attention and run["status"] in ATTENTION:
+        attention = preview.attention
+        target = attention["primary"]
+        aps["category"] = target["category"]
+        payload["hermex.destination"]["human_input"] = target
+        payload["hermex.pending_count"] = attention["count"]
+        payload["hermex.nearest_expires_at"] = attention["nearest_expires_at"]
+        if target["category"] == "HERMEX_SECURE_INPUT_V1":
+            aps["alert"] = generic_alert(run["status"])
     if (ident := agent_id(scope.profile)) is not None:
         payload["hermex.agent_id"] = ident
     if run["status"] in INPUT_KINDS:
@@ -201,6 +212,13 @@ def content_state(run, scope, *, preview=None, previews=False):
             content["currentActivity"] = step
         if status == "complete":
             content["responseExcerpt"] = first_line(preview.reply, 140)
+    if preview.attention and status in ATTENTION:
+        content["pendingCount"] = preview.attention["count"]
+        content["pendingInput"] = preview.attention["primary"]
+        content["nearestExpiresAt"] = preview.attention["nearest_expires_at"]
+        if preview.attention["primary"]["category"] == "HERMEX_SECURE_INPUT_V1":
+            content.update(sessionTitle=GENERIC_TITLE, currentActivity=generic_activity_line(status, scope.profile),
+                           responseExcerpt="", previewsEnabled=False)
     if status == "failed":
         content["errorSummary"] = "Open the chat for details."
     if run.get("activity_expired"):
@@ -225,7 +243,8 @@ def activity_payload(run, scope, now, *, preview=None, previews=False):
     aps = {"timestamp": int(run["updated_at"]), "event": "end" if final else "update",
            "content-state": content_state(run, scope, preview=preview, previews=previews),
            "relevance-score": 100 if run["status"] in ATTENTION else 0 if final else 10}
-    aps["dismissal-date" if final else "stale-date"] = int(now + (300 if final else 120))
+    from .mobile_push_attention import freshness
+    aps["dismissal-date" if final else "stale-date"] = int(now + 300) if final else freshness(aps, now)
     return {"aps": aps}
 
 
