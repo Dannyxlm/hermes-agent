@@ -938,7 +938,8 @@ class TestEmailCodes:
 
         asked = []
         unlock_mod.set_code_prompt_callback((lambda site, hint: asked.append(site) or prompt) if prompt is not None else None)
-        cfg = {"enabled": True, "wait_seconds": 0, "poll_interval_seconds": 1, "lookback_seconds": 600}
+        cfg = {"enabled": True, "wait_seconds": 0, "poll_interval_seconds": 1, "lookback_seconds": 600,
+               "sender_aliases": {"accounts.acme.test": ["acme.test"]}}
         real_wait = vault_email_codes.wait_for_email_code
         try:
             with patch("agent.vault_store.get_vault_store", return_value=store), \
