@@ -802,8 +802,8 @@ def _note_supervisor_page(task_id: str, session_key: str, url: str) -> None:
         from tools.browser_supervisor import SUPERVISOR_REGISTRY  # type: ignore[import-not-found]
         for key in {task_id, session_key}:
             SUPERVISOR_REGISTRY.note_page(key, str(url or ""))
-    except Exception as exc:
-        logger.debug("supervisor page hint failed: %s", exc)
+    except Exception as exc:  # health: allow BLE001 -- optional supervisor hints must not fail completed navigation; log only the error type because messages/tracebacks may contain credential-bearing URLs
+        logger.debug("supervisor page hint failed: %s", type(exc).__name__)
 
 
 def _add_navigate_warnings(response: dict[str, Any], title: str, first_nav_session: Optional[dict[str, Any]]) -> None:

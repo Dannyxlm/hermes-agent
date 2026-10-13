@@ -2,7 +2,9 @@
 import os
 import pytest
 from fastapi import HTTPException
-from tests.plugins.test_cloudseed_mobile import client, P
+from tests.plugins.test_cloudseed_mobile import client as _client, P
+
+client = _client
 
 
 def setup_root(c, home):

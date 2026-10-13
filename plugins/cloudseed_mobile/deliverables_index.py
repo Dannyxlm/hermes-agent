@@ -59,6 +59,20 @@ def superseded(row,versions,q):
     return bool(listed) and max(listed)[2]!=row['id']
 
 
+def query_cursor(cursor,generation,scope):
+    """Validate the opaque page key against the same profile, filters and revision."""
+    if not cursor: return None
+    if not generation or len(cursor)>8192:
+        raise HTTPException(409,'Invalid or stale cursor')
+    try:
+        data=json.loads(base64.urlsafe_b64decode(cursor))
+        if data['scope']!=scope: raise ValueError()
+        after=tuple(data['after'])
+        if len(after)!=2 or not isinstance(after[0],(int,float)) or not isinstance(after[1],str): raise ValueError()
+    except (ValueError,KeyError,TypeError): raise HTTPException(409,'Invalid or stale cursor') from None
+    return after
+
+
 class DeliverablesIndex:
     def __init__(self,home,profile,workspaces):
         self.home=Path(home); self.profile=profile; self.workspaces=workspaces
@@ -463,16 +477,7 @@ class DeliverablesIndex:
         meta=self.snapshot()
         scope=[self.profile,str(self.home),workspace_id,session_id,kind,q,reveal,meta.get('index_revision')]
         if media_type is not None: scope.append(media_type)
-        after=None
-        if cursor:
-            if not meta.get('generation') or len(cursor)>8192:
-                raise HTTPException(409,'Invalid or stale cursor')
-            try:
-                data=json.loads(base64.urlsafe_b64decode(cursor))
-                if data['scope']!=scope: raise ValueError()
-                after=tuple(data['after'])
-                if len(after)!=2 or not isinstance(after[0],(int,float)) or not isinstance(after[1],str): raise ValueError()
-            except (ValueError,KeyError,TypeError): raise HTTPException(409,'Invalid or stale cursor') from None
+        after=query_cursor(cursor,meta.get('generation'),scope)
         deadline=time.monotonic()+REFRESH_SECONDS
         try:
             with self.connection() as db:

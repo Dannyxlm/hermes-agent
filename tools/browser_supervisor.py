@@ -386,7 +386,7 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                 if sid:
                     self._detach_soon(sid)
                 raise
-            except Exception as exc:
+            except Exception as exc:  # health: allow BLE001 -- isolate per-tab transport/protocol failures; cancellation re-raises above, detach follows, and tracebacks may expose page credentials
                 logger.debug("page probe %s skipped (%s)", target_id[:8], type(exc).__name__)
             if sid:
                 self._detach_soon(sid)

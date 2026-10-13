@@ -139,19 +139,22 @@ def workspaces(profile, include_generation=False):
                 except (OSError,HTTPException): quick[key]=False
         finally: os.close(fd)
         items.append({'id':digest([str(home.absolute()),profile,str(root)]),'name':name,'root_path':str(root),'quick_folders':quick})
+    items.extend(generated_workspace(home,profile))
+    return {'items':sorted(items,key=lambda x:(x['name'],x['id'])),'partial':len(roots)>=1000}
+
+
+def generated_workspace(home,profile):
     # Only this synthetic, profile-bound leaf can bypass registered-root denial.
     # Discovery is read-only; a missing or symlinked tree grants nothing.
     generated = home.absolute() / 'cache/generated/images'
     try:
         fd = open_absolute_directory(generated)
     except (OSError, HTTPException):
-        pass
-    else:
-        os.close(fd)
-        items.append({'id':digest([str(home.absolute()),profile,str(generated)]),
-                      'name':'Generated','root_path':str(generated),'generated':True,
-                      'quick_folders':{}})
-    return {'items':sorted(items,key=lambda x:(x['name'],x['id'])),'partial':len(roots)>=1000}
+        return []
+    os.close(fd)
+    return [{'id':digest([str(home.absolute()),profile,str(generated)]),
+             'name':'Generated','root_path':str(generated),'generated':True,
+             'quick_folders':{}}]
 
 
 def workspace_aliases(workspaces):

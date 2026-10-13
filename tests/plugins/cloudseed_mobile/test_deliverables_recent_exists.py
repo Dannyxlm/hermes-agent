@@ -8,8 +8,10 @@ import sqlite3
 
 import pytest
 from plugins.cloudseed_mobile import deliverables_index as ix
-from tests.plugins.test_cloudseed_mobile import client, P
+from tests.plugins.test_cloudseed_mobile import client as _client, P
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
+
+client = _client
 
 
 def seed(home, root, contents):

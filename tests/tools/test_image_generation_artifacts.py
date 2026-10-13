@@ -3,7 +3,9 @@ import json
 import threading
 from types import SimpleNamespace
 
-from tests.plugins.test_cloudseed_mobile import client
+from tests.plugins.test_cloudseed_mobile import client as _client
+
+client = _client
 
 
 def test_postprocess_adds_agent_visible_image_for_active_ssh_env(monkeypatch, tmp_path):
