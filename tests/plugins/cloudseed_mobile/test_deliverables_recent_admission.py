@@ -165,3 +165,20 @@ def test_scan_v4_false_tool_delivery_is_rebuilt(client, monkeypatch):
     index.refresh()
     assert index.query()['items'] == []
     assert not index.query()['coverage']['refresh_pending']
+
+
+def test_scan_v6_rebuild_discovers_image_key_with_unchanged_source(client, monkeypatch):
+    with monkeypatch.context() as m:
+        # v6 ignored image_generate's image key, producing an empty projection.
+        m.setattr(ix, 'project', lambda *args, **kwargs: [])
+        index, _, home = index_messages(client, [{'tool_name': 'image_generate',
+                                                'content': '{"image":"$ROOT/outputs/real.png","success":true}'}])
+    with sqlite3.connect(index.path) as db:
+        db.execute("UPDATE meta SET value='6' WHERE key='scan_version'")
+    before = (home / 'state.db').read_bytes()
+    assert index.query()['items'] == []
+    assert index.query()['coverage']['refresh_pending']
+    index.refresh()
+    assert [(row['relative_path'], row['action']) for row in index.query()['items']] == [('outputs/real.png', 'created')]
+    assert not index.query()['coverage']['refresh_pending']
+    assert (home / 'state.db').read_bytes() == before

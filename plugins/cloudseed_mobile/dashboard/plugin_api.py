@@ -207,10 +207,10 @@ def deliverable_store(profile):
 
 
 @router.get('/deliverables')
-def deliverable_list(background_tasks: BackgroundTasks, profile: str, workspace_id: str | None = None, session_id: str | None = None, kind: str | None = None, q: str = '', cursor: str | None = None, limit: int = 50, reveal: bool = False):
+def deliverable_list(background_tasks: BackgroundTasks, profile: str, workspace_id: str | None = None, session_id: str | None = None, kind: str | None = None, q: str = '', cursor: str | None = None, limit: int = 50, reveal: bool = False, media_type: str | None = None):
     def run():
         index = deliverable_store(profile)
-        result = index.query(workspace_id, session_id, kind, q, cursor, limit, reveal)
+        result = index.query(workspace_id, session_id, kind, q, cursor, limit, reveal, media_type=media_type)
         background_tasks.add_task(index.refresh)
         return result
     return guarded(run)
@@ -255,14 +255,14 @@ def workspace_read(profile: str, workspace_id: str | None = None, path: str | No
     return guarded(run)
 
 
-@router.get('/workspace-files/download')
-def workspace_download(profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
+@router.api_route('/workspace-files/download', methods=['GET', 'HEAD'])
+def workspace_download(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
     def run():
         if media_path is not None:
             if any(value is not None for value in (workspace_id,path,id)): raise HTTPException(400,'Choose media path or workspace file')
-            return files.transport(profile,None,media_path,media=True)
+            return files.transport(profile,None,media_path,media=True,range_header=request.headers.get('range'),head=request.method=='HEAD')
         wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
-        return files.transport(profile, wid, rel, reveal, generation=bool(id))
+        return files.transport(profile, wid, rel, reveal, range_header=request.headers.get('range'),head=request.method=='HEAD',generation=bool(id))
     return guarded(run)
 
 

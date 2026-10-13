@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import sqlite3
 import threading
@@ -17,8 +18,8 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from hermes_state_holders import read_only_db_uri
-from plugins.cloudseed_mobile.deliverables import delegate_child, earliest, project, decode, MAX_STRING
-from plugins.cloudseed_mobile.workspace_files import digest
+from plugins.cloudseed_mobile.deliverables import delegate_child, earliest, project, decode, MAX_STRING, is_image
+from plugins.cloudseed_mobile.workspace_files import digest, open_beneath
 
 LOG=logging.getLogger(__name__)
 
@@ -30,9 +31,8 @@ REFRESH_SECONDS=0.75
 # many candidates per requested row before handing back a cursor.
 RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
-# Any parser or admission change bumps this so published rows rebuild (v6: Desktop's
-# artifact rule and artifact identity on inline rows).
-SCAN_VERSION=6
+# v7 adds producer image output and the narrow Generated collection.
+SCAN_VERSION=7
 # Desktop keeps at most this many versions of one artifact; the versions route matches.
 MAX_ARTIFACT_VERSIONS=20
 MAX_LINEAGE_HOPS=64
@@ -193,7 +193,11 @@ class DeliverablesIndex:
         for rid,data,inline in rows:
             if stopped(): break
             row=json.loads(data)
-            recent=not row.get('subagent',False) and row.get('availability')!='deleted' and row['action'] in {'delivered','created','edited'} and (row['action']=='delivered' or row['kind']!='file' or row.get('relative_path','').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/')))
+            generated_image=row.get('generated') and row.get('provenance','').startswith('producer:') and is_image(row.get('display_name'),row.get('display_type'))
+            output_path=(row.get('relative_path') or '').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/'))
+            recent=(not row.get('subagent',False) and row.get('availability')!='deleted'
+                    and row['action'] in {'delivered','created','edited'}
+                    and (row['action']=='delivered' or row['kind']!='file' or generated_image or output_path))
             search=' '.join(str(row.get(k) or '') for k in ('display_name','relative_path','source_chat_title')).casefold()
             search+=' '+next((w['name'] for w in self.workspaces if w['id']==row.get('workspace_id')),'').casefold()
             cache.execute('INSERT OR REPLACE INTO prepared_entries VALUES(?,?,?,?,?,?,?,?,?,?,?)',(sid,rid,generation,-(row.get('observed_at') or 0),row.get('workspace_id'),row['kind'],int(row.get('private',False)),int(recent),search,data,inline))
@@ -395,7 +399,7 @@ class DeliverablesIndex:
 
     def _exists(self,row):
         """True unless a workspace file row names a path that is not a regular file inside its
-        workspace right now. Bounded to one stat; symlinks may not escape the workspace."""
+        workspace right now. Use the transport's descriptor-relative/no-follow check."""
         if row.get('kind')=='remote_media':
             # Unencoded quotes, brackets and backticks are not legal in a URL: such a row is
             # code cut out of a test or a log (`x.png'}])[0]['kind']`), never a delivery.
@@ -409,12 +413,11 @@ class DeliverablesIndex:
         relative=row.get('relative_path')
         if not root or not isinstance(relative,str) or not relative: return False
         try:
-            base=Path(root).resolve(strict=True)
-            target=(base/relative).resolve(strict=True)
-            target.relative_to(base)
-            return target.is_file()
-        except (OSError,ValueError,RuntimeError):
+            fd=open_beneath(root,relative,reveal=True)
+        except (OSError,HTTPException):
             return False
+        os.close(fd)
+        return True
 
     def _artifacts(self,db,generation,keys):
         """Every published version row of each artifact, as {key: [version, ...]} in
@@ -453,12 +456,13 @@ class DeliverablesIndex:
                 'stored_session_id':v['sid'],'message_id':v['first'][3],'byte_size':v['byte_size']} for v in kept]
         return {'items':items,'version_count':len(ordered),'partial':len(kept)<len(ordered) or bool(meta.get('partial',True))}
 
-    def query(self,workspace_id=None,session_id=None,kind=None,q='',cursor=None,limit=50,reveal=False):
-        if not 1<=limit<=200 or len(q)>256 or kind not in (None,'file','remote_media','inline_content'):
+    def query(self,workspace_id=None,session_id=None,kind=None,q='',cursor=None,limit=50,reveal=False,media_type=None):
+        if not 1<=limit<=200 or len(q)>256 or kind not in (None,'file','remote_media','inline_content') or media_type not in (None,'image'):
             raise HTTPException(400,'Invalid deliverables query')
         if workspace_id and workspace_id not in {w['id'] for w in self.workspaces}: raise HTTPException(404,'Workspace not found')
         meta=self.snapshot()
         scope=[self.profile,str(self.home),workspace_id,session_id,kind,q,reveal,meta.get('index_revision')]
+        if media_type is not None: scope.append(media_type)
         after=None
         if cursor:
             if not meta.get('generation') or len(cursor)>8192:
@@ -481,6 +485,9 @@ class DeliverablesIndex:
                 if lineage:
                     clauses.append('sid IN ('+','.join('?' for _ in lineage)+')'); params.extend(sorted(lineage))
                 else: clauses.append('recent=1')
+                if media_type == 'image':
+                    db.create_function('is_image',2,is_image,deterministic=True)
+                    clauses.append("is_image(json_extract(data,'$.display_name'),json_extract(data,'$.display_type'))=1")
                 if q: clauses.append('instr(search,?)>0'); params.append(q.casefold())
                 where=' AND '.join(clauses)
                 outer='rank=1'
@@ -498,6 +505,7 @@ class DeliverablesIndex:
                         more=True; break
                     last=(sort_time,rid)
                     if validates and (not self._exists(row) or superseded(row,artifacts.get(row.get('artifact_key')),q)): continue
+                    if validates and row.get('kind')=='file': row['availability']='available'
                     fetched.append((rid,sort_time,row))
                 items=[]
                 histories={rid: [] for rid, _, _ in fetched[:limit]}
