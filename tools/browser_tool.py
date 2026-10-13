@@ -788,10 +788,22 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     # Only a successful, non-blocked navigation becomes the task owner: failed opens
     # and blocked redirects must not retarget follow-up clicks to an irrelevant session.
     _last_active_session_key[effective_task_id] = nav_session_key
+    _note_supervisor_page(effective_task_id, nav_session_key, final_url)
     _lp._copy_fallback_warning(response, result)
     _add_navigate_warnings(response, title, session_info if is_first_nav else None)
     _attach_auto_snapshot(response, nav_session_key)
     return _dumps(response)
+
+
+def _note_supervisor_page(task_id: str, session_key: str, url: str) -> None:
+    """Tell the CDP supervisor which tab this task just navigated, so vault fills and supervisor
+    (re)attaches in a browser shared with other agents pick THIS tab, not the first one."""
+    try:
+        from tools.browser_supervisor import SUPERVISOR_REGISTRY  # type: ignore[import-not-found]
+        for key in {task_id, session_key}:
+            SUPERVISOR_REGISTRY.note_page(key, str(url or ""))
+    except Exception as exc:
+        logger.debug("supervisor page hint failed: %s", exc)
 
 
 def _add_navigate_warnings(response: dict[str, Any], title: str, first_nav_session: Optional[dict[str, Any]]) -> None:
