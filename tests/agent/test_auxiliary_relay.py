@@ -646,3 +646,130 @@ def test_call_llm_stream_unwraps_completed_response(relay_turn, monkeypatch):
     assert result is completed
     assert captured["stream"] is True
     assert captured["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.parametrize("provider, model, base_url", [
+    ("openai-codex", "gpt-6-astra", "https://chatgpt.com/backend-api/codex"),
+    ("xai-oauth", "grok-4.7", "https://api.x.ai/v1"),
+])
+def test_moa_responses_reference_reaches_provider_through_managed_relay(
+    relay_turn, monkeypatch, provider, model, base_url,
+):
+    """Relay sees the auxiliary chat envelope, not the adapter's later Responses wire."""
+    import json
+    from openai import OpenAI
+    from agent import moa_loop
+
+    _relay, turn = relay_turn
+    turn.lease.host.retain_managed_execution("test.moa-responses")
+    requests = []
+    sdk = OpenAI(api_key="test-only", base_url=base_url)
+
+    def create(**kwargs):
+        # The SDK-transform bypass moves the native body into extra_body.
+        requests.append({**kwargs, **(kwargs.get("extra_body") or {})})
+        return SimpleNamespace(
+            status="completed", output_text="ref-ok",
+            output=[SimpleNamespace(type="message", role="assistant", phase="final_answer",
+                                    content=[SimpleNamespace(type="output_text", text="ref-ok")])],
+            usage=None,
+        )
+
+    monkeypatch.setattr(sdk.responses, "create", create)
+    client = auxiliary_client.CodexAuxiliaryClient(sdk, model)
+    monkeypatch.setattr(auxiliary_client, "_get_cached_client", lambda *a, **k: (client, model))
+    monkeypatch.setattr(moa_loop, "_slot_runtime", lambda slot: {
+        "provider": provider, "model": model, "base_url": base_url,
+        "api_key": "test-only", "api_mode": "codex_responses",
+    })
+    monkeypatch.setattr(moa_loop, "_reference_context_length", lambda *a: 100_000)
+    slot = {"provider": provider, "model": model}
+    preset = {"reference_models": [slot], "aggregator": {"provider": "anthropic", "model": "claude-test"}}
+    monkeypatch.setattr(moa_loop, "_resolve_preset_cached", lambda name: (preset, {}))
+    events = []
+    agent = SimpleNamespace(
+        provider="moa", model="default", _interrupt_requested=False,
+        _touch_activity=lambda *a: None, tool_progress_callback=lambda *a, **k: events.append(a),
+    )
+    moa_loop.bind_moa_runtime(agent, "default")
+    try:
+        prepared = agent.client.chat.completions.prepare([{"role": "user", "content": "ref-question"}])
+        assert len(requests) == 1, events
+        assert "ref-question" in json.dumps(requests[0]["input"])
+        assert requests[0]["instructions"] == moa_loop._REFERENCE_SYSTEM_PROMPT
+        assert "messages" not in requests[0]
+        assert "[failed:" not in prepared["guidance"]
+        assert "ref-ok" in prepared["guidance"]
+        assert any(event[0] == "moa.reference" and event[2] == "ref-ok" for event in events)
+    finally:
+        sdk.close()
+        turn.lease.host.release_managed_execution("test.moa-responses")
+
+
+@pytest.mark.parametrize("mode", ["sync", "async", "stream"])
+def test_auxiliary_responses_envelope_and_route_survive_relay_intercepts(
+    relay_turn, monkeypatch, mode,
+):
+    """All auxiliary seams use chat codecs without losing provider attribution or rewrites."""
+    import asyncio
+
+    relay, turn = relay_turn
+    turn.lease.host.retain_managed_execution("test.aux-responses-envelope")
+    observed = []
+    completed = SimpleNamespace(
+        model="grok-test", choices=[SimpleNamespace(
+            index=0, message=SimpleNamespace(content="ok", tool_calls=None), finish_reason="stop")], usage=None,
+    )
+
+    def create(request):
+        observed.append(request)
+        return completed
+
+    async def acreate(request):
+        return create(request)
+
+    # Exercise the real typed codec and request intercept pipeline.
+    metadata = []
+    original_metadata = relay_llm._relay_metadata
+
+    def record_metadata(provider, route):
+        value = original_metadata(provider, route)
+        metadata.append(value)
+        return value
+
+    monkeypatch.setattr(relay_llm, "_relay_metadata", record_metadata)
+
+    def rewrite(name, request, context):
+        assert name == "openai.chat_completions"
+        messages = context.messages
+        messages[-1]["content"] = "rewritten"
+        context.messages = messages
+        return relay.LLMRequestInterceptOutcome(request, context)
+
+    relay.intercepts.register_llm_request("test.aux-envelope", 1, False, rewrite)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: create(kw))))
+
+    @auxiliary_client._relay_auxiliary_call
+    def run(task):
+        auxiliary_client._set_relay_auxiliary_route("xai-oauth", "grok-test", "codex_responses")
+        kwargs = {"model": "grok-test", "messages": [{"role": "user", "content": "original"}]}
+        if mode == "stream":
+            return auxiliary_client._relay_sync_stream(client, kwargs)
+        return auxiliary_client._relay_sync_completion(client, kwargs, create=create)
+
+    @auxiliary_client._relay_auxiliary_call_async
+    async def arun(task):
+        auxiliary_client._set_relay_auxiliary_route("xai-oauth", "grok-test", "codex_responses")
+        return await auxiliary_client._relay_async_completion(
+            client, {"model": "grok-test", "messages": [{"role": "user", "content": "original"}]}, create=acreate)
+
+    try:
+        result = asyncio.run(arun("compression")) if mode == "async" else run("compression")
+        assert result.choices[0].message.content == "ok"
+        assert observed[0]["messages"][-1]["content"] == "rewritten"
+        assert metadata[0]["hermes.provider"] == "xai-oauth"
+        assert metadata[0]["api_mode"] == "codex_responses"
+        assert metadata[0]["call_role"] == "auxiliary:compression"
+    finally:
+        relay.intercepts.deregister_llm_request("test.aux-envelope")
+        turn.lease.host.release_managed_execution("test.aux-responses-envelope")
