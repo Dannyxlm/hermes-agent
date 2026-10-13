@@ -399,6 +399,19 @@ class TestMailCliChildEnv:
         assert vault_email_codes._run_cli(["mailcli", "gmail"]) == "{}"
         assert calls == [{"inherit_credentials": True}, served]
 
+    def test_output_is_decoded_as_utf8_not_the_locale_codepage(self, monkeypatch):
+        """A real child writing UTF-8 plus one invalid byte: decoded as UTF-8 with replacement, never via
+        locale.getpreferredencoding() (cp1252/cp936 on Windows) and never a UnicodeDecodeError."""
+        import os
+        import sys
+
+        from agent import vault_email_codes
+
+        monkeypatch.setattr("tools.environments.local.served_profile_child_env", lambda **kw: dict(os.environ))
+        script = 'import sys; sys.stdout.buffer.write(\'{"s": "caf\\u00e9 \\u2713"}\'.encode("utf-8") + b"\\xff")'
+        out = vault_email_codes._run_cli([sys.executable, "-c", script])
+        assert out == '{"s": "caf\u00e9 \u2713"}\ufffd'
+
     def test_unscoped_child_env_fails_closed_before_spawning(self, monkeypatch):
         from agent import vault_email_codes
 

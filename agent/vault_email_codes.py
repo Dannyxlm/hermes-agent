@@ -165,7 +165,10 @@ def _run_cli(argv: list[str]) -> str:
     # The CLI reads the SERVED profile's mailbox: one process serves many profiles, and os.environ holds the
     # launch profile's. Raises (no spawn) when no profile scope is bound under multiplexing.
     env = served_profile_child_env(inherit_credentials=True)
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=45, stdin=subprocess.DEVNULL, check=False, env=env)
+    # The mail CLI emits UTF-8 JSON; never decode with the locale codepage (cp1252/cp936 on Windows). A stray
+    # undecodable byte becomes U+FFFD instead of crashing the reader thread.
+    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45,
+                          stdin=subprocess.DEVNULL, check=False, env=env)
     if proc.returncode != 0:
         # stderr is never echoed: a failing mail CLI can print message fragments.
         raise RuntimeError(f"mail CLI exited {proc.returncode}")
