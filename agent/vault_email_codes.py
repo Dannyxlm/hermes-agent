@@ -6,7 +6,8 @@ login without a human relaying the code and without the model ever seeing the co
 
 Guard rails, each covered by tests:
 - the inbox is chosen by the saved login's identifier, never searched broadly;
-- only mail from the site's own domain, received within ``lookback_seconds``, counts; the NEWEST such
+- only mail from the site's own domain (or the same brand name on another established TLD, a .ca store
+  mailing from its .com), received within ``lookback_seconds``, counts; the NEWEST such
   email must hold exactly one code, otherwise the caller falls back to asking the user;
 - reads are read-only by construction (Gmail ``messages.list/get``; IMAP ``EXAMINE`` + ``BODY.PEEK``);
 - bodies and codes never reach logs or tool results; a code is used at most once per process.
@@ -113,12 +114,31 @@ def _squash(text: str) -> str:
 # Any other brand-prefixed domain (acme-login.test, acmesecure.test) is registrable by anyone, so it never counts.
 _MAIL_SUFFIXES = ("mail", "email", "mailer")
 
+# The same brand on another TLD (a .ca storefront whose codes come from the .com) counts only when both
+# ends sit on an established TLD: .com/.net/.org or a country code. Country codes that are free to
+# register or are classic typosquats of .com stay out (acme.co / acme.cm posing as acme.com).
+_CROSS_TLD_GENERIC = frozenset({"com", "net", "org"})
+_CROSS_TLD_DENY = frozenset({"co", "cm", "om", "tk", "ml", "ga", "cf", "gq"})
+
+
+def _name_and_suffix(registrable: str) -> tuple[str, str]:
+    name, _, suffix = registrable.partition(".")
+    return name, suffix
+
+
+def _established_suffix(suffix: str) -> bool:
+    tld = suffix.rsplit(".", 1)[-1]
+    if suffix in _CROSS_TLD_GENERIC:
+        return True
+    return len(tld) == 2 and tld.isalpha() and tld not in _CROSS_TLD_DENY
+
 
 def sender_matches_site(sender: str, subject: str, site_host: str, site_label: str = "") -> bool:
     """Did the site send this? Decided by the sender's DOMAIN only: it is the site's registrable domain
-    or a subdomain of it, or its registrable name is the site's name (first label of that domain, or the
-    saved login's label) plus a mail-sending suffix. Display names and subjects are free to spoof, so they
-    never count: an impostor's code typed into the real page could authorise the impostor's device.
+    or a subdomain of it; or the same registrable name, exactly, on another established TLD (stubhub.com
+    mailing for stubhub.ca); or its registrable name is the site's name (first label of that domain, or
+    the saved login's label) plus a mail-sending suffix. Display names and subjects are free to spoof, so
+    they never count: an impostor's code typed into the real page could authorise the impostor's device.
     ``subject`` is accepted for callers' convenience and ignored."""
     site = _registrable_domain(site_host)
     if not site:
@@ -128,7 +148,13 @@ def sender_matches_site(sender: str, subject: str, site_host: str, site_label: s
         return False
     if domain == site or domain.endswith("." + site):
         return True
-    sender_name = _squash(_registrable_domain(domain).rsplit(".", 1)[0])
+    sender_registrable = _registrable_domain(domain)
+    site_name, site_suffix = _name_and_suffix(site)
+    other_name, other_suffix = _name_and_suffix(sender_registrable)
+    if (other_name == site_name and len(site_name) >= 4 and other_suffix != site_suffix
+            and _established_suffix(site_suffix) and _established_suffix(other_suffix)):
+        return True
+    sender_name = _squash(sender_registrable.rsplit(".", 1)[0])
     names = {_squash(site.split(".", 1)[0]), _squash(site_label)}
     return any(len(n) >= 4 and sender_name in {n + s for s in _MAIL_SUFFIXES} for n in names)
 

@@ -2465,6 +2465,17 @@ DEFAULT_CONFIG = {
             "enabled": True,        # `bw` CLI (Password Manager, not Secrets Manager); run `bw login` once first.
             "binary_path": "",      # absolute path to bw; empty = PATH.
         },
+        # Opt-in: browser_vault_enter_code reads a site's emailed sign-in code from an inbox Hermes can
+        # already read, chosen by the saved login's identifier; otherwise the user is asked for the code.
+        "email_codes": {
+            "enabled": False,
+            # Each inbox: {addresses: [...], gmail_command: [...]} or {addresses: [...], imap: {host,
+            # port, username, password_ref: op://..., folder}}.
+            "inboxes": [],
+            "lookback_seconds": 600,     # mail received this long before the request still counts
+            "wait_seconds": 75,          # how long to wait for the email (capped at 180)
+            "poll_interval_seconds": 5,
+        },
     },
     "secrets": {
         # Optional ordering of enabled sources (e.g. [onepassword, bitwarden]); default registration

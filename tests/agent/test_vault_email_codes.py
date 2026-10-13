@@ -69,6 +69,29 @@ class TestSiteMatch:
         assert sender_matches_site("no-reply@mail.acme.test", "", "acme.test")
         assert sender_matches_site("Bank <alerts@mybank.co.uk>", "", "login.mybank.co.uk")
 
+    def test_same_brand_on_another_country_tld_matches(self):
+        # Canadian/UK storefronts often send their codes from the brand's .com domain.
+        assert sender_matches_site("StubHub <noreply@stubhub.com>", "", "www.stubhub.ca")
+        assert sender_matches_site("Best Buy <noreply@bestbuy.com>", "", "www.bestbuy.ca")
+        assert sender_matches_site("noreply@mail.bestbuy.com", "", "www.bestbuy.ca")
+        assert sender_matches_site("noreply@acme.ca", "", "www.acme.com")
+        assert sender_matches_site("noreply@acme.com", "", "www.acme.co.uk")
+        assert sender_matches_site("noreply@acme.co.uk", "", "www.acme.de")
+
+    def test_cross_tld_requires_the_exact_name_on_an_established_tld(self):
+        # Only the site's own name, not a squashed or prefixed variant, and not the free-text login label.
+        assert not sender_matches_site("x <noreply@stub-hub.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("x <noreply@stubhubs.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("x <noreply@stubhub-login.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("x <noreply@stubhub.ca.evil.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("GoDaddy <noreply@godaddy.com>", "Your code", "sso.example.com", site_label="GoDaddy")
+        # Cheap or typosquat-prone TLDs never stand in for the brand's own domain.
+        for tld in ("xyz", "top", "co", "cm", "tk", "test2"):
+            assert not sender_matches_site(f"x <noreply@acme.{tld}>", "Your code", "www.acme.com"), tld
+            assert not sender_matches_site("x <noreply@acme.com>", "Your code", f"www.acme.{tld}"), tld
+        # Short names collide across TLDs too often to trust.
+        assert not sender_matches_site("x <noreply@abc.com>", "Your code", "www.abc.ca")
+
     def test_lookalike_domains_do_not_match(self):
         assert not sender_matches_site("x <no-reply@notacme.test>", "Hello", "acme.test")
         assert not sender_matches_site("x <no-reply@acme.test.evil.com>", "Hello", "acme.test")
