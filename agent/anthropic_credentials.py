@@ -60,9 +60,18 @@ def _first_env(*names: str) -> str:
     return next((v for v in (_getenv(n).strip() for n in names) if v), "")
 
 
+# Claude Console API keys. ``sk-ant-api*`` are workspace/legacy keys; ``sk-ant-usr*`` are the
+# identity-backed personal keys the Console issues by default. Both are plain API credentials:
+# treating them as OAuth adds the Claude Code system-prompt identity, which Anthropic bills as
+# Claude Code usage — promotional API credits (e.g. the Max-plan monthly credit) then refuse the
+# request with "credit balance is too low".
+_CONSOLE_API_KEY_PREFIXES = ("sk-ant-api", "sk-ant-usr")
+
+
 def _is_oauth_token(key: str) -> bool:
-    """True for Anthropic OAuth/setup tokens (sk-ant-*, eyJ JWTs, cc-); False for sk-ant-api* Console keys."""
-    if not key or key.startswith("sk-ant-api"):
+    """True for Anthropic OAuth/setup tokens (sk-ant-*, eyJ JWTs, cc-); False for Console API keys
+    (``sk-ant-api*`` workspace keys and ``sk-ant-usr*`` personal keys)."""
+    if not key or key.startswith(_CONSOLE_API_KEY_PREFIXES):
         return False
     return key.startswith(("sk-ant-", "eyJ", "cc-"))
 
