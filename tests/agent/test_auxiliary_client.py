@@ -2954,12 +2954,10 @@ class TestAuxiliaryAuthRefreshRetry:
         assert resp.choices[0].message.content == "fresh-sync"
         mock_refresh.assert_called_once_with("openai-codex")
 
-
-
-
-
-
-    def test_refresh_provider_credentials_force_refreshes_anthropic_oauth_and_evicts_cache(self, monkeypatch):
+    def test_refresh_provider_credentials_force_refreshes_anthropic_oauth_and_evicts_cache(self, monkeypatch, tmp_path):
+        # Mocked credential I/O still takes the real path-keyed refresh lock.
+        # Keep that lock and rotation sidecars off the operator's Claude login.
+        monkeypatch.setenv("HERMES_CLAUDE_CODE_CONFIG_DIR", str(tmp_path))
         stale_client = MagicMock()
         from agent.auxiliary_client import _client_cache_key
         cache_key = _client_cache_key("anthropic", async_mode=False)
@@ -2994,6 +2992,7 @@ class TestAuxiliaryAuthRefreshRetry:
         mock_refresh_oauth.assert_called_once_with("refresh-token", use_json=False)
         mock_write.assert_called_once_with(
             "fresh-token", "refresh-token-2", 9999999999999, spent_refresh_token="refresh-token")
+        assert (tmp_path / ".credentials.lock").is_file()
         stale_client.close.assert_not_called()
 
     def test_refresh_provider_credentials_remints_vertex_token_and_evicts_cache(self):
