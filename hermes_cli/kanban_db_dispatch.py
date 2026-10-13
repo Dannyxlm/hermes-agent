@@ -2928,9 +2928,7 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     # build_context_files_prompt; without it relative writes land in the gateway
     # user's home and workers load the gateway's AGENTS.md. file_tools rejects
     # relative / sentinel values, so only set a real absolute directory.
-    # Pin TERMINAL_CWD to the task's workspace so the worker's file tools and context-file loader anchor on
-    # the workspace, not whatever cwd the dispatching gateway happened to export. The worker subprocess is
-    # already launched with cwd=workspace, but TERMINAL_CWD takes precedence over the process cwd in both
+    # TERMINAL_CWD wins over cwd=workspace in both
     # file_tools._resolve_base_dir (#41312 — relative write_file paths were landing in the gateway user's
     # home) and build_context_files_prompt (#34619 — workers loaded the dispatching gateway's AGENTS.md
     # instead of the task's). Setting it to the workspace fixes both: the workspace is where the task's work
@@ -2971,6 +2969,8 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     # older hermes builds on PATH that predate the flag's precedence.
     env.pop("HERMES_TUI", None)
 
+    from hermes_cli.kanban_worker_tier import set_worker_service_tier
+    set_worker_service_tier(env, task, profile_home)
     cmd = _worker_argv(task, profile_arg, env.get("HERMES_HOME"))
     # The module argv must carry the import context that made it resolvable:
     # the shim's in-process path injection is invisible to the bare child.
