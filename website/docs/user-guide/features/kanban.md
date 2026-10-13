@@ -341,6 +341,31 @@ gateway docs). Without a running gateway, `ready` tasks stay where they are
 until one comes up — `hermes kanban create` warns about this at creation
 time.
 
+#### Provider-specific worker speed
+
+Set `kanban.service_tier_by_provider` in the **assigned worker profile's**
+`config.yaml` to give only selected providers a worker tier (default: `{}`):
+
+```yaml
+kanban:
+  service_tier_by_provider:
+    openai-codex: fast
+```
+
+The dispatcher checks the task's provider override first, otherwise the profile's
+configured provider (including a provider in `model.default`). An unmapped
+provider is unchanged: this example does not enable Anthropic Fast Mode.
+Use explicit provider names; `auto` is not guessed from credentials at dispatch.
+Accepted tier words are the same as `/fast`, including `normal`, `fast`,
+`priority`, `ultrafast`, `auto`, and `cold`. Invalid entries are warned and ignored.
+
+A non-empty `agent.service_tier` remains an explicit profile-wide override,
+including `normal` to disable fast mode. Leave it empty to use the provider map.
+Managed configuration retains its final precedence. The policy is resolved for
+new worker spawns only, never saved into the profile's agent settings or applied
+to ordinary chats. Codex `fast` becomes `priority` on the Responses path and
+`fast` on the app-server path; actual served tiers remain provider-controlled.
+
 #### Workers and systemd cgroups
 
 Workers are fire-and-forget processes that outlive the dispatcher tick, so

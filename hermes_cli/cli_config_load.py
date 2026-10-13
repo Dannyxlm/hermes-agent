@@ -286,6 +286,9 @@ def load_cli_config() -> dict[str, Any]:
     from hermes_cli.config import _expand_env_vars
     defaults = _expand_env_vars(defaults)
 
+    from hermes_cli.kanban_worker_tier import apply_worker_service_tier
+    apply_worker_service_tier(defaults)
+
     # Administrator-pinned (managed scope) values overlay LAST; cli.py builds its config
     # independently of hermes_cli.config, so this keeps parity with `hermes config`. Fail-open.
     from hermes_cli import managed_scope
