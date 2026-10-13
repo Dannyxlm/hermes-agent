@@ -47,8 +47,9 @@ Sites that ask for a code after the password are handled the same way:
   when the login's identifier is an address whose inbox Hermes can already
   read, Hermes waits up to about a minute for the site's email, takes the
   code out of it and enters it. Nobody is asked, headless sessions included.
-  Only mail from the site's own domain counts (a display name or subject
-  saying "Acme" is not enough), only mail from the last ten minutes, and only
+  Only mail from the exact site host (or its subdomains) or an explicit
+  per-site sender alias counts. A display name, subject or similar brand name
+  is not evidence of ownership. Only mail from the last ten minutes counts, and only
   when the newest such email holds exactly one code; anything ambiguous falls
   through to the prompt below. The inbox is read, never changed: Gmail via
   `messages.list/get` (nothing is marked read), IMAP via `EXAMINE` and
@@ -68,6 +69,7 @@ vault:
     wait_seconds: 75            # how long to wait for the email (max 180)
     lookback_seconds: 600       # emails older than this are never used
     poll_interval_seconds: 5
+    sender_aliases: {}         # opt-in trust rules; no aliases are inferred
     inboxes:
       # Gmail through any gws-compatible CLI (`<command> gmail users messages list|get`)
       - addresses: [me@example.com, me@example.org]   # identifiers that land in this inbox
@@ -77,6 +79,46 @@ vault:
         imap: {host: imap.mail.me.com, port: 993, username: me@icloud.com,
                password_ref: "op://<vault-id>/<item-id>/credential", folder: INBOX}
 ```
+
+### Explicit email sender aliases
+
+`vault.email_codes.sender_aliases` maps a site domain to a list of trusted sender
+domains. Only add a rule after independently verifying that the site uses those
+sender domains for login codes. For example, an operator who has verified the
+relationship can configure `{"stubhub.ca": ["stubhub.com"]}`. This is an example,
+not a built-in trust rule. Hermes ships an empty map.
+
+Both sides match the exact configured domain and dot-boundary subdomains:
+`stubhub.ca` includes `www.stubhub.ca`; `stubhub.com` includes
+`mail.stubhub.com`, not `notstubhub.com` or `stubhub.com.evil.test`. Rules are
+one-way, do not chain, and never widen to a parent or sibling domain. Use the
+narrowest site and sender domains possible. Do not configure public suffixes
+(such as `co.uk`) or shared hosting domains: a rule explicitly trusts every
+subdomain beneath its key and values.
+
+Values must be lists (an empty list grants no extra trust); keys and entries must
+be ASCII DNS domains, optionally using explicit IDNA A-labels, with at least two
+labels. URLs, ports, paths, wildcards, IPs, leading/trailing dots, whitespace and
+free-text labels are rejected. Domains are case-insensitive; duplicate keys
+that differ only in case are rejected. Any malformed rule disables email-code
+retrieval before the inbox is opened and falls back to the user prompt. No
+configuration values or email contents are included in the error log.
+
+#### Migrating existing configurations
+
+Existing `enabled`, inbox and timing settings remain valid and unchanged.
+Missing `sender_aliases` means an empty map; nothing is auto-populated. The old
+same-name cross-TLD and `mail`/`email`/`mailer` name guesses are no longer trusted.
+Nor does Hermes guess a registrable parent domain: a page at
+`accounts.example.test` receiving mail from `example.test` needs an explicit
+`{"accounts.example.test": ["example.test"]}` rule. Without a verified rule,
+those cases safely fall back to the user prompt (or report prompt unavailable
+in headless sessions). Exact-site and descendant sender domains still work.
+
+Review and set the complete desired map through
+`hermes config set vault.email_codes.sender_aliases '<JSON object>'`; this does
+not replace the other email-code settings. Do not derive aliases from email
+display names, login labels, brand similarity or an automated broad allowlist.
 
 ## Already using 1Password or Bitwarden?
 

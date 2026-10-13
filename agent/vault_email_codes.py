@@ -6,8 +6,8 @@ login without a human relaying the code and without the model ever seeing the co
 
 Guard rails, each covered by tests:
 - the inbox is chosen by the saved login's identifier, never searched broadly;
-- only mail from the site's own domain (or the same brand name on another established TLD, a .ca store
-  mailing from its .com), received within ``lookback_seconds``, counts; the NEWEST such
+- only mail from the exact site host/descendants or an explicit per-site sender alias,
+  received within ``lookback_seconds``, counts; the NEWEST such
   email must hold exactly one code, otherwise the caller falls back to asking the user;
 - reads are read-only by construction (Gmail ``messages.list/get``; IMAP ``EXAMINE`` + ``BODY.PEEK``);
 - bodies and codes never reach logs or tool results; a code is used at most once per process.
@@ -90,79 +90,74 @@ class EmailMessage:
     key: str = ""  # lane-scoped message id, so a code already entered is never entered twice
 
 
-# Second-level labels under a two-letter country TLD (acme.co.uk, acme.com.au): the registrable
-# domain is then three labels. A heuristic, not the public-suffix list; a miss only means "ask the user".
-_SECOND_LEVEL = {"co", "com", "net", "org", "gov", "ac", "edu", "ne", "or"}
+# Trust is expressed as DNS boundaries, never as guessed registrable names. A public suffix
+# or shared hosting boundary cannot be inferred safely from the last two/three labels.
+_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.ASCII)
 
 
-def _registrable_domain(host: str) -> str:
-    labels = [x for x in host.lower().strip(".").split(".") if x]
-    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:])
+def _domain(value: object) -> str:
+    """An explicit ASCII DNS domain, lowercased; no URLs, wildcards, IPs or silent trimming."""
+    if not isinstance(value, str) or not value.isascii() or len(value) > 253:
+        return ""
+    labels = value.lower().split(".")
+    if len(labels) < 2 or labels[-1].isdigit() or not all(_DOMAIN_LABEL.fullmatch(x) for x in labels):
+        return ""
+    return ".".join(labels)
+
+
+def _sender_aliases(value: object) -> Optional[dict[str, list[str]]]:
+    """Validate the entire map atomically. A malformed rule must not silently widen trust."""
+    if not isinstance(value, dict):
+        return None
+    aliases = {}
+    for key, senders in value.items():
+        site = _domain(key)
+        if not site or site in aliases or not isinstance(senders, list):
+            return None
+        domains = [_domain(sender) for sender in senders]
+        if not all(domains):
+            return None
+        aliases[site] = domains
+    return aliases
 
 
 def _sender_address(sender: str) -> str:
-    return (parseaddr(sender or "")[1] or "").lower()
+    # Validate ASCII before case-folding a domain (e.g. Kelvin sign must not become ASCII k).
+    return parseaddr(sender or "")[1] or ""
 
 
-def _squash(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+def _within_domain(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
 
 
-# A brand's dedicated sending domain is its name plus one of these (facebookmail.com, shopifyemail.com).
-# Any other brand-prefixed domain (acme-login.test, acmesecure.test) is registrable by anyone, so it never counts.
-_MAIL_SUFFIXES = ("mail", "email", "mailer")
+def sender_matches_site(sender: str, subject: str, site_host: str, site_label: str = "", *,
+                        sender_aliases: Optional[dict] = None) -> bool:
+    """Trust only the exact site host/descendants or an explicitly configured sender domain.
 
-# The same brand on another TLD (a .ca storefront whose codes come from the .com) counts only when both
-# ends sit on an established TLD: .com/.net/.org or a country code. Country codes that are free to
-# register or are classic typosquats of .com stay out (acme.co / acme.cm posing as acme.com).
-_CROSS_TLD_GENERIC = frozenset({"com", "net", "org"})
-_CROSS_TLD_DENY = frozenset({"co", "cm", "om", "tk", "ml", "ga", "cf", "gq"})
-
-
-def _name_and_suffix(registrable: str) -> tuple[str, str]:
-    name, _, suffix = registrable.partition(".")
-    return name, suffix
-
-
-def _established_suffix(suffix: str) -> bool:
-    tld = suffix.rsplit(".", 1)[-1]
-    if suffix in _CROSS_TLD_GENERIC:
-        return True
-    return len(tld) == 2 and tld.isalpha() and tld not in _CROSS_TLD_DENY
-
-
-def sender_matches_site(sender: str, subject: str, site_host: str, site_label: str = "") -> bool:
-    """Did the site send this? Decided by the sender's DOMAIN only: it is the site's registrable domain
-    or a subdomain of it; or the same registrable name, exactly, on another established TLD (stubhub.com
-    mailing for stubhub.ca); or its registrable name is the site's name (first label of that domain, or
-    the saved login's label) plus a mail-sending suffix. Display names and subjects are free to spoof, so
-    they never count: an impostor's code typed into the real page could authorise the impostor's device.
-    ``subject`` is accepted for callers' convenience and ignored."""
-    site = _registrable_domain(site_host)
-    if not site:
+    Alias keys and sender domains each include dot-boundary subdomains, not parents or siblings.
+    Rules are directional and never followed transitively. ``subject`` and ``site_label`` are
+    retained for call compatibility but ignored: neither proves ownership. No TLD, brand-name,
+    mail-suffix or public-suffix heuristic grants trust.
+    """
+    site = _domain(site_host)
+    address = _sender_address(sender)
+    local, separator, host = address.rpartition("@")
+    domain = _domain(host) if local and separator else ""
+    aliases = _sender_aliases({} if sender_aliases is None else sender_aliases)
+    if not site or not domain or aliases is None:
         return False
-    domain = _sender_address(sender).rpartition("@")[2]
-    if not domain:
-        return False
-    if domain == site or domain.endswith("." + site):
+    if _within_domain(domain, site):
         return True
-    sender_registrable = _registrable_domain(domain)
-    site_name, site_suffix = _name_and_suffix(site)
-    other_name, other_suffix = _name_and_suffix(sender_registrable)
-    if (other_name == site_name and len(site_name) >= 4 and other_suffix != site_suffix
-            and _established_suffix(site_suffix) and _established_suffix(other_suffix)):
-        return True
-    sender_name = _squash(sender_registrable.rsplit(".", 1)[0])
-    names = {_squash(site.split(".", 1)[0]), _squash(site_label)}
-    return any(len(n) >= 4 and sender_name in {n + s for s in _MAIL_SUFFIXES} for n in names)
+    return any(_within_domain(site, trusted_site) and any(_within_domain(domain, d) for d in senders)
+               for trusted_site, senders in aliases.items())
 
 
-def pick_code(messages: Iterable[EmailMessage], site_host: str, *, since: float, site_label: str = "") -> Optional[str]:
+def pick_code(messages: Iterable[EmailMessage], site_host: str, *, since: float, site_label: str = "",
+              sender_aliases: Optional[dict] = None) -> Optional[str]:
     """The code in the NEWEST message from the site received at or after ``since``. When that message
     holds no single code, returns None rather than reaching back to an older one."""
-    fresh = [m for m in messages if m.received_at >= since and sender_matches_site(m.sender, m.subject, site_host, site_label)]
+    fresh = [m for m in messages if m.received_at >= since and sender_matches_site(
+        m.sender, m.subject, site_host, site_label, sender_aliases=sender_aliases)]
     if not fresh:
         return None
     newest = max(fresh, key=lambda m: m.received_at)
@@ -191,7 +186,10 @@ def _run_cli(argv: list[str]) -> str:
     # The CLI reads the SERVED profile's mailbox: one process serves many profiles, and os.environ holds the
     # launch profile's. Raises (no spawn) when no profile scope is bound under multiplexing.
     env = served_profile_child_env(inherit_credentials=True)
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=45, stdin=subprocess.DEVNULL, check=False, env=env)
+    # The mail CLI emits UTF-8 JSON; never decode with the locale codepage (cp1252/cp936 on Windows). A stray
+    # undecodable byte becomes U+FFFD instead of crashing the reader thread.
+    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45,
+                          stdin=subprocess.DEVNULL, check=False, env=env)
     if proc.returncode != 0:
         # stderr is never echoed: a failing mail CLI can print message fragments.
         raise RuntimeError(f"mail CLI exited {proc.returncode}")
@@ -376,6 +374,12 @@ def wait_for_email_code(site_host: str, identifier: str, *, site_label: str = ""
     The window opens ``lookback_seconds`` before the call (the site was asked to send the code just
     before) and the wait lasts at most ``wait_seconds``. Never logs content."""
     cfg = email_codes_config() if cfg is None else cfg
+    if not isinstance(cfg, dict) or not _domain(site_host):
+        return None
+    aliases = _sender_aliases(cfg.get("sender_aliases", {}))
+    if aliases is None:
+        logger.info("email code: invalid sender_aliases configuration; falling back to the user")
+        return None
     lane = (lane_factory or lane_for_identifier)(identifier, cfg)
     if lane is None:
         return None
@@ -385,7 +389,7 @@ def wait_for_email_code(site_host: str, identifier: str, *, site_label: str = ""
     interval = max(_number(cfg, "poll_interval_seconds", 5), 1)
 
     def from_site(sender: str, subject: str) -> bool:
-        return sender_matches_site(sender, subject, site_host, site_label)
+        return sender_matches_site(sender, subject, site_host, site_label, sender_aliases=aliases)
 
     try:
         while True:
@@ -397,7 +401,8 @@ def wait_for_email_code(site_host: str, identifier: str, *, site_label: str = ""
             with _USED_LOCK:  # check and reserve atomically: two sessions never both enter one code
                 fresh = [m for m in received if not (m.key and m.key in _USED_KEYS)]
                 newest = max(fresh, key=lambda m: m.received_at) if fresh else None
-                code = pick_code([newest], site_host, since=since, site_label=site_label) if newest else None
+                code = pick_code([newest], site_host, since=since, site_label=site_label,
+                                 sender_aliases=aliases) if newest else None
                 if code and newest.key:
                     _USED_KEYS.add(newest.key)
             if newest is not None:
