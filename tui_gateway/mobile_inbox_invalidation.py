@@ -99,6 +99,12 @@ def on_session_change(change) -> None:
 
 def note_runtime_session(sid: str) -> None:
     """``server_requests`` attention hook: the request's runtime belongs to one profile."""
+    if not sid:
+        # Sessionless connection attention has no row; invalidate enrolled profile lists.
+        from hermes_cli.profiles import list_profiles
+        for profile in list_profiles():
+            note_profile(profile.name)
+        return
     import sys
     server = sys.modules.get("tui_gateway.server")
     if server is None or not (session := server._sessions.get(sid)):

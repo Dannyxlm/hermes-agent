@@ -5,6 +5,73 @@ Backend-only native dashboard plugin, mounted at **`/api/plugins/cloudseed_mobil
 No WebUI imports, proxying, execution runtime, credential store, scheduler or activation.
 The directory name, manifest name and URL use an underscore (not `cloudseed-mobile`).
 
+## Human-input attention (U6; additive version 1)
+
+The native supervisor owns `methods_mobile_push`, the existing SQLite outbox and APNs worker.
+The hosted plugin is only an owner-authenticated adapter for U1's
+`POST human-input/pending`, `POST human-input/respond`, and `POST human-input/action-status`.
+It must not instantiate another push worker or import a second request registry.
+Compute children publish through their supervisor; their local push service is disabled.
+No push token, notification descriptor, widget read token or APNs signature authorizes an answer.
+
+Alerts retain `hermex.destination` and add:
+
+- `aps.category`: `HERMEX_APPROVAL_V1`, `HERMEX_QUESTION_V1`, `HERMEX_SETUP_V1`, or
+  `HERMEX_SECURE_INPUT_V1`.
+- `hermex.destination.human_input`: `{version:1, method, session_id, request_id?, operation_id?,
+  request_epoch?, request_revision?, question_id?, created_at, expires_at, category, allowed_actions}`.
+  Times are Unix epoch seconds; nullable expiry means unlimited, not a renewed timeout.
+- `hermex.pending_count` and `hermex.nearest_expires_at` describe the complete projected run cut.
+  The primary is deterministic oldest-first (creation time, then opaque ID); nearest expiry can
+  belong to a different pending request. Metadata describes availability, never answer authority.
+
+Map outer `surface:native` to U1 `destination_kind:bot` plus `canonical_root_id`;
+`native_session` to `destination_kind:chat` plus outer `session_id` as `stored_session_id`.
+The descriptor's `session_id` is always the live runtime, not the stored row.
+Sessionless installation sudo uses outer `surface:connection` without a stored/root session,
+`destination_kind:connection`, and descriptor `session_id:""`. It sends one generic secure alert
+per installation/connection already enrolled for attention in that exact profile, borrowing that
+live alert lease; it creates no extra subscription or chat Live Activity. A silent Inbox-only
+lease does not opt into audible host-setup alerts. Removing the source lease/logout also removes
+its pending delivery. No lease means in-app/pending-query presentation, not fabricated enrollment.
+
+`allowed_actions` is an allowlist, not the notification category's complete static button set:
+
+- `once` is offered only for explicitly offered once choices on recognized read-only tools
+  (`read_file`, `search_files`, `web_search`, `web_extract`) without a consent surface.
+  All other Allow taps, including terminal, payment, MCP and unknown tool consent, require foreground
+  review. Clients must check this allowlist and current server state even if iOS shows a static button.
+- `deny` and `suggest` require an offered deny choice. Suggest sends deny-with-reason, never approval.
+  Session/permanent grants are never quick actions.
+- `reply`/`skip` identify an exact qid and are offered only when one non-multi-select question remains.
+  Batch and multi-select requests open the sheet. Preview text, when opted in, comes from that same qid.
+- Secure methods expose only `open_securely`, with generic copy even when previews are enabled.
+  No hints, origins, identifiers, env field names/defaults, commands or answer values enter their
+  outbox/presentation. Connector operations carry only op ID/sequence/deadline and Open/Open securely;
+  targets, OAuth URLs and credential fields stay in the authenticated operation API.
+- Legacy producers without epoch/revision still produce generic attention with Open/Open securely,
+  but never executable quick actions. Reconcile them in-app; do not fabricate generation selectors.
+
+ActivityKit `content-state` retains all shipped fields and adds optional `pendingCount`,
+`pendingInput` (the same selector), and `nearestExpiresAt` (Unix seconds, unlike the existing
+Swift-epoch `startedAt`/`updatedAt`). Native notification-run snapshots expose the corresponding
+`pending_count`, `pending_input`, `nearest_expires_at` fields. Partial clarify progress is a
+metadata-only `request.updated` event with remaining qids and revision, not a new srq. Older clients
+may ignore it and continue restoring locks through their existing snapshots.
+
+APNs expiration never exceeds the nearest pending deadline. Activity stale-date is the earlier of
+that deadline and the 120-second freshness lease: a stale activity means “check latest,” not proof
+of human expiry. A delayed push-to-start is rebuilt from the latest run cut. New primary/count,
+settlement, replacement and cancellation retire old queued attention, including leased retries;
+already accepted/in-flight APNs cannot be recalled. Foreground suppression, current preview policy,
+logout, revoked subscriptions, phone-origin enrollment and orphan closure remain in force.
+
+U7 must authenticate/unlock, query the exact current owner scope, submit once with a unique action
+ID, and reconcile metadata-only action status after uncertainty. Never automatically replay a
+mutation, refresh a deadline, or send a secret via notification reply. `connection.request` is an
+operation selector for `connection.respond`, not a `human_input.respond` srq. These source tests
+prove local projection/outbox behavior only—not physical APNs receipt, iOS actions, or Island UX.
+
 ## Governance and activation prerequisites
 
 Ship this directory with the reviewed immutable Hermes artifact. Native dashboard

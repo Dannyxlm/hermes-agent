@@ -17990,6 +17990,43 @@
         "title": "HumanInputStatus",
         "type": "string"
       },
+      "HumanInputUpdatedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "request_epoch": {
+            "title": "Request Epoch",
+            "type": "string"
+          },
+          "request_revision": {
+            "title": "Request Revision",
+            "type": "integer"
+          },
+          "remaining_question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remaining Question Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "request_epoch",
+          "request_revision",
+          "remaining_question_ids"
+        ],
+        "title": "HumanInputUpdatedPayload",
+        "type": "object"
+      },
       "I18nCatalogParams": {
         "additionalProperties": false,
         "properties": {
@@ -22117,6 +22154,41 @@
           "updated_at": {
             "title": "Updated At",
             "type": "number"
+          },
+          "pending_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Count"
+          },
+          "pending_input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobilePendingInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "nearest_expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nearest Expires At"
           }
         },
         "required": [
@@ -22353,6 +22425,143 @@
           "request_id"
         ],
         "title": "MobilePendingClarify",
+        "type": "object"
+      },
+      "MobilePendingInput": {
+        "additionalProperties": false,
+        "description": "APNs/ActivityKit selector only; requires fresh authenticated request admission.",
+        "properties": {
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Operation Id"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "category": {
+            "enum": [
+              "HERMEX_APPROVAL_V1",
+              "HERMEX_QUESTION_V1",
+              "HERMEX_SECURE_INPUT_V1",
+              "HERMEX_SETUP_V1"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "allowed_actions": {
+            "items": {
+              "enum": [
+                "open",
+                "open_securely",
+                "once",
+                "deny",
+                "suggest",
+                "reply",
+                "skip"
+              ],
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "method",
+          "session_id",
+          "category",
+          "allowed_actions"
+        ],
+        "title": "MobilePendingInput",
         "type": "object"
       },
       "MobilePushRefreshParams": {
@@ -47204,6 +47413,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/RequestCancelPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "request.updated",
+      "summary": "Metadata-only partial human-input progress; not a new request or an answer authority.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/HumanInputUpdatedPayload"
           }
         }
       ]

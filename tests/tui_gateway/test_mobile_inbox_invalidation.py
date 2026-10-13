@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
+from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc  # noqa: PLC0414 - imported pytest fixtures
 from tests.tui_gateway.test_mobile_push import Sender
 from tui_gateway import mobile_inbox_invalidation as hints
 from tui_gateway import server, server_requests, session_change_cursor
@@ -261,3 +261,34 @@ def test_token_rotation_during_an_in_flight_send_keeps_the_lease(push):
     now[0] += 60  # past the retry backoff, well inside the hint's one-hour expiry
     service.drain_once()  # the retry goes out with the rotated token; the lease survives
     assert [j["token"] for j in service.sender.jobs] == ["ef" * 32]
+
+
+def test_connector_owner_and_setup_count_without_apns(push, mobile_home, monkeypatch):
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    from tools.connectors import live
+    from tools.connectors.operation import ConnectionOperation, Target
+    from tools.connectors.contract import SettleReason
+    from tui_gateway.inbox_summaries import page_attention
+    _service, _now, _ids, _lease, _db_path = push
+    home = mobile_home / "profiles" / "ops"
+    sid = "input-runtime"
+    server._sessions[sid] = {"session_key": "same", "profile_home": str(home)}
+    op = ConnectionOperation(targets=[Target("fixture", "mcp", "install")], session_key="same")
+    token = set_hermes_home_override(home)
+    live.open(op)
+    reset_hermes_home_override(token)
+    monkeypatch.setattr(server, "_mobile_push_service", lambda: None)
+    try:
+        server._emit("connection.request", sid, op.request_payload())
+        summary = page_attention([{"id": "same"}], home)
+        assert summary["same"]["kind"] == "input" and summary["same"]["count"] == 1
+        # Push-disabled is not Inbox-disabled. Its pre-existing silent hint still observes the change.
+        assert "ops" in hints._pending_profiles
+        settle_setup = server_requests.send_async("setup_choose", sid, {"kind": "question", "question": "Setup?"}, lambda result: None)
+        assert page_attention([{"id": "same"}], home)["same"]["count"] == 2
+        settle_setup("answered")
+        op.settle(SettleReason.all_resolved)
+        assert page_attention([{"id": "same"}], home) == {}
+    finally:
+        live.close(op)
+        server._sessions.pop(sid, None)

@@ -5,13 +5,25 @@ from typing import Literal
 
 from pydantic import Field
 
-from .base import Params, Result
+from .base import Params, Payload, Result
 from .common import PendingApproval, TranscriptMessage
 from .media import VideoUploadLimits
 from .prompt_voice import PromptOrigin, PromptSubmitResult
-from .registry import method
+from .registry import event, method
 from .server_requests import ClarifyQuestion
 from .sessions import InflightTurn, OpenRequestEntry, QueuedPrompt, SessionInterruptResult, TodoState
+
+
+class HumanInputUpdatedPayload(Payload):
+    id: str
+    method: str
+    request_epoch: str
+    request_revision: int
+    remaining_question_ids: list[str]
+
+
+event("request.updated", HumanInputUpdatedPayload,
+      doc="Metadata-only partial human-input progress; not a new request or an answer authority.")
 
 
 class MobileEmptyParams(Params):
@@ -122,11 +134,30 @@ class MobilePendingClarify(Result):
     owning_client: str | None = None
 
 
+class MobilePendingInput(Result):
+    """APNs/ActivityKit selector only; requires fresh authenticated request admission."""
+    version: int = 1
+    method: str
+    session_id: str
+    request_id: str | None = None
+    operation_id: str | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
+    question_id: str | None = None
+    created_at: float | None = None
+    expires_at: float | None = None
+    category: Literal["HERMEX_APPROVAL_V1", "HERMEX_QUESTION_V1", "HERMEX_SECURE_INPUT_V1", "HERMEX_SETUP_V1"]
+    allowed_actions: list[Literal["open", "open_securely", "once", "deny", "suggest", "reply", "skip"]]
+
+
 class MobileNotificationRun(Result):
     run_id: str
     status: str
     started_at: float
     updated_at: float
+    pending_count: int | None = None
+    pending_input: MobilePendingInput | None = None
+    nearest_expires_at: float | None = None
 
 
 class MobileSnapshotResult(Result):
