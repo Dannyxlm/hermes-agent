@@ -36,9 +36,11 @@ def test_dead_grant_is_classified_and_not_replayed_at_other_endpoints(monkeypatc
     assert calls == ["https://a.example/oauth/token"]  # a dead grant is not replayed at the fallback endpoint
     assert not ac.is_terminal_anthropic_refresh_error(TimeoutError("timed out"))
 
-def test_claude_code_refresher_reports_dead_grant_once_per_process(monkeypatch, caplog):
+def test_claude_code_refresher_reports_dead_grant_once_per_process(monkeypatch, caplog, tmp_path):
     """Later attempts with the same dead refresh token neither replay it at the endpoint nor re-warn; a rotated
     (re-login) token is tried again."""
+    # Mocked credential reads still take the real path-keyed lock and consult rotation sidecars.
+    monkeypatch.setenv("HERMES_CLAUDE_CODE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(ac, "_DEAD_REFRESH_TOKEN_FINGERPRINTS", set())
     monkeypatch.setattr(ac, "read_claude_code_credentials", lambda: {"accessToken": "old", "refreshToken": "rt-dead", "expiresAt": 1})
     posts = []
@@ -58,6 +60,7 @@ def test_claude_code_refresher_reports_dead_grant_once_per_process(monkeypatch, 
     monkeypatch.setattr(ac, "read_claude_code_credentials", lambda: {"accessToken": "old", "refreshToken": "rt-new", "expiresAt": 1})
     assert ac._refresh_oauth_token({"accessToken": "old", "refreshToken": "rt-new"}) is None
     assert posts == ["rt-dead", "rt-new"]
+    assert (tmp_path / ".credentials.lock").is_file()
 
 def test_claude_code_credentials_path_honours_claude_config_dir(monkeypatch, tmp_path):
     """The documented opt-out: CLAUDE_CONFIG_DIR relocates the borrowed file exactly as the Claude CLI does."""
