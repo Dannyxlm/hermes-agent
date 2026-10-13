@@ -7,7 +7,9 @@ the transport and declared on the shared base) and the ``result`` the client ans
 
 from __future__ import annotations
 
-from pydantic import Field
+from typing import Literal
+
+from pydantic import Field, field_validator, model_validator
 
 from tools.tour_presets import TourPreset
 
@@ -110,10 +112,97 @@ class ApprovalChoice(WireEnum):
     deny = "deny"
 
 
+class ApprovalKind(WireEnum):
+    terminal = "terminal"
+    tool = "tool"
+    payment = "payment"
+    mcp_trust = "mcp_trust"
+    mcp_elicitation = "mcp_elicitation"
+
+    @classmethod
+    def for_context(cls, surface: str | None, tool_name: str | None = None, *, payment: bool = False) -> ApprovalKind:
+        if surface == "vault-payment" or payment:
+            return cls.payment
+        family = (surface or "").split("/", 1)[0]
+        if family == "mcp-trust":
+            return cls.mcp_trust
+        if family == "mcp-elicitation":
+            return cls.mcp_elicitation
+        return cls.tool if tool_name and tool_name != "terminal" else cls.terminal
+
+
+class PaymentMerchant(Params):
+    name: str
+    source: Literal["page"]
+
+
+class PaymentTotal(Params):
+    amount_minor: int
+    currency: str | None = None
+    display: str
+    source: Literal["page"]
+    label: str
+
+
+class PaymentLine(Params):
+    name: str
+    qty: int
+    amount_minor: int
+
+
+class PaymentAdjustment(Params):
+    kind: Literal["discount", "tax", "shipping", "fee"]
+    amount_minor: int
+
+
+class PaymentLimit(Params):
+    amount_minor: int
+    currency: str | None = None
+    period: Literal["per_purchase", "monthly", "unknown"]
+    source: Literal["config", "vault"]
+
+
+class PaymentCard(Params):
+    """Presentation metadata only; never PAN, expiry or CVC."""
+
+    label: str
+    last4: str | None = Field(default=None, pattern=r"^[0-9]{4}$")
+    backend: str | None = None
+    limit: PaymentLimit | None = None
+
+
+class PaymentChecks(Params):
+    total_found: bool
+    over_limit: bool | None = None
+
+
+class PaymentApprovalContext(Params):
+    """Frozen Pay v1 metadata; page facts are not issuer or origin authority."""
+
+    v: Literal[1]
+    origin: str
+    origin_bound: bool
+    merchant: PaymentMerchant | None = None
+    total: PaymentTotal | None = None
+    lines: list[PaymentLine] = Field(default_factory=list)
+    lines_truncated: bool = False
+    adjustments: list[PaymentAdjustment] = Field(default_factory=list)
+    card: PaymentCard
+    checks: PaymentChecks
+
+
 class ApprovalRequestParams(ServerRequestParams):
     """``tui_gateway/server.py::_approval_request_payload`` — the command is redacted server-side."""
 
     request_id: str
+    kind: ApprovalKind | None = None
+    # Explicit producer risk classification. Missing/old context is not safe quick consent.
+    risk: Literal["read_only", "destructive", "sensitive", "unknown"] = "unknown"
+    destructive: bool = False
+    sensitive: bool = False
+    # Output projection derives this; a producer-supplied True grants nothing.
+    quick_once: bool = False
+    payment: PaymentApprovalContext | None = None
     command: str = ""
     description: str = ""
     choices: list[ApprovalChoice] = Field(default_factory=list)
@@ -130,15 +219,34 @@ class ApprovalRequestParams(ServerRequestParams):
     # of keys is owned by tools/approval.py, so it stays open here.
     model_config = Params.model_config | {"extra": "allow"}
 
+    @model_validator(mode="after")
+    def consent_scopes(self) -> ApprovalRequestParams:
+        inferred = ApprovalKind.for_context(self.surface, self.tool_name, payment=self.payment is not None)
+        consent = {ApprovalKind.payment, ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation}
+        if inferred in consent or self.kind in consent:
+            if (any(choice not in (ApprovalChoice.once, ApprovalChoice.deny) for choice in self.choices)
+                    or self.allow_session is True or self.allow_permanent is True):
+                raise ValueError("Per-call consent is once-only")
+        if self.payment is not None and self.origin is not None and self.origin != self.payment.origin:
+            raise ValueError("Payment origin mismatch")
+        return self
+
 
 class ApprovalResult(Result):
     choice: ApprovalChoice
     all: bool | None = None
     reason: str | None = Field(default=None, max_length=2000)
+    # Client-reported authentication is receipt metadata, never answer authority.
+    auth: str | None = None
+
+    @field_validator("auth")
+    @classmethod
+    def known_auth(cls, value: str | None) -> str | None:
+        return value if value in ("face_id", "touch_id", "optic_id", "passcode") else None
 
 
 server_request("approval", params=ApprovalRequestParams, result=ApprovalResult,
-               doc="A dangerous command awaits the user's decision.")
+               doc="An action awaits the user's exact offered consent.")
 
 
 # ── one-string prompts ────────────────────────────────────────────────────────────────────────

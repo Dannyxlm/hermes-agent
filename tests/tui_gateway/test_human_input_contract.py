@@ -124,3 +124,40 @@ def test_invalid_secret_result_never_echoes(caplog):
         sr.resolve_response({'id': request['id'], 'result': {'value': {'secret': 'DUMMY-NO-ECHO'}}})
     assert 'DUMMY-NO-ECHO' not in str(exc.value) + caplog.text
     assert not seen
+
+
+@pytest.mark.parametrize('transport', ['legacy', 'scoped'])
+@pytest.mark.parametrize('flags', [{'allow_session': False}, {'allow_permanent': False}, {'smart_denied': True}])
+def test_explicit_scope_constraints_survive_broad_offers(transport, flags, tmp_path):
+    request, seen = pending(params={'request_id': 'queue-id', 'choices': ['once', 'session', 'always', 'deny'], **flags})
+    result = {'choice': 'always'}
+    with pytest.raises(PermissionError):
+        if transport == 'legacy':
+            sr.resolve_response({'id': request['id'], 'result': result})
+        else:
+            sr.scoped_respond(body(request, result), scope=scope(tmp_path))
+    assert seen == []
+    assert sr.open_requests('runtime')
+
+
+@pytest.mark.parametrize('transport', ['legacy', 'scoped'])
+def test_bounded_deny_reason_is_preserved_and_receipt_is_metadata_only(transport, tmp_path):
+    request, seen = pending()
+    reason = 'ø' * 2000
+    result = {'choice': 'deny', 'reason': reason}
+    if transport == 'legacy':
+        assert sr.resolve_response({'id': request['id'], 'result': result})
+    else:
+        receipt = sr.scoped_respond(body(request, result), scope=scope(tmp_path))
+        assert receipt['status'] == 'accepted'
+        assert reason not in json.dumps(receipt)
+    assert seen == [result]
+    assert not sr.resolve_response({'id': request['id'], 'result': result})
+
+
+@pytest.mark.parametrize('auth', ['face_id', 'touch_id', 'optic_id', 'passcode', 'unrecognized-client-text'])
+def test_auth_is_normalized_receipt_metadata_not_a_grant(auth):
+    from tui_gateway.contracts.server_requests import ApprovalResult
+    result = ApprovalResult.model_validate({'choice': 'deny', 'auth': auth})
+    assert result.choice == 'deny'
+    assert result.auth == (None if auth == 'unrecognized-client-text' else auth)

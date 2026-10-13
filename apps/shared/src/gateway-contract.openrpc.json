@@ -5838,6 +5838,17 @@
         "title": "ApprovalChoice",
         "type": "string"
       },
+      "ApprovalKind": {
+        "enum": [
+          "terminal",
+          "tool",
+          "payment",
+          "mcp_trust",
+          "mcp_elicitation"
+        ],
+        "title": "ApprovalKind",
+        "type": "string"
+      },
       "ApprovalPendingParams": {
         "additionalProperties": false,
         "properties": {
@@ -6009,6 +6020,54 @@
           "request_id": {
             "title": "Request Id",
             "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApprovalKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "risk": {
+            "default": "unknown",
+            "enum": [
+              "read_only",
+              "destructive",
+              "sensitive",
+              "unknown"
+            ],
+            "title": "Risk",
+            "type": "string"
+          },
+          "destructive": {
+            "default": false,
+            "title": "Destructive",
+            "type": "boolean"
+          },
+          "sensitive": {
+            "default": false,
+            "title": "Sensitive",
+            "type": "boolean"
+          },
+          "quick_once": {
+            "default": false,
+            "title": "Quick Once",
+            "type": "boolean"
+          },
+          "payment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaymentApprovalContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "command": {
             "default": "",
@@ -6250,6 +6309,18 @@
             ],
             "default": null,
             "title": "Reason"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Auth"
           }
         },
         "required": [
@@ -16033,6 +16104,93 @@
           "request_id": {
             "title": "Request Id",
             "type": "string"
+          },
+          "scoped_approval_response": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scoped Approval Response"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Auth"
+          },
+          "expected_authority_gateway_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Gateway Id"
+          },
+          "expected_authority_epoch": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Epoch"
           }
         },
         "required": [
@@ -16125,6 +16283,21 @@
           "max_log_limit": {
             "title": "Max Log Limit",
             "type": "integer"
+          },
+          "feature_versions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Feature Versions"
           }
         },
         "required": [
@@ -21508,6 +21681,68 @@
           "choice": {
             "title": "Choice",
             "type": "string"
+          },
+          "scoped_approval_response": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scoped Approval Response"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Auth"
           }
         },
         "required": [
@@ -22162,6 +22397,187 @@
           "canonical_root_id"
         ],
         "title": "MobileOpenParams",
+        "type": "object"
+      },
+      "MobilePendingApproval": {
+        "additionalProperties": true,
+        "properties": {
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Command"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "pattern_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern Key"
+          },
+          "pattern_keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern Keys"
+          },
+          "allow_permanent": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Allow Permanent"
+          },
+          "allow_session": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Allow Session"
+          },
+          "smart_denied": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Smart Denied"
+          },
+          "choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Choices"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Name"
+          },
+          "scoped_approval_response": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scoped Approval Response"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          }
+        },
+        "title": "MobilePendingApproval",
         "type": "object"
       },
       "MobilePendingClarify": {
@@ -23083,7 +23499,7 @@
           },
           "pending_approvals": {
             "items": {
-              "$ref": "#/components/schemas/PendingApproval"
+              "$ref": "#/components/schemas/MobilePendingApproval"
             },
             "title": "Pending Approvals",
             "type": "array"
@@ -24552,6 +24968,272 @@
         "title": "PasteCollapseResult",
         "type": "object"
       },
+      "PaymentAdjustment": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "discount",
+              "tax",
+              "shipping",
+              "fee"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "amount_minor": {
+            "title": "Amount Minor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "amount_minor"
+        ],
+        "title": "PaymentAdjustment",
+        "type": "object"
+      },
+      "PaymentApprovalContext": {
+        "additionalProperties": false,
+        "description": "Frozen Pay v1 metadata; page facts are not issuer or origin authority.",
+        "properties": {
+          "v": {
+            "const": 1,
+            "title": "V",
+            "type": "integer"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "origin_bound": {
+            "title": "Origin Bound",
+            "type": "boolean"
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMerchant"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "total": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaymentTotal"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "lines_truncated": {
+            "default": false,
+            "title": "Lines Truncated",
+            "type": "boolean"
+          },
+          "adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentAdjustment"
+            },
+            "title": "Adjustments",
+            "type": "array"
+          },
+          "card": {
+            "$ref": "#/components/schemas/PaymentCard"
+          },
+          "checks": {
+            "$ref": "#/components/schemas/PaymentChecks"
+          }
+        },
+        "required": [
+          "v",
+          "origin",
+          "origin_bound",
+          "card",
+          "checks"
+        ],
+        "title": "PaymentApprovalContext",
+        "type": "object"
+      },
+      "PaymentCard": {
+        "additionalProperties": false,
+        "description": "Presentation metadata only; never PAN, expiry or CVC.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last4": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{4}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last4"
+          },
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Backend"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaymentLimit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "PaymentCard",
+        "type": "object"
+      },
+      "PaymentChecks": {
+        "additionalProperties": false,
+        "properties": {
+          "total_found": {
+            "title": "Total Found",
+            "type": "boolean"
+          },
+          "over_limit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Over Limit"
+          }
+        },
+        "required": [
+          "total_found"
+        ],
+        "title": "PaymentChecks",
+        "type": "object"
+      },
+      "PaymentLimit": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_minor": {
+            "title": "Amount Minor",
+            "type": "integer"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "period": {
+            "enum": [
+              "per_purchase",
+              "monthly",
+              "unknown"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "config",
+              "vault"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount_minor",
+          "period",
+          "source"
+        ],
+        "title": "PaymentLimit",
+        "type": "object"
+      },
+      "PaymentLine": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "qty": {
+            "title": "Qty",
+            "type": "integer"
+          },
+          "amount_minor": {
+            "title": "Amount Minor",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "qty",
+          "amount_minor"
+        ],
+        "title": "PaymentLine",
+        "type": "object"
+      },
+      "PaymentMerchant": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "const": "page",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source"
+        ],
+        "title": "PaymentMerchant",
+        "type": "object"
+      },
       "PaymentMethodKind": {
         "enum": [
           "card",
@@ -24560,6 +25242,48 @@
         ],
         "title": "PaymentMethodKind",
         "type": "string"
+      },
+      "PaymentTotal": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_minor": {
+            "title": "Amount Minor",
+            "type": "integer"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
+          "source": {
+            "const": "page",
+            "title": "Source",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount_minor",
+          "display",
+          "source",
+          "label"
+        ],
+        "title": "PaymentTotal",
+        "type": "object"
       },
       "PdfAttachParams": {
         "additionalProperties": false,
@@ -46392,7 +47116,7 @@
   "x-server-requests": [
     {
       "name": "approval",
-      "summary": "A dangerous command awaits the user's decision.",
+      "summary": "An action awaits the user's exact offered consent.",
       "params": [
         {
           "name": "params",

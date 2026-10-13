@@ -1456,6 +1456,7 @@ export interface GroupsCapabilitiesResult {
   features: string[]
   methods: string[]
   max_log_limit: number
+  feature_versions?: Record<string, number> | null
 }
 /** ``enabled`` with ``profile``/``catalog``/``endpoint``, or disabled with a ``reason``. */
 export interface RoomLinkStatus {
@@ -1683,6 +1684,13 @@ export interface GroupsApproveParams {
   execution_generation: number
   choice: ApprovalChoice
   request_id: string
+  scoped_approval_response?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  reason?: string | null
+  auth?: string | null
+  expected_authority_gateway_id?: string | null
+  expected_authority_epoch?: number | null
 }
 export type ApprovalChoice = 'once' | 'session' | 'always' | 'deny'
 /** ``result`` is the local ``approval.respond`` answer or the peer's run-action receipt. */
@@ -3403,7 +3411,7 @@ export interface MobileSnapshotResult {
   status: string
   inflight: InflightTurn | null
   queued: QueuedPrompt | null
-  pending_approvals: PendingApproval[]
+  pending_approvals: MobilePendingApproval[]
   pending_clarify: MobilePendingClarify | null
   notification_run: MobileNotificationRun | null
   open_requests?: OpenRequestEntry[] | null
@@ -3413,6 +3421,23 @@ export interface MobileHistory {
   messages: TranscriptMessage[]
   has_more: boolean
   before_row_id: number | null
+}
+export interface MobilePendingApproval {
+  request_id?: string | null
+  command?: string | null
+  description?: string | null
+  pattern_key?: string | null
+  pattern_keys?: string[] | null
+  allow_permanent?: boolean | null
+  allow_session?: boolean | null
+  smart_denied?: boolean | null
+  choices?: string[] | null
+  tool_name?: string | null
+  scoped_approval_response?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  expires_at?: number | null
+  [key: string]: unknown
 }
 export interface MobilePendingClarify {
   created_at?: number | null
@@ -3473,6 +3498,11 @@ export interface MobileApprovalParams {
   session_id: string
   request_id: string
   choice: string
+  scoped_approval_response?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  reason?: string | null
+  auth?: string | null
 }
 export interface MobileApprovalResult {
   resolved: number
@@ -5133,6 +5163,12 @@ export interface ApprovalRequestParams {
   request_epoch?: string | null
   request_revision?: number | null
   request_id: string
+  kind?: ApprovalKind | null
+  risk?: 'read_only' | 'destructive' | 'sensitive' | 'unknown'
+  destructive?: boolean
+  sensitive?: boolean
+  quick_once?: boolean
+  payment?: PaymentApprovalContext | null
   command?: string
   description?: string
   choices?: ApprovalChoice[]
@@ -5147,10 +5183,62 @@ export interface ApprovalRequestParams {
   gateway_session_id?: string | null
   [key: string]: unknown
 }
+export type ApprovalKind = 'terminal' | 'tool' | 'payment' | 'mcp_trust' | 'mcp_elicitation'
+/** Frozen Pay v1 metadata; page facts are not issuer or origin authority. */
+export interface PaymentApprovalContext {
+  v: 1
+  origin: string
+  origin_bound: boolean
+  merchant?: PaymentMerchant | null
+  total?: PaymentTotal | null
+  lines?: PaymentLine[]
+  lines_truncated?: boolean
+  adjustments?: PaymentAdjustment[]
+  card: PaymentCard
+  checks: PaymentChecks
+}
+export interface PaymentMerchant {
+  name: string
+  source: 'page'
+}
+export interface PaymentTotal {
+  amount_minor: number
+  currency?: string | null
+  display: string
+  source: 'page'
+  label: string
+}
+export interface PaymentLine {
+  name: string
+  qty: number
+  amount_minor: number
+}
+export interface PaymentAdjustment {
+  kind: 'discount' | 'tax' | 'shipping' | 'fee'
+  amount_minor: number
+}
+/** Presentation metadata only; never PAN, expiry or CVC. */
+export interface PaymentCard {
+  label: string
+  last4?: string | null
+  backend?: string | null
+  limit?: PaymentLimit | null
+}
+export interface PaymentLimit {
+  amount_minor: number
+  currency?: string | null
+  period: 'per_purchase' | 'monthly' | 'unknown'
+  source: 'config' | 'vault'
+}
+export interface PaymentChecks {
+  total_found: boolean
+  over_limit?: boolean | null
+}
 export interface ApprovalResult {
   choice: ApprovalChoice
   all?: boolean | null
   reason?: string | null
+  auth?: string | null
 }
 /** Original command, redacted server-side before any password-injection rewrite. */
 export interface SudoRequestParams {
@@ -6635,7 +6723,7 @@ export const RPC_METHODS = [
 
 // ── Server→client requests ──
 export interface ServerRequestMap {
-  /** A dangerous command awaits the user's decision. */
+  /** An action awaits the user's exact offered consent. */
   approval: { params: ApprovalRequestParams; result: ApprovalResult }
   /** The clarify tool: ask the user 1-5 questions. */
   clarify: { params: ClarifyRequestParams; result: ClarifyResult }

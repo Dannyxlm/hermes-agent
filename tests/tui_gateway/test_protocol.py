@@ -161,10 +161,8 @@ def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     }
     second = {"command": "rm -rf /tmp/later", "description": "later"}
     saved_queue = approval._gateway_queues.pop("stored-session", None)
-    approval._gateway_queues["stored-session"] = [
-        approval_gateway_wait._ApprovalEntry(first),
-        approval_gateway_wait._ApprovalEntry(second),
-    ]
+    first_entry = approval_gateway_wait._ApprovalEntry(first)
+    approval._gateway_queues["stored-session"] = [first_entry, approval_gateway_wait._ApprovalEntry(second)]
     monkeypatch.setattr(server, "_approval_request_payload", lambda data: dict(data or {}))
 
     try:
@@ -180,6 +178,8 @@ def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     # correlate their approval.respond with the exact queued request.
     assert replayed.pop("request_id")
     assert replayed.pop("expires_at") == replayed.pop("created_at") + replayed.pop("timeout_seconds")
+    for key in ("scoped_approval_response", "request_epoch", "request_revision"):
+        assert replayed.pop(key) == first_entry.data[key]
     assert replayed == first
 
 
@@ -490,7 +490,9 @@ def test_client_capabilities_advertises_counting_not_shown_declines(server):
 def test_server_request_timeout_emits_one_request_cancel(capture, method):
     from tui_gateway import server_requests
     _server, buf = capture
-    assert server_requests.send(method, "s1", {}, timeout=0) is None
+    params = {"secret": {"env_var": "DUMMY_KEY", "prompt": "Dummy credential"},
+              "tour": {"action": "start"}}.get(method, {})
+    assert server_requests.send(method, "s1", params, timeout=0) is None
     request, cancel = _frames(buf)
     assert request["method"] == method
     assert cancel["params"]["type"] == "request.cancel"
