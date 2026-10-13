@@ -109,12 +109,17 @@ def _squash(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
 
+# A brand's dedicated sending domain is its name plus one of these (facebookmail.com, shopifyemail.com).
+# Any other brand-prefixed domain (acme-login.test, acmesecure.test) is registrable by anyone, so it never counts.
+_MAIL_SUFFIXES = ("mail", "email", "mailer")
+
+
 def sender_matches_site(sender: str, subject: str, site_host: str, site_label: str = "") -> bool:
     """Did the site send this? Decided by the sender's DOMAIN only: it is the site's registrable domain
-    or a subdomain of it, or the site's name (first label of that domain, or the saved login's label)
-    begins the sender's registrable domain (facebookmail.com, shopifyemail.com; never notacme.test). Display names and
-    subjects are free to spoof, so they never count: an impostor's code typed into the real page could
-    authorise the impostor's device. ``subject`` is accepted for callers' convenience and ignored."""
+    or a subdomain of it, or its registrable name is the site's name (first label of that domain, or the
+    saved login's label) plus a mail-sending suffix. Display names and subjects are free to spoof, so they
+    never count: an impostor's code typed into the real page could authorise the impostor's device.
+    ``subject`` is accepted for callers' convenience and ignored."""
     site = _registrable_domain(site_host)
     if not site:
         return False
@@ -125,7 +130,7 @@ def sender_matches_site(sender: str, subject: str, site_host: str, site_label: s
         return True
     sender_name = _squash(_registrable_domain(domain).rsplit(".", 1)[0])
     names = {_squash(site.split(".", 1)[0]), _squash(site_label)}
-    return any(len(n) >= 4 and sender_name.startswith(n) for n in names)
+    return any(len(n) >= 4 and sender_name in {n + s for s in _MAIL_SUFFIXES} for n in names)
 
 
 def pick_code(messages: Iterable[EmailMessage], site_host: str, *, since: float, site_label: str = "") -> Optional[str]:
@@ -155,7 +160,12 @@ def _preferred_text(parts: list[tuple[str, str]]) -> str:
 
 
 def _run_cli(argv: list[str]) -> str:
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=45, stdin=subprocess.DEVNULL, check=False)
+    from tools.environments.local import served_profile_child_env
+
+    # The CLI reads the SERVED profile's mailbox: one process serves many profiles, and os.environ holds the
+    # launch profile's. Raises (no spawn) when no profile scope is bound under multiplexing.
+    env = served_profile_child_env(inherit_credentials=True)
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=45, stdin=subprocess.DEVNULL, check=False, env=env)
     if proc.returncode != 0:
         # stderr is never echoed: a failing mail CLI can print message fragments.
         raise RuntimeError(f"mail CLI exited {proc.returncode}")
@@ -354,18 +364,17 @@ def wait_for_email_code(site_host: str, identifier: str, *, site_label: str = ""
     try:
         while True:
             try:
-                with _USED_LOCK:
-                    used = set(_USED_KEYS)
-                fresh = [m for m in lane.recent(since, from_site) if not (m.key and m.key in used)]
+                received = lane.recent(since, from_site)
             except Exception as exc:  # the message is never logged: it can carry mail content
                 logger.info("email code: inbox read failed (%s); falling back to the user", type(exc).__name__)
                 return None
-            if fresh:
-                newest = max(fresh, key=lambda m: m.received_at)
-                code = pick_code([newest], site_host, since=since, site_label=site_label)
+            with _USED_LOCK:  # check and reserve atomically: two sessions never both enter one code
+                fresh = [m for m in received if not (m.key and m.key in _USED_KEYS)]
+                newest = max(fresh, key=lambda m: m.received_at) if fresh else None
+                code = pick_code([newest], site_host, since=since, site_label=site_label) if newest else None
                 if code and newest.key:
-                    with _USED_LOCK:
-                        _USED_KEYS.add(newest.key)
+                    _USED_KEYS.add(newest.key)
+            if newest is not None:
                 logger.info("email code: site email found, code %s", "extracted" if code else "not unambiguous")
                 return code
             if clock() + interval > deadline:

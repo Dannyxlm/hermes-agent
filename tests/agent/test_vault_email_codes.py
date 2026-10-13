@@ -78,13 +78,21 @@ class TestSiteMatch:
         """Display names and subjects are free to spoof; a code from an impostor typed into the real page
         could authorise the impostor's device. Only the sender's domain counts."""
         assert sender_matches_site("Shopify <mailer@shopifyemail.com>", "", "accounts.shopify.com")
-        assert sender_matches_site("noreply@mail.godaddy-sso.com", "Your code", "sso.example.com", site_label="GoDaddy")
+        assert sender_matches_site("Facebook <security@facebookmail.com>", "", "www.facebook.com")
         assert not sender_matches_site("mailer@sendgrid.net", "Your Acme verification code", "acme.test")
         assert not sender_matches_site("Acme Security <alerts@evil.test>", "Your code", "acme.test")
         assert not sender_matches_site("GoDaddy <noreply@secureserver.net>", "Your code", "sso.example.com", site_label="GoDaddy Login")
 
     def test_wrong_sender_does_not_match(self):
         assert not sender_matches_site("Other Co <no-reply@other.test>", "Your verification code", "acme.test")
+
+    def test_brand_prefixed_domains_anyone_can_register_do_not_match(self):
+        """Only the site's own domain or its name plus a mail-sending suffix (facebookmail, shopifyemail)
+        counts. Any other domain merely starting with the brand is attacker-registrable."""
+        assert not sender_matches_site("x <no-reply@acme-login.test>", "Your code", "acme.test")
+        assert not sender_matches_site("x <no-reply@acmesecure.test>", "Your code", "acme.test")
+        assert not sender_matches_site("x <no-reply@acmemailer-verify.test>", "Your code", "acme.test")
+        assert not sender_matches_site("noreply@mail.godaddy-sso.com", "Your code", "sso.example.com", site_label="GoDaddy")
 
 
 class TestPickCode:
@@ -347,3 +355,59 @@ class TestWaitForEmailCode:
         clock = Clock()
         assert wait_for_email_code("acme.test", "someone@else.test", cfg=CFG, clock=clock, sleep=clock.sleep) is None
         assert clock.sleeps == []
+
+    def test_two_concurrent_waits_never_both_enter_the_same_code(self):
+        """The at-most-once guard reserves a message under the same lock that checks it."""
+        import threading
+
+        msg = EmailMessage("no-reply@acme.test", "Sign in", NOW - 5, "Your code is 593172.", key="gmail:race-once")
+        barrier = threading.Barrier(2)
+
+        class RacingLane(ScriptedLane):
+            def recent(self, since, matches):
+                barrier.wait(timeout=5)  # both sessions have read the inbox before either reserves
+                return [msg]
+
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(_wait(RacingLane([]), Clock()))) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert sorted(results, key=str) == ["593172", None]
+
+
+class TestMailCliChildEnv:
+    """The mail CLI acts for the served profile: its env comes from served_profile_child_env, never the
+    launch profile's os.environ (one process serves many profiles)."""
+
+    def test_child_env_is_the_served_profile_env(self, monkeypatch):
+        import subprocess
+
+        from agent import vault_email_codes
+
+        served = {"HERMES_HOME": "/srv/profiles/b", "PATH": "/usr/bin"}
+        calls = []
+        monkeypatch.setattr("tools.environments.local.served_profile_child_env",
+                            lambda **kw: (calls.append(kw), dict(served))[1])
+
+        def fake_run(argv, **kw):
+            calls.append(kw.get("env"))
+            return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
+
+        monkeypatch.setattr(vault_email_codes.subprocess, "run", fake_run)
+        assert vault_email_codes._run_cli(["mailcli", "gmail"]) == "{}"
+        assert calls == [{"inherit_credentials": True}, served]
+
+    def test_unscoped_child_env_fails_closed_before_spawning(self, monkeypatch):
+        from agent import vault_email_codes
+
+        def unscoped(**kw):
+            raise RuntimeError("no profile scope bound")
+
+        spawned = []
+        monkeypatch.setattr("tools.environments.local.served_profile_child_env", unscoped)
+        monkeypatch.setattr(vault_email_codes.subprocess, "run", lambda *a, **k: spawned.append(a))
+        with pytest.raises(RuntimeError):
+            vault_email_codes._run_cli(["mailcli", "gmail"])
+        assert spawned == []
