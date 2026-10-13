@@ -116,19 +116,34 @@ def test_opt_out_never_adopts_codex_cli_login(tmp_path, monkeypatch):
         "tokens": {"access_token": "fresh-access", "refresh_token": "fresh-refresh"}}))
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    hermes_before = (hermes_home / "auth.json").read_bytes()
+    codex_before = (codex_home / "auth.json").read_bytes()
 
+    def _unexpected_http(*_a, **_k):
+        pytest.fail("opt-out recovery test must not construct a real HTTP client")
+
+    monkeypatch.setattr(auth_codex, "_codex_http_client", _unexpected_http)
     with pytest.raises(AuthError) as info:
         resolve_codex_runtime_credentials()
     assert info.value.code == "codex_auth_missing_access_token"
 
-    def _rejected(*_a, **_k):
-        raise AuthError("bad", provider="openai-codex", code="invalid_grant", relogin_required=True)
+    refresh_calls = []
+    rejected = AuthError("bad", provider="openai-codex", code="invalid_grant", relogin_required=True)
 
-    monkeypatch.setattr(auth_codex, "refresh_codex_oauth_pure", _rejected)
+    def _rejected(access_token, refresh_token, *, timeout_seconds):
+        refresh_calls.append((access_token, refresh_token, timeout_seconds))
+        raise rejected
+
+    # The transaction late-imports refresh from the facade, not auth_codex.
+    monkeypatch.setattr(auth, "refresh_codex_oauth_pure", _rejected)
     with pytest.raises(AuthError) as info:
         _refresh_codex_auth_tokens(dict(STALE), 5.0)
     assert info.value.relogin_required  # surfaced, not papered over with the CLI pair
+    assert info.value is rejected
+    assert refresh_calls == [("stale-access", "stale-refresh", 5.0)]
     assert json.loads((hermes_home / "auth.json").read_text()) == hermes_auth
+    assert (hermes_home / "auth.json").read_bytes() == hermes_before
+    assert (codex_home / "auth.json").read_bytes() == codex_before
 
 
 def _codex_jwt(account_id: str, sub: str = "user-1") -> str:
