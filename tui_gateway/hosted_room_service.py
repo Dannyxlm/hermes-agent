@@ -61,6 +61,22 @@ def _authority(room: Mapping[str, Any]) -> tuple[str, int]:
     return str(room["authority_gateway_id"]), int(room["authority_epoch"])
 
 
+def require_current_approval_authority(db_path, room_id, member_id, task_id, execution_generation, gateway_id, epoch):
+    """Read durable current room/task fences again at the local settlement boundary."""
+    if not isinstance(gateway_id, str) or not gateway_id or type(epoch) is not int or epoch < 1:
+        raise ValueError("Exact room authority required")
+    room = hosted_rooms.room_state(db_path, room_id=room_id)
+    if _authority(room) != (gateway_id, epoch) or room.get("disbanded_at") is not None:
+        raise RuntimeError("room approval authority changed")
+    task = next((task for task in driver.list_tasks(db_path, room_id=room_id)
+                 if task["identity"].task_id == task_id), None)
+    if (task is None or task["status"] != "running"
+            or task["execution_generation"] != execution_generation
+            or (task["payload"].get("target_member_id") or task["payload"]["target_profile"]) != member_id
+            or task["run_gateway_id"] != gateway_id):
+        raise RuntimeError("room approval task is no longer current")
+
+
 class HostedRoomService:
     """Own the hosted Discussion policy and its transport-free worker."""
 
@@ -518,7 +534,11 @@ class HostedRoomService:
 
     def approve_room_task(
         self, room_id: str, *, member_id: str, task_id: str, execution_generation: int,
-        choice: str, request_id: str | None = None) -> Mapping[str, Any]:
+        choice: str, request_id: str | None = None, scoped_approval_response: int | None = None,
+        request_epoch: str | None = None, request_revision: int | None = None,
+        reason: str | None = None, auth: str | None = None,
+        expected_authority_gateway_id: str | None = None,
+        expected_authority_epoch: int | None = None) -> Mapping[str, Any]:
         """Resolve one exact local or peer approval and wake room observation."""
         key = (room_id, member_id)
         route, client = self.peer_routes.get(key), self.peer_clients.get(key)
@@ -533,23 +553,56 @@ class HostedRoomService:
             ) == (requested_approval_id, task_id, execution_generation)
         if not requested_approval_id or not matches(action):
             raise RuntimeError("room approval is no longer pending")
-        if choice not in {"once", "deny"}:
-            raise RuntimeError("room approval choice must be once or deny")
+        from tui_gateway.human_input import approval_response_metadata, approval_response_settled, validate_team_approval
+        response = {key: value for key, value in {
+            "scoped_approval_response": scoped_approval_response, "request_epoch": request_epoch,
+            "request_revision": request_revision, "reason": reason, "auth": auth}.items() if value is not None}
+        enhanced, metadata = approval_response_metadata(response, choice)
+        pending = action.get("approval") or {}
+        validate_team_approval(pending, choice, enhanced=enhanced, metadata=metadata)
+        if enhanced:
+            require_current_approval_authority(self.db_path, room_id, member_id, task_id, execution_generation,
+                                               expected_authority_gateway_id, expected_authority_epoch)
+            if (pending.get("request_epoch"), pending.get("request_revision")) != (request_epoch, request_revision):
+                raise RuntimeError("room approval request authority changed")
+            response = {**response, **metadata, "expected_authority_gateway_id": expected_authority_gateway_id,
+                        "expected_authority_epoch": expected_authority_epoch}
+            # Unknown auth labels are ignored, never forwarded as authentication evidence.
+            if "auth" not in metadata:
+                response.pop("auth", None)
+        elif expected_authority_gateway_id is not None or expected_authority_epoch is not None:
+            raise ValueError("Scoped approval envelope required")
         approve = _hook(client, "approve_receipt")
+        if route is not None and approve is None:
+            raise RuntimeError("peer approval target is unavailable")
         if route is not None and approve is not None:
-            result = approve(
-                task_id=task_id, execution_generation=execution_generation,
-                request_id=requested_approval_id, choice=choice, grant=route.grant)
+            # Freeze the home authority/task cut until the bounded peer action returns;
+            # takeover and cancellation must not race a request sent under the old cut.
+            with driver._transaction(self.db_path) if enhanced else contextlib.nullcontext():
+                if enhanced:
+                    require_current_approval_authority(self.db_path, room_id, member_id, task_id, execution_generation,
+                                                       expected_authority_gateway_id, expected_authority_epoch)
+                result = approve(
+                    task_id=task_id, execution_generation=execution_generation,
+                    request_id=requested_approval_id, choice=choice, grant=route.grant, **response)
         else:
             session_id = str(action.get("session_id") or "")
             if not session_id:
                 raise RuntimeError("local room approval identity is unavailable")
             result = self.rpc.approve(
-                session_id=session_id, request_id=requested_approval_id, choice=choice)
+                session_id=session_id, request_id=requested_approval_id, choice=choice,
+                **({"task_id": task_id, "execution_generation": execution_generation,
+                    "room_id": room_id, "member_id": member_id, "room_db_path": self.db_path} if enhanced else {}), **response)
         if result is None:
             raise RuntimeError("room approval target is unavailable")
         with self._policy_lock:
-            if matches(self._pending_actions.get(key)):
+            # A transport return is not settlement: keep zero/unknown receipts visible.
+            settled = approval_response_settled(result)
+            current = self._pending_actions.get(key)
+            same_envelope = (not enhanced or current is not None and
+                ((current.get("approval") or {}).get("request_epoch"),
+                 (current.get("approval") or {}).get("request_revision")) == (request_epoch, request_revision))
+            if settled and matches(current) and same_envelope:
                 self._pending_actions.pop(key, None)
         self.runtime.wakeup()
         return result

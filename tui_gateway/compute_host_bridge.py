@@ -148,15 +148,16 @@ def _relay_compute_host_rpc(message: dict) -> bool:
         session = _sessions.get(str((params or {}).get("session_id") or "")) if isinstance(params, dict) else None
         if session is not None:
             with _history_lock(session):
-                session["_compute_host_open_request"] = {
-                    "id": message["id"], "method": message["method"], "params": dict(params)}
+                mirrored = {"id": message["id"], "method": message["method"], "params": dict(params)}
+                session.setdefault("_compute_host_open_requests", {})[message["id"]] = mirrored
+                session["_compute_host_open_request"] = mirrored
     elif isinstance(params, dict) and params.get("type") == "request.cancel":
         session = _sessions.get(str(params.get("session_id") or ""))
         payload = params.get("payload")
         if session is not None and isinstance(payload, dict):
             with _history_lock(session):
                 if _open_request_matches(session, payload.get("id")):
-                    session.pop("_compute_host_open_request", None)
+                    _forget_compute_request(session, payload.get("id"))
     return write_json(message)
 
 
@@ -164,10 +165,19 @@ def _history_lock(session: dict):
     return session.get("history_lock", threading.Lock())
 
 
+def _forget_compute_request(session: dict, request_id) -> None:
+    mirrors = session.get("_compute_host_open_requests", {})
+    mirrors.pop(request_id, None)
+    if (session.get("_compute_host_open_request") or {}).get("id") == request_id:
+        session.pop("_compute_host_open_request", None)
+        if mirrors:
+            session["_compute_host_open_request"] = next(iter(mirrors.values()))
+
+
 def _open_request_matches(session: dict, request_id) -> bool:
     """Whether ``session``'s mirrored open request is ``request_id``. Caller holds history_lock."""
     mirrored = session.get("_compute_host_open_request")
-    return isinstance(mirrored, dict) and mirrored.get("id") == request_id
+    return request_id in session.get("_compute_host_open_requests", {}) or (isinstance(mirrored, dict) and mirrored.get("id") == request_id)
 
 
 def _compute_host_request_session(request_id: str) -> tuple[str, dict] | None:
@@ -186,10 +196,11 @@ def _relay_compute_host_response(frame: dict) -> bool:
     if located is None or not _session_uses_compute_host(located[1]):
         return False
     sid, session = located
-    with _history_lock(session):
-        session.pop("_compute_host_open_request", None)
     try:
-        _get_compute_host_supervisor().respond(sid, {"frame": dict(frame)})
+        ack = _get_compute_host_supervisor().respond(sid, {"frame": dict(frame)}, start_if_missing=False)
+        if ack.get("type") == "respond.ack" and (ack.get("response") or {}).get("result", {}).get("status") in ("ok", "expired"):
+            with _history_lock(session):
+                _forget_compute_request(session, frame.get("id"))
     except Exception:
         logger.debug("compute-host response relay failed sid=%s", sid, exc_info=True)
     return True
@@ -218,9 +229,9 @@ def _lock_compute_host_clarify(rid: str, request_id: str, question_id: str, answ
     result = response.get("result") if isinstance(response.get("result"), dict) else {}
     with _history_lock(session):
         if _open_request_matches(session, request_id):
-            mirrored = session["_compute_host_open_request"]
+            mirrored = session.get("_compute_host_open_requests", {}).get(request_id) or session["_compute_host_open_request"]
             if result.get("status") == "expired" or result.get("remaining") == []:
-                session.pop("_compute_host_open_request", None)
+                _forget_compute_request(session, request_id)
             else:
                 mirrored["params"]["answers"] = {**(mirrored["params"].get("answers") or {}), question_id: answer}
     return _ok(rid, result)
@@ -249,6 +260,7 @@ def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -
         session["last_active"] = time.time()
         _clear_inflight_turn(session)
         session.pop("_compute_host_open_request", None)
+        session.pop("_compute_host_open_requests", None)
     # The isolated turn carried the queued model switch to the compute host, whose
     # turn thread applied it. Clear the server-side stash so it isn't re-forwarded
     # (kept on error so the fail-open in-process path can still apply it).

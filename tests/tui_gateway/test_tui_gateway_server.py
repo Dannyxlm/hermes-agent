@@ -482,7 +482,7 @@ def test_compute_host_open_request_survives_activation_and_proxies_locks_and_res
         def __init__(self):
             self.responses = []
 
-        def respond(self, sid, params, *, timeout=15.0):
+        def respond(self, sid, params, *, timeout=15.0, start_if_missing=True):
             self.responses.append((sid, dict(params), timeout))
             lock = params.get("lock") or {}
             remaining = ["q1"] if lock.get("question_id") == "q0" else []

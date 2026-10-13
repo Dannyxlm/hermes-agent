@@ -10,6 +10,7 @@ from . import (
     display,
     events,
     groups_bot_relay,
+    human_input,
     i18n,
     liveness,
     media,

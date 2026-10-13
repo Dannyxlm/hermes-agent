@@ -517,18 +517,42 @@ class PeerRunsHTTPClient:
             "approval": status.get("approval")}
 
     def approve_receipt(
-        self, *, task_id: str, execution_generation: int, request_id: str, choice: str, grant: str
+        self, *, task_id: str, execution_generation: int, request_id: str, choice: str, grant: str,
+        scoped_approval_response: int | None = None, request_epoch: str | None = None,
+        request_revision: int | None = None, reason: str | None = None, auth: str | None = None,
+        expected_authority_gateway_id: str | None = None,
+        expected_authority_epoch: int | None = None,
     ) -> Mapping[str, Any] | None:
-        """Resolve approval for the exact durable remote run."""
+        """Resolve approval for the exact durable remote run, preserving scoped metadata."""
         record = self._receipt(task_id, execution_generation)
         if record is None:
             return None
-        request_id = str(request_id or "").strip()
-        if not request_id:
+        if not isinstance(request_id, str) or not request_id:
             raise PeerRunsHTTPError("an exact approval request_id is required")
         self._require_room_grant(grant)
+        from tui_gateway.human_input import approval_response_metadata, validate_team_approval
+        response = {key: value for key, value in {
+            "scoped_approval_response": scoped_approval_response, "request_epoch": request_epoch,
+            "request_revision": request_revision, "reason": reason, "auth": auth}.items() if value is not None}
+        enhanced, metadata = approval_response_metadata(response, choice)
+        if enhanced:
+            if (type(expected_authority_epoch) is not int
+                    or (record.get("authority_gateway_id"), record.get("authority_epoch"))
+                    != (expected_authority_gateway_id, expected_authority_epoch)):
+                raise PeerRunsHTTPError("room approval authority changed")
+            pending = self._poll_receipt(record, grant=grant).get("approval") or {}
+            validate_team_approval(pending, choice, enhanced=True, metadata=metadata)
+            if (pending.get("request_id"), pending.get("request_epoch"), pending.get("request_revision")) != (
+                    request_id, request_epoch, request_revision):
+                raise PeerRunsHTTPError("peer approval request authority changed")
+            response = {**response, **metadata, "expected_authority_gateway_id": expected_authority_gateway_id,
+                        "expected_authority_epoch": expected_authority_epoch}
+            if "auth" not in metadata:
+                response.pop("auth", None)
+        elif expected_authority_gateway_id is not None or expected_authority_epoch is not None:
+            raise ValueError("Scoped approval envelope required")
         return self._post_run_action(
-            record, "approval", body={"choice": choice, "request_id": request_id}, grant=grant)
+            record, "approval", body={"choice": choice, "request_id": request_id, **response}, grant=grant)
 
     def _post_run_action(
         self, record: Mapping[str, Any], action: str, *, body: dict[str, Any], grant: str

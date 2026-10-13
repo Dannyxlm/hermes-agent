@@ -9,6 +9,8 @@ Handlers: ``tui_gateway/methods_groups.py``, ``tui_gateway/methods_bot_relay.py`
 
 from __future__ import annotations
 
+from pydantic import Field
+
 from .base import JsonValue, Params, Result, WireEnum
 from .common import OkResult, OpenModel, ProfileParams
 from .registry import method
@@ -156,6 +158,7 @@ class GroupsCapabilitiesResult(Result):
     features: list[str]
     methods: list[str]
     max_log_limit: int
+    feature_versions: dict[str, int] | None = None
 
 
 method("groups.capabilities", params=GroupsCapabilitiesParams, result=GroupsCapabilitiesResult,
@@ -344,6 +347,13 @@ class GroupsApproveParams(RoomParams):
     execution_generation: int
     choice: ApprovalChoice
     request_id: str
+    scoped_approval_response: int | None = Field(default=None, strict=True)
+    request_epoch: str | None = None
+    request_revision: int | None = Field(default=None, strict=True, ge=1)
+    reason: str | None = Field(default=None, max_length=2000)
+    auth: str | None = None
+    expected_authority_gateway_id: str | None = None
+    expected_authority_epoch: int | None = Field(default=None, strict=True, ge=1)
 
 
 class GroupsApproveResult(Result):

@@ -829,7 +829,26 @@ def _mount_hosted_plugin_api(app, plugin: dict, api_file_name: str) -> None:
     scope still apply here first). Responses are buffered: streaming and websockets need in-process."""
     name = plugin["name"]
 
+    if name == 'cloudseed_mobile':
+        # Built-in owner/auth/deadline code stays beside the canonical gateway.
+        # Never send entered credentials into the isolated user plugin's ASGI.
+        from fastapi import HTTPException
+        from plugins.cloudseed_mobile.dashboard.plugin_api import human_input_endpoint
+        from plugins.cloudseed_mobile.human_input_adapter import OPERATIONS
+
+        def require_enabled_mobile():
+            if _hosted_plugin_for_request(name) is None:
+                raise HTTPException(status_code=404, detail='Plugin not enabled for this profile')
+
+        for operation in OPERATIONS:
+            app.add_api_route(f'/api/plugins/{name}/human-input/{operation}', human_input_endpoint(operation),
+                              methods=['POST'], name=f'native_mobile_{operation}',
+                              dependencies=[Depends(_plugin_route_secret_scope), Depends(require_enabled_mobile)])
+
     async def forward(request: Request, path: str = "") -> Response:
+        if name == "cloudseed_mobile" and (path == "human-input" or path.startswith("human-input/")):
+            return JSONResponse({"error": "Unknown human input operation"}, status_code=404,
+                                headers={"Cache-Control": "no-store"})
         # Resolve the plugin again in the REQUESTING profile (the route is mounted once, from the
         # launch profile): its own copy, gated by its own plugins.enabled, served by its own host.
         target = await asyncio.to_thread(_hosted_plugin_for_request, name)

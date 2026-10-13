@@ -69,8 +69,8 @@ def test_resolve_commits_the_choice_before_releasing_the_approval_lock(monkeypat
             return real_lock.__exit__(*exc)
 
     monkeypatch.setattr(mod, "_lock", _Instrumented())
-    assert mod.resolve_gateway_approval(SESSION_KEY, "once", reason="fine") == 1
-    assert seen == {"result_at_release": "once", "event_at_release": True}
+    assert mod.resolve_gateway_approval(SESSION_KEY, "deny", reason="fine") == 1
+    assert seen == {"result_at_release": "deny", "event_at_release": True}
     assert entry.reason == "fine"
 
 

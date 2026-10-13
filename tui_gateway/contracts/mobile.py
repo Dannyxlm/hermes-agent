@@ -18,6 +18,15 @@ class MobileEmptyParams(Params):
     pass
 
 
+class MobileHumanInputCapability(Result):
+    protocol_version: int = 1
+    methods: list[str]
+    secure_methods: list[str]
+    destinations: list[str]
+    rest_requires_owner_plugin: bool = True
+    receipt_scope: str = 'process_bounded'
+
+
 class MobileCapabilitiesResult(Result):
     protocol_version: int
     methods: list[str]
@@ -26,6 +35,7 @@ class MobileCapabilitiesResult(Result):
     max_history_limit: int
     max_roster_limit: int
     video_upload: VideoUploadLimits | None = None
+    human_input: MobileHumanInputCapability | None = None
 
 
 class MobileBotsParams(Params):
@@ -95,6 +105,12 @@ class MobileHistory(Result):
 
 
 class MobilePendingClarify(Result):
+    created_at: float | None = None
+    expires_at: float | None = None
+    timeout_seconds: float | None = None
+    server_time: float | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
     request_id: str
     session_id: str | None = None
     question: str | None = None
@@ -113,6 +129,13 @@ class MobileNotificationRun(Result):
     updated_at: float
 
 
+class MobilePendingApproval(PendingApproval):
+    scoped_approval_response: int | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
+    expires_at: float | None = None
+
+
 class MobileSnapshotResult(Result):
     profile: str
     canonical_root_id: str
@@ -123,7 +146,7 @@ class MobileSnapshotResult(Result):
     status: str
     inflight: InflightTurn | None
     queued: QueuedPrompt | None
-    pending_approvals: list[PendingApproval]
+    pending_approvals: list[MobilePendingApproval]
     pending_clarify: MobilePendingClarify | None
     notification_run: MobileNotificationRun | None
     open_requests: list[OpenRequestEntry] | None = None
@@ -144,6 +167,11 @@ class MobileSubmitResult(PromptSubmitResult):
 class MobileApprovalParams(MobileScopeParams):
     request_id: str
     choice: str  # handler rejects choices outside the exact pending request's offered set
+    scoped_approval_response: int | None = Field(default=None, strict=True)
+    request_epoch: str | None = None
+    request_revision: int | None = Field(default=None, strict=True, ge=1)
+    reason: str | None = Field(default=None, max_length=2000)
+    auth: str | None = None
 
 
 class MobileApprovalResult(Result):

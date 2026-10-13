@@ -48,13 +48,16 @@ def test_real_blocking_timeout_rejects_late_answer(isolated_registry):
 
 def test_batch_timeout_preserves_locked_answers(isolated_registry, monkeypatch):
     frames, _ = isolated_registry
+    clock = [10.0]
+    monkeypatch.setattr(requests.time, "monotonic", lambda: clock[0])
     def deliver(frame):
         frames.append(frame)
         assert requests.lock_answer(frame["id"], "a", "Blue", expected_sid="own") == ["b"]
+        clock[0] = 40.0  # First lock was live; the remaining batch now expires.
     monkeypatch.setattr(requests, "_write", deliver)
     result = requests.send("clarify", "own", {"questions": [
         {"qid": "a", "question": "A?"}, {"qid": "b", "question": "B?"}]},
-        timeout=0, qids=["a", "b"])
+        timeout=30, qids=["a", "b"])
     assert result == {"answers": {"a": "Blue"}, "outcome": "timed_out"}
 
 
@@ -104,7 +107,8 @@ def test_window_decline_preserves_mobile_owner_fence(isolated_registry, monkeypa
 
 
 def test_skipped_batch_answer_preserves_owner_fence(isolated_registry):
-    req = requests.ServerRequest("own", "clarify", {}, qids=["a", "b"])
+    req = requests.ServerRequest("own", "clarify", {"questions": [
+        {"qid": "a", "question": "A?"}, {"qid": "b", "question": "B?"}]}, qids=["a", "b"])
     requests._register(req)
     with pytest.raises(PermissionError):
         requests.lock_answer(req.id, "a", None, expected_sid="foreign")

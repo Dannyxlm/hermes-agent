@@ -1656,6 +1656,8 @@ DEFAULT_CONFIG = {
         "free_response_rooms": "",  # comma-separated room IDs answered without mention
         "allowed_rooms": "",  # if set, ONLY respond in these room IDs (whitelist)
     },
+    # Non-approval human prompts (questions, secure entry, setup); frozen at publication.
+    "human_input": {"timeout": 300},
     # Approvals for dangerous commands.
     # mode: manual (always prompt) | smart (aux LLM auto-approves low-risk) | off (= --yolo)
     # cron_mode / single_query_mode / unattended_mode: deny | approve — what to do when a
@@ -1676,9 +1678,6 @@ DEFAULT_CONFIG = {
         # channel — a pending approval there just blocks for the full timeout with nobody to answer (#37284,
         # #87509): deny    — block the command instantly and let the agent find another way (default, safe;
         # mirrors cron_mode deny) approve — auto-approve all dangerous commands on unattended platforms
-        # Shared by the CLI prompt and gateway/messaging waits. Messaging approvals arrive as a push
-        # notification the user may not see immediately — 60s proved too tight on Telegram/Discord (the
-        # prompt expired before the user reached their phone), so the default is 300.
         "mode": "smart",
         "timeout": 300,
         "cron_mode": "deny",

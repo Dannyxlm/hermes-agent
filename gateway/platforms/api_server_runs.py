@@ -867,6 +867,7 @@ def _make_approval_notify(self, run: _RunLaunch, *, _api_server) -> Callable[[di
     def _approval_notify(approval_data: dict[str, Any]) -> None:
         # Clients must never receive the raw flagged command (#48456): the shared builder redacts.
         event = _api_server._approval_request_event(run_id, approval_data)
+        event["choices"] = [choice for choice in event["choices"] if choice in approval_data.get("choices", [])]
         self._set_run_status(run_id, "waiting_for_approval", last_event="approval.request", approval=event)
         with suppress(Exception):
             loop.call_soon_threadsafe(q.put_nowait, event)
@@ -1189,11 +1190,13 @@ async def _handle_run_approval(self, request: web.Request, *, _api_server) -> we
         body = await request.json()
     except Exception:
         return _json_error(_openai_error, "Invalid JSON", status=400)
+    if not isinstance(body, dict):
+        return _json_error(_openai_error, "Invalid approval response", status=400)
     raw_choice = str(body.get("choice", "")).strip().lower()
     choice = _APPROVAL_CHOICE_ALIASES.get(raw_choice, raw_choice)
     room_scoped = bool(self._room_grant_token(request))
     raw_request_id = body.get("request_id")
-    request_id = raw_request_id.strip() if isinstance(raw_request_id, str) else ""
+    request_id = raw_request_id if isinstance(raw_request_id, str) else ""
     # Room grants may resolve exactly one request and never widen to session/always.
     allowed = {"once", "deny"} if room_scoped else {"once", "session", "always", "deny"}
     resolve_all = any(_api_server._coerce_request_bool(body.get(k), default=False) for k in ("all", "resolve_all"))
@@ -1213,12 +1216,34 @@ async def _handle_run_approval(self, request: web.Request, *, _api_server) -> we
         if failed:
             return _json_error(_openai_error, message, code=code, status=status)
     try:
-        from tools.approval import resolve_gateway_approval
+        from tools.approval import list_gateway_approvals, resolve_gateway_approval
+        from tui_gateway.human_input import approval_response_metadata, validate_team_approval
+        enhanced, metadata = approval_response_metadata(body, choice)
+        if enhanced and (not request_id or resolve_all):
+            raise ValueError("Scoped approval requires one exact request")
+        if enhanced and room_scoped:
+            claims = self._room_grant_claims(request, permission="approve")
+            if (not isinstance(body.get("expected_authority_gateway_id"), str)
+                    or type(body.get("expected_authority_epoch")) is not int
+                    or (body["expected_authority_gateway_id"], body["expected_authority_epoch"])
+                    != (claims["authority_gateway_id"], claims["authority_epoch"])):
+                raise PermissionError("Room approval authority changed")
+        if not enhanced and any(body.get(key) is not None for key in
+                                ("expected_authority_gateway_id", "expected_authority_epoch")):
+            raise ValueError("Scoped approval envelope required")
+        pending = next((p for p in list_gateway_approvals(approval_session_key)
+                        if p.get("request_id") == request_id), None)
+        if pending is not None and (room_scoped or enhanced):
+            validate_team_approval(pending, choice, enhanced=enhanced, metadata=metadata)
+        selectors = ({"expected_epoch": body["request_epoch"], "expected_revision": body["request_revision"]}
+                     if enhanced else {})
         resolved = resolve_gateway_approval(
-            approval_session_key, choice, resolve_all=resolve_all, request_id=request_id or None)
-    except Exception as exc:
-        logger.exception("[api_server] approval resolution failed for run %s", run_id)
-        return _json_error(_openai_error, str(exc), status=500)
+            approval_session_key, choice, resolve_all=resolve_all, request_id=request_id or None, **metadata, **selectors)
+    except (ValueError, PermissionError):
+        return _json_error(_openai_error, "Invalid scoped approval response", code="invalid_approval_scope", status=400)
+    except Exception:  # health: allow BLE001 -- callbacks may contain private suggestions; never log or echo answer text
+        # Suggestions are transient answers; exceptions must not echo or log answer content.
+        return _json_error(_openai_error, "Approval resolution unavailable", status=500)
     if resolved <= 0:
         return _json_error(
             _openai_error, f"Run has no pending approval: {run_id}", code="approval_not_pending", status=409)

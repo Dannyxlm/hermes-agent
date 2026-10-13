@@ -298,9 +298,13 @@ class HostSupervisor:
             with self._lock:
                 self._pending_controls.pop(request_id, None)
 
-    def respond(self, sid: str, params: dict[str, Any], *, timeout: float = 15.0) -> dict:
-        """Deliver an interactive prompt response to the host that owns it."""
-        self.start()
+    def respond(self, sid: str, params: dict[str, Any], *, timeout: float = 15.0,
+                start_if_missing: bool = True) -> dict:
+        """Deliver to the owning host; reconciliation must never resurrect a dead host."""
+        if start_if_missing:
+            self.start()
+        elif not self.is_running():
+            raise RuntimeError("Compute request owner unavailable")
         request_id = uuid.uuid4().hex
         frame = {"type": "respond", "sid": sid, "request_id": request_id, "params": dict(params)}
         return self._await_reply(frame, request_id, timeout)

@@ -361,7 +361,7 @@ class ApprovalReceivedResult(Result):
 
 
 method("approval.received", params=ApprovalReceivedParams, result=ApprovalReceivedResult,
-       doc="Tell the backend the card is on screen, so its timeout clock starts.")
+       doc="Acknowledge display of the card. Its frozen timeout starts at publication, not display.")
 
 
 class ApprovalRespondParams(SessionParams):
