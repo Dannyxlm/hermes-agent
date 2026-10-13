@@ -144,8 +144,9 @@ def _attachment_operation_store(session: dict, params: dict):
         raise ValueError("attachment operation requires an attached session transport")
     home = Path(session.get("profile_home") or _hermes_home).resolve()
     if params.get("profile"):
-        requested_home = _profile_home(params["profile"])
-        if requested_home is None or Path(requested_home).resolve() != home:
+        # _profile_home answers None for the launch profile, which owns _hermes_home.
+        requested_home = _profile_home(params["profile"]) or _hermes_home
+        if Path(requested_home).resolve() != home:
             raise ValueError("attachment operation profile does not own this session")
     key = _submit_row_target_key(session)
     if not key:
