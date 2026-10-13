@@ -52,6 +52,7 @@ class PromptSubmitParams(SessionParams):
     truncate_before_message_id: str | None = None
     confirm_truncate: bool | None = None
     confirm_empty_truncate: bool | None = None
+    confirm_deep_truncate: bool | None = None  # send when the cut archives >1 user turn (enforced next release)
     rebind_survivor_row_ids: list[int] | None = None
     origin: PromptOrigin | None = None
     # Absent retains the legacy implicit queue. Explicit [] consumes no queued images.

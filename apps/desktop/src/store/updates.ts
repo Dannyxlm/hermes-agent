@@ -591,6 +591,8 @@ export function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateS
     message: res.message ?? undefined,
     updateAvailable: managed ? managedBehind !== null && managedBehind > 0 : res.update_available,
     behind: managed ? (managedBehind ?? undefined) : backendBehind === null || backendBehind < 0 ? null : backendBehind,
+    rollback: !managed && Boolean(res.rollback_to),
+    sourceVersion: managed ? undefined : res.rollback_to ?? undefined,
     currentVersion: res.current_version,
     targetSha:
       managed && managedBehind !== null

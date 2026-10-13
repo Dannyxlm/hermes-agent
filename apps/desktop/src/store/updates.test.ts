@@ -476,6 +476,7 @@ describe('checkBackendUpdates', () => {
     checkHermesUpdateSpy.mockResolvedValue({
       install_method: 'managed-runtime',
       current_version: '0.19.0',
+      rollback_to: 'v0.18.0',
       behind: 4,
       update_available: true,
       can_apply: false,
@@ -511,6 +512,8 @@ describe('checkBackendUpdates', () => {
     const result = await checkBackendUpdates()
 
     expect(checkHermesUpdateSpy).toHaveBeenCalledWith(false)
+    expect(result?.rollback).toBe(false)
+    expect(result?.sourceVersion).toBeUndefined()
     expect(result?.supported).toBe(true)
     expect(result?.behind).toBe(4)
     expect(result?.currentVersion).toBe('0.19.0')
