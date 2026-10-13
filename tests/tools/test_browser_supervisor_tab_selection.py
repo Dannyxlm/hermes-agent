@@ -39,6 +39,8 @@ class FakeBrowser:
         self.tabs = {t.target_id: t for t in tabs}
         self.order = [t.target_id for t in tabs]
         self.calls: list[tuple[str, dict, str | None]] = []
+        self.cancelled_probes: set[str] = set()
+        self.expired_probes: set[str] = set()
 
     def detached(self) -> set[str]:
         return {p["sessionId"] for m, p, _ in self.calls if m == "Target.detachFromTarget"}
@@ -64,7 +66,16 @@ class FakeBrowser:
                                               "value": ["visible" if tab.state == "visible" else "hidden", accepted, tab.url]}}}
             return {"result": {}}
 
-        return await asyncio.wait_for(answer(), timeout)
+        try:
+            return await asyncio.wait_for(answer(), timeout)
+        except asyncio.CancelledError:
+            if method == "Runtime.evaluate":
+                self.cancelled_probes.add(session_id)
+            raise
+        except TimeoutError:
+            if method == "Runtime.evaluate":
+                self.expired_probes.add(session_id)
+            raise
 
 
 def _supervisor(fake: FakeBrowser, task_id: str = "tab-select") -> bs.CDPSupervisor:
@@ -73,14 +84,14 @@ def _supervisor(fake: FakeBrowser, task_id: str = "tab-select") -> bs.CDPSupervi
     return sup
 
 
-def _pick(sup, fake, *, accept=None, prefer_url=None):
+def _pick(sup, fake, *, accept=None, prefer_url=None, probe_timeout=PROBE):
     async def run():
         t0 = time.monotonic()
         res = await sup._pick_page([(i, fake.tabs[i].url) for i in fake.order], accept=accept,
-                                   prefer_url=prefer_url, probe_timeout=PROBE)
-        await asyncio.sleep(0.05)  # let fire-and-forget detaches run
+                                   prefer_url=prefer_url, probe_timeout=probe_timeout)
+        await asyncio.gather(*list(sup._background_tasks))
         return res, time.monotonic() - t0
-    return asyncio.run(run())
+    return asyncio.run(asyncio.wait_for(run(), timeout=5.0))
 
 
 def test_hung_first_tab_is_skipped_within_one_probe_bound():
@@ -90,7 +101,7 @@ def test_hung_first_tab_is_skipped_within_one_probe_bound():
     sup = _supervisor(fake)
     (url, sid), elapsed = _pick(sup, fake, accept=PASSWORD_PROBE)
     assert (url, sid) == ("https://www.bestbuy.ca/signin", "S-ok")
-    assert elapsed < PROBE * 2 + 0.3  # parallel probes: a hung tab costs the bound once, not per tab
+    assert elapsed < 2.0  # load-tolerant ceiling; the many-tab case also rejects serial probing
     assert {"S-hung1", "S-hung2"} <= fake.detached() and "S-ok" not in fake.detached()
 
 
@@ -99,9 +110,11 @@ def test_prefer_url_beats_a_visible_tab_and_does_not_wait_for_hung_tabs():
                         Tab("vis", "https://www.bestbuy.ca/signin?tid=A", "visible", form=True),
                         Tab("mine", "https://www.bestbuy.ca/signin?tid=B", "hidden", form=True)])
     sup = _supervisor(fake)
-    (url, sid), elapsed = _pick(sup, fake, accept=PASSWORD_PROBE, prefer_url="https://www.bestbuy.ca/signin?tid=B")
+    (url, sid), _ = _pick(sup, fake, accept=PASSWORD_PROBE,
+                         prefer_url="https://www.bestbuy.ca/signin?tid=B", probe_timeout=30.0)
     assert sid == "S-mine" and url.endswith("tid=B")
-    assert elapsed < PROBE  # returned as soon as the navigated tab answered
+    assert fake.cancelled_probes == {"S-hung"}
+    assert not fake.expired_probes  # selected without waiting for the hung probe deadline
     assert "S-vis" in fake.detached()
 
 
@@ -132,7 +145,9 @@ def test_no_responsive_tab_returns_none_within_the_bound():
     sup = _supervisor(fake)
     res, elapsed = _pick(sup, fake)
     assert res is None
-    assert elapsed < PROBE * 2 + 0.5  # 40 hung tabs, still one bound
+    assert elapsed < 2.0  # 40 hung tabs must not consume 40 serial probe deadlines
+    assert fake.expired_probes == {f"S-h{i}" for i in range(40)}
+    assert fake.detached() == fake.expired_probes
 
 
 def test_probe_expression_tolerates_a_throwing_accept_check():
@@ -187,7 +202,7 @@ def test_initial_attach_still_succeeds_when_every_tab_is_hung():
 
     elapsed = asyncio.run(run())
     assert sup._page_session_id == "S-h1"
-    assert elapsed < PROBE * 3 + 0.5
+    assert elapsed < 2.0
 
 
 @pytest.fixture
@@ -221,11 +236,11 @@ def test_focus_page_picks_the_navigated_login_tab_among_hung_same_origin_tabs(lo
                         Tab("vis", "https://www.bestbuy.ca/signin?tid=A", "visible", form=True),
                         Tab("mine", "https://www.bestbuy.ca/signin?tid=B", "hidden", form=True)])
     sup = looped_supervisor(fake)
-    t0 = time.monotonic()
-    res = sup.focus_page("https://www.bestbuy.ca", accept=PASSWORD_PROBE, probe_timeout=PROBE,
+    res = sup.focus_page("https://www.bestbuy.ca", accept=PASSWORD_PROBE, probe_timeout=30.0, timeout=4.0,
                          prefer_url="https://www.bestbuy.ca/signin?tid=B")
     assert res == {"ok": True, "url": "https://www.bestbuy.ca/signin?tid=B"}
-    assert time.monotonic() - t0 < 1.0
+    assert fake.cancelled_probes == {"S-h1"}
+    assert not fake.expired_probes
     assert sup._page_session_id == "S-mine"
     attached = {p["targetId"] for m, p, _ in fake.calls if m == "Target.attachToTarget"}
     assert "other" not in attached  # other origins are never touched
@@ -238,7 +253,7 @@ def test_focus_page_failure_is_bounded_and_keeps_the_previous_session(looped_sup
     t0 = time.monotonic()
     res = sup.focus_page("https://www.bestbuy.ca", accept=PASSWORD_PROBE, probe_timeout=PROBE)
     assert res["ok"] is False and "no responsive page" in res["error"] and "30 candidate" in res["error"]
-    assert time.monotonic() - t0 < PROBE * 2 + 1.0
+    assert time.monotonic() - t0 < 2.0
     assert sup._page_session_id == "S-previous"
 
 
@@ -247,25 +262,78 @@ def test_schedule_cancels_the_coroutine_when_the_caller_times_out():
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
     reached_end = threading.Event()
+    entered = threading.Event()
     cancelled = threading.Event()
+    finished = threading.Event()
+    release = None
 
     async def slow():
+        nonlocal release
+        release = asyncio.Event()
+        entered.set()
         try:
-            await asyncio.sleep(0.5)
+            await release.wait()
             reached_end.set()
         except asyncio.CancelledError:
             cancelled.set()
             raise
+        finally:
+            finished.set()
 
     try:
         with pytest.raises(TimeoutError):
-            bs._schedule(slow(), loop, timeout=0.05)
-        assert cancelled.wait(1.0)
-        time.sleep(0.6)
+            bs._schedule(slow(), loop, timeout=2.0)
+        assert entered.wait(2.0)
+        assert cancelled.wait(2.0)
+        assert finished.wait(2.0)
+        loop.call_soon_threadsafe(release.set)
         assert not reached_end.is_set()  # a late result can no longer retarget the page session
     finally:
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("entry", ["focus", "initial"])
+@pytest.mark.parametrize("stage", ["_enable_page_domains", "_install_dialog_bridge"])
+@pytest.mark.parametrize("cancel", [False, True], ids=["failure", "cancellation"])
+def test_selected_session_detached_when_setup_does_not_finish(entry, stage, cancel):
+    """An uncommitted selection belongs to setup until both initialization steps succeed."""
+    fake = FakeBrowser([Tab("selected", "https://shop.example/login", "visible", form=True)])
+    sup = _supervisor(fake)
+    sup._page_session_id = "S-previous"
+
+    async def run():
+        entered = asyncio.Event()
+        failure = RuntimeError("synthetic setup failure")
+
+        async def fail_setup(sid, **_kwargs):
+            assert sid == "S-selected"
+            entered.set()
+            if cancel:
+                await asyncio.Event().wait()
+            raise failure
+
+        sup._loop = asyncio.get_running_loop()
+        # Run the public focus entry's coroutine on this loop, rather than adding a thread.
+        with patch.object(sup, stage, fail_setup), \
+                patch.object(bs, "_schedule", side_effect=lambda coro, *_a, **_kw: coro):
+            operation = (sup.focus_page("https://shop.example") if entry == "focus"
+                         else sup._attach_initial_page())
+            task = asyncio.ensure_future(operation)
+            await asyncio.wait_for(entered.wait(), timeout=5.0)
+            if cancel:
+                task.cancel()
+            with pytest.raises(asyncio.CancelledError if cancel else RuntimeError) as caught:
+                await task
+            if not cancel:
+                assert caught.value is failure
+            await asyncio.gather(*list(sup._background_tasks))
+
+        assert sup._page_session_id == "S-previous"
+        detaches = [p["sessionId"] for m, p, _ in fake.calls if m == "Target.detachFromTarget"]
+        assert detaches == ["S-selected"]
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5.0))
 
 
 def test_page_hints_record_http_pages_only_and_clear_on_stop():

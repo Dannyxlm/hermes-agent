@@ -340,8 +340,13 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                 return _fail(f"no responsive page on {where}" + (" with the expected form" if accept else "")
                              + f" ({len(candidates)} candidate tab(s) probed)")
             url, sid = best
-            await self._enable_page_domains(sid, timeout=timeout)
-            await self._install_dialog_bridge(sid)
+            try:
+                await self._enable_page_domains(sid, timeout=timeout)
+                await self._install_dialog_bridge(sid)
+            except BaseException:
+                # Selection owns this session until setup commits it, including on cancellation.
+                self._detach_soon(sid)
+                raise
             with self._state_lock:
                 self._page_session_id = sid
             return {"ok": True, "url": url}
@@ -569,9 +574,13 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                                      probe_timeout=PAGE_PROBE_TIMEOUT_S)
         if best is not None:
             _url, sid = best
+            try:
+                await self._enable_page_domains(sid, timeout=10.0)
+                await self._install_dialog_bridge(sid)
+            except BaseException:
+                self._detach_soon(sid)
+                raise
             self._page_session_id = sid
-            await self._enable_page_domains(sid, timeout=10.0)
-            await self._install_dialog_bridge(sid)
             return
         logger.debug("CDP supervisor %s: none of %s page targets answered; attaching the first without waiting",
                      self.task_id, len(pages))
