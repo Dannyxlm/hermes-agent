@@ -36,7 +36,9 @@ _RELAY_PROTOCOL_BY_API_MODE = {
 
 
 def _api_mode(metadata: dict[str, Any] | None) -> str:
-    return str((metadata or {}).get("api_mode") or "")
+    """Protocol of the envelope at this boundary, not an adapter's downstream wire."""
+    metadata = metadata or {}
+    return str(metadata.get("request_api_mode") or metadata.get("api_mode") or "")
 
 
 def _relay_operation_name(provider_name: str, metadata: dict[str, Any] | None) -> str:
