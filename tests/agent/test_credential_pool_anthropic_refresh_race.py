@@ -201,13 +201,15 @@ def test_concurrent_hermes_pkce_refresh_loses_credential_despite_valid_token_on_
     )
 
 
-def test_concurrent_claude_code_refresh_recovers_via_credentials_file(monkeypatch):
+def test_concurrent_claude_code_refresh_recovers_via_credentials_file(monkeypatch, tmp_path):
     """Contrast case: entry.source == 'claude_code' DOES recover from a lost
     race, because ``_sync_anthropic_entry_from_credentials_file`` re-reads
     ``~/.claude/.credentials.json`` on failure. This asymmetry is itself
     evidence that hermes_pkce/dashboard-sourced credentials were simply
     never given the same treatment, not that recovery is impossible.
     """
+    # Keep the real shared-file lock and rotation sidecars away from ambient credentials.
+    monkeypatch.setenv("HERMES_CLAUDE_CODE_CONFIG_DIR", str(tmp_path))
     server = _SingleUseTokenServer()
     monkeypatch.setattr(
         "agent.anthropic_credentials.refresh_anthropic_oauth_pure",
@@ -264,3 +266,10 @@ def test_concurrent_claude_code_refresh_recovers_via_credentials_file(monkeypatc
     # its own refresh, the loser via the credentials-file sync-and-retry.
     assert results["a"] is not None, "claude_code process A should recover"
     assert results["b"] is not None, "claude_code process B should recover"
+    assert not t_a.is_alive() and not t_b.is_alive()
+    assert (tmp_path / ".credentials.lock").is_file()
+    assert server.calls == ["stale-rt"]
+    for result in results.values():
+        assert isinstance(result, PooledCredential)
+        assert result.access_token == winner_creds["accessToken"]
+        assert result.refresh_token == winner_creds["refreshToken"]
