@@ -34,6 +34,16 @@ class TestIsOAuthToken:
         assert _is_oauth_token("sk-ant-usr01-abcdef1234567890") is False
 
 
+    def test_personal_key_route_uses_api_key_auth(self):
+        from agent.anthropic_adapter import _auth_style
+        from agent.anthropic_credentials import anthropic_route_is_oauth
+
+        key = "sk-ant-usr01-" + "x" * 90
+        assert anthropic_route_is_oauth("https://api.anthropic.com", key) is False
+        assert _auth_style(key, "https://api.anthropic.com", "https://api.anthropic.com") == "api_key"
+        assert anthropic_route_is_oauth("https://api.anthropic.com", "sk-ant-oat01-" + "x" * 90) is True
+
+
 def test_missing_sdk_error_reports_why_the_lazy_install_did_not_land(monkeypatch):
     """A completed install that needs a restart must not tell the user to install it again."""
     import pm
