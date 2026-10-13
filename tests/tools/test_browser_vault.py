@@ -894,3 +894,102 @@ class TestTwoFactor:
              patch.object(browser_vault_tool, "_eval_js", side_effect=fake_eval):
             out = json.loads(browser_vault_tool.browser_vault_enter_code(task_id="t"))
         assert out["error_type"] == "no_code_field"
+
+
+class TestEmailCodes:
+    """enter_code's email source: TOTP first, then the inbox that receives the login's identifier, then the user."""
+
+    CODE = "739104"
+    CONTROLS = [{"index": 0, "type": "text", "name": "otp", "label": "Verification code", "autocomplete": "one-time-code"}]
+
+    def _run(self, store, *, lane_polls, prompt=None, can_prompt=True, identifier="me@work.example", otp_secret=None):
+        from agent import vault_email_codes
+        from agent.vault_backends import unlock as unlock_mod
+        from tools import browser_vault_tool
+
+        secret = {"identifier_type": "email", "identifier": identifier, "password": "pw"}
+        if otp_secret:
+            secret["otp_secret"] = otp_secret
+        meta = store.add_item("login", "Acme", secret, origin="https://accounts.acme.test")
+        seen, lanes = {}, []
+
+        class Lane:
+            def __init__(self):
+                self.polls = list(lane_polls)
+
+            def recent(self, since, matches):
+                batch = self.polls.pop(0) if self.polls else []
+                return [m for m in batch if matches(m.sender, m.subject)]
+
+            def close(self):
+                pass
+
+        def factory(ident, cfg):
+            lanes.append(ident)
+            return Lane()
+
+        def fake_eval(task_id, expr):
+            return {"success": True, "result": json.dumps(self.CONTROLS) if "querySelectorAll" in expr else "https://accounts.acme.test/2fa"}
+
+        def fake_secret(task_id, expr):
+            seen["expr"] = expr
+            return {"success": True, "result": json.dumps({"filled": 1})}
+
+        asked = []
+        unlock_mod.set_code_prompt_callback((lambda site, hint: asked.append(site) or prompt) if prompt is not None else None)
+        cfg = {"enabled": True, "wait_seconds": 0, "poll_interval_seconds": 1, "lookback_seconds": 600}
+        real_wait = vault_email_codes.wait_for_email_code
+        try:
+            with patch("agent.vault_store.get_vault_store", return_value=store), \
+                 patch("agent.vault_email_codes.email_codes_config", return_value=cfg), \
+                 patch("agent.vault_email_codes.wait_for_email_code",
+                       side_effect=lambda *a, **k: real_wait(*a, **{**k, "lane_factory": factory, "sleep": lambda s: None})), \
+                 patch("agent.vault_backends.unlock.can_prompt_here", return_value=can_prompt), \
+                 patch.object(browser_vault_tool, "_focus_bound_origin", lambda *a, **k: None), \
+                 patch.object(browser_vault_tool, "_eval_js", side_effect=fake_eval), \
+                 patch.object(browser_vault_tool, "_eval_js_secret", side_effect=fake_secret):
+                raw = browser_vault_tool.browser_vault_enter_code(meta.id, task_id="t")
+        finally:
+            unlock_mod.set_code_prompt_callback(None)
+        return raw, seen, asked, lanes
+
+    def _mail(self, body=None, sender="Acme <no-reply@acme.test>", key="gmail:m1"):
+        import time as _t
+        from agent.vault_email_codes import EmailMessage
+        return EmailMessage(sender, "Your Acme sign-in code", _t.time() - 20, body or f"Your verification code is {self.CODE}.", key=key)
+
+    def test_code_from_email_is_filled_headless_without_asking_and_never_returned(self, store):
+        from agent import redact
+        from agent.redact import redact_sensitive_text
+
+        try:
+            raw, seen, asked, lanes = self._run(store, lane_polls=[[self._mail(key="gmail:headless")]], can_prompt=False)
+            out = json.loads(raw)
+            assert out["success"] and out["source"] == "email" and asked == []
+            assert lanes == ["me@work.example"]  # the inbox is chosen by the login's identifier
+            assert f'"value": "{self.CODE}"' in seen["expr"]
+            assert self.CODE not in raw
+            assert self.CODE not in redact_sensitive_text(f"the page now shows {self.CODE}")
+        finally:
+            redact.clear_vault_redaction_values()
+
+    def test_no_email_falls_back_to_the_user_prompt(self, store):
+        raw, seen, asked, _ = self._run(store, lane_polls=[], prompt="135792")
+        out = json.loads(raw)
+        assert out["success"] and out["source"] == "user" and asked == ["accounts.acme.test"]
+        assert '"value": "135792"' in seen["expr"]
+
+    def test_ambiguous_or_wrong_sender_email_falls_back_to_the_user(self, store):
+        raw, _, asked, _ = self._run(store, lane_polls=[[self._mail(body="Code 111111. Backup code 222222.", key="gmail:amb")]], prompt="135792")
+        assert json.loads(raw)["source"] == "user" and asked
+        raw, _, asked, _ = self._run(store, lane_polls=[[self._mail(sender="x <no-reply@evil.test>", key="gmail:evil")]], prompt="135792")
+        assert json.loads(raw)["source"] == "user" and asked
+
+    def test_headless_without_an_email_code_says_so(self, store):
+        raw, _, _, _ = self._run(store, lane_polls=[], can_prompt=False)
+        out = json.loads(raw)
+        assert out["error_type"] == "prompt_unavailable" and "email" in out["error"]
+
+    def test_authenticator_key_still_wins_over_email(self, store):
+        raw, _, _, lanes = self._run(store, lane_polls=[[self._mail(key="gmail:totp")]], otp_secret="JBSWY3DPEHPK3PXP")
+        assert json.loads(raw)["source"] == "local" and lanes == []

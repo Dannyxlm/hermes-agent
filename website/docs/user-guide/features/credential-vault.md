@@ -43,12 +43,40 @@ Sites that ask for a code after the password are handled the same way:
   hold a TOTP seed count too): Hermes generates the current code and enters
   it. Nobody is asked. Add the key in **Settings → Passwords & Logins → Add**
   or `hermes vault add`; the item shows a *2FA auto* badge.
+- **Code sent to your email, read by Hermes** (opt-in, `vault.email_codes`):
+  when the login's identifier is an address whose inbox Hermes can already
+  read, Hermes waits up to about a minute for the site's email, takes the
+  code out of it and enters it. Nobody is asked, headless sessions included.
+  Only mail from the site's own domain counts (a display name or subject
+  saying "Acme" is not enough), only mail from the last ten minutes, and only
+  when the newest such email holds exactly one code; anything ambiguous falls
+  through to the prompt below. The inbox is read, never changed: Gmail via
+  `messages.list/get` (nothing is marked read), IMAP via `EXAMINE` and
+  `BODY.PEEK`. The email and the code never reach the model. When a site
+  offers to send the code by email or text, the agent picks email.
 - **Code sent to your phone or email**: a small prompt appears in your
   surface ("Verification code for github.com"), you type the code, Hermes
   enters it into the page. The code never enters the conversation either.
 - **Passkeys, hardware keys, app approvals** ("tap Approve in Duo"): nothing
   to type. The agent tells you to complete it on your device and waits for
   the page to move on.
+
+```yaml
+vault:
+  email_codes:
+    enabled: true
+    wait_seconds: 75            # how long to wait for the email (max 180)
+    lookback_seconds: 600       # emails older than this are never used
+    poll_interval_seconds: 5
+    inboxes:
+      # Gmail through any gws-compatible CLI (`<command> gmail users messages list|get`)
+      - addresses: [me@example.com, me@example.org]   # identifiers that land in this inbox
+        gmail_command: [/usr/local/bin/gws, --account, work]
+      # Any IMAP inbox; the app password stays in 1Password and is read at connect time
+      - addresses: [me@icloud.com]
+        imap: {host: imap.mail.me.com, port: 993, username: me@icloud.com,
+               password_ref: "op://<vault-id>/<item-id>/credential", folder: INBOX}
+```
 
 ## Already using 1Password or Bitwarden?
 
