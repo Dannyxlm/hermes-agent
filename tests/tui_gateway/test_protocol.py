@@ -251,9 +251,11 @@ def _silent_ws():
         def __init__(self):
             self._ws, self._loop, self._peer, self._auth_identity = object(), None, "test", None
             self.frames: list[dict] = []
+            self.written = threading.Event()
 
         def write(self, obj):
             self.frames.append(obj)
+            self.written.set()
             return True
 
         def close(self):
@@ -306,6 +308,8 @@ def test_server_request_waits_for_a_ws_client_that_advertised(server):
     thread = threading.Thread(target=lambda: box.setdefault("r", server_requests.send("sudo", "ws-new", {}, timeout=5)),
                               daemon=True)
     thread.start()
+    # Registration is visible before the transport writes the request frame.
+    assert peer.written.wait(timeout=5), "advertised client never received the request"
     req = _wait_open(server_requests)
     assert peer.frames[-1]["id"] == req.id
     assert server.dispatch({"jsonrpc": "2.0", "id": req.id, "result": {"value": "yes"}}) is None
