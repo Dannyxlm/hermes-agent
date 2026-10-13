@@ -5,6 +5,9 @@ docs of config.yaml.
 """
 
 
+from hermes_cli.config_defaults_vault import DEFAULT_VAULT_CONFIG
+
+
 #: Image every container terminal backend (docker/modal/daytona/singularity) uses unless the
 #: user pins one. LEGACY_SANDBOX_IMAGES are the plain defaults that preceded the desktop stack
 #: (the 3.14 pin shipped between the two without a migration); a saved config still holding one
@@ -2449,23 +2452,7 @@ DEFAULT_CONFIG = {
     # encrypted vault (`hermes vault add`, Desktop → Settings → Credential Vault) is always on.
     # External password managers are unlocked per session with a masked master-password prompt;
     # headless sessions (cron, webhook, API) never prompt and see them as locked.
-    "vault": {
-        "onepassword": {
-            # Detected managers are login sources unless the user opts out (vault.<name>.enabled: false).
-            "enabled": True,        # `op` CLI: Login items with a website URL become fillable handles.
-            "account": "",          # account shorthand for `op --account`; empty = default account.
-            "binary_path": "",      # absolute path to op; empty = PATH.
-            # Env var holding a service-account token (headless auth, no unlock prompt). Unset = prompt.
-            "service_account_token_env": "OP_SERVICE_ACCOUNT_TOKEN",
-            # Opt-in: list Credit Card items as payment handles. They carry no website, so each fill
-            # binds to the current https page only after the user approves that exact site.
-            "payment_cards": False,
-        },
-        "bitwarden": {
-            "enabled": True,        # `bw` CLI (Password Manager, not Secrets Manager); run `bw login` once first.
-            "binary_path": "",      # absolute path to bw; empty = PATH.
-        },
-    },
+    "vault": DEFAULT_VAULT_CONFIG,
     "secrets": {
         # Optional ordering of enabled sources (e.g. [onepassword, bitwarden]); default registration
         # order. Mapped sources (explicit VAR→ref) always beat bulk sources (BSM project dumps);

@@ -65,20 +65,44 @@ def _msg(sender, body, *, age=30.0, subject="Your sign-in code"):
 
 class TestSiteMatch:
     def test_sender_on_the_site_domain_or_a_subdomain_matches(self):
-        assert sender_matches_site("Acme <no-reply@acme.test>", "", "accounts.acme.test")
+        assert sender_matches_site("Acme <no-reply@acme.test>", "", "accounts.acme.test",
+                                   sender_aliases={"acme.test": ["acme.test"]})
         assert sender_matches_site("no-reply@mail.acme.test", "", "acme.test")
-        assert sender_matches_site("Bank <alerts@mybank.co.uk>", "", "login.mybank.co.uk")
+        assert sender_matches_site("Bank <alerts@mybank.co.uk>", "", "login.mybank.co.uk",
+                                   sender_aliases={"login.mybank.co.uk": ["mybank.co.uk"]})
+
+    def test_cross_tld_sender_requires_an_explicit_alias(self):
+        aliases = {"stubhub.ca": ["stubhub.com"], "bestbuy.ca": ["bestbuy.com"]}
+        assert not sender_matches_site("noreply@stubhub.com", "", "www.stubhub.ca")
+        assert sender_matches_site("noreply@stubhub.com", "", "www.stubhub.ca", sender_aliases=aliases)
+        assert sender_matches_site("noreply@mail.bestbuy.com", "", "www.bestbuy.ca", sender_aliases=aliases)
+
+    def test_unconfigured_cross_tld_senders_do_not_match(self):
+        # Only the site's own name, not a squashed or prefixed variant, and not the free-text login label.
+        assert not sender_matches_site("x <noreply@stub-hub.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("x <noreply@stubhubs.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("x <noreply@stubhub-login.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("x <noreply@stubhub.ca.evil.com>", "Your code", "www.stubhub.ca")
+        assert not sender_matches_site("GoDaddy <noreply@godaddy.com>", "Your code", "sso.example.com", site_label="GoDaddy")
+        # No TLD establishes ownership without explicit configuration.
+        for tld in ("xyz", "top", "co", "cm", "tk", "test2"):
+            assert not sender_matches_site(f"x <noreply@acme.{tld}>", "Your code", "www.acme.com"), tld
+            assert not sender_matches_site("x <noreply@acme.com>", "Your code", f"www.acme.{tld}"), tld
+        # Short names do not establish trust either.
+        assert not sender_matches_site("x <noreply@abc.com>", "Your code", "www.abc.ca")
 
     def test_lookalike_domains_do_not_match(self):
         assert not sender_matches_site("x <no-reply@notacme.test>", "Hello", "acme.test")
         assert not sender_matches_site("x <no-reply@acme.test.evil.com>", "Hello", "acme.test")
         assert not sender_matches_site("x <alerts@other.co.uk>", "Hello", "login.mybank.co.uk")
 
-    def test_site_name_in_the_sender_domain_matches_but_display_name_or_subject_alone_never_does(self):
+    def test_dedicated_sender_domains_need_aliases_not_display_names_or_subjects(self):
         """Display names and subjects are free to spoof; a code from an impostor typed into the real page
         could authorise the impostor's device. Only the sender's domain counts."""
-        assert sender_matches_site("Shopify <mailer@shopifyemail.com>", "", "accounts.shopify.com")
-        assert sender_matches_site("Facebook <security@facebookmail.com>", "", "www.facebook.com")
+        assert sender_matches_site("Shopify <mailer@shopifyemail.com>", "", "accounts.shopify.com",
+                                   sender_aliases={"shopify.com": ["shopifyemail.com"]})
+        assert sender_matches_site("Facebook <security@facebookmail.com>", "", "www.facebook.com",
+                                   sender_aliases={"facebook.com": ["facebookmail.com"]})
         assert not sender_matches_site("mailer@sendgrid.net", "Your Acme verification code", "acme.test")
         assert not sender_matches_site("Acme Security <alerts@evil.test>", "Your code", "acme.test")
         assert not sender_matches_site("GoDaddy <noreply@secureserver.net>", "Your code", "sso.example.com", site_label="GoDaddy Login")
@@ -87,8 +111,7 @@ class TestSiteMatch:
         assert not sender_matches_site("Other Co <no-reply@other.test>", "Your verification code", "acme.test")
 
     def test_brand_prefixed_domains_anyone_can_register_do_not_match(self):
-        """Only the site's own domain or its name plus a mail-sending suffix (facebookmail, shopifyemail)
-        counts. Any other domain merely starting with the brand is attacker-registrable."""
+        """Unconfigured domains merely starting with the brand are attacker-registrable."""
         assert not sender_matches_site("x <no-reply@acme-login.test>", "Your code", "acme.test")
         assert not sender_matches_site("x <no-reply@acmesecure.test>", "Your code", "acme.test")
         assert not sender_matches_site("x <no-reply@acmemailer-verify.test>", "Your code", "acme.test")
@@ -98,7 +121,8 @@ class TestSiteMatch:
 class TestPickCode:
     def test_single_code_from_the_site(self):
         msgs = [_msg("Acme <no-reply@acme.test>", "Your verification code is 482913.")]
-        assert pick_code(msgs, "accounts.acme.test", since=NOW - 600) == "482913"
+        assert pick_code(msgs, "accounts.acme.test", since=NOW - 600,
+                         sender_aliases={"accounts.acme.test": ["acme.test"]}) == "482913"
 
     def test_newest_matching_message_wins(self):
         msgs = [_msg("no-reply@acme.test", "Your code is 111111.", age=200),
@@ -247,6 +271,7 @@ class TestImapLane:
 
 CFG = {
     "enabled": True,
+    "sender_aliases": {"accounts.acme.test": ["acme.test"]},
     "wait_seconds": 60,
     "poll_interval_seconds": 5,
     "lookback_seconds": 600,
@@ -398,6 +423,19 @@ class TestMailCliChildEnv:
         monkeypatch.setattr(vault_email_codes.subprocess, "run", fake_run)
         assert vault_email_codes._run_cli(["mailcli", "gmail"]) == "{}"
         assert calls == [{"inherit_credentials": True}, served]
+
+    def test_output_is_decoded_as_utf8_not_the_locale_codepage(self, monkeypatch):
+        """A real child writing UTF-8 plus one invalid byte: decoded as UTF-8 with replacement, never via
+        locale.getpreferredencoding() (cp1252/cp936 on Windows) and never a UnicodeDecodeError."""
+        import os
+        import sys
+
+        from agent import vault_email_codes
+
+        monkeypatch.setattr("tools.environments.local.served_profile_child_env", lambda **kw: dict(os.environ))
+        script = 'import sys; sys.stdout.buffer.write(\'{"s": "caf\\u00e9 \\u2713"}\'.encode("utf-8") + b"\\xff")'
+        out = vault_email_codes._run_cli([sys.executable, "-c", script])
+        assert out == '{"s": "caf\u00e9 \u2713"}\ufffd'
 
     def test_unscoped_child_env_fails_closed_before_spawning(self, monkeypatch):
         from agent import vault_email_codes
