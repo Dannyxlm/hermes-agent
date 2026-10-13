@@ -900,7 +900,7 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
         reason = reason[:2000] if choice == "deny" and isinstance(reason, str) else None
         return bool(_approval.resolve_gateway_approval(session_key, choice, resolve_all=False,
                                                        request_id=request_id or None, reason=reason,
-                                                       auth=result.get("auth")))
+                                                       auth=_approval.normalize_approval_auth(result.get("auth"))))
 
     settle = server_requests.send_async("approval", sid, payload, on_result, timeout=timeout,
                                        deadline_monotonic=deadline_monotonic, created_at=created_at)

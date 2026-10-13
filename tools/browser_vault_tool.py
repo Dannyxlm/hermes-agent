@@ -480,9 +480,6 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
     if meta.kind != "login" and not meta.origin and not meta.any_origin:
         return json.dumps({"success": False, "error_type": "no_origin",
                            "error": f"Vault item {handle!r} has no bound origin; {meta.kind} items are filled only on the site they were saved for."})
-    if meta.kind == "payment" and not meta.any_origin and not _confirm_payment_fill(meta.label, str(meta.origin)):
-        return json.dumps({"success": False, "error_type": "payment_declined",
-                           "error": "The user did not confirm filling this payment card. Do not retry; ask them instead."})
 
     # ── Origin binding pre-check (cheap early exit; the authoritative check
     # runs synchronously inside the fill script itself) ──────────────────────
@@ -499,9 +496,6 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         if not page_origin.startswith("https://"):
             return json.dumps({"success": False, "error_type": "insecure_origin",
                                "error": f"Refused: cards from a password manager are filled only on https pages, not {page_origin}."})
-        if not _confirm_payment_fill(meta.label, page_origin, unbound=True):
-            return json.dumps({"success": False, "error_type": "payment_declined",
-                               "error": "The user did not confirm filling this payment card. Do not retry; ask them instead."})
         allowed = [page_origin]
     else:
         allowed = list(meta.allowed_origins) or ([str(meta.origin)] if meta.origin else [])
@@ -529,28 +523,72 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         )
 
     # ── Inspect + classify page controls ────────────────────────────────────
-    nonce = secrets.token_hex(8)  # binds this fill to THIS inspection's stamps
-    inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
-    if not inspect.get("success"):
-        return json.dumps(
-            {"success": False, "error": f"Could not inspect page inputs: {inspect.get('error', 'eval failed')}"}
-        )
-    raw_controls = _parse_json_result(inspect.get("result"))
-    if isinstance(raw_controls, str):
-        raw_controls = _parse_json_result(raw_controls)
-    if not isinstance(raw_controls, list):
-        return json.dumps({"success": False, "error": "Page input inspection returned no usable controls."})
-
     classify = classify_login_control if meta.kind == "login" else classify_checkout_control
-    classified: list[ClassifiedLoginControl] = []
-    for raw in raw_controls:
-        if not isinstance(raw, dict):
-            continue
-        result = classify(LoginControl.from_dict(raw))
-        if result is not None:
-            classified.append(result)
-    if not classified:
-        return json.dumps({"success": False, "error": f"No {meta.kind} form fields were found on the current page."})
+
+    def inspect_controls():
+        """(nonce, classified controls) or (None, error-json). The nonce binds a fill to THIS inspection."""
+        nonce = secrets.token_hex(8)
+        inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
+        if not inspect.get("success"):
+            return None, json.dumps(
+                {"success": False, "error": f"Could not inspect page inputs: {inspect.get('error', 'eval failed')}"})
+        raw_controls = _parse_json_result(inspect.get("result"))
+        if isinstance(raw_controls, str):
+            raw_controls = _parse_json_result(raw_controls)
+        if not isinstance(raw_controls, list):
+            return None, json.dumps({"success": False, "error": "Page input inspection returned no usable controls."})
+        found: list[ClassifiedLoginControl] = []
+        for raw in raw_controls:
+            if not isinstance(raw, dict):
+                continue
+            result = classify(LoginControl.from_dict(raw))
+            if result is not None:
+                found.append(result)
+        if not found:
+            return None, json.dumps({"success": False, "error": f"No {meta.kind} form fields were found on the current page."})
+        return nonce, found
+
+    nonce, classified = inspect_controls()
+    if nonce is None:
+        return classified
+
+    receipt = None
+
+    def with_receipt(obj: dict, filled: bool = False) -> str:
+        if receipt is not None:
+            obj["payment"] = {**receipt, "filled": filled}
+        return json.dumps(obj)
+
+    if meta.kind == "payment":
+        # The card goes in only after the human approves THIS total at THIS exact origin with THIS card.
+        payment = _payment_approval_block(effective_task_id, backend, handle, meta, page_origin)
+        verdict, details = _confirm_payment_fill(meta.label, page_origin, payment, unbound=meta.any_origin)
+        if verdict != "accept":
+            expired = verdict == "cancel"
+            return json.dumps({
+                "success": False, "error_type": "payment_expired" if expired else "payment_declined",
+                "error": ("Nobody answered the payment approval in time. Nothing was filled. Do not retry on your own; "
+                          "ask the user." if expired else
+                          "The user did not confirm filling this payment card. Do not retry; ask them instead."),
+                "payment": _payment_receipt(payment, "expired" if expired else "declined", details, filled=False)})
+        receipt = _payment_receipt(payment, "approved", details, filled=False)
+        # The human wait can be minutes: the page may have navigated or re-rendered since the first look.
+        if _current_page_origin(effective_task_id) != page_origin:
+            return json.dumps({"success": False, "error_type": "origin_changed", "payment": receipt,
+                               "error": f"Refused: the page left {page_origin} while the user was approving. Nothing was written."})
+        nonce, classified = inspect_controls()
+        if nonce is None:
+            out = json.loads(classified)
+            out["payment"] = receipt
+            return json.dumps(out)
+        # Same-origin cart edits invalidate the approved snapshot just as navigation does.
+        # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
+        current_summary = _checkout_summary(effective_task_id)
+        if current_summary is None or any(current_summary[k] != payment[k] for k in current_summary):
+            return with_receipt({
+                "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
+                "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
+                         "Ask the user for a fresh payment request; never replay this approval."})
 
     # ── Resolve secret and fill (secret never enters any logged string) ─────
     try:
@@ -561,12 +599,24 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
             secret = backend.resolve_secret(handle)
             fills = select_checkout_fills(classified, secret, PAYMENT_FIELDS if meta.kind == "payment" else ADDRESS_FIELDS)
     except UnlockRequired:
-        return json.dumps({"success": False, "error_type": "unlock_required",
-                           "error": f"{backend.display_name} locked again; call browser_vault_unlock."})
+        out = {"success": False, "error_type": "unlock_required",
+               "error": f"{backend.display_name} locked again; call browser_vault_unlock."}
+        if receipt is not None:
+            out["fresh_request_needed"] = True
+        return with_receipt(out)
+    except Exception:
+        # Resolution may fail before a secret dictionary exists to scrub against. Never echo
+        # provider exception text: it may include a card, token or other credential.
+        out = {"success": False, "error_type": "secret_resolution_failed",
+               "error": "Could not resolve the saved credential. Nothing was filled."}
+        if receipt is not None:
+            out["fresh_request_needed"] = True
+        return with_receipt(out)
     if not fills:
-        return json.dumps(
-            {"success": False, "error": f"No fillable {meta.kind} field matched the saved item on this page."}
-        )
+        out = {"success": False, "error": f"No fillable {meta.kind} field matched the saved item on this page."}
+        if receipt is not None:
+            out["payment"] = receipt
+        return json.dumps(out)
 
     # Register the secret bytes with the model-egress redaction boundary
     # BEFORE they touch the page: any later browser_* result (including
@@ -581,21 +631,19 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         )
     except Exception as exc:
         # Strip any secret material from exception text before surfacing.
-        return json.dumps(
-            {"success": False, "error": scrub_secret_from_text(str(exc), secret)}
-        )
+        return with_receipt({"success": False, "error": scrub_secret_from_text(str(exc), secret)})
     if not fill_result.get("success"):
         err = scrub_secret_from_text(str(fill_result.get("error") or "fill failed"), secret)
         out = {"success": False, "error": err}
         if fill_result.get("error_type"):
             out["error_type"] = fill_result["error_type"]
-        return json.dumps(out)
+        return with_receipt(out)
 
     parsed = _parse_json_result(fill_result.get("result"))
     if isinstance(parsed, str):
         parsed = _parse_json_result(parsed)
     if isinstance(parsed, dict) and parsed.get("refused") == "origin_changed":
-        return json.dumps(
+        return with_receipt(
             {
                 "success": False,
                 "error_type": "origin_changed",
@@ -616,24 +664,171 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
                        + (" (a code will be generated automatically)." if meta.has_otp else "."))
     if meta.kind != "login":
         out["fields"] = sorted(f["token"] for f in fills)  # which controls were targeted, never the values
-    return json.dumps(out)
+    return with_receipt(out, filled=bool(filled))
 
 
-def _confirm_payment_fill(label: str, origin: str, *, unbound: bool = False) -> bool:
+def _payment_limits_config() -> dict:
+    """``vault.payment_limits``: card label → ``{amount, currency, period}``. Missing → {}."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        limits = (load_config_readonly().get("vault") or {}).get("payment_limits") or {}
+    except Exception:
+        return {}
+    return limits if isinstance(limits, dict) else {}
+
+
+def _limit_period(text: str) -> str:
+    low = (text or "").lower()
+    if "month" in low:
+        return "monthly"
+    if "purchase" in low or "transaction" in low or "per_purchase" in low:
+        return "per_purchase"
+    return "unknown"
+
+
+def _card_limit(backend, handle: str, label: str) -> Optional[dict]:
+    """The card's limit from config (wins) or the vault item's own limit field. Never from the page."""
+    import re
+    from agent.vault_checkout_summary import parse_money
+
+    entry = _payment_limits_config().get(label)
+    if isinstance(entry, dict):
+        try:
+            amount = float(entry.get("amount"))
+        except (TypeError, ValueError):
+            amount = None
+        if amount is not None and amount > 0:
+            currency = str(entry.get("currency") or "").upper() or None
+            period = str(entry.get("period") or "")
+            return {"amount_minor": round(amount * 100), "currency": currency,
+                    "period": period if period in ("per_purchase", "monthly") else "unknown", "source": "config"}
+    getter = getattr(backend, "card_limit_text", None)
+    try:
+        text = getter(handle) if callable(getter) else None
+    except Exception:
+        text = None
+    if not text:
+        return None
+    money = parse_money(text)
+    if money is None and (m := re.search(r"\d+(?:\.\d{1,2})?", text.replace(",", ""))):
+        money = {"amount_minor": round(float(m.group(0)) * 100), "currency": None}
+    if not money or money["amount_minor"] <= 0:
+        return None
+    return {"amount_minor": money["amount_minor"], "currency": money.get("currency"),
+            "period": _limit_period(text), "source": "vault"}
+
+
+def _checkout_summary(task_id: str) -> Optional[dict]:
+    """Read non-secret page facts; distinguish an unreadable page from a readable missing total."""
+    from agent.vault_checkout_summary import ORDER_SUMMARY_JS, summarize_checkout
+
+    try:
+        res = _eval_js(task_id, ORDER_SUMMARY_JS)
+        raw = _parse_json_result(res.get("result")) if res.get("success") else None
+        if isinstance(raw, str):
+            raw = _parse_json_result(raw)
+        return summarize_checkout(raw) if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
+def _payment_approval_block(task_id: str, backend, handle: str, meta, origin: str) -> dict:
+    """The ``payment`` block of a vault-payment approval (contract v1). ``origin`` is the browser's exact page
+    origin and ``card`` comes from the vault; merchant/total/items are read deterministically from the page
+    and labelled ``source: page``. The full card number, expiry and CVC never appear here."""
+    from agent.vault_checkout_summary import summarize_checkout
+
+    summary = _checkout_summary(task_id) or summarize_checkout(None)
+    getter = getattr(backend, "card_last4", None)
+    try:
+        last4 = getter(handle) if callable(getter) else getattr(meta, "last4", None)
+    except Exception:
+        last4 = None
+    last4 = last4 if isinstance(last4, str) and len(last4) == 4 and last4.isdigit() else None
+    limit = _card_limit(backend, handle, meta.label)
+    total = summary["total"]
+    over_limit = None
+    if total is not None and limit is not None and (
+            not total.get("currency") or not limit.get("currency") or total["currency"] == limit["currency"]):
+        over_limit = total["amount_minor"] > limit["amount_minor"]
+    return {
+        "v": 1, "origin": origin, "origin_bound": not getattr(meta, "any_origin", False),
+        "merchant": summary["merchant"], "total": total, "lines": summary["lines"],
+        "lines_truncated": summary["lines_truncated"], "adjustments": summary["adjustments"],
+        "card": {"label": meta.label, "last4": last4, "backend": getattr(backend, "name", None), "limit": limit},
+        "checks": {"total_found": total is not None, "over_limit": over_limit},
+    }
+
+
+def _money_display(amount_minor: int, currency: Optional[str]) -> str:
+    symbol = {"USD": "$", "CAD": "$", "AUD": "$", "EUR": "€", "GBP": "£"}.get(currency or "", "$")
+    return f"{symbol}{amount_minor // 100:,}.{amount_minor % 100:02d}"
+
+
+def _payment_copy(payment: dict, *, unbound: bool) -> tuple[str, str, str]:
+    """(command, description, title) for legacy clients, the CLI panel and push. Amount + origin in the
+    command keep two different payments from coalescing into one approval."""
+    from urllib.parse import urlsplit
+
+    origin = payment["origin"]
+    host = urlsplit(origin).hostname or origin
+    card = payment["card"]
+    card_text = card["label"] + (f" ••{card['last4']}" if card.get("last4") else "")
+    total = payment.get("total")
+    if total:
+        command = f"Pay {total['display']} at {origin} with {card_text}"
+        title = f"Approve {total['display']} at {host}?"
+        description = (f"{title} The agent fills {card_text} and places the order. "
+                       "It never sees the card number.")
+    else:
+        command = f"Fill {card_text} at {origin} (total not found)"
+        title = f"Approve card fill at {host}?"
+        description = (f"Total not found on the checkout page. Approve filling {card_text} on {host} anyway? "
+                       "The agent never sees the card number.")
+    limit = card.get("limit")
+    if payment["checks"].get("over_limit") and limit:
+        description += (f" This is over the {_money_display(limit['amount_minor'], limit.get('currency'))} "
+                        "card limit, so the card issuer may decline it.")
+    if unbound:
+        description += (f" This card is not tied to one website: check that {host} is the store you mean "
+                        "before approving.")
+    return command, description, title
+
+
+def _confirm_payment_fill(label: str, origin: str, payment: dict, *, unbound: bool = False) -> tuple[str, dict]:
     """Human confirmation before a card is written into a page: a prompt injection that reaches a checkout
-    must not be able to spend. Routes through the approval surface of the active session (gateway button
-    round-trip or CLI panel); headless sessions cannot confirm and the fill is refused. For an unbound
-    password-manager card this approval is the only site binding, so the prompt says so."""
+    must not be able to spend. Routes through the approval surface of the active session (gateway decision
+    panel or CLI panel) with the structured ``payment`` block; headless sessions cannot confirm and the fill
+    is refused. Once only: no session/always scope is offered, and the server refuses one if sent. For an
+    unbound password-manager card this approval is the only site binding, so the prompt says so.
+    Returns ``(verdict, details)`` where verdict is accept/decline/cancel (cancel = nobody answered)."""
+    import time
+    from tools import approval_context as _ctx
     from tools.approval_prompt import request_elicitation_consent
 
-    description = ("The agent wants to enter your saved card details into this checkout page. The card number and "
-                   "CVC never enter the conversation. Approve only if you intend to pay here.")
-    if unbound:
-        description += (f" This card is not tied to one website: check that {origin} is the store you mean "
-                        "before approving.")
-    return request_elicitation_consent(
-        f"Fill payment card '{label}' on {origin}", description,
-        surface="vault-payment", title="Confirm payment card fill?") == "accept"
+    command, description, title = _payment_copy(payment, unbound=unbound)
+    try:
+        timeout = max(float(_ctx._get_approval_timeout()), 0.0)
+    except Exception:
+        timeout = 300.0
+    created = time.time()
+    extra = {"surface": "vault-payment", "allow_session": False, "allow_permanent": False, "payment": payment,
+             "created_at": created, "timeout_seconds": timeout, "expires_at": created + timeout}
+    details: dict = {}
+    verdict = request_elicitation_consent(command, description, surface="vault-payment", title=title,
+                                          extra=extra, details=details)
+    return verdict, details
+
+
+def _payment_receipt(payment: dict, decision: str, details: dict, *, filled: bool) -> dict:
+    """Non-secret echo kept in the saved tool result so the chat can redraw the order card after a reload:
+    merchant, exact origin, items, total, card label + last four, and how it was decided."""
+    import time
+    keep = ("v", "origin", "origin_bound", "merchant", "total", "lines", "lines_truncated", "adjustments",
+            "card", "checks")
+    return {**{k: payment.get(k) for k in keep}, "decision": decision,
+            "auth": (details or {}).get("auth") if decision == "approved" else None,
+            "decided_at": (details or {}).get("decided_at") or time.time(), "filled": filled}
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +877,7 @@ BROWSER_VAULT_FILL_SCHEMA = {
         "Refused unless the page origin exactly matches the item's bound origin (re-checked atomically at "
         "fill time); a password-manager card with no bound site (fill_scope in the list) fills the current https "
         "page only after the user approves that exact site. If a password manager is locked the user is prompted to unlock first. Never retry a "
-        "payment_declined result."
+        "payment_declined or payment_expired result; ask the user."
     ),
     "parameters": {
         "type": "object",

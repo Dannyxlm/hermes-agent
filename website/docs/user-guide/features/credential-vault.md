@@ -147,6 +147,27 @@ Headless sessions (cron, webhooks, the API server) cannot confirm and are
 refused, so a prompt injection that reaches a checkout page can ask, but it
 cannot spend. Address fills need no confirmation.
 
+The card approval names exactly what you are agreeing to: the **total** read from
+the checkout page (labelled as page-sourced; "Total not found" when the page has
+no clear total, and the prompt still lets you approve), the **exact site** from
+the browser's address bar (page text never chooses it), the items when they add
+up to that total, and the **card label plus its last four digits**. The full
+number, expiry and CVC never appear. It is once only: no "allow for this chat"
+or "always" scope is offered, and Hermes refuses one if a client sends it. A
+timeout reports *expired*, not *declined*; either way nothing is filled. The
+saved tool result keeps a non-secret receipt (site, total, items, card, decision
+and time), so apps can redraw the order card after a reload.
+
+To show a card limit on the approval, set it in config (or fill the card item's
+own "credit limit" field in 1Password). Going over the limit warns but does not
+block, because the issuer enforces the real limit:
+
+```yaml
+vault:
+  payment_limits:
+    "Expense Card": {amount: 50, currency: USD, period: per_purchase}  # or monthly
+```
+
 ## Managing what's saved
 
 - **Desktop → Settings → Passwords & Logins**: everything saved, the detected

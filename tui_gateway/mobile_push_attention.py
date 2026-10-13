@@ -5,13 +5,11 @@ compute mirrors own srqs; only connector sequence tombstones are retained betwee
 """
 import math
 
-from .human_input import HUMAN_METHODS, SECURE_METHODS
+from .human_input import HUMAN_METHODS, SECURE_METHODS, approval_quick_once
 
 CATEGORIES = {"approval": "HERMEX_APPROVAL_V1", "clarify": "HERMEX_QUESTION_V1",
               "setup_choose": "HERMEX_SETUP_V1", "connection.request": "HERMEX_SETUP_V1"}
 SECURE_CATEGORY = "HERMEX_SECURE_INPUT_V1"
-# Unknown, destructive, payment and tool-escalation approvals require foreground review.
-_QUICK_TOOLS = frozenset({"read_file", "search_files", "web_search", "web_extract"})
 
 
 def _time(value):
@@ -39,7 +37,7 @@ def descriptor(frame):
         choices = params.get("choices") or []
         if "deny" in choices:
             target["allowed_actions"] += ["deny", "suggest"]
-        if "once" in choices and params.get("tool_name") in _QUICK_TOOLS and not params.get("surface"):
+        if approval_quick_once(params):
             target["allowed_actions"].append("once")
     elif method == "clarify":
         remaining = [q for q in params.get("questions", []) if q.get("qid") not in (params.get("answers") or {})]
@@ -122,12 +120,42 @@ def updated_frame(session, frame):
     return frame
 
 
-def question_preview(session, sid, attention):
-    if not attention or attention["primary"]["method"] != "clarify":
+def payment_preview(payment):
+    """Only non-secret Pay display fields; delivery still requires preview consent."""
+    from urllib.parse import urlsplit
+    host = urlsplit(str(payment.get("origin") or "")).hostname or "this site"
+    total = payment.get("total") if isinstance(payment.get("total"), dict) else None
+    head = f"Approve {total.get('display')} at {host}?" if total and total.get("display") else \
+        f"Approve card fill at {host}?"
+    card = payment.get("card") if isinstance(payment.get("card"), dict) else {}
+    tail = str(card.get("label") or "card")
+    if card.get("last4"):
+        tail += f" ••{card['last4']}"
+    lines = payment.get("lines") if isinstance(payment.get("lines"), list) else []
+    if lines:
+        tail += f" · {len(lines)} item{'s' if len(lines) != 1 else ''}"
+    return f"{head} {tail}"
+
+
+def input_preview(session, sid, attention):
+    if not attention:
         return ""
     target = attention["primary"]
-    frame = request_frames(session, sid).get(target.get("request_id"), {})
-    return next((q.get("question", "") for q in frame.get("params", {}).get("questions", [])
+    if target["category"] == SECURE_CATEGORY:
+        return ""
+    frame = request_frames(session, sid).get(target.get("request_id"))
+    if frame is None:
+        return ""
+    frame = updated_frame(session, frame)
+    if descriptor(frame) != target:
+        return ""
+    params = frame["params"]
+    if frame["method"] == "approval":
+        payment = params.get("payment")
+        return payment_preview(payment) if isinstance(payment, dict) else ""
+    if frame["method"] != "clarify":
+        return ""
+    return next((q.get("question", "") for q in params.get("questions", [])
                  if q.get("qid") == target.get("question_id")), "")
 
 

@@ -36,3 +36,12 @@ class LocalLoginBackend(LoginBackend):
 
     def resolve_secret(self, handle: str) -> dict[str, str]:
         return {k: str(v) for k, v in _store().resolve_secret(handle).items()}
+
+    def card_last4(self, handle: str) -> Optional[str]:
+        """The local vault stores the card encrypted with no masked subtitle: decrypt in process, keep only
+        the last four digits, drop the rest immediately."""
+        meta = self.get_meta(handle)
+        if meta is None or meta.kind != "payment":
+            return None
+        digits = "".join(ch for ch in str(_store().resolve_secret(handle).get("card_number") or "") if ch.isdigit())
+        return digits[-4:] if len(digits) >= 12 else None

@@ -508,7 +508,7 @@ def _mobile_push_frame(obj):
 
 def _mobile_push_capture_ordered(obj):
     from tui_gateway.human_input import HUMAN_METHODS
-    from tui_gateway.mobile_push_attention import attention_state, note_connection, note_update, pending_projection, question_preview
+    from tui_gateway.mobile_push_attention import attention_state, note_connection, note_update, pending_projection, input_preview
     parsed = _mobile_push_frame(obj)
     if parsed is None:
         return
@@ -569,7 +569,7 @@ def _mobile_push_capture_ordered(obj):
             session["_mobile_push_agents"] = _mobile_push_agent_count(session)
         preview = _mobile_push_presentation(
             session, push_scope, reply=payload.get("text", "") if status == "complete" else "",
-            ask=question_preview(session, params.get("session_id"), attention),
+            ask=input_preview(session, params.get("session_id"), attention),
             attention=attention)
         signature = preview.to_json()
         if status == current and signature == session.get("_mobile_push_sig"):

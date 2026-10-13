@@ -560,6 +560,8 @@ class TestBrowserVaultTools:
         def fake_eval(task_id, expression):
             if "location.href" in expression:
                 return {"success": True, "result": "https://shop.test/checkout"}
+            if "__hermesOrderSummary" in expression:
+                return {"success": True, "result": json.dumps({"rows": []})}
             return {"success": True, "result": json.dumps(controls)}
 
         secret_exprs = []
@@ -621,6 +623,8 @@ class TestBrowserVaultTools:
         def fake_eval(task_id, expression):
             if "location.href" in expression:
                 return {"success": True, "result": page["href"]}
+            if "__hermesOrderSummary" in expression:
+                return {"success": True, "result": json.dumps({"rows": []})}
             return {"success": True, "result": json.dumps(controls)}
 
         secret_exprs, prompts = [], []

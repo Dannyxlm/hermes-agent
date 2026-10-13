@@ -167,19 +167,19 @@ def test_failed_projection_does_not_expose_exception_or_stop_request(enrolled, p
     def fail(*args, **kwargs):
         raise OSError("SECRET_STORAGE_SENTINEL")
     monkeypatch.setattr(push_service.store, "record", fail)
-    frame = ask(sid, "secret", {"env_var": "DUMMY"})
+    frame = ask(sid, "secret", {"env_var": "DUMMY", "prompt": "Dummy prompt"})
     assert server_requests.open_requests(sid)[0]["id"] == frame["id"]
     assert "SECRET_STORAGE_SENTINEL" not in caplog.text
 
 
 @pytest.mark.parametrize("params,expected", [
-    ({"tool_name": "read_file", "choices": ["once", "deny"]}, {"open", "once", "deny", "suggest"}),
+    ({"tool_name": "read_file", "kind": "tool", "risk": "read_only", "choices": ["once", "deny"]}, {"open", "once", "deny", "suggest"}),
     ({"tool_name": "terminal", "choices": ["once", "deny"]}, {"open", "deny", "suggest"}),
     ({"tool_name": "read_file", "surface": "payment", "choices": ["once", "deny"]}, {"open", "deny", "suggest"}),
     ({"tool_name": "read_file", "choices": ["session", "always"]}, {"open"}),
 ])
 def test_quick_actions_never_grant_unoffered_or_broad_scope(enrolled, push_service, params, expected):
     sid, _, _ = enrolled
-    ask(sid, "approval", {"command": "private", **params})
+    ask(sid, "approval", {"request_id": "queue-test", "command": "private", **params})
     target = json.loads(pending_jobs(push_service)[-1]["payload"])["hermex.destination"]["human_input"]
     assert set(target["allowed_actions"]) == expected

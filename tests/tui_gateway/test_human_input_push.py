@@ -34,7 +34,7 @@ def ask(sid, method, params=None):
 
 
 @pytest.mark.parametrize("method,params,category", [
-    ("approval", {"choices": ["once", "deny"], "command": "private-command", "tool_name": "read_file"}, "HERMEX_APPROVAL_V1"),
+    ("approval", {"request_id": "queue-test", "choices": ["once", "deny"], "command": "private-command", "tool_name": "read_file"}, "HERMEX_APPROVAL_V1"),
     ("clarify", {"questions": [{"qid": "q1", "question": "Question?"}]}, "HERMEX_QUESTION_V1"),
     ("setup_choose", {"kind": "question", "question": "Private setup"}, "HERMEX_SETUP_V1"),
     ("sudo", {"command": "SENSITIVE_SENTINEL"}, "HERMEX_SECURE_INPUT_V1"),

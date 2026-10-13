@@ -160,7 +160,9 @@ def resolve_gateway_approval(session_key: str, choice: str,
     *resolve_all* approves pending non-payments; bulk denial still includes payments.
     Payments need individual consent. Otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
-    relayed to the agent in the BLOCKED message. Returns the number resolved.
+    relayed to the agent in the BLOCKED message. *auth* is the device authentication a native
+    client reports with its answer (``face_id``/``passcode``…); unknown labels are dropped.
+    Returns the number resolved.
     """
     auth = normalize_approval_auth(auth)
     with _lock:
