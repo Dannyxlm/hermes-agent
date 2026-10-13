@@ -532,6 +532,15 @@ export function verifiedManagedBehind(source: DesktopManagedSourceUpdate | undef
   return source.commitsBehind ?? null
 }
 
+function backendRollbackMetadata(res: BackendUpdateCheckResponse) {
+  // Managed releases move through the paired release train, never the stock rollback action.
+  if (res.managed_source) {
+    return { rollback: false, sourceVersion: undefined }
+  }
+
+  return { rollback: Boolean(res.rollback_to), sourceVersion: res.rollback_to ?? undefined }
+}
+
 export function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
   const backendBehind = res.behind === undefined ? 0 : res.behind
   const checkFailed = !res.managed_source && res.can_apply && res.behind === null
@@ -591,8 +600,7 @@ export function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateS
     message: res.message ?? undefined,
     updateAvailable: managed ? managedBehind !== null && managedBehind > 0 : res.update_available,
     behind: managed ? (managedBehind ?? undefined) : backendBehind === null || backendBehind < 0 ? null : backendBehind,
-    rollback: !managed && Boolean(res.rollback_to),
-    sourceVersion: managed ? undefined : res.rollback_to ?? undefined,
+    ...backendRollbackMetadata(res),
     currentVersion: res.current_version,
     targetSha:
       managed && managedBehind !== null

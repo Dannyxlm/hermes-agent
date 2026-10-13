@@ -122,6 +122,10 @@ function versionItem(
   }
 }
 
+function versionStatusChannel(channel?: string | null) {
+  return channel === 'stable' ? 'stable' : 'main'
+}
+
 export function useStatusbarItems({
   agentsOpen,
   changeSessionCwd,
@@ -421,7 +425,7 @@ export function useStatusbarItems({
       applyMessage: updateApply.message,
       behind,
       branch: upstreamBranch,
-      channel: updateStatus?.channel === 'stable' ? 'stable' : 'main',
+      channel: versionStatusChannel(updateStatus?.channel),
       latestTag: updateStatus?.latestTag,
       rollback: rollbackSentence(updateStatus, rollbackBody),
       copy,

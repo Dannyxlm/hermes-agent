@@ -1293,6 +1293,11 @@ class TestExecHybridPrivateUrlRouting:
 
     @pytest.fixture(autouse=True)
     def _cloud_with_hybrid(self, monkeypatch, tmp_path, _fake_managed_chromium):
+        # Route tests exercise DNS classification without depending on public DNS availability.
+        real_getaddrinfo = socket.getaddrinfo
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **kw:
+                            [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+                            if host == "example.com" else real_getaddrinfo(host, *a, **kw))
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "")
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override_raw", lambda: "")
         monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
@@ -1356,3 +1361,21 @@ class TestExecHybridPrivateUrlRouting:
         assert daemons == [want for _, want in steps]
         assert self.cloud_keys == ["t"]
         assert [k for k, *_ in self.local_keys] == ["t::local", "t::local"]
+
+    def test_long_named_sidecars_keep_distinct_browser_endpoints(self, tmp_path, monkeypatch):
+        """A persistent daemon must not latch a sibling session's endpoint after name shortening."""
+        cli = _fake_cli(tmp_path, f'''
+latch="{tmp_path}/daemon-${{BU_NAME:-default}}"
+cat > /dev/null
+[ -f "$latch" ] || echo "${{BU_CDP_WS:-$BU_CDP_URL}}" > "$latch"
+cat "$latch"
+''')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        names = ["a" * 57 + "1", "a" * 57 + "2"]
+        endpoints = []
+        for name in [*names, names[0]]:
+            result = json.loads(bu_cli.browser_exec(f'new_tab("{self.LAN}")', session=name, task_id="t"))
+            assert result["success"] is True, result
+            endpoints.append(result["output"].strip())
+        assert endpoints == [f"ws://127.0.0.1:47000/devtools/browser/bu-named-{name}::local"
+                             for name in [*names, names[0]]]

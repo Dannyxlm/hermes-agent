@@ -402,7 +402,11 @@ def _sidecar_daemon_name(name: str) -> str:
     """BU_NAME of the harness daemon serving the hybrid local sidecar. The daemon reads BU_CDP_* once at
     spawn and outlives the call, so sharing the cloud route's daemon would relay a private URL to the
     cloud browser it is already attached to. User session names cannot start with ``_``."""
-    return f"_local_{name or 'default'}"[:64]
+    if not name:
+        return "_local_default"
+    import hashlib
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+    return f"_local_{name[:40]}_{digest}"
 
 
 def _resolve_lightpanda_cdp(env: dict, task_id: Optional[str], session_name: str = "",
