@@ -68,9 +68,9 @@ _MONEY_RE = re.compile(
     # Prefixed: "USD $32.77", "CAD 32.77", "C$32.77", "$32.77", "€9.50" (optional trailing code).
     r"(?:(?P<code1>\b(?:USD|CAD|EUR|GBP|AUD))\s?(?P<sym1>\$)?\s?|(?P<pre>US\$|CA\$|C\$|AU\$|A\$|\$|€|£)\s?)"
     # Capture the WHOLE numeric token: never recover a partial amount from bad punctuation.
-    r"(?P<num1>\d+(?:[.,]\d+)*)(?![\d.,])(?:\s?(?P<code2>USD|CAD|EUR|GBP|AUD)\b)?"
+    r"(?P<num1>\d+(?:[., \t\u00a0\u202f]\d+)*)(?![\d.,])(?:\s?(?P<code2>USD|CAD|EUR|GBP|AUD)\b)?"
     # Suffixed: "32.77 CAD", "9,50 €". No starting inside an invalid numeric token.
-    r"|(?<![\w.,])(?P<num2>\d+(?:[.,]\d+)*)\s?(?:(?P<code3>USD|CAD|EUR|GBP|AUD)\b|(?P<sym2>€|£))")
+    r"|(?<![\w.,])(?P<num2>\d+(?:[., \t\u00a0\u202f]\d+)*)\s?(?:(?P<code3>USD|CAD|EUR|GBP|AUD)\b|(?P<sym2>€|£))")
 
 _STRONG_TOTAL = re.compile(r"\b(order total|grand total|total due|amount due|total to pay|estimated total|"
                            r"total \(|total amount|you pay|total charge)", re.IGNORECASE)

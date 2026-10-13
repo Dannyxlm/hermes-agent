@@ -13,7 +13,8 @@ def test_decimal_comma_prefix_and_suffix(amount):
     assert out["total"]["label"] == "Order total"
 
 
-@pytest.mark.parametrize("amount", ["€9,5", "9,5 EUR", "€1.234", "1.234 EUR", "€1,23,4", "1,23,4 EUR"])
+@pytest.mark.parametrize("amount", ["€9,5", "9,5 EUR", "€1.234", "1.234 EUR", "€1,23,4", "1,23,4 EUR",
+                                           "€1 234,56", "1 234,56 EUR", "€1\u202f234,56", "1\u00a0234,56 EUR"])
 def test_ambiguous_or_malformed_punctuation_is_not_a_partial_amount(amount):
     assert parse_money(f"Order total {amount}") is None
     assert summarize_checkout({"rows": [f"Order total {amount}"]})["total"] is None
