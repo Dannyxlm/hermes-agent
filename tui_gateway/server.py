@@ -815,6 +815,9 @@ def _open_requests(sid: str) -> list[dict]:
         return reqs
     if (session := _sessions.get(sid)) is not None:
         with session.get("history_lock", threading.Lock()):
+            mirrors = session.get("_compute_host_open_requests")
+            if mirrors:
+                return [dict(req) for req in mirrors.values()]
             mirrored = session.get("_compute_host_open_request")
             return [dict(mirrored)] if isinstance(mirrored, dict) else []
     return []
@@ -852,12 +855,19 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
     interrupt) withdraws the request with ``request.cancel``."""
     from tui_gateway import server_requests
     from tools import approval as _approval
+    deadline_monotonic = getattr(data, "deadline_monotonic", None)
+    data = dict(data or {})
+    timeout = data.pop("timeout_seconds", None)
+    created_at = data.pop("created_at", None)
+    data.pop("expires_at", None)  # the registry derives the public envelope
     payload = _approval_request_payload(data)
     request_id = str(payload.get("request_id") or "")
     session_key = str((_sessions.get(sid) or {}).get("session_key") or "")
 
     def on_result(result: dict | None) -> None:
         if result is None:
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                return  # queue poll owns timeout attribution, not a client capability refusal
             # No client can answer this prompt: the request was never sent (the only attached client predates
             # server→client requests) or the client answered -32601 (no handler). Without withdrawing the
             # queue entry the agent would idle for the whole approvals.timeout with no prompt anywhere
@@ -868,10 +878,13 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
                                                     "(update the Hermes app)")
             return
         choice = str(result.get("choice") or "deny")
-        _approval.resolve_gateway_approval(session_key, choice, resolve_all=bool(result.get("all")),
-                                           request_id=request_id or None)
+        reason = result.get("reason")
+        reason = reason[:2000] if choice == "deny" and isinstance(reason, str) else None
+        return bool(_approval.resolve_gateway_approval(session_key, choice, resolve_all=False,
+                                                       request_id=request_id or None, reason=reason))
 
-    settle = server_requests.send_async("approval", sid, payload, on_result)
+    settle = server_requests.send_async("approval", sid, payload, on_result, timeout=timeout,
+                                       deadline_monotonic=deadline_monotonic, created_at=created_at)
     # The wait can end between the frame going out and the hook attaching (the client answered by RPC, another
     # surface resolved it): withdraw now, or the request stays in ``open_requests`` for every later resume.
     if request_id and not _approval.register_gateway_settle(session_key, request_id, settle):
@@ -3786,3 +3799,5 @@ for _m in (
     _methods_i18n, _methods_shared_metrics, _methods_media, _methods_start_chat):
     _m.register(sys.modules[__name__])
 del _m
+from tui_gateway import methods_human_input as _methods_human_input
+_methods_human_input.register(sys.modules[__name__], register_method)

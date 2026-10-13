@@ -110,7 +110,12 @@ def _mobile_scope(params):
 
 @_mobile_handler("mobile.capabilities")
 def _(rid, params):
+    from .human_input import HUMAN_METHODS, SECURE_METHODS
     return _ok(rid, {"protocol_version": 1, "methods": list(_MOBILE_METHODS),
+        "human_input": {"protocol_version": 1, "methods": sorted(HUMAN_METHODS),
+                        "secure_methods": sorted(SECURE_METHODS),
+                        "destinations": ["chat", "bot", "connection"],
+                        "rest_requires_owner_plugin": True, "receipt_scope": "process_bounded"},
         "features": ["strict_canonical_open", "bounded_history", "scoped_interactions",
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",

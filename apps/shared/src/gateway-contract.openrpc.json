@@ -44,7 +44,7 @@
     },
     {
       "name": "approval.received",
-      "summary": "Tell the backend the card is on screen, so its timeout clock starts.",
+      "summary": "Acknowledge display of the card. Its frozen timeout starts at publication, not display.",
       "params": [
         {
           "name": "params",
@@ -1515,6 +1515,60 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/HandoffStateResult"
+        }
+      }
+    },
+    {
+      "name": "human_input.action_status",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/HumanInputActionStatusParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/HumanInputReceipt"
+        }
+      }
+    },
+    {
+      "name": "human_input.pending",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/HumanInputScope"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/HumanInputPendingResult"
+        }
+      }
+    },
+    {
+      "name": "human_input.respond",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/HumanInputRespondParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/HumanInputReceipt"
         }
       }
     },
@@ -5880,6 +5934,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "request_id": {
             "title": "Request Id",
             "type": "string"
@@ -5948,6 +6074,54 @@
             ],
             "default": null,
             "title": "Tool Name"
+          },
+          "surface": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Surface"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Origin"
+          },
+          "mcp_server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mcp Server"
           },
           "gateway_session_id": {
             "anyOf": [
@@ -6063,6 +6237,19 @@
             ],
             "default": null,
             "title": "All"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
           }
         },
         "required": [
@@ -8703,6 +8890,78 @@
           "session_id": {
             "title": "Session Id",
             "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
           },
           "questions": {
             "items": {
@@ -13556,6 +13815,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "profile_key": {
             "title": "Profile Key",
             "type": "string"
@@ -14691,6 +15022,78 @@
           "session_id": {
             "title": "Session Id",
             "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
           }
         },
         "required": [
@@ -17187,6 +17590,405 @@
         ],
         "title": "HeartbeatSnapshot",
         "type": "object"
+      },
+      "HumanInputActionStatusParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "connection_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "destination_kind": {
+            "$ref": "#/components/schemas/HumanInputDestination"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "method": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Method",
+            "type": "string"
+          },
+          "request_epoch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Epoch",
+            "type": "string"
+          },
+          "request_revision": {
+            "minimum": 1,
+            "title": "Request Revision",
+            "type": "integer"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question Id"
+          }
+        },
+        "required": [
+          "profile",
+          "connection_id",
+          "installation_id",
+          "destination_kind",
+          "session_id",
+          "request_id",
+          "method",
+          "request_epoch",
+          "request_revision",
+          "action_id"
+        ],
+        "title": "HumanInputActionStatusParams",
+        "type": "object"
+      },
+      "HumanInputDestination": {
+        "enum": [
+          "chat",
+          "bot",
+          "connection"
+        ],
+        "title": "HumanInputDestination",
+        "type": "string"
+      },
+      "HumanInputPendingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "params"
+        ],
+        "title": "HumanInputPendingRequest",
+        "type": "object"
+      },
+      "HumanInputPendingResult": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "request_epoch": {
+            "title": "Request Epoch",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "unavailable": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable",
+            "type": "array"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/HumanInputPendingRequest"
+            },
+            "title": "Requests",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_epoch",
+          "server_time",
+          "complete",
+          "unavailable",
+          "requests"
+        ],
+        "title": "HumanInputPendingResult",
+        "type": "object"
+      },
+      "HumanInputReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/HumanInputStatus"
+          },
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "request_epoch": {
+            "title": "Request Epoch",
+            "type": "string"
+          },
+          "request_revision": {
+            "title": "Request Revision",
+            "type": "integer"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "action_id",
+          "request_id",
+          "method",
+          "request_epoch",
+          "request_revision",
+          "server_time"
+        ],
+        "title": "HumanInputReceipt",
+        "type": "object"
+      },
+      "HumanInputRespondParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "connection_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "destination_kind": {
+            "$ref": "#/components/schemas/HumanInputDestination"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Canonical Root Id",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "method": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Method",
+            "type": "string"
+          },
+          "request_epoch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Epoch",
+            "type": "string"
+          },
+          "request_revision": {
+            "minimum": 1,
+            "title": "Request Revision",
+            "type": "integer"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Question Id"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile",
+          "connection_id",
+          "installation_id",
+          "destination_kind",
+          "session_id",
+          "request_id",
+          "method",
+          "request_epoch",
+          "request_revision",
+          "action_id",
+          "result"
+        ],
+        "title": "HumanInputRespondParams",
+        "type": "object"
+      },
+      "HumanInputScope": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "connection_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "destination_kind": {
+            "$ref": "#/components/schemas/HumanInputDestination"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "canonical_root_id": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Canonical Root Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "connection_id",
+          "installation_id",
+          "destination_kind",
+          "session_id"
+        ],
+        "title": "HumanInputScope",
+        "type": "object"
+      },
+      "HumanInputStatus": {
+        "enum": [
+          "accepted",
+          "already_resolved",
+          "expired",
+          "cancelled",
+          "conflict",
+          "unknown",
+          "outcome_unknown",
+          "unavailable"
+        ],
+        "title": "HumanInputStatus",
+        "type": "string"
       },
       "I18nCatalogParams": {
         "additionalProperties": false,
@@ -21027,6 +21829,17 @@
               }
             ],
             "default": null
+          },
+          "human_input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MobileHumanInputCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -21170,6 +21983,54 @@
         "title": "MobileHistory",
         "type": "object"
       },
+      "MobileHumanInputCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "secure_methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secure Methods",
+            "type": "array"
+          },
+          "destinations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Destinations",
+            "type": "array"
+          },
+          "rest_requires_owner_plugin": {
+            "default": true,
+            "title": "Rest Requires Owner Plugin",
+            "type": "boolean"
+          },
+          "receipt_scope": {
+            "default": "process_bounded",
+            "title": "Receipt Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "methods",
+          "secure_methods",
+          "destinations"
+        ],
+        "title": "MobileHumanInputCapability",
+        "type": "object"
+      },
       "MobileInboxPushRegisterParams": {
         "additionalProperties": false,
         "description": "Opt one installation/connection into content-free Inbox-changed silent pushes for a profile.",
@@ -21306,6 +22167,78 @@
       "MobilePendingClarify": {
         "additionalProperties": false,
         "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "request_id": {
             "title": "Request Id",
             "type": "string"
@@ -26416,6 +27349,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "action": {
             "title": "Action",
             "type": "string"
@@ -30484,6 +31489,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "start": {
             "anyOf": [
               {
@@ -32343,6 +33420,78 @@
           "session_id": {
             "title": "Session Id",
             "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
           },
           "env_var": {
             "title": "Env Var",
@@ -37047,6 +38196,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "kind": {
             "$ref": "#/components/schemas/SetupChooseKind"
           },
@@ -40885,6 +42106,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "command": {
             "default": "",
             "title": "Command",
@@ -41780,6 +43073,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "action": {
             "title": "Action",
             "type": "string"
@@ -42669,6 +44034,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "site": {
             "anyOf": [
               {
@@ -42901,6 +44338,78 @@
             "title": "Session Id",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
           "origin": {
             "title": "Origin",
             "type": "string"
@@ -43083,6 +44592,78 @@
           "session_id": {
             "title": "Session Id",
             "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expires At"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "server_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Time"
+          },
+          "request_epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Epoch"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
           },
           "backend": {
             "title": "Backend",

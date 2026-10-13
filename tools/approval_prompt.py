@@ -279,7 +279,7 @@ def _transport_choice(attempt: dict, *, pattern_key: str, description: str):
 
 def _consent(choice, unresolved: str) -> str:
     """Map an approval choice to an elicitation verdict; *unresolved* is the no-answer outcome."""
-    if choice in ("once", "session", "always"):
+    if choice == "once":  # per-call confirmation never grants a reusable scope
         return "accept"
     return unresolved if choice in ("timeout", "cancelled") else "decline"
 
@@ -319,7 +319,9 @@ def request_elicitation_consent(message: str, description: str, *,
             decision = _gw._await_gateway_decision(
                 session_key, notify_cb, {"command": message, "description": description,
                                          "pattern_key": "mcp_elicitation",
-                                         "pattern_keys": ["mcp_elicitation"]}, surface=surface)
+                                         "pattern_keys": ["mcp_elicitation"],
+                                         "allow_session": False, "allow_permanent": False},
+                surface=surface, timeout_seconds=timeout_seconds)
         except Exception as exc:
             logger.error("Elicitation gateway dispatch failed: %s", exc, exc_info=True)
             return "decline"
@@ -346,7 +348,7 @@ def request_elicitation_consent(message: str, description: str, *,
         # allow_permanent=False: elicitation is a per-call confirmation — no pattern to remember.
         # Pass the agent thread's panel callback: without it prompt_toolkit fails the prompt closed unseen.
         choice = prompt_dangerous_approval(message, description, timeout_seconds=timeout_seconds,
-                                           allow_permanent=False, title=title,
+                                           allow_permanent=False, allow_session=False, title=title,
                                            approval_callback=_get_approval_callback())
         hook_choice = choice
     except Exception as exc:

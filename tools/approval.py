@@ -17,6 +17,7 @@ import importlib
 import logging
 import os
 import threading
+import time
 from typing import Optional
 
 from utils import env_var_enabled, is_truthy_value
@@ -154,12 +155,17 @@ def resolve_gateway_approval(session_key: str, choice: str,
             targets = [entry for entry in queue if entry.data.get("request_id") == request_id]
             if not targets:
                 return 0
-            queue[:] = [entry for entry in queue if entry not in targets]
         elif resolve_all:
             targets = list(queue)
-            queue.clear()
         else:
-            targets = [queue.pop(0)]
+            targets = [queue[0]]
+        # Validate every surface before removing an entry or waking its callback.
+        if (choice not in ("once", "session", "always", "deny")
+                or (reason is not None and (not isinstance(reason, str) or len(reason) > 2000 or choice != "deny"))
+                or any(choice not in entry.data.get("choices", [])
+                       or time.monotonic() >= entry.event.deadline_monotonic for entry in targets)):
+            return 0
+        queue[:] = [entry for entry in queue if entry not in targets]
         if not queue:
             _gateway_queues.pop(session_key, None)
         # Popping the entry and committing its outcome are ONE critical section: the waiter's

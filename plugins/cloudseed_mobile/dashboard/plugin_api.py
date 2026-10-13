@@ -22,6 +22,7 @@ from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write
 from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
 from plugins.cloudseed_mobile import flight_recorder as recorder
+from plugins.cloudseed_mobile import human_input_adapter as human_input
 from plugins.cloudseed_mobile.deliverables_warmer import DeliverablesWarmer
 
 MAX_BODY = 1024 * 1024
@@ -197,6 +198,36 @@ for operation in PHOTO_OPS:
     router.add_api_route('/photo-catalog/'+operation, photo_endpoint(operation), methods=['POST'], name='photo_'+operation)
 for operation in REMINDER_OPS:
     router.add_api_route('/iphone-reminders/'+operation, reminder_endpoint(operation), methods=['POST'], name='reminder_'+operation)
+
+
+def human_input_endpoint(operation):
+    def endpoint(body: dict = Depends(payload), principal: str = Depends(owner)):
+        # Body profile is an assertion about the mounted scope, not a selector.
+        # Do this before native dispatch, including unavailable/hosted processes.
+        try:
+            mounted_profile = profile_id()
+        except ValueError:
+            raise HTTPException(403, 'Profile not found') from None
+        if body.get('profile') != mounted_profile:
+            raise HTTPException(403, 'Profile not found')
+        headers = {'Cache-Control': 'no-store'}
+        try:
+            result = human_input.call(operation, body, principal=principal)
+            return JSONResponse(result, headers=headers)
+        except PermissionError:
+            return JSONResponse({'error': 'Human input scope forbidden'}, status_code=403, headers=headers)
+        except (ValueError, TypeError, RecursionError):
+            # Includes Pydantic validation errors: never serialize errors()/inputs.
+            return JSONResponse({'error': 'Invalid human input request'}, status_code=400, headers=headers)
+        except Exception:  # health: allow BLE001 -- secure endpoint must not echo callback exceptions or credentials
+            # The secure boundary must not emit an exception containing a value,
+            # including unexpected callback errors. No logging or automatic retry.
+            return JSONResponse({'error': 'Human input unavailable'}, status_code=503, headers=headers)
+    return endpoint
+
+
+for operation in human_input.OPERATIONS:
+    router.add_api_route('/human-input/'+operation, human_input_endpoint(operation), methods=['POST'], name='human_input_'+operation)
 
 
 def deliverable_store(profile):

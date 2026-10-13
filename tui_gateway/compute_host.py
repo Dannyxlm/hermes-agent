@@ -212,7 +212,15 @@ class ComputeHost:
                 self._reply("respond.error", sid, request_id, message=error)
                 return
             from tui_gateway import server_requests
-            if isinstance(params.get("lock"), dict):
+            if isinstance(params.get("human_input"), dict):
+                from tui_gateway.methods_human_input import child_call
+                try:
+                    result = child_call(server, sid, params["human_input"])
+                    response = {"jsonrpc": "2.0", "id": request_id, "result": result}
+                except (ValueError, TypeError, KeyError, PermissionError, RuntimeError):
+                    self._reply("respond.error", sid, request_id, message="Human input unavailable")
+                    return
+            elif isinstance(params.get("lock"), dict):
                 response = server._methods["clarify.lock"](request_id, params["lock"])
             else:
                 response_frame = params.get("frame") if isinstance(params.get("frame"), dict) else params

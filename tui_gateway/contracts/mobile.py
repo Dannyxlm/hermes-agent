@@ -18,6 +18,15 @@ class MobileEmptyParams(Params):
     pass
 
 
+class MobileHumanInputCapability(Result):
+    protocol_version: int = 1
+    methods: list[str]
+    secure_methods: list[str]
+    destinations: list[str]
+    rest_requires_owner_plugin: bool = True
+    receipt_scope: str = 'process_bounded'
+
+
 class MobileCapabilitiesResult(Result):
     protocol_version: int
     methods: list[str]
@@ -26,6 +35,7 @@ class MobileCapabilitiesResult(Result):
     max_history_limit: int
     max_roster_limit: int
     video_upload: VideoUploadLimits | None = None
+    human_input: MobileHumanInputCapability | None = None
 
 
 class MobileBotsParams(Params):
@@ -95,6 +105,12 @@ class MobileHistory(Result):
 
 
 class MobilePendingClarify(Result):
+    created_at: float | None = None
+    expires_at: float | None = None
+    timeout_seconds: float | None = None
+    server_time: float | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
     request_id: str
     session_id: str | None = None
     question: str | None = None

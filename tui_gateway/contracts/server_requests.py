@@ -19,6 +19,12 @@ class ServerRequestParams(Params):
     """Every request frame's params start with the session the question belongs to."""
 
     session_id: str
+    created_at: float | None = None
+    expires_at: float | None = None
+    timeout_seconds: float | None = None
+    server_time: float | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
 
 
 class ValueResult(Result):
@@ -115,6 +121,10 @@ class ApprovalRequestParams(ServerRequestParams):
     allow_session: bool | None = None
     smart_denied: bool | None = None
     tool_name: str | None = None
+    surface: str | None = None
+    workspace: str | None = None
+    origin: str | None = None
+    mcp_server: str | None = None
     session_id_hint: str | None = Field(default=None, alias="gateway_session_id")
     # The approval queue entry carries tool-specific context the card may render; the closed set
     # of keys is owned by tools/approval.py, so it stays open here.
@@ -124,6 +134,7 @@ class ApprovalRequestParams(ServerRequestParams):
 class ApprovalResult(Result):
     choice: ApprovalChoice
     all: bool | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 server_request("approval", params=ApprovalRequestParams, result=ApprovalResult,

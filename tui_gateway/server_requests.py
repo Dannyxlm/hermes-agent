@@ -50,20 +50,27 @@ class ServerRequest:
     __slots__ = (
         "answered",
         "created_at",
+        "deadline_monotonic",
         "declined",
         "event",
+        "expires_at",
         "id",
         "locked",
         "method",
         "on_result",
         "params",
+        "profile_home",
         "qids",
         "result",
+        "revision",
         "sid",
+        "timeout_seconds",
     )
 
     def __init__(self, sid: str, method: str, params: dict, *, qids: list[str] | None = None,
-                 on_result: Callable[[dict | None], None] | None = None) -> None:
+                 on_result: Callable[[dict | None], None] | None = None,
+                 timeout: float | None = None, deadline_monotonic: float | None = None,
+                 created_at: float | None = None) -> None:
         self.id = f"srq-{uuid.uuid4().hex[:12]}"
         self.sid = sid
         self.method = method
@@ -71,9 +78,17 @@ class ServerRequest:
         self.event = threading.Event()
         self.result: dict | None = None
         self.answered = False
-        self.created_at = time.time()
+        from hermes_constants import get_hermes_home
+        from pathlib import Path
+        self.profile_home = str(Path(get_hermes_home()).resolve())
+        self.created_at = time.time() if created_at is None else created_at
+        self.timeout_seconds = timeout
+        self.deadline_monotonic = (deadline_monotonic if deadline_monotonic is not None else
+                                   time.monotonic() + timeout if timeout is not None else None)
+        self.expires_at = self.created_at + timeout if timeout is not None else None
+        self.revision = 1
         # Batch clarify: question ids still to lock, and the answers locked so far.
-        self.qids = list(qids) if qids else None
+        self.qids = list(qids) if qids else ([q["qid"] for q in params.get("questions", [])] or None if method == "clarify" else None)
         self.locked: dict[str, str | None] = {}
         self.on_result = on_result
         # Client transports that answered NOT_SHOWN_CODE (no window there shows this session).
@@ -81,12 +96,22 @@ class ServerRequest:
 
     def frame(self) -> dict:
         return {"jsonrpc": "2.0", "id": self.id, "method": self.method,
-                "params": {"session_id": self.sid, **self.params}}
+                "params": self.wire_params()}
+
+    def wire_params(self) -> dict:
+        from .human_input import SECURE_METHODS, safe_params
+        params = safe_params(self.method, self.params) if self.method in SECURE_METHODS else self.params
+        return {**params, "session_id": self.sid, "created_at": self.created_at,
+                "expires_at": self.expires_at, "timeout_seconds": self.timeout_seconds,
+                "server_time": time.time(), "request_epoch": inbox_epoch(), "request_revision": self.revision}
+
+    def expired(self) -> bool:
+        return self.deadline_monotonic is not None and time.monotonic() >= self.deadline_monotonic
 
     def snapshot(self) -> dict:
         """``open_requests`` entry: the request as sent, plus the batch answers locked so far so a
         reconnecting client restores its ✓ state."""
-        params = {"session_id": self.sid, **self.params}
+        params = self.wire_params()
         if self.locked:
             params["answers"] = dict(self.locked)
         return {"id": self.id, "method": self.method, "params": params}
@@ -94,6 +119,10 @@ class ServerRequest:
 
 _lock = threading.Lock()
 _open: dict[str, ServerRequest] = {}
+# Bounded metadata-only reconciliation caches, never answer values or value digests.
+_terminal: dict[str, dict] = {}
+_receipts: dict[tuple, dict] = {}
+_MAX_RECEIPTS = 4096
 
 # Frame sinks, bound by ``bind_sinks`` from server.py at import time (like the method_ctx split
 # modules): importing server back from here would pick a different module object under the test
@@ -205,16 +234,18 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
     """
     if _unanswerable(method, sid):
         return None
-    req = ServerRequest(sid, method, params, qids=qids)
+    req = ServerRequest(sid, method, params, qids=qids, timeout=timeout)
     _register(req)
     try:
-        req.event.wait(timeout)
+        req.event.wait(None if req.deadline_monotonic is None else max(0, req.deadline_monotonic - time.monotonic()))
     except BaseException:
         # The wait itself died (KeyboardInterrupt, SystemExit, injected error): withdraw the request
         # or it stays in _open forever — replayed to every reconnecting client and reported by
         # pending_kind() as a human still being waited on.
         with _lock:
             still_open = _open.pop(req.id, None) is req
+            if still_open:
+                _remember_terminal(req, "cancelled")
         if still_open:
             _attention_changed(req)
             _emit_cancel(req, "interrupted")
@@ -224,6 +255,8 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
         # response frame can land after the deadline expires and before this removal, and
         # settlement (resolve_response / lock_answer / cancel) already popped it (#112548).
         timed_out = _open.pop(req.id, None) is req
+        if timed_out:
+            _remember_terminal(req, "expired")
         answered, result, locked = req.answered, req.result, dict(req.locked)
     if answered:
         return result
@@ -235,19 +268,25 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
     return None
 
 
-def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | None], None]) -> Callable[[str], None]:
+def send_async(method: str, sid: str, params: dict, on_result: Callable[[dict | None], None], *,
+               timeout: float | None = None, deadline_monotonic: float | None = None,
+               created_at: float | None = None) -> Callable[[str], None]:
     """Send one request whose wait is owned elsewhere (the approval queue's own timeout). ``on_result``
     runs on the dispatching thread when the response lands. Returns ``settle(reason)``: call it when
     the underlying wait ends; if the request is still open it is withdrawn with ``request.cancel``."""
     if _unanswerable(method, sid):
         on_result(None)
         return lambda reason: None
-    req = ServerRequest(sid, method, params, on_result=on_result)
+    req = ServerRequest(sid, method, params, on_result=on_result, timeout=timeout,
+                        deadline_monotonic=deadline_monotonic, created_at=created_at)
     _register(req)
 
     def settle(reason: str) -> None:
         with _lock:
             still_open = _open.pop(req.id, None) is not None
+            if still_open:
+                _remember_terminal(req, "expired" if reason == "timeout" else
+                                   "already_resolved" if reason == "resolved" else "cancelled")
         if still_open:
             _attention_changed(req)
             _emit_cancel(req, reason)
@@ -283,6 +322,7 @@ def _decline(rid: str, transport: Any, *, expected_sid: str | None = None,
         _open.pop(rid, None)
         req.result = {"value": json.dumps({"success": False, "error": NOT_SHOWN_MESSAGE})}
         req.answered = True
+        _remember_terminal(req, "cancelled")
     _attention_changed(req)
     if req.on_result is not None:
         req.on_result(req.result)
@@ -290,11 +330,57 @@ def _decline(rid: str, transport: Any, *, expected_sid: str | None = None,
     return True
 
 
+def _remember_terminal(req: ServerRequest, status: str) -> None:
+    _terminal[req.id] = {"status": status, "session_id": req.sid, "method": req.method,
+                         "profile_home": req.profile_home, "request_epoch": inbox_epoch(),
+                         "request_revision": req.revision}
+    while len(_terminal) > _MAX_RECEIPTS:
+        _terminal.pop(next(iter(_terminal)))
+
+
+def _consume(req: ServerRequest, result: dict | None, status: str) -> None:
+    # Caller owns _lock. No callback or external IO under the registry lock.
+    _open.pop(req.id, None)
+    req.result, req.answered = result, status == "accepted"
+    _remember_terminal(req, "outcome_unknown" if status == "accepted" and req.on_result else status)
+
+
+def _deliver(req: ServerRequest, status: str) -> str:
+    _attention_changed(req)
+    try:
+        if req.on_result is not None:
+            consumed = req.on_result(req.result)
+            if status == "accepted" and consumed is False:
+                status = "already_resolved"
+    except Exception:  # health: allow BLE001 -- callback exceptions may contain entered credentials; log only the method
+        # Even exception text can contain a secure answer. Never echo/log it.
+        status = "outcome_unknown"
+        logger.warning("human input callback outcome unknown (%s)", req.method)
+    finally:
+        req.event.set()
+    with _lock:
+        _remember_terminal(req, status)
+    _emit_cancel(req, "resolved" if status in ("accepted", "already_resolved") else
+                 "timeout" if status == "expired" else "interrupted")
+    return status
+
+
+def _answer_result(req: ServerRequest, result: dict) -> dict:
+    from .human_input import validate_answer
+    result = validate_answer(req.method, req.params, result)
+    if req.qids:
+        answers = result.get("answers")
+        # A lock accepted elsewhere must not be overwritten by a stale full reply.
+        if answers is not None:
+            result = {"answers": {**answers, **req.locked}, "outcome": "submitted"}
+        else:
+            result = {"answers": dict(req.locked), "outcome": "cancelled"}
+    return result
+
+
 def resolve_response(frame: dict, transport: Any = None, *, expected_sid: str | None = None,
                      expected_method: str | None = None, mobile: bool = False) -> bool:
-    """Route one client response frame to its open request. False when nothing is waiting for that id
-    (already timed out / cancelled, or owned by another process — see the compute-host bridge).
-    *transport* is the client connection the frame arrived on (counts a NOT_SHOWN_CODE decline)."""
+    """One validated settlement for Desktop, WS and scoped HTTP. Legacy frames need no new fields."""
     rid = frame.get("id")
     if not isinstance(rid, str):
         return False
@@ -303,45 +389,23 @@ def resolve_response(frame: dict, transport: Any = None, *, expected_sid: str | 
     with _lock:
         req = _open.get(rid)
         if req is None:
-            # Already settled (timed out, cancelled, answered from another surface) or owned by
-            # another process; say so — a dropped answer used to vanish without a trace.
-            logger.debug("server request %s: response dropped, request no longer open", rid)
             return False
         _check_owner(req, expected_sid, expected_method)
-        if mobile:
-            result = frame.get("result", {})
-            if req.method == "approval":
-                choice = result.get("choice")
-                if choice not in ("once", "deny") or choice not in req.params.get("choices", []):
-                    raise PermissionError("approval choice is not offered to mobile")
-            if req.qids is not None:
-                raise ValueError("question_id required for batch clarification")
-        # Removing the request and committing its outcome are one settlement.
-        # ``cancel()`` also settles under this lock, so the first side to get
-        # here wins instead of a later cancellation overwriting a response.
-        _open.pop(rid, None)
-        if "error" in frame:
-            logger.debug("server request %s (%s) answered with error: %s", rid, req.method, frame.get("error"))
-            req.result, req.answered = None, False
+        if req.expired():
+            status, result = "expired", None
+        elif "error" in frame:
+            status, result = "cancelled", None
         else:
-            result = frame.get("result")
-            req.result = result if isinstance(result, dict) else {}
-            if req.qids and "answers" in req.result:
-                # Batch clarify: answers locked early via clarify.lock belong to the final set even when
-                # the closing response only carries the tail the user answered last.
-                answers = req.result.get("answers")
-                merged = dict(req.locked)
-                if isinstance(answers, dict):
-                    merged.update(answers)
-                req.result = {**req.result, "answers": merged, "outcome": "submitted"}
-            elif req.qids:
-                req.result = {"answers": dict(req.locked), "outcome": "cancelled"}
-            req.answered = True
-    _attention_changed(req)
-    req.event.set()
-    if req.on_result is not None:
-        req.on_result(req.result)
-    return True
+            result = _answer_result(req, frame.get("result"))
+            if mobile:
+                if req.method == "approval" and result.get("choice") not in ("once", "deny"):
+                    raise PermissionError("Approval choice is not offered to mobile")
+                if req.qids is not None:
+                    raise ValueError("question_id required for batch clarification")
+            status = "accepted"
+        _consume(req, result, status)
+    _deliver(req, status)
+    return status != "expired"
 
 
 def _check_owner(req: ServerRequest, sid: str | None, method: str | None) -> None:
@@ -349,28 +413,37 @@ def _check_owner(req: ServerRequest, sid: str | None, method: str | None) -> Non
         raise PermissionError("pending request does not belong to this runtime")
 
 
+def _lock_question(req: ServerRequest, question_id: str, answer: str | None) -> list[str]:
+    if req.qids is None or question_id not in req.qids:
+        raise ValueError("Unknown clarification question")
+    if answer is not None and (not isinstance(answer, str) or len(answer.encode()) > 65536):
+        raise ValueError("Invalid clarification answer")
+    if question_id not in req.locked or req.locked[question_id] != answer:
+        req.locked[question_id] = answer
+        req.revision += 1
+    remaining = [qid for qid in req.qids if qid not in req.locked]
+    if not remaining:
+        _consume(req, {"answers": dict(req.locked), "outcome": "submitted"}, "accepted")
+    return remaining
+
+
 def lock_answer(request_id: str, question_id: str, answer: str | None, *,
                 expected_sid: str | None = None) -> list[str] | None:
-    """Lock one batch-clarify answer (update-in-place; ``None`` = skipped). Returns the question ids
-    still unanswered; the last lock resolves the request with the full ``{"answers"}`` set. ``None``
-    when no open batch has that id (expired or foreign); ``ValueError`` for an unknown question id."""
     with _lock:
         req = _open.get(request_id)
         if req is None:
             return None
         _check_owner(req, expected_sid, "clarify")
-        if req.qids is None:
-            raise ValueError("question_id is only valid for batch clarification")
-        if question_id not in req.qids:
-            raise ValueError(f"unknown question_id {question_id!r}")
-        req.locked[question_id] = answer
-        remaining = [qid for qid in req.qids if qid not in req.locked]
-        if not remaining:
-            req.result, req.answered = {"answers": dict(req.locked), "outcome": "submitted"}, True
-            _open.pop(request_id, None)
+        if req.expired():
+            _consume(req, None, "expired")
+            remaining, status = None, "expired"
+        else:
+            remaining = _lock_question(req, question_id, answer)
+            status = "accepted"
     if not remaining:
+        _deliver(req, status)
+    else:
         _attention_changed(req)
-        req.event.set()
     return remaining
 
 
@@ -382,6 +455,7 @@ def cancel(sid: str | None = None, reason: str = "interrupted") -> int:
     with _lock:
         targets = [req for req in _open.values() if sid is None or req.sid == sid]
         for req in targets:
+            _remember_terminal(req, "expired" if reason == "timeout" else "cancelled")
             _open.pop(req.id, None)
             if req.qids is not None:
                 req.result, req.answered = {"answers": dict(req.locked), "outcome": "cancelled"}, True
@@ -403,6 +477,121 @@ def open_requests(sid: str) -> list[dict]:
         return [req.snapshot() for req in reqs]
 
 
+def has_pending_human(sid: str) -> bool:
+    from .human_input import HUMAN_METHODS
+    with _lock:
+        return any(req.sid == sid and req.method in HUMAN_METHODS and not req.expired() for req in _open.values())
+
+
+def scoped_pending(sid: str, *, profile_home: str) -> list[dict]:
+    from .human_input import HUMAN_METHODS, safe_params
+    with _lock:
+        requests = sorted((req for req in _open.values() if req.sid == sid
+                           and req.profile_home == profile_home and req.method in HUMAN_METHODS
+                           and not req.expired()), key=lambda req: req.created_at)
+        return [{**req.snapshot(), 'params': safe_params(req.method, req.snapshot()['params'])} for req in requests]
+
+
+def _receipt_selector(body: dict) -> tuple:
+    return tuple(body.get(key) for key in ('request_id', 'method', 'session_id', 'request_epoch',
+                                         'request_revision', 'question_id'))
+
+
+def _receipt(body: dict, status: str) -> dict:
+    return {'protocol_version': 1, 'status': status, 'action_id': body['action_id'],
+            'request_id': body['request_id'], 'method': body['method'],
+            'request_epoch': body['request_epoch'], 'request_revision': body['request_revision'],
+            'server_time': time.time()}
+
+
+def remember_remote_receipt(body: dict, *, scope: tuple, receipt: dict) -> None:
+    from .contracts.human_input import HumanInputReceipt
+    from pydantic import ValidationError
+    try:
+        metadata = HumanInputReceipt.model_validate(receipt).model_dump(mode='json')
+    except ValidationError:
+        raise ValueError('Invalid action receipt') from None
+    for field in ('action_id', 'request_id', 'method', 'request_epoch', 'request_revision'):
+        if metadata[field] != body[field]:
+            raise ValueError('Mismatched action receipt')
+    if metadata['status'] not in ('accepted', 'already_resolved', 'expired', 'cancelled', 'conflict'):
+        return
+    with _lock:
+        _receipts[(*scope, body['action_id'])] = {'selector': _receipt_selector(body), 'receipt': metadata}
+        while len(_receipts) > _MAX_RECEIPTS:
+            _receipts.pop(next(iter(_receipts)))
+
+
+def action_status(body: dict, *, scope: tuple) -> dict:
+    with _lock:
+        entry = _receipts.get((*scope, body['action_id']))
+        if entry is not None:
+            if entry['selector'] != _receipt_selector(body):
+                return _receipt(body, 'conflict')
+            return dict(entry['receipt'])
+    return _receipt(body, 'unknown')
+
+
+def _scoped_state(req: ServerRequest | None, body: dict, scope: tuple) -> str:
+    if req is not None:
+        _check_owner(req, body['session_id'], body['method'])
+        if req.profile_home != scope[-1]:
+            raise PermissionError('Request profile mismatch')
+        if body['request_epoch'] != inbox_epoch() or body['request_revision'] != req.revision:
+            return 'conflict'
+        return 'expired' if req.expired() else 'pending'
+    terminal = _terminal.get(body['request_id'])
+    if body['request_epoch'] != inbox_epoch():
+        return 'conflict'
+    if terminal is None:
+        return 'unknown'
+    if (terminal['profile_home'], terminal['session_id'], terminal['method']) != (scope[-1], body['session_id'], body['method']):
+        raise PermissionError('Request ownership mismatch')
+    return 'already_resolved' if terminal['status'] == 'accepted' else terminal['status']
+
+
+def scoped_respond(body: dict, *, scope: tuple) -> dict:
+    from .human_input import HUMAN_METHODS
+    deliver = False
+    with _lock:
+        key = (*scope, body['action_id'])
+        previous = _receipts.get(key)
+        if previous is not None:
+            return (dict(previous['receipt']) if previous['selector'] == _receipt_selector(body)
+                    else _receipt(body, 'conflict'))
+        req = _open.get(body['request_id'])
+        status = _scoped_state(req, body, scope)
+        if req is not None and status == 'pending':
+            if req.method not in HUMAN_METHODS:
+                raise PermissionError('Not a human input request')
+            if body.get('question_id') is not None:
+                if req.method != 'clarify' or not isinstance(body['result'], dict) or set(body['result']) != {'answer'}:
+                    raise ValueError('Invalid question answer')
+                remaining = _lock_question(req, body['question_id'], body['result']['answer'])
+                deliver = not remaining
+            else:
+                result = _answer_result(req, body['result'])
+                _consume(req, result, 'accepted')
+                deliver = True
+            status = 'accepted'
+        elif req is not None and status == 'expired':
+            _consume(req, None, 'expired')
+            deliver = True
+        receipt = _receipt(body, 'outcome_unknown' if deliver and req.on_result else status)
+        _receipts[key] = {'selector': _receipt_selector(body), 'receipt': receipt}
+        while len(_receipts) > _MAX_RECEIPTS:
+            _receipts.pop(next(iter(_receipts)))
+    if deliver:
+        status = _deliver(req, status)
+        with _lock:
+            receipt = _receipt(body, status)
+            if key in _receipts:
+                _receipts[key]['receipt'] = receipt
+    elif req is not None and status == 'accepted':
+        _attention_changed(req)
+    return dict(receipt)
+
+
 def open_request_count() -> int:
     """Unanswered server→client requests across every session: the process is waiting on a
     human (clarify, approval, sudo, secret, ...) and must not be treated as idle."""
@@ -413,7 +602,7 @@ def open_request_count() -> int:
 _INBOX_KINDS = {
     "approval": "approval", "clarify": "clarify", "sudo": "input", "secret": "input",
     "vault.unlock_prompt": "input", "vault.save_login": "input", "vault.code": "input",
-    "display.install.sudo": "input",
+    "display.install.sudo": "input", "setup_choose": "input",
 }
 _INBOX_EPOCH = uuid.uuid4().hex
 
@@ -458,4 +647,6 @@ def is_response_frame(obj: Any) -> bool:
 def reset_for_tests() -> None:
     with _lock:
         _open.clear()
+        _terminal.clear()
+        _receipts.clear()
         _answering_clients.clear()

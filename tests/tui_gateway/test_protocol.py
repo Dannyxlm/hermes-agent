@@ -71,7 +71,6 @@ def server(tmp_path):
 
 
 
-
 @pytest.fixture()
 def capture(server):
     """Redirect server's real stdout to a StringIO and return (server, buf)."""
@@ -80,13 +79,11 @@ def capture(server):
     return server, buf
 
 
-# ── JSON-RPC envelope ────────────────────────────────────────────────
 
 
 def test_unknown_method(server):
     resp = server.handle_request({"id": "1", "method": "bogus"})
     assert resp["error"]["code"] == -32601
-
 
 
 
@@ -122,7 +119,7 @@ def test_session_interrupt_uses_explicit_stop_compatibility(server, monkeypatch,
         "agent": agent,
         "history_lock": threading.Lock(),
         "running": True,
-        "queued_prompt": "later",
+        "queued_prompt": {"text": "later"},
         "session_key": "session-key",
         "_run_thread": None,
     }
@@ -140,7 +137,6 @@ def test_session_interrupt_uses_explicit_stop_compatibility(server, monkeypatch,
 
 
 # ── write_json ────────────────────────────────────────────────
-
 
 
 
@@ -183,6 +179,7 @@ def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     # request_id is injected by _ApprovalEntry so reconnecting clients can
     # correlate their approval.respond with the exact queued request.
     assert replayed.pop("request_id")
+    assert replayed.pop("expires_at") == replayed.pop("created_at") + replayed.pop("timeout_seconds")
     assert replayed == first
 
 
@@ -202,11 +199,15 @@ def test_live_session_payload_replays_open_requests(server):
     finally:
         server_requests._open.pop(req.id, None)
 
-    assert payload["open_requests"] == [{"id": req.id, "method": "clarify",
-                                         "params": {"session_id": "runtime-session", "question": "Which?", "choices": ["a", "b"]}}]
+    replay = payload["open_requests"][0]
+    assert replay["id"] == req.id and replay["method"] == "clarify"
+    assert replay["params"]["session_id"] == "runtime-session"
+    assert replay["params"]["question"] == "Which?"
+    assert replay["params"]["choices"] == ["a", "b"]
+    assert replay["params"]["expires_at"] is None
+    assert replay["params"]["request_epoch"] == server_requests.inbox_epoch()
     assert payload["open_requests"][0]["params"] is not req.params
     assert "open_requests" not in other
-
 
 
 
@@ -256,7 +257,9 @@ def test_server_request_round_trip_uses_response_frame(capture):
     thread.start()
     req = _wait_open(server_requests, buf)
     frame = _frames(buf)[-1]
-    assert frame == {"jsonrpc": "2.0", "id": req.id, "method": "sudo", "params": {"session_id": "s1"}}
+    assert {k: v for k, v in frame.items() if k != "params"} == {"jsonrpc": "2.0", "id": req.id, "method": "sudo"}
+    assert frame["params"]["session_id"] == "s1"
+    assert frame["params"]["expires_at"] == frame["params"]["created_at"] + 5
     assert req.id.startswith("srq-")
 
     assert server.dispatch({"jsonrpc": "2.0", "id": req.id, "result": {"value": "hunter2"}}) is None
@@ -288,10 +291,8 @@ def test_settlement_wins_over_a_later_cancel(capture, method, qids, settle, expe
     assert req.event.is_set()
 
 
-def test_send_returns_an_answer_committed_after_the_deadline_expired(capture, monkeypatch):
-    """An answer accepted by resolve_response is never reported as a timeout (#112548): the
-    response frame can land after event.wait() gave up and before send() withdraws the request,
-    and the renderer must not get a bogus request.cancel for a card the user just answered."""
+def test_send_refuses_answer_after_deadline_even_before_wait_cleanup(capture, monkeypatch):
+    """The monotonic deadline is enforced in the resolver, not just the waiter cleanup."""
     from tui_gateway import server_requests
 
     cancels: list[dict] = []
@@ -303,13 +304,13 @@ def test_send_returns_an_answer_committed_after_the_deadline_expired(capture, mo
         # Deadline expires, then the response frame lands before send() re-enters the lock.
         expired = real_wait(event, timeout)
         rid = next(iter(server_requests._open))
-        assert server_requests.resolve_response({"id": rid, "result": {"value": "yes"}})
+        assert not server_requests.resolve_response({"id": rid, "result": {"value": "yes"}})
         return expired
 
     monkeypatch.setattr(server_requests.threading.Event, "wait", answered_during_the_gap)
 
-    assert server_requests.send("sudo", "s1", {}, timeout=0.001) == {"value": "yes"}
-    assert cancels == []
+    assert server_requests.send("sudo", "s1", {}, timeout=0.001) is None
+    assert len(cancels) == 1 and cancels[0]["reason"] == "timeout"
     assert not server_requests._open
 
 
@@ -555,7 +556,8 @@ def test_clarify_batch_locks_resolve_in_order_and_keep_partial_on_timeout(captur
         server._clarify_timeout_seconds = original_timeout
     assert box["answer"] == {"answers": {"q0": "kept"}, "outcome": "timed_out"}
     cancels = [f for f in _frames(buf) if f.get("method") == "event" and f["params"]["type"] == "request.cancel"]
-    assert [c["params"]["payload"]["id"] for c in cancels] == [req.id]
+    assert [c["params"]["payload"]["id"] for c in cancels
+            if c["params"]["payload"]["reason"] == "timeout"] == [req.id]
 
 
 def test_clarify_batch_cancel_all_is_a_response_without_answers(capture):
@@ -731,7 +733,6 @@ def test_approval_respond_4001_when_nothing_resolves(server, monkeypatch):
 
 
 # ── Session lookup ───────────────────────────────────────────────────
-
 
 
 
@@ -1715,7 +1716,6 @@ def test_command_dispatch_queue_sends_message(server):
     result = resp["result"]
     assert result["type"] == "send"
     assert result["message"] == "tell me about quantum computing"
-
 
 
 
