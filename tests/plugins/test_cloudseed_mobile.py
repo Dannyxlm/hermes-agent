@@ -254,10 +254,11 @@ def test_account_display_missing_label_is_generic():
     assert _safe_entry_label(entry, 7) == 'Account 7'
 
 
-def test_account_primary_cas_uses_native_store(client):
+@pytest.mark.parametrize('provider, display_name', [('openai-codex', 'Codex'), ('xai-oauth', 'Grok')])
+def test_account_primary_cas_uses_native_store(client, provider, display_name):
     import json
     c, home = client
-    store = {'credential_pool': {'openai-codex': [
+    store = {'credential_pool': {provider: [
         {'id': 'first', 'label': 'synthetic-private-label', 'source': 'manual', 'priority': 0, 'auth_type': 'oauth', 'access_token': 'fixture-only-not-a-token'},
         {'id': 'second', 'label': 'synthetic@example.invalid', 'source': 'manual', 'priority': 1, 'auth_type': 'oauth', 'access_token': 'fixture-only-other'},
     ]}}
@@ -268,7 +269,9 @@ def test_account_primary_cas_uses_native_store(client):
     assert response.status_code == 200
     assert path.read_bytes() == original  # inventory is strictly read-only
     assert 'fixture-only' not in response.text
-    accounts = response.json()['providers'][1]['accounts']
+    section = next(p for p in response.json()['providers'] if p['id'] == provider)
+    assert section['display_name'] == display_name
+    accounts = section['accounts']
     assert [a['id'] for a in accounts] == ['first', 'second']
     assert [a['priority'] for a in accounts] == [0, 1]
     assert accounts[0]['is_primary'] and not accounts[1]['is_primary']
@@ -276,25 +279,24 @@ def test_account_primary_cas_uses_native_store(client):
     assert accounts[1]['label'] == 'Account 2'  # email-shaped label never shown
     assert 'synthetic@example.invalid' not in response.text
     assert 'synthetic-private-label' not in response.text
-    section = next(p for p in response.json()['providers'] if p['id'] == 'openai-codex')
-    body = {'provider': 'openai-codex', 'account_id': 'second', 'profile_id': 'default', 'revision': section['revision']}
+    body = {'provider': provider, 'account_id': 'second', 'profile_id': 'default', 'revision': section['revision']}
     changed = c.post(P+'/provider/accounts/primary', json=body)
     assert changed.status_code == 200, changed.text
-    section2 = next(p for p in changed.json()['providers'] if p['id'] == 'openai-codex')
+    section2 = next(p for p in changed.json()['providers'] if p['id'] == provider)
     assert section2['primary_id'] == 'second'
     assert section2['revision'] != section['revision']
     assert c.post(P+'/provider/accounts/primary', json=body).status_code == 409
     saved = json.loads(path.read_text())
-    assert next(r for r in saved['credential_pool']['openai-codex'] if r['id'] == 'second')['priority'] == 0
+    assert next(r for r in saved['credential_pool'][provider] if r['id'] == 'second')['priority'] == 0
     b = home/'profiles'/'b'
     b.mkdir(parents=True)
     (b/'config.yaml').write_text('{}')
     borrowed = c.get(P+'/provider/accounts?profile=b')
-    borrowed_section = next(p for p in borrowed.json()['providers'] if p['id'] == 'openai-codex')
+    borrowed_section = next(p for p in borrowed.json()['providers'] if p['id'] == provider)
     assert borrowed_section['scope'] == 'shared_root'
     assert not borrowed_section['can_set_primary']
     denied = c.post(P+'/provider/accounts/primary?profile=b', json={
-        'provider': 'openai-codex', 'account_id': 'first', 'profile_id': 'b', 'revision': borrowed_section['revision']})
+        'provider': provider, 'account_id': 'first', 'profile_id': 'b', 'revision': borrowed_section['revision']})
     assert denied.status_code == 403
     assert json.loads(path.read_text()) == saved
     assert not (b/'auth.json').exists()  # no borrowed credential copy
