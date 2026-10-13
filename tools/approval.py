@@ -152,7 +152,8 @@ def resolve_gateway_approval(session_key: str, choice: str,
                              auth: Optional[str] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
-    *resolve_all* resolves every pending approval (``/approve all``); otherwise the oldest
+    *resolve_all* resolves pending non-payment approvals (``/approve all``); bulk denial
+    still resolves every entry. Payments need individual answers. Otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
     relayed to the agent in the BLOCKED message. *auth* is the device authentication a native
     client reports with its answer (``face_id``/``passcode``…); unknown labels are dropped.
@@ -169,8 +170,9 @@ def resolve_gateway_approval(session_key: str, choice: str,
                 return 0
             queue[:] = [entry for entry in queue if entry not in targets]
         elif resolve_all:
-            targets = list(queue)
-            queue.clear()
+            targets = [entry for entry in queue
+                       if choice == "deny" or entry.data.get("surface") != "vault-payment"]
+            queue[:] = [entry for entry in queue if entry not in targets]
         else:
             targets = [queue.pop(0)]
         if not queue:

@@ -544,6 +544,12 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         return classified
 
     receipt = None
+
+    def with_receipt(obj: dict, filled: bool = False) -> str:
+        if receipt is not None:
+            obj["payment"] = {**receipt, "filled": filled}
+        return json.dumps(obj)
+
     if meta.kind == "payment":
         # The card goes in only after the human approves THIS total at THIS exact origin with THIS card.
         payment = _payment_approval_block(effective_task_id, backend, handle, meta, page_origin)
@@ -566,6 +572,14 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
             out = json.loads(classified)
             out["payment"] = receipt
             return json.dumps(out)
+        # Same-origin cart edits invalidate the approved snapshot just as navigation does.
+        # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
+        current_summary = _checkout_summary(effective_task_id)
+        if current_summary is None or any(current_summary[k] != payment[k] for k in current_summary):
+            return with_receipt({
+                "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
+                "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
+                         "Ask the user for a fresh payment request; never replay this approval."})
 
     # ── Resolve secret and fill (secret never enters any logged string) ─────
     try:
@@ -576,8 +590,19 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
             secret = backend.resolve_secret(handle)
             fills = select_checkout_fills(classified, secret, PAYMENT_FIELDS if meta.kind == "payment" else ADDRESS_FIELDS)
     except UnlockRequired:
-        return json.dumps({"success": False, "error_type": "unlock_required",
-                           "error": f"{backend.display_name} locked again; call browser_vault_unlock."})
+        out = {"success": False, "error_type": "unlock_required",
+               "error": f"{backend.display_name} locked again; call browser_vault_unlock."}
+        if receipt is not None:
+            out["fresh_request_needed"] = True
+        return with_receipt(out)
+    except Exception:
+        # Resolution may fail before a secret dictionary exists to scrub against. Never echo
+        # provider exception text: it may include a card, token or other credential.
+        out = {"success": False, "error_type": "secret_resolution_failed",
+               "error": "Could not resolve the saved credential. Nothing was filled."}
+        if receipt is not None:
+            out["fresh_request_needed"] = True
+        return with_receipt(out)
     if not fills:
         out = {"success": False, "error": f"No fillable {meta.kind} field matched the saved item on this page."}
         if receipt is not None:
@@ -590,11 +615,6 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
     # Address values are not secrets but the card fields are: register every payment value.
     for value in (secret.values() if meta.kind == "payment" else [secret.get("password", "")]):
         register_vault_redaction_value(value)
-
-    def with_receipt(obj: dict, filled: bool = False) -> str:
-        if receipt is not None:
-            obj["payment"] = {**receipt, "filled": filled}
-        return json.dumps(obj)
 
     try:
         fill_result = _eval_js_secret(
@@ -689,17 +709,27 @@ def _card_limit(backend, handle: str, label: str) -> Optional[dict]:
             "period": _limit_period(text), "source": "vault"}
 
 
+def _checkout_summary(task_id: str) -> Optional[dict]:
+    """Read non-secret page facts; distinguish an unreadable page from a readable missing total."""
+    from agent.vault_checkout_summary import ORDER_SUMMARY_JS, summarize_checkout
+
+    try:
+        res = _eval_js(task_id, ORDER_SUMMARY_JS)
+        raw = _parse_json_result(res.get("result")) if res.get("success") else None
+        if isinstance(raw, str):
+            raw = _parse_json_result(raw)
+        return summarize_checkout(raw) if isinstance(raw, dict) else None
+    except Exception:
+        return None
+
+
 def _payment_approval_block(task_id: str, backend, handle: str, meta, origin: str) -> dict:
     """The ``payment`` block of a vault-payment approval (contract v1). ``origin`` is the browser's exact page
     origin and ``card`` comes from the vault; merchant/total/items are read deterministically from the page
     and labelled ``source: page``. The full card number, expiry and CVC never appear here."""
-    from agent.vault_checkout_summary import ORDER_SUMMARY_JS, summarize_checkout
+    from agent.vault_checkout_summary import summarize_checkout
 
-    res = _eval_js(task_id, ORDER_SUMMARY_JS)
-    raw = _parse_json_result(res.get("result")) if res.get("success") else None
-    if isinstance(raw, str):
-        raw = _parse_json_result(raw)
-    summary = summarize_checkout(raw)
+    summary = _checkout_summary(task_id) or summarize_checkout(None)
     getter = getattr(backend, "card_last4", None)
     try:
         last4 = getter(handle) if callable(getter) else getattr(meta, "last4", None)

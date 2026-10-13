@@ -22,7 +22,7 @@ from typing import Any, Optional
 ORDER_SUMMARY_JS = r"""
 (() => {
   const __hermesOrderSummary = 1;
-  const MONEY = /(?:US|CA|C|AU|A)?\$\s?\d|[€£]\s?\d|\b(?:USD|CAD|EUR|GBP|AUD)\b\s?\$?\s?\d|\d(?:[.,]\d{2})?\s?(?:USD|CAD|EUR|GBP|AUD)\b/;
+  const MONEY = /(?:US|CA|C|AU|A)?\$\s?\d|[€£]\s?\d|\b(?:USD|CAD|EUR|GBP|AUD)\b\s?\$?\s?\d|\d(?:[.,]\d+)*\s?(?:(?:USD|CAD|EUR|GBP|AUD)\b|[€£])/;
   const WORD = /[A-Za-z\u00C0-\u024F]{2,}/;
   const visible = (el) => {
     if (el.closest('[aria-hidden="true"], [hidden], script, style, noscript, template')) return false;
@@ -67,9 +67,10 @@ _SYMBOL = {"USD": "$", "CAD": "$", "AUD": "$", "EUR": "€", "GBP": "£"}
 _MONEY_RE = re.compile(
     # Prefixed: "USD $32.77", "CAD 32.77", "C$32.77", "$32.77", "€9.50" (optional trailing code).
     r"(?:(?P<code1>\b(?:USD|CAD|EUR|GBP|AUD))\s?(?P<sym1>\$)?\s?|(?P<pre>US\$|CA\$|C\$|AU\$|A\$|\$|€|£)\s?)"
-    r"(?P<int1>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<frac1>\d{2}))?(?!\d)(?:\s?(?P<code2>USD|CAD|EUR|GBP|AUD)\b)?"
-    # Suffixed only: "32.77 CAD".
-    r"|\b(?P<int2>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<frac2>\d{2}))?\s?(?P<code3>USD|CAD|EUR|GBP|AUD)\b")
+    # Capture the WHOLE numeric token: never recover a partial amount from bad punctuation.
+    r"(?P<num1>\d+(?:[.,]\d+)*)(?![\d.,])(?:\s?(?P<code2>USD|CAD|EUR|GBP|AUD)\b)?"
+    # Suffixed: "32.77 CAD", "9,50 €". No starting inside an invalid numeric token.
+    r"|(?<![\w.,])(?P<num2>\d+(?:[.,]\d+)*)\s?(?:(?P<code3>USD|CAD|EUR|GBP|AUD)\b|(?P<sym2>€|£))")
 
 _STRONG_TOTAL = re.compile(r"\b(order total|grand total|total due|amount due|total to pay|estimated total|"
                            r"total \(|total amount|you pay|total charge)", re.IGNORECASE)
@@ -89,11 +90,24 @@ def _currency_of(match: re.Match, hint: Optional[str]) -> Optional[str]:
     code = match.group("code1") or match.group("code2") or match.group("code3")
     if code:
         return code
-    pre = match.group("pre")
+    pre = match.group("pre") or match.group("sym2")
     if pre in _PREFIX:
         return _PREFIX[pre]
     hint = (hint or "").strip().upper()
     return hint if hint in _CODES else None
+
+
+def _amount_minor(number: str) -> Optional[int]:
+    """Accept integers, two-digit decimals and comma-grouped dot-decimals; reject ambiguity."""
+    if re.fullmatch(r"\d+", number):
+        return int(number) * 100
+    if re.fullmatch(r"\d+[.,]\d{2}", number):
+        whole, frac = re.split(r"[.,]", number)
+        return int(whole) * 100 + int(frac)
+    if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d{2})?", number):
+        whole, _, frac = number.replace(",", "").partition(".")
+        return int(whole) * 100 + int(frac or "00")
+    return None
 
 
 def parse_money(text: str, currency_hint: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -102,9 +116,9 @@ def parse_money(text: str, currency_hint: Optional[str] = None) -> Optional[dict
     if not matches:
         return None
     m = matches[-1]
-    whole = (m.group("int1") or m.group("int2") or "0").replace(",", "")
-    frac = m.group("frac1") or m.group("frac2") or "00"
-    amount_minor = int(whole) * 100 + int(frac)
+    amount_minor = _amount_minor(m.group("num1") or m.group("num2"))
+    if amount_minor is None:
+        return None
     currency = _currency_of(m, currency_hint)
     symbol = _SYMBOL.get(currency or "", "$" if (m.group("pre") or "").endswith("$") or m.group("sym1") else "")
     major = f"{amount_minor // 100:,}.{amount_minor % 100:02d}"
