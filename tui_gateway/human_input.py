@@ -32,8 +32,13 @@ def validate_answer(method: str, params: dict, result: dict) -> dict:
         raise ValueError('Invalid human input result') from None
     value = model.model_dump(mode='json', exclude_unset=True)
     if method == 'approval':
+        from tui_gateway.contracts.server_requests import ApprovalKind
         choice = value['choice']
-        forbidden = ((choice in ('session', 'always') and (params.get('allow_session') is False or params.get('smart_denied')))
+        inferred = ApprovalKind.for_context(params.get('surface'), params.get('tool_name'),
+                                             payment=params.get('payment') is not None)
+        consent = {ApprovalKind.payment, ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation}
+        once_only = inferred in consent or params.get('kind') in consent
+        forbidden = ((choice in ('session', 'always') and (once_only or params.get('allow_session') is False or params.get('smart_denied')))
                      or (choice == 'always' and params.get('allow_permanent') is False))
         if choice not in params.get('choices', []) or forbidden or value.get('all'):
             raise PermissionError('Approval scope is not offered')
@@ -64,6 +69,20 @@ def validate_answer(method: str, params: dict, result: dict) -> dict:
     return value
 
 
+def approval_quick_once(params: dict) -> bool:
+    """Explicit safe quick-consent projection, never request/answer authority.
+
+    Inspect the full producer cut BEFORE dropping extras. Tool name or absent flags
+    alone cannot certify read-only intent. This predicate is shared with U6.
+    """
+    return (params.get('risk') == 'read_only' and params.get('kind') == 'tool'
+            and params.get('tool_name') in {'read_file', 'search_files', 'web_search', 'web_extract'}
+            and not params.get('surface') and params.get('payment') is None
+            and params.get('destructive', False) is False
+            and params.get('sensitive', False) is False
+            and 'once' in (params.get('choices') or []))
+
+
 def safe_params(method: str, params: dict) -> dict:
     """Keep renderable context, never producer-owned credential defaults/extra metadata."""
     from tui_gateway.contracts import SERVER_REQUESTS
@@ -71,4 +90,7 @@ def safe_params(method: str, params: dict) -> dict:
     allowed = set(fields) | {field.alias for field in fields.values() if field.alias}
     safe = {key: value for key, value in params.items() if key in allowed}
     safe.pop('metadata', None)
+    if method == 'approval':
+        safe['quick_once'] = approval_quick_once(params)
+        safe['risk'] = params.get('risk', 'unknown')
     return safe

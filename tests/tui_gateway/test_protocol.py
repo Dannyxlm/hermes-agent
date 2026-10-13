@@ -490,7 +490,9 @@ def test_client_capabilities_advertises_counting_not_shown_declines(server):
 def test_server_request_timeout_emits_one_request_cancel(capture, method):
     from tui_gateway import server_requests
     _server, buf = capture
-    assert server_requests.send(method, "s1", {}, timeout=0) is None
+    params = {"secret": {"env_var": "DUMMY_KEY", "prompt": "Dummy credential"},
+              "tour": {"action": "start"}}.get(method, {})
+    assert server_requests.send(method, "s1", params, timeout=0) is None
     request, cancel = _frames(buf)
     assert request["method"] == method
     assert cancel["params"]["type"] == "request.cancel"

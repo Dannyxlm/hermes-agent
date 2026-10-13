@@ -5133,6 +5133,12 @@ export interface ApprovalRequestParams {
   request_epoch?: string | null
   request_revision?: number | null
   request_id: string
+  kind?: ApprovalKind | null
+  risk?: 'read_only' | 'destructive' | 'sensitive' | 'unknown'
+  destructive?: boolean
+  sensitive?: boolean
+  quick_once?: boolean
+  payment?: PaymentApprovalContext | null
   command?: string
   description?: string
   choices?: ApprovalChoice[]
@@ -5147,10 +5153,62 @@ export interface ApprovalRequestParams {
   gateway_session_id?: string | null
   [key: string]: unknown
 }
+export type ApprovalKind = 'terminal' | 'tool' | 'payment' | 'mcp_trust' | 'mcp_elicitation'
+/** Frozen Pay v1 metadata; page facts are not issuer or origin authority. */
+export interface PaymentApprovalContext {
+  v: 1
+  origin: string
+  origin_bound: boolean
+  merchant?: PaymentMerchant | null
+  total?: PaymentTotal | null
+  lines?: PaymentLine[]
+  lines_truncated?: boolean
+  adjustments?: PaymentAdjustment[]
+  card: PaymentCard
+  checks: PaymentChecks
+}
+export interface PaymentMerchant {
+  name: string
+  source: 'page'
+}
+export interface PaymentTotal {
+  amount_minor: number
+  currency?: string | null
+  display: string
+  source: 'page'
+  label: string
+}
+export interface PaymentLine {
+  name: string
+  qty: number
+  amount_minor: number
+}
+export interface PaymentAdjustment {
+  kind: 'discount' | 'tax' | 'shipping' | 'fee'
+  amount_minor: number
+}
+/** Presentation metadata only; never PAN, expiry or CVC. */
+export interface PaymentCard {
+  label: string
+  last4?: string | null
+  backend?: string | null
+  limit?: PaymentLimit | null
+}
+export interface PaymentLimit {
+  amount_minor: number
+  currency?: string | null
+  period: 'per_purchase' | 'monthly' | 'unknown'
+  source: 'config' | 'vault'
+}
+export interface PaymentChecks {
+  total_found: boolean
+  over_limit?: boolean | null
+}
 export interface ApprovalResult {
   choice: ApprovalChoice
   all?: boolean | null
   reason?: string | null
+  auth?: string | null
 }
 /** Original command, redacted server-side before any password-injection rewrite. */
 export interface SudoRequestParams {
@@ -6635,7 +6693,7 @@ export const RPC_METHODS = [
 
 // ── Server→client requests ──
 export interface ServerRequestMap {
-  /** A dangerous command awaits the user's decision. */
+  /** An action awaits the user's exact offered consent. */
   approval: { params: ApprovalRequestParams; result: ApprovalResult }
   /** The clarify tool: ask the user 1-5 questions. */
   clarify: { params: ClarifyRequestParams; result: ClarifyResult }

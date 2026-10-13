@@ -36,7 +36,7 @@ from tools.approval_floors import (
     _command_matches_permanent_allowlist, _hardline_block_result, _match_user_deny_rule, _sudo_stdin_block_result,
     _user_deny_block_result,
 )
-from tools.approval_gateway_wait import _await_gateway_decision
+from tools.approval_gateway_wait import _await_gateway_decision, _consent_kind
 from tools.approval_prompt import _present_with_selected_transport, _transport_choice, prompt_dangerous_approval
 from tools.approval_smart import _smart_verdict
 
@@ -137,16 +137,27 @@ def unregister_gateway_notify(session_key: str) -> None:
             entry.event.set()
 
 
+APPROVAL_AUTH_LABELS = frozenset({"face_id", "touch_id", "optic_id", "passcode"})
+
+
+def normalize_approval_auth(auth) -> Optional[str]:
+    """Normalize client-reported receipt metadata; this grants no authority."""
+    return auth if isinstance(auth, str) and auth in APPROVAL_AUTH_LABELS else None
+
+
 def resolve_gateway_approval(session_key: str, choice: str,
                              resolve_all: bool = False,
                              reason: Optional[str] = None,
-                             request_id: Optional[str] = None) -> int:
+                             request_id: Optional[str] = None,
+                             auth: Optional[str] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
-    *resolve_all* resolves every pending approval (``/approve all``); otherwise the oldest
+    *resolve_all* approves pending non-payments; bulk denial still includes payments.
+    Payments need individual consent. Otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
     relayed to the agent in the BLOCKED message. Returns the number resolved.
     """
+    auth = normalize_approval_auth(auth)
     with _lock:
         queue = _gateway_queues.get(session_key)
         if not queue:
@@ -156,13 +167,14 @@ def resolve_gateway_approval(session_key: str, choice: str,
             if not targets:
                 return 0
         elif resolve_all:
-            targets = list(queue)
+            targets = [entry for entry in queue if choice == "deny" or _consent_kind(entry.data) != "payment"]
         else:
             targets = [queue[0]]
         # Validate every surface before removing an entry or waking its callback.
         if (choice not in ("once", "session", "always", "deny")
                 or (reason is not None and (not isinstance(reason, str) or len(reason) > 2000 or choice != "deny"))
                 or any(choice not in entry.data.get("choices", [])
+                       or (choice in ("session", "always") and _consent_kind(entry.data) is not None)
                        or time.monotonic() >= entry.event.deadline_monotonic for entry in targets)):
             return 0
         queue[:] = [entry for entry in queue if entry not in targets]
@@ -175,6 +187,7 @@ def resolve_gateway_approval(session_key: str, choice: str,
             entry.result = choice
             if reason:
                 entry.reason = reason
+            entry.auth = auth
             entry.event.set()
     return len(targets)
 

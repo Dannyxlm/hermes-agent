@@ -22,6 +22,18 @@ from tools.approval_human_wait import activity_heartbeat, human_wait_window
 logger = logging.getLogger("tools.approval")
 
 
+def _consent_kind(data: dict) -> str | None:
+    """Derive per-call constraints independently of producer-supplied offers."""
+    surface = data.get("surface") or ""
+    kind = data.get("kind")
+    if surface == "vault-payment" or kind == "payment" or data.get("payment") is not None:
+        return "payment"
+    family = surface.split("/", 1)[0]
+    if family in ("mcp-trust", "mcp-elicitation"):
+        return family.replace("-", "_")
+    return kind if kind in ("mcp_trust", "mcp_elicitation") else None
+
+
 class _ApprovalEvent(threading.Event):
     """Wake signal carrying the queue owner's immutable monotonic deadline."""
 
@@ -40,12 +52,14 @@ class _ApprovalNotice(dict):
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("acknowledged", "cancelled", "data", "event", "reason", "result", "settle")
+    __slots__ = ("acknowledged", "auth", "cancelled", "data", "event", "reason", "result", "settle")
 
     def __init__(self, data: dict, *, timeout_seconds: float | None = None):
         from agent.deadline import clamp_timeout
         self.data = dict(data)
         self.data.setdefault("request_id", uuid.uuid4().hex)
+        if _consent_kind(self.data) is not None:
+            self.data.update(allow_session=False, allow_permanent=False)
         timeout = clamp_timeout(_ctx._get_approval_timeout() if timeout_seconds is None else timeout_seconds) or 0.0
         self.data.update(created_at=time.time(), timeout_seconds=timeout)
         self.data["expires_at"] = self.data["created_at"] + timeout
@@ -53,9 +67,9 @@ class _ApprovalEntry:
         # and observer latency must not restart the queue's clock after sending.
         self.event = _ApprovalEvent(time.monotonic() + timeout)
         choices = ["once"]
-        if not data.get("smart_denied") and data.get("allow_session") is not False:
+        if not self.data.get("smart_denied") and self.data.get("allow_session") is not False:
             choices.append("session")
-            if data.get("allow_permanent") is not False:
+            if self.data.get("allow_permanent") is not False:
                 choices.append("always")
         offered = data.get("choices", choices + ["deny"])
         self.data["choices"] = [choice for choice in choices + ["deny"] if choice in offered]
@@ -66,6 +80,8 @@ class _ApprovalEntry:
         self.result: str | None = None  # "once"|"session"|"always"|"deny"
         # Free-text reason from ``/deny <reason>`` so the agent can adapt, not just hear "denied".
         self.reason: str | None = None
+        # Client-reported receipt metadata, never authentication proof.
+        self.auth: str | None = None
         # Why the prompt was withdrawn with nobody answering (interrupt cause, session teardown);
         # followers and teardown read it so a withdrawn prompt never renders as a user deny.
         self.cancelled: str | None = None
@@ -185,10 +201,11 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         "session_key": session_key, "surface": surface,
     }
     keys = list(approval_data.get("pattern_keys") or [])
-    can_coalesce = approval_data.get("allow_session") is not False and not approval_data.get("smart_denied")
+    can_coalesce = (_consent_kind({**approval_data, "surface": surface}) is None
+                    and approval_data.get("allow_session") is not False and not approval_data.get("smart_denied"))
     with _approval._lock:
         leader = next((e for e in _approval._gateway_queues.get(session_key, [])
-                       if can_coalesce and e.data.get("allow_session") is not False
+                       if can_coalesce and _consent_kind(e.data) is None and e.data.get("allow_session") is not False
                        and not e.data.get("smart_denied")
                        and (e.data.get("allow_permanent") is not False) == (approval_data.get("allow_permanent") is not False)
                        and e.data.get("surface", "gateway") == surface
@@ -268,4 +285,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         resolved = state != "timeout" or choice is not None
         extra = {"cancelled": cancelled} if cancelled else {}
         human.outcome = _hook_choice(resolved, choice, extra)
-        return _finish(payload, resolved, choice, entry.reason, **extra)
+        decision = _finish(payload, resolved, choice, entry.reason, **extra)
+        if entry.auth and choice is not None and not cancelled:
+            decision["auth"] = entry.auth
+        return decision

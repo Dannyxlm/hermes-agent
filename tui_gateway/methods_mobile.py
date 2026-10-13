@@ -269,6 +269,19 @@ def _mobile_approvals(session, requests=()):
     return out
 
 
+def _mobile_open_requests(sid):
+    """Bot replay offers only Bot authority; never mutate the canonical Desktop request."""
+    out = []
+    for request in _open_requests(sid):
+        if request["method"] == "approval":
+            params = _approval_request_payload(request["params"])
+            params.update(allow_session=False, allow_permanent=False)
+            params["choices"] = [choice for choice in params["choices"] if choice in ("once", "deny")]
+            request = {**request, "params": params}
+        out.append(request)
+    return out
+
+
 def _mobile_snapshot(params):
     profile, home, sid, session, root, tip, chain = _mobile_scope(params)
     with _mobile_read_db(home) as db:
@@ -276,7 +289,7 @@ def _mobile_snapshot(params):
     with session["history_lock"]:
         inflight, queued = _inflight_snapshot(session), _queued_prompt_snapshot(session)
         running = bool(session.get("running"))
-    requests = _open_requests(sid)
+    requests = _mobile_open_requests(sid)
     pending_clarify = next(({**request["params"], "request_id": request["id"]}
                             for request in requests if request["method"] == "clarify"), None)
     if pending_clarify is not None and session.get("_compute_host_open_request", {}).get("id") == pending_clarify["request_id"]:

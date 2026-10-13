@@ -99,8 +99,10 @@ class ServerRequest:
                 "params": self.wire_params()}
 
     def wire_params(self) -> dict:
-        from .human_input import SECURE_METHODS, safe_params
+        from .human_input import SECURE_METHODS, approval_quick_once, safe_params
         params = safe_params(self.method, self.params) if self.method in SECURE_METHODS else self.params
+        if self.method == "approval":
+            params = {**params, "quick_once": approval_quick_once(params), "risk": params.get("risk", "unknown")}
         return {**params, "session_id": self.sid, "created_at": self.created_at,
                 "expires_at": self.expires_at, "timeout_seconds": self.timeout_seconds,
                 "server_time": time.time(), "request_epoch": inbox_epoch(), "request_revision": self.revision}
@@ -214,9 +216,13 @@ def _register(req: ServerRequest) -> None:
     contract = contracts.SERVER_REQUESTS.get(req.method)
     if contract is None:
         raise RuntimeError(f"server request {req.method!r} has no contract in tui_gateway/contracts")
-    _, problem = contracts.validate_params(contract, {"session_id": req.sid, **req.params})
-    if problem is not None:
-        raise ValueError(problem)  # a key the renderer's typed handler would never read: our bug
+    from pydantic import ValidationError
+
+    try:
+        contract.params.model_validate({"session_id": req.sid, **req.params})
+    except ValidationError:
+        # Producer input can contain secure values: never echo validation details.
+        raise ValueError("Invalid server request params") from None
     with _lock:
         _open[req.id] = req
     _attention_changed(req)
