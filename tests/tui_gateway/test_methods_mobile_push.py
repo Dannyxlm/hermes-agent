@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, open_bot, rpc, scope
+from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, open_bot, rpc, scope  # noqa: PLC0414 - imported pytest fixtures
 from tests.tui_gateway.test_mobile_push import Sender
 from tui_gateway import server
 from tui_gateway.mobile_push import PushService
@@ -150,5 +150,38 @@ def test_server_requests_project_attention_and_cancel_from_canonical_registry(pu
         assert server_requests.cancel(sid, "timeout") == 1
         assert push_service.current_run(push_scope)["status"] == "thinking"
         assert server_requests.open_requests(sid) == []
+    finally:
+        server_requests.cancel(sid)
+
+
+def test_phone_continuation_start_uses_latest_pending_descriptor(push_service, mobile_home, peer):
+    """A queued push-to-start may wait behind APNs backoff while the agent asks a question."""
+    from tests.tui_gateway.test_mobile_push_start import phone_submit, register_start_token
+    from tests.tui_gateway.test_mobile_session_parity import live
+    from tui_gateway import server_requests
+    from hermes_state import SessionDB
+    with SessionDB(db_path=mobile_home / "profiles" / "ops" / "state.db") as db:
+        db.create_session("ordinary-tip", "desktop")
+    ordinary = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
+    register_start_token(ordinary)
+    sid = live(mobile_home, peer)
+    phone_submit(sid, ordinary)
+    server._emit("message.start", sid)
+    server._emit("message.complete", sid, {"status": "complete", "text": "done"})
+    push_service.drain_once()
+    server._emit("message.start", sid)
+    try:
+        server_requests.send_async("vault.code", sid, {"hint": "SECRET_HINT_SENTINEL"}, lambda result: None, timeout=300)
+        frame = server_requests.open_requests(sid)[0]
+        push_service.drain_once()
+        jobs = [job for job in push_service.sender.jobs if job["kind"] == "activity_start"]
+        assert len(jobs) == 1
+        job = jobs[0]
+        content = job["payload"]["aps"]["content-state"]
+        assert content["pendingInput"]["request_id"] == frame["id"]
+        assert content["pendingCount"] == 1 and content["status"] == "waitingForClarification"
+        assert job["expires_at"] <= frame["params"]["expires_at"]
+        assert "SECRET_HINT_SENTINEL" not in json.dumps(job["payload"])
     finally:
         server_requests.cancel(sid)

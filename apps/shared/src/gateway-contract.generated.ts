@@ -3239,6 +3239,24 @@ export interface MobileNotificationRun {
   status: string
   started_at: number
   updated_at: number
+  pending_count?: number | null
+  pending_input?: MobilePendingInput | null
+  nearest_expires_at?: number | null
+}
+/** APNs/ActivityKit selector only; requires fresh authenticated request admission. */
+export interface MobilePendingInput {
+  version?: number
+  method: string
+  session_id: string
+  request_id?: string | null
+  operation_id?: string | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  question_id?: string | null
+  created_at?: number | null
+  expires_at?: number | null
+  category: 'HERMEX_APPROVAL_V1' | 'HERMEX_QUESTION_V1' | 'HERMEX_SECURE_INPUT_V1' | 'HERMEX_SETUP_V1'
+  allowed_actions: ('open' | 'open_securely' | 'once' | 'deny' | 'suggest' | 'reply' | 'skip')[]
 }
 export interface MobilePushRefreshParams {
   installation_id: string
@@ -5842,6 +5860,13 @@ export interface SessionsChangedPayload {
   truncated?: boolean | null
   [key: string]: unknown
 }
+export interface HumanInputUpdatedPayload {
+  id: string
+  method: string
+  request_epoch: string
+  request_revision: number
+  remaining_question_ids: string[]
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY'
 
 // ── Client→server methods ──
@@ -6865,6 +6890,8 @@ export interface BackendGatewayEventMap {
   'reasoning.delta': StreamDeltaPayload
   /** The backend withdrew an open server→client request; clear the matching card only. */
   'request.cancel': RequestCancelPayload
+  /** Metadata-only partial human-input progress; not a new request or an answer authority. */
+  'request.updated': HumanInputUpdatedPayload
   /** Background review of the last turn finished. */
   'review.summary': ReviewSummaryPayload
   /** Persisted goal / loop / heartbeat state changed. */
@@ -6975,6 +7002,7 @@ export const GATEWAY_EVENT_TYPES = [
   'reasoning.available',
   'reasoning.delta',
   'request.cancel',
+  'request.updated',
   'review.summary',
   'session.control.update',
   'session.info',
