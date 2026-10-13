@@ -8,6 +8,49 @@ HUMAN_METHODS = frozenset({'approval', 'clarify', 'setup_choose', 'sudo', 'secre
     'vault.unlock_prompt', 'vault.save_login', 'vault.code', 'display.install.sudo'})
 SECURE_METHODS = HUMAN_METHODS - {'approval', 'clarify', 'setup_choose'}
 MAX_ANSWER_BYTES = 65536
+APPROVAL_RESPONSE_FIELDS = ('scoped_approval_response', 'request_epoch', 'request_revision', 'reason', 'auth')
+
+
+def approval_response_metadata(params: dict, choice: str) -> tuple[bool, dict]:
+    """Enhanced selectors are all-or-nothing; authentication is receipt metadata only."""
+    from tools.approval import normalize_approval_auth
+    enhanced = any(params.get(key) is not None for key in APPROVAL_RESPONSE_FIELDS)
+    if not enhanced:
+        return False, {}
+    if (type(params.get('scoped_approval_response')) is not int or params['scoped_approval_response'] != 1
+            or not isinstance(params.get('request_epoch'), str) or not params['request_epoch']
+            or type(params.get('request_revision')) is not int or params['request_revision'] < 1):
+        raise ValueError('Scoped approval envelope required')
+    reason = params.get('reason')
+    if reason is not None and (choice != 'deny' or not isinstance(reason, str) or len(reason) > 2000):
+        raise ValueError('A bounded suggestion must deny the original action')
+    result = {'reason': reason} if reason is not None else {}
+    if (auth := normalize_approval_auth(params.get('auth'))) is not None:
+        result['auth'] = auth
+    return True, result
+
+
+def approval_response_settled(result: dict) -> bool:
+    return (type(result.get('resolved')) is int and result['resolved'] == 1
+            and result.get('status') in {None, 'accepted', 'already_resolved'})
+
+
+def approval_envelope_supported(params: dict) -> bool:
+    expiry = params.get('expires_at')
+    return (type(params.get('scoped_approval_response')) is int and params['scoped_approval_response'] == 1
+            and isinstance(params.get('request_epoch'), str) and bool(params['request_epoch'])
+            and type(params.get('request_revision')) is int and params['request_revision'] >= 1
+            and type(expiry) in (int, float) and math.isfinite(expiry))
+
+
+def validate_team_approval(pending: dict, choice: str, *, enhanced: bool, metadata: dict) -> None:
+    from tools.approval_gateway_wait import _consent_kind
+    if choice not in ('once', 'deny') or choice not in (pending.get('choices') or []):
+        raise PermissionError('Approval choice is not offered to Team')
+    if enhanced and not approval_envelope_supported(pending):
+        raise PermissionError('Scoped approval response is unsupported for this request')
+    if _consent_kind(pending) == 'payment' and choice == 'once' and (not enhanced or not metadata.get('auth')):
+        raise PermissionError('Payment requires scoped review and recognized authentication metadata')
 
 
 def human_timeout() -> float:

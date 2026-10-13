@@ -161,10 +161,8 @@ def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     }
     second = {"command": "rm -rf /tmp/later", "description": "later"}
     saved_queue = approval._gateway_queues.pop("stored-session", None)
-    approval._gateway_queues["stored-session"] = [
-        approval_gateway_wait._ApprovalEntry(first),
-        approval_gateway_wait._ApprovalEntry(second),
-    ]
+    first_entry = approval_gateway_wait._ApprovalEntry(first)
+    approval._gateway_queues["stored-session"] = [first_entry, approval_gateway_wait._ApprovalEntry(second)]
     monkeypatch.setattr(server, "_approval_request_payload", lambda data: dict(data or {}))
 
     try:
@@ -180,6 +178,8 @@ def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     # correlate their approval.respond with the exact queued request.
     assert replayed.pop("request_id")
     assert replayed.pop("expires_at") == replayed.pop("created_at") + replayed.pop("timeout_seconds")
+    for key in ("scoped_approval_response", "request_epoch", "request_revision"):
+        assert replayed.pop(key) == first_entry.data[key]
     assert replayed == first
 
 

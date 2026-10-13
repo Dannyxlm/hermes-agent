@@ -187,6 +187,11 @@ def test_local_approval_snapshot_and_response_use_exact_request():
         "session_key": "stored-session",
         "_hosted_room_task": {"task_id": "task-a"},
     }
+    server._session_resume_lock = threading.Lock()
+    def exact_responder(rid, record, request_id, choice, **kwargs):
+        calls.append(("exact.approval", {"record": record, "request_id": request_id, "choice": choice, **kwargs}))
+        return {"result": {"resolved": 1}}
+    server._mobile_approval_respond = exact_responder
     rpc = HostedRoomServerRPC(server)
 
     info = rpc.info(profile="ops", session_id="runtime", source="bot_room")
@@ -197,13 +202,12 @@ def test_local_approval_snapshot_and_response_use_exact_request():
         request_id="approval-1",
         choice="once",
     ) == {"resolved": 1}
-    params = next(params for method, params in calls if method == "approval.respond")
+    params = next(params for method, params in calls if method == "exact.approval")
     assert params == {
-        "session_id": "runtime",
-        "request_id": "approval-1",
-        "choice": "once",
-        "all": False,
+        "record": server._sessions["runtime"], "expected_sid": "runtime",
+        "request_id": "approval-1", "choice": "once", "params": {},
     }
+    assert not any(method == "approval.respond" for method, _ in calls)
 
 
 def test_rpc_errors_are_typed():

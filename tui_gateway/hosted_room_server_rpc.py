@@ -4,6 +4,7 @@ task proof as an in-process-only Python object that JSON clients cannot forge.""
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import threading
 from collections.abc import Mapping, Sequence
@@ -161,13 +162,53 @@ class HostedRoomServerRPC:
             pending_reader = getattr(self.server, "_pending_approval_request_payload", None)
             if callable(pending_reader) and (pending := pending_reader(str(record.get("session_key") or ""))):
                 result["status"] = "waiting_for_approval"
+                from tui_gateway import server_requests
+                projector = getattr(self.server, "_mobile_approvals", None)
+                if callable(projector):
+                    rows = projector(record, server_requests.open_requests(session_id))
+                    pending = next((row for row in rows if row.get("request_id") == pending.get("request_id")), pending)
                 result["pending_approval"] = pending
             return result
 
-    def approve(self, *, session_id: str, request_id: str, choice: str) -> Mapping[str, Any]:
-        """Resolve one exact local room approval without broad policy changes."""
-        return self._call("approval.respond", {
-            "session_id": session_id, "request_id": request_id, "choice": choice, "all": False})
+    def approve(self, *, session_id: str, request_id: str, choice: str,
+                task_id: str | None = None, execution_generation: int | None = None,
+                room_id: str | None = None, member_id: str | None = None, room_db_path=None,
+                scoped_approval_response: int | None = None, request_epoch: str | None = None,
+                request_revision: int | None = None, reason: str | None = None, auth: str | None = None,
+                expected_authority_gateway_id: str | None = None,
+                expected_authority_epoch: int | None = None) -> Mapping[str, Any]:
+        """Never route room answers through approval.respond's stale-runtime fallback."""
+        from tui_gateway.human_input import approval_response_metadata
+        params = {key: value for key, value in {
+            "scoped_approval_response": scoped_approval_response, "request_epoch": request_epoch,
+            "request_revision": request_revision, "reason": reason, "auth": auth}.items() if value is not None}
+        enhanced, _ = approval_response_metadata(params, choice)
+        with self.server._session_resume_lock:
+            record = self.server._sessions.get(session_id)
+            if record is None:
+                raise RuntimeError("local room approval runtime is unavailable")
+            with record["history_lock"]:
+                if self.server._sessions.get(session_id) is not record:
+                    raise RuntimeError("local room approval runtime changed")
+                with contextlib.ExitStack() as fence:
+                    if enhanced:
+                        task = record.get("_hosted_room_task") or {}
+                        if (not room_db_path or not room_id or not member_id
+                                or (task.get("room_id"), task.get("member_id"), task.get("task_id"), task.get("execution_generation"))
+                                != (room_id, member_id, task_id, execution_generation)):
+                            raise RuntimeError("local room approval task changed")
+                        # Serialize authority/task mutations through the canonical room transaction
+                        # until the exact approval commits. Cached matching alone cannot fence takeover.
+                        fence.enter_context(state._transaction(room_db_path))
+                        from tui_gateway.hosted_room_service import require_current_approval_authority
+                        require_current_approval_authority(room_db_path, room_id, member_id, task_id,
+                            execution_generation, expected_authority_gateway_id, expected_authority_epoch)
+                    envelope = self.server._mobile_approval_respond(
+                        f"hosted-room-{next(self._ids)}", record, request_id, choice,
+                        params=params, expected_sid=session_id)
+                    if "error" in envelope:
+                        raise HostedRoomSessionError("room.approval", envelope["error"]["code"], envelope["error"]["message"])
+                    return envelope["result"]
 
     def interrupt(
         self, *, profile: str, session_id: str, source: str, expected_task_id: str

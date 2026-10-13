@@ -17,6 +17,7 @@ import importlib
 import logging
 import os
 import threading
+import uuid
 import time
 from typing import Optional
 
@@ -50,6 +51,8 @@ _YOLO_MODE_FROZEN: bool = is_truthy_value(os.getenv("HERMES_YOLO_MODE", ""))
 # --- Per-session approval state (thread-safe) -----------------------------------------------------------------------
 
 _lock = threading.Lock()
+# Queue-only surfaces use the same envelope from creation through exact settlement.
+_gateway_approval_epoch = uuid.uuid4().hex
 _pending: dict[str, dict] = {}
 _session_approved: dict[str, set] = {}
 _session_yolo: set[str] = set()
@@ -149,7 +152,9 @@ def resolve_gateway_approval(session_key: str, choice: str,
                              resolve_all: bool = False,
                              reason: Optional[str] = None,
                              request_id: Optional[str] = None,
-                             auth: Optional[str] = None) -> int:
+                             auth: Optional[str] = None, *,
+                             expected_epoch: Optional[str] = None,
+                             expected_revision: Optional[int] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
     *resolve_all* approves pending non-payments; bulk denial still includes payments.
@@ -170,6 +175,13 @@ def resolve_gateway_approval(session_key: str, choice: str,
             targets = [entry for entry in queue if choice == "deny" or _consent_kind(entry.data) != "payment"]
         else:
             targets = [queue[0]]
+        if expected_epoch is not None or expected_revision is not None:
+            if (not request_id or resolve_all or len(targets) != 1 or type(expected_revision) is not int
+                    or expected_revision < 1 or not isinstance(expected_epoch, str)
+                    or any(entry.data.get("request_epoch") != expected_epoch
+                           or entry.data.get("request_revision") != expected_revision
+                           or entry.data.get("scoped_approval_response") != 1 for entry in targets)):
+                return 0
         # Validate every surface before removing an entry or waking its callback.
         if (choice not in ("once", "session", "always", "deny")
                 or (reason is not None and (not isinstance(reason, str) or len(reason) > 2000 or choice != "deny"))

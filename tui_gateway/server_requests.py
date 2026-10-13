@@ -103,6 +103,9 @@ class ServerRequest:
         params = safe_params(self.method, self.params) if self.method in SECURE_METHODS else self.params
         if self.method == "approval":
             params = {**params, "quick_once": approval_quick_once(params), "risk": params.get("risk", "unknown")}
+            params.pop("scoped_approval_response", None)
+            if self.expires_at is not None:
+                params["scoped_approval_response"] = 1
         return {**params, "session_id": self.sid, "created_at": self.created_at,
                 "expires_at": self.expires_at, "timeout_seconds": self.timeout_seconds,
                 "server_time": time.time(), "request_epoch": inbox_epoch(), "request_revision": self.revision}

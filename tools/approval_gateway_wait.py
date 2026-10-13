@@ -61,6 +61,8 @@ class _ApprovalEntry:
         if _consent_kind(self.data) is not None:
             self.data.update(allow_session=False, allow_permanent=False)
         timeout = clamp_timeout(_ctx._get_approval_timeout() if timeout_seconds is None else timeout_seconds) or 0.0
+        from tools.approval import _gateway_approval_epoch
+        self.data.update(scoped_approval_response=1, request_epoch=_gateway_approval_epoch, request_revision=1)
         self.data.update(created_at=time.time(), timeout_seconds=timeout)
         self.data["expires_at"] = self.data["created_at"] + timeout
         # Carry the producer's frozen budget with the wake signal. Publication
