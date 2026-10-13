@@ -69,7 +69,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
     if (marker := read_turn_marker(home, session_key)) is None:
         return None
     if not marker.get("auto_continue", True):
-        return None  # The mailbox owns recovery and receipt identity for imported turns.
+        return None  # Mailbox/attachment receipts own recovery for these turns.
     from agent.initiate_setup_prompt import intro_resends
     if intro_resends(marker["prompt"], _session_source(session)):
         clear_turn_marker(home, session_key)  # the desktop intro sends /initiate-setup again itself
@@ -176,12 +176,13 @@ def _ac_inflight_original(session: dict) -> str:
 
 
 def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[str] | None = None,
-                    turn_author: dict | None = None) -> dict | None:
+                    turn_author: dict | None = None, auto_continue: bool = True) -> dict | None:
     """Queue a message for the next turn. Text-only arrivals share a slot and merge losslessly (like the
     consecutive-user merge in ``repair_message_sequence``); image-bearing and authored ones stay separate
     envelopes so attachment chronology and the sender survive. ``transport`` is pinned so the drained turn
     streams to its sender. Returns the envelope dict the text landed in (the merged head on a merge)
     so the caller can attach durable state to it; None when the text was dropped as a duplicate."""
+    explicit_images = image_paths is not None
     image_paths = list(image_paths or [])
     # Scrub live-turn self-duplicates first so the text merge below can't glue "{original}\n\n{later}" and re-fire the
     # original after a correction settles.
@@ -191,11 +192,14 @@ def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[
     # A text-only self-copy of the live prompt would restart it on drain; an authored copy is another sender's message.
     if text_only and not turn_author and text.strip() == _ac_inflight_original(session) != "":
         return None
-    queued = {"text": text, "transport": transport, **({"image_paths": image_paths} if image_paths else {}),
+    queued = {"text": text, "transport": transport, **({"image_paths": image_paths} if explicit_images else {}),
+              **({"_auto_continue": False} if not auto_continue else {}),
               **({"turn_author": turn_author} if turn_author else {})}
     existing = session.get("queued_prompt")
     if (existing and text_only and not turn_author and isinstance(existing.get("text"), str)
             and not existing.get("image_paths") and not existing.get("turn_author")
+            and ("image_paths" in existing) == explicit_images
+            and existing.get("_auto_continue", True) == auto_continue
             and not session.get("queued_prompts")):
         prev = existing["text"]
         existing["text"] = f"{prev}\n\n{text}" if prev and text else (prev or text)
@@ -429,12 +433,15 @@ def _replace_queued_user_row_for_turn(session: dict, queued: dict, is_dispatchin
 
 
 def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any, queued: bool = False,
-                        turn_author: dict | None = None, display_kind: str | None = None) -> dict | None:
+                        turn_author: dict | None = None, display_kind: str | None = None,
+                        image_paths: list[str] | None = None, auto_continue: bool = True,
+                        attachment_queue: dict | None = None) -> dict | None:
     """Apply ``display.busy_input_mode`` to a mid-turn prompt instead of rejecting it (rejection made clients busy-retry
     and drop sends): ``interrupt`` (default) → redirect, falling back to hard interrupt + queue; ``queue`` → queue only;
     ``steer`` → inject after the current atomic action. ``queued=True`` (client queue drain) forces queue mode: a "run
     after" message must NEVER become a live correction."""
     mode = "queue" if queued else _load_busy_input_mode()
+    explicit_images = image_paths is not None
     agent = session.get("agent")
     # Compression in flight demotes steer/interrupt to queue: a correction delivered
     # mid-compression aborts the compression instead of waiting for it (#61042). The
@@ -446,9 +453,10 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
             return None  # turn ended since prompt.submit's busy check; caller retries on the idle session
         # Typed while the turn ran, in any busy mode: the running turn no longer counts as unattended.
         session["_turn_user_input"] = True
-        image_paths = list(session.get("attached_images", []))
-        if image_paths:
-            session["attached_images"] = []  # claim now so a later paste isn't consumed when the turn yields
+        image_paths = list(session.get("attached_images", []) if image_paths is None else image_paths)
+        claimed = [] if explicit_images else list(session.get("attached_images", []))
+        if not explicit_images:
+            session["attached_images"] = []
     plain_text = _coerce_message_text(text).strip() if not image_paths and _is_text_only_busy_payload(text) else ""
     # Text-only corrections steer/redirect in place when supported; media payloads and older agents fall through to
     # the proven interrupt + queue path.
@@ -464,13 +472,18 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
     # interrupt can wait behind the op it cancels.
     with session["history_lock"]:
         if not session.get("running"):
-            if image_paths:
-                session["attached_images"] = image_paths + list(session.get("attached_images", []))
+            if claimed:
+                session["attached_images"] = claimed + list(session.get("attached_images", []))
             return None
-        envelope = _enqueue_prompt(session, text, transport, image_paths=image_paths, turn_author=turn_author)
+        envelope = _enqueue_prompt(session, text, transport,
+            image_paths=image_paths if explicit_images or image_paths else None, turn_author=turn_author,
+            auto_continue=auto_continue)
         # Durable AT ACCEPT (not when the turn runs): a cold resume sees the queued message and a
         # backend restart cannot lose it. Lives on the envelope, never the shared session slot.
         if envelope is not None:
+            if attachment_queue is not None:
+                attachment_queue["store"].queued(attachment_queue["ids"], attachment_queue["id"], sid)
+                envelope["_attachment_queue"] = attachment_queue
             _persist_queued_user_row(session, envelope, display_kind)
         session["last_active"] = time.time()
     # Attachments need their own model invocation: queue without cancelling so the user gets both results in order.
@@ -492,6 +505,14 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
             return False
         queue_generation = int(session.get("_queued_prompt_generation", 0))
+        if selection := queued.get("_attachment_queue"):
+            if selection.get("accepting"):
+                return False  # The submit wrapper still owns its receipt locks.
+            try:
+                selection["store"].begin_queued_dispatch(selection["ids"], selection["id"])
+            except (ValueError, OSError) as exc:
+                _emit("error", sid, {"message": str(exc)})
+                return False
         _ac_set_queue(session, session.get("queued_prompts") or [])
         session["running"] = True
         queued_transport = queued.get("transport")
@@ -507,13 +528,20 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             # Generation bump cancelled the claim (Stop, compress re-anchor, …): don't dispatch, but restore the
             # envelope (claimed head first, then whatever advanced into the slot) so a legitimate follow-up isn't dropped.
             # See #84417.
-            advanced = session.get("queued_prompt")
-            _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
+            if session.get("_turn_cancel_requested"):
+                _restore_refused_queued_attachments(queued, sid)
+            else:
+                if selection := queued.get("_attachment_queue"):
+                    selection["store"].queued(selection["ids"], selection["id"], sid)
+                advanced = session.get("queued_prompt")
+                _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
             session["running"] = False
             return True
     kwargs: dict = {"queued_prompt_generation": queue_generation}
-    if queued.get("image_paths"):
+    if "image_paths" in queued:
         kwargs["image_paths"] = queued["image_paths"]
+    if not queued.get("_auto_continue", True):
+        kwargs["auto_continue"] = False
     # Re-place the accept-time rows (if any) at the transcript END before the turn's rows follow
     # them, and slot the dispatching envelope's fresh row for adoption. EVERY queued envelope is
     # re-placed in acceptance order: a later-accepted prompt's row must never sit behind while an
@@ -537,8 +565,14 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     dispatch_failed = False
     try:
         if not use_compute_host:
-            _run_prompt_submit(rid, sid, session, queued["text"], **kwargs, **author_kwargs)
-        elif (resp := _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs)).get("error"):
+            if _run_prompt_submit(rid, sid, session, queued["text"], **kwargs, **author_kwargs) is False:
+                _restore_refused_queued_attachments(queued, sid)
+        elif (resp := _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs,
+                **({"queued_prompt": queued} if queued.get("_attachment_queue") else {}))).get("error"):
+            if resp["error"].get("data", {}).get("delivery_uncertain"):
+                _emit("error", sid, {"message": str(resp["error"].get("message") or "queued dispatch uncertain")})
+                return True
+            _restore_refused_queued_attachments(queued, sid)
             with session["history_lock"]:
                 session["running"] = False
                 _clear_inflight_turn(session)
@@ -554,6 +588,12 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         if drain_next:
             _drain_queued_prompt(rid, sid, session)
     return True
+
+
+def _restore_refused_queued_attachments(queued: dict, sid: str) -> None:
+    if selection := queued.get("_attachment_queue"):
+        for operation_id in selection["ids"]:
+            selection["store"].reconcile_queue(operation_id, set(), sid, refused_id=selection["id"])
 
 
 def _inflight_snapshot(session: dict) -> dict | None:

@@ -36,6 +36,7 @@ MUTATOR_ROUTE_TABLE: dict[str, str] = {
 _REGISTRY_NAME = "dashboard-compute-host.json"
 _RESPAWN_WINDOW_SECS = 300.0
 _SHUTDOWN_TIMEOUT_SECS = 10.0
+_UNCERTAIN_SEND_SETTLE_SECS = 30.0
 # Late control-ack handlers: a compress that outlives its RPC waiter can run for the full
 # compression ceiling plus a stall-fallback retry, so keep registrations past that — bounded.
 # See #97948.
@@ -45,6 +46,10 @@ _LATE_CONTROL_MAX = 64
 _CONTROL_REPLY_TYPES = frozenset({
     "control.ack", "control.error", "respond.ack", "respond.error", "interrupt.ack",
     "reload_mcp.ack", "shutdown.ack"})
+
+
+class TurnDispatchRefused(RuntimeError):
+    """No turn bytes reached the child; the caller may release its admission claim."""
 
 
 def append_log_record(path: str | Path, record: str) -> None:
@@ -233,7 +238,10 @@ class HostSupervisor:
         return outcome
 
     def submit_turn(self, frame: dict[str, Any], *, on_complete: Callable[[dict], None] | None = None) -> str:
-        self.start()
+        try:
+            self.start()
+        except Exception as exc:
+            raise TurnDispatchRefused(str(exc)) from exc
         request_id = str(frame.get("request_id") or uuid.uuid4().hex)
         sid = str(frame.get("sid") or "")
         payload = {**frame, "type": "turn.start", "request_id": request_id}
@@ -241,14 +249,37 @@ class HostSupervisor:
             self._pending_turns[request_id] = (sid, on_complete)
         try:
             self._send_frame(payload)
-        except Exception as exc:
+        except TurnDispatchRefused:
             with self._lock:
                 self._pending_turns.pop(request_id, None)
-            if on_complete is not None:
-                on_complete({"type": "turn.error", "sid": sid, "request_id": request_id,
-                             "reason": "send_failed", "message": str(exc)})
+            raise
+        except Exception:
+            # A failed write/flush may have delivered the complete frame. Keep the
+            # settlement callback and settle only on a correlated end or confirmed death.
+            timer = threading.Timer(_UNCERTAIN_SEND_SETTLE_SECS, self.reconcile_turn, args=(request_id,))
+            timer.daemon = True
+            timer.start()
             raise
         return request_id
+
+    def reconcile_turn(self, request_id: str) -> bool:
+        """Bound an ambiguous send by stopping its host; never infer death from a timeout."""
+        with self._lock:
+            if request_id not in self._pending_turns:
+                return True
+            proc = self._proc
+        if proc is not None:
+            self._terminate_process(proc)
+            if proc.poll() is None:
+                return False
+        with self._lock:
+            if request_id not in self._pending_turns:
+                return True
+            if self._proc is not proc:
+                return False
+            self._proc = None
+            self._fail_pending_turns(reason="crash", message="compute host stopped after uncertain dispatch")
+        return True
 
     def interrupt(self, sid: str, *, request_id: str | None = None) -> None:
         self.start()
@@ -380,11 +411,15 @@ class HostSupervisor:
             logger.debug("failed to remove compute host registry", exc_info=True)
 
     def _send_frame(self, frame: dict[str, Any]) -> None:
+        try:
+            encoded = json.dumps(frame, separators=(",", ":"), ensure_ascii=False) + "\n"
+        except (TypeError, ValueError) as exc:
+            raise TurnDispatchRefused(str(exc)) from exc
         with self._lock:
             proc = self._proc
             if proc is None or proc.poll() is not None or proc.stdin is None:
-                raise RuntimeError("compute host is not running")
-            proc.stdin.write(json.dumps(frame, separators=(",", ":"), ensure_ascii=False) + "\n")
+                raise TurnDispatchRefused("compute host is not running")
+            proc.stdin.write(encoded)
             proc.stdin.flush()
 
     def _drain_stdout(self, proc: subprocess.Popen[str]) -> None:

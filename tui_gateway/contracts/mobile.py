@@ -133,6 +133,8 @@ class MobileSnapshotResult(Result):
 class MobileSubmitParams(MobileScopeParams):
     text: str
     origin: PromptOrigin | None = None
+    image_paths: list[str] | None = None
+    attachment_operation_ids: list[str] | None = None
 
 
 class MobileSubmitResult(PromptSubmitResult):

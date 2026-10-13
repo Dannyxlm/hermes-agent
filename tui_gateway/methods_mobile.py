@@ -116,12 +116,12 @@ def _(rid, params):
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
                      "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery",
                      "video_upload", "session_change_cursor", "inbox_silent_push", "push_alert_policy",
-                     "push_to_start", "activity_content_v2", "prompt_origin"],
+                     "push_to_start", "activity_content_v2", "prompt_origin", "attachment_operations"],
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
                              "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
                              "session_change_cursor": 1, "inbox_silent_push": 1,
                              "activity_content": 2, "push_alert_policy": 1, "push_to_start": 1,
-                             "artifact_versions": 1},
+                             "artifact_versions": 1, "attachment_operations": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 
@@ -326,6 +326,8 @@ def _(rid, params):
     _profile, _home, sid, session, *_rest = _mobile_scope(params)
     response = _methods["prompt.submit"](rid, {"session_id": sid, "text": text, "queued": True,
         "_mobile_expected_record": session, "_mobile_scope_params": params,
+        **({key: params[key] for key in ("image_paths", "attachment_operation_ids")
+            if params.get(key) is not None}),
         **({"origin": params["origin"]} if params.get("origin") is not None else {})})
     if "result" in response:
         response["result"]["accepted"] = response["result"].get("status") in ("streaming", "queued")

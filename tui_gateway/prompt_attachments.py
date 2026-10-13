@@ -134,6 +134,43 @@ def _session_images_dir(session: dict) -> Path:
     return _session_home_dir(session, "images")
 
 
+def _attachment_operation_store(session: dict, params: dict):
+    """Admit a live peer/profile and anchor receipts on the durable compression root."""
+    from tui_gateway.attachment_operations import AttachmentOperations
+    if _sessions.get(params.get("session_id")) is not session:
+        raise ValueError("attachment operation session changed")
+    transport = current_transport()
+    if transport is not None and not _session_transport_contains(session, transport):
+        raise ValueError("attachment operation requires an attached session transport")
+    home = Path(session.get("profile_home") or _hermes_home).resolve()
+    if params.get("profile"):
+        # _profile_home answers None for the launch profile, which owns _hermes_home.
+        requested_home = _profile_home(params["profile"]) or _hermes_home
+        if Path(requested_home).resolve() != home:
+            raise ValueError("attachment operation profile does not own this session")
+    key = _submit_row_target_key(session)
+    if not key:
+        raise ValueError("attachment operation requires a durable session identity")
+    if (home / "state.db").is_file():
+        from hermes_state import SessionDB
+        with SessionDB(db_path=home / "state.db", read_only=True) as db:
+            key = db.get_compression_chain(key)[0]
+    return AttachmentOperations(_session_images_dir(session), key)
+
+
+def _attachment_operation_error(rid, exc):
+    from tui_gateway.attachment_operations import OperationConflict
+    code = 4020 if isinstance(exc, OperationConflict) else 4017 if isinstance(exc, ValueError) else 5027
+    return _err(rid, code, str(exc))
+
+
+def _attachment_fingerprint(data: bytes, *metadata) -> str:
+    import hashlib
+    digest = hashlib.sha256(data)
+    digest.update(json.dumps(metadata, ensure_ascii=True).encode())
+    return digest.hexdigest()
+
+
 def _queue_attached_image(session: dict, img_bytes: bytes, ext: str, *, prefix: str) -> Path:
     """Write image bytes into the session images dir and queue them for the next submit."""
     img_dir = _session_images_dir(session)

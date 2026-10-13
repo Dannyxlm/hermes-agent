@@ -54,6 +54,10 @@ class PromptSubmitParams(SessionParams):
     confirm_empty_truncate: bool | None = None
     rebind_survivor_row_ids: list[int] | None = None
     origin: PromptOrigin | None = None
+    # Absent retains the legacy implicit queue. Explicit [] consumes no queued images.
+    image_paths: list[str] | None = None
+    # Identified uploads are private to these operations and never join the implicit queue.
+    attachment_operation_ids: list[str] | None = None
     # In-process only: injected by the hosted-room / bot-relay handlers, never accepted from a
     # client (a client dict for ``_turn_author`` answers 4124). Excluded from the rendered wire.
     hosted_task: JsonValue | None = Field(default=None, exclude=True, alias="_hosted_task")
@@ -101,7 +105,7 @@ class ImageMeta(Result):
 
 
 class AttachedImageResult(ImageMeta):
-    """``methods_prompt.py::_attached_image_result``: the image is queued for the next turn."""
+    """Legacy uploads queue for the next turn. Identified uploads require explicit operation selection."""
 
     attached: bool
     path: str | None = None
@@ -110,6 +114,7 @@ class AttachedImageResult(ImageMeta):
     text: str | None = None
     bytes: int | None = None
     message: str | None = None  # clipboard.paste: why nothing was attached
+    operation_id: str | None = None
 
 
 class ClipboardPasteParams(SessionParams):
@@ -130,21 +135,24 @@ method("image.attach", params=ImageAttachParams, result=AttachedImageResult,
 
 class ImageAttachBytesParams(SessionParams):
     """``content_base64`` (or the ``data`` alias) carries the bytes; ``filename`` / ``ext`` only hint
-    the extension — magic bytes decide."""
+    the extension — magic bytes decide. ``operation_id`` makes this upload durable and idempotent;
+    it stays outside the implicit queue and requires ``attachment_operation_ids`` at submit."""
 
     content_base64: str | None = None
     data: str | None = None
     filename: str | None = None
     ext: str | None = None
+    operation_id: str | None = None
 
 
 method("image.attach_bytes", params=ImageAttachBytesParams, result=AttachedImageResult,
-       doc="Queue an image uploaded as base64 (remote client); reply mirrors image.attach.")
+       doc="Upload an image; identified operations require explicit selection, untagged uploads retain the legacy queue.")
 
 
 class PdfAttachParams(SessionParams):
     """Host ``path`` or base64 ``content_base64`` / ``data``; ``first_page`` / ``last_page`` bound the
-    render (per-call page cap enforced server-side)."""
+    render (per-call page cap enforced server-side). ``operation_id`` isolates the staged pages
+    from the implicit queue and provides durable partial-write reconciliation."""
 
     path: str | None = None
     content_base64: str | None = None
@@ -152,6 +160,7 @@ class PdfAttachParams(SessionParams):
     filename: str | None = None
     first_page: int | None = None
     last_page: int | None = None
+    operation_id: str | None = None
 
 
 class PdfPage(ImageMeta):
@@ -166,10 +175,41 @@ class PdfAttachResult(Result):
     pages: list[PdfPage]
     count: int
     text: str
+    operation_id: str | None = None
 
 
 method("pdf.attach", params=PdfAttachParams, result=PdfAttachResult,
-       doc="Render a PDF's pages to PNG and queue them as images for the next turn.")
+       doc="Render PDF pages; identified uploads require operation selection and retain partial staging receipts.")
+
+
+class AttachmentOperationParams(SessionParams):
+    operation_id: str
+
+
+class AttachmentOperationState(WireEnum):
+    missing = "missing"
+    staging = "staging"
+    partial = "partial"
+    staged = "staged"
+    dispatching = "dispatching"
+    submitted = "submitted"
+    detaching = "detaching"
+    detached = "detached"
+
+
+class AttachmentOperationResult(Result):
+    operation_id: str
+    state: AttachmentOperationState
+    image_paths: list[str]
+    completed_images: int | None = None
+    result: AttachedImageResult | PdfAttachResult | None = None
+    submission_result: PromptSubmitResult | None = None
+
+
+method("attachment.operation.status", params=AttachmentOperationParams, result=AttachmentOperationResult,
+       doc="Read an image/PDF operation's durable staging/dispatch receipt for the admitted conversation.")
+method("attachment.operation.detach", params=AttachmentOperationParams, result=AttachmentOperationResult,
+       doc="Cancel only this operation; a durable tombstone fences delayed uploads. Dispatched media is retained.")
 
 
 class FileAttachParams(SessionParams):

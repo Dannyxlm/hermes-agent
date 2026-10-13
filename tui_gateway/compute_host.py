@@ -242,7 +242,8 @@ class ComputeHost:
                 queued_gen = frame.get("queued_prompt_generation")
                 current_gen = int(session.get("_queued_prompt_generation", 0))
                 if queued_gen is not None and current_gen != int(queued_gen):
-                    self._reply("turn.end", sid, request_id, interrupted=True, ended_ns=now_ns())
+                    self._reply("turn.end", sid, request_id, interrupted=True,
+                                dispatch_refused=True, ended_ns=now_ns())
                     return
                 if session.get("running"):
                     self._reply("turn.error", sid, request_id, message="session busy")
@@ -267,6 +268,7 @@ class ComputeHost:
                 server._persist_branch_seed(session)
             server._run_prompt_submit(
                 request_id, sid, session, text, display_kind=frame.get("display_kind") or None,
+                auto_continue=frame.get("auto_continue", True),
                 display_metadata=(frame.get("display_metadata")
                                   if isinstance(frame.get("display_metadata"), dict) else None))
             run_thread = session.get("_run_thread")
