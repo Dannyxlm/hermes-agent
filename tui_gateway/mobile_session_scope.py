@@ -10,6 +10,8 @@ def projection_destinations(db, profile, stored_ids):
 
     Only metadata is read; branch/reset/delegate children never join the path.
     The input title is kept separately from the root read marker and tip title.
+    Missing or depth-capped lineages are omitted, never partially projected;
+    one invalid destination must not discard evidence for the rest of the page.
     """
     from hermes_state_compression import _CHAIN_CAP, _CHAIN_STEP_SQL
     from hermes_state_common import _RESET_CHILD_SQL, _sql_json_extract
@@ -29,7 +31,8 @@ def projection_destinations(db, profile, stored_ids):
             JOIN sessions s ON s.id=a.id JOIN sessions p ON p.id=s.parent_session_id
             WHERE p.end_reason='compression' AND NOT ({fork}) AND a.depth < {_CHAIN_CAP}
         ), roots(key,id) AS (
-            SELECT key,id FROM ancestors a WHERE depth=(SELECT MAX(depth) FROM ancestors b WHERE b.key=a.key)
+            SELECT key,id FROM ancestors a WHERE depth < {_CHAIN_CAP}
+                AND depth=(SELECT MAX(depth) FROM ancestors b WHERE b.key=a.key)
         ), chain(key,id,depth) AS (
             SELECT key,id,0 FROM roots
             UNION ALL
@@ -42,15 +45,19 @@ def projection_destinations(db, profile, stored_ids):
     """, list(stored_ids))
     grouped = {}
     for row in rows:
-        if row['depth'] >= _CHAIN_CAP:
-            raise RuntimeError('Compression lineage exceeds the safe depth limit')
         grouped.setdefault(row['key'], []).append(row)
     result = {}
     for key, chain in grouped.items():
+        if chain[-1]['depth'] >= _CHAIN_CAP:
+            continue
         root, tip = chain[0], chain[-1]
         canonical = root['title'] == SessionDB.CANONICAL_BOT_CHAT_TITLE
         # Canonical Bot Chats have their own producer surface, not native_session.
-        scope = Scope('native' if canonical else 'native_session', profile, root['id'])
+        try:
+            scope = Scope('native' if canonical else 'native_session', profile, root['id'])
+        except ValueError:
+            # Legacy/malformed stored IDs cannot be used as push destinations.
+            continue
         result[key] = {'scope': scope, 'tip': tip['id'], 'title': root['input_title'],
                        'root': {'id': root['id'], 'last_read_at': root['last_read_at'],
                                 '_lineage_ids': [row['id'] for row in chain]}}

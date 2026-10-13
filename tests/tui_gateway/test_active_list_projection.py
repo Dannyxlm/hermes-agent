@@ -5,10 +5,12 @@ import sqlite3
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
+from tests.tui_gateway.test_methods_mobile import rpc
 from tui_gateway import server
 from tui_gateway.mobile_push_payloads import Scope
 from tui_gateway.mobile_push_store import PushStore
+
+pytest_plugins = ["tests.tui_gateway.test_methods_mobile"]
 
 
 def store(home):
@@ -57,7 +59,7 @@ def test_active_list_excludes_rewound_replies(mobile_home, peer, monkeypatch, co
     assert 'last_assistant_reply' not in rpc('session.active_list')['result']['sessions'][0]
 
 
-def test_unknown_stored_id_warns_once_per_session_interval(mobile_home, peer, monkeypatch, caplog):
+def test_unknown_stored_id_is_quiet_and_recovers_after_persistence(mobile_home, peer, monkeypatch, caplog):
     import time
     monkeypatch.setattr(server, '_resolve_model', lambda: 'fixture')
     now = [100.0]
@@ -70,11 +72,21 @@ def test_unknown_stored_id_warns_once_per_session_interval(mobile_home, peer, mo
             rows = rpc('session.active_list')['result']['sessions']
             assert rows[0]['title'] == 'Draft title' and 'latest_run' not in rows[0]
         warnings = lambda: [r for r in caplog.records if 'Inbox run summary unavailable' in r.message]
-        assert len(warnings()) == 1
-        assert 'not-stored' not in warnings()[0].message
+        assert not warnings()
         now[0] += 61
         rpc('session.active_list')
-        assert len(warnings()) == 2
+        assert not warnings()
+        assert server._sessions['unknown'] == {'session_key': 'not-stored', 'pending_title': 'Draft title'}
+        with SessionDB(db_path=mobile_home / 'state.db') as db:
+            db.create_session('not-stored', 'desktop')
+            db.set_session_title('not-stored', 'Persisted title')
+            db.append_message('not-stored', 'assistant', 'Persisted reply', timestamp=100)
+        push.start_run(Scope('native_session', 'default', 'not-stored'), run_id='persisted-run')
+        row = rpc('session.active_list')['result']['sessions'][0]
+        assert row['title'] == 'Persisted title'
+        assert row['last_assistant_reply']['preview'] == 'Persisted reply'
+        assert row['latest_run']['run_id'] == 'persisted-run'
+        assert not warnings()
     finally:
         push.close()
 
