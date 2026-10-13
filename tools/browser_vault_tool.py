@@ -98,12 +98,17 @@ def _ensure_supervisor(task_id: str):
     supervisor = SUPERVISOR_REGISTRY.get(task_id)
     if supervisor is not None:
         return supervisor
-    from tools.browser_tool import _last_session_key
+    from tools.browser_tool import _active_sessions, _last_session_key
     from tools.browser_tool_cdp import _get_dialog_policy_config, _resolve_cdp_override
     from tools.browser_tool_session import _run_browser_command
 
-    res = _run_browser_command(_last_session_key(task_id), "get", ["cdp-url"])
-    cdp_url = str(((res or {}).get("data") or {}).get("cdpUrl") or "") if (res or {}).get("success") else ""
+    # A session that already knows its endpoint (real-profile / CDP-override / cloud) needs no daemon
+    # round-trip; in a busy shared browser ``get cdp-url`` can sit out its full 30 s command timeout.
+    session_key = _last_session_key(task_id)
+    cdp_url = str((_active_sessions.get(session_key) or {}).get("cdp_url") or "")
+    if not cdp_url:
+        res = _run_browser_command(session_key, "get", ["cdp-url"])
+        cdp_url = str(((res or {}).get("data") or {}).get("cdpUrl") or "") if (res or {}).get("success") else ""
     if not cdp_url:
         return None
     policy, timeout_s = _get_dialog_policy_config()
@@ -208,7 +213,11 @@ def _focus_bound_origin(task_id: str, origin: str, kind: str) -> Optional[str]:
         supervisor = None
     if supervisor is None:
         return None
-    focused = supervisor.focus_page(origin, accept=_TAB_PROBES.get(kind))
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+
+    focused = supervisor.focus_page(origin, accept=_TAB_PROBES.get(kind), prefer_url=SUPERVISOR_REGISTRY.page_hint(task_id))
+    if not focused.get("ok"):
+        logger.debug("vault fill: focus on %s failed: %s", origin or "any site", focused.get("error"))
     return (origin or focused.get("url")) if focused.get("ok") else None
 
 

@@ -322,3 +322,79 @@ def test_evaluate_runtime_unserializable_value(chrome_cdp, supervisor_registry):
     out = supervisor.evaluate_runtime("Infinity")
     assert out["ok"] is True
     assert out["result"] == "Infinity"
+
+
+def _serve_tab_pages():
+    """Local http server: /signin* has a password form, /hung* wedges its renderer in a busy loop."""
+    import http.server
+    import socketserver
+    import threading
+
+    pages = {
+        "/signin": b"<!doctype html><title>login</title><form><input name=u><input type=password name=p></form>",
+        "/hung": b"<!doctype html><title>hung</title><script>setTimeout(()=>{for(;;){}},200)</script>",
+    }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = next((v for k, v in pages.items() if self.path.startswith(k)), b"<!doctype html><p>plain</p>")
+            self.send_response(200)
+            self.send_header("content-type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_a):
+            pass
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _open_tabs(cdp_url: str, urls: list[str]) -> None:
+    import websockets as _ws_mod
+
+    async def run():
+        async with _ws_mod.connect(cdp_url, max_size=50 * 1024 * 1024) as ws:
+            for i, url in enumerate(urls, start=1):
+                await ws.send(json.dumps({"id": i, "method": "Target.createTarget", "params": {"url": url}}))
+                while json.loads(await ws.recv()).get("id") != i:
+                    pass
+        await asyncio.sleep(1.5)  # loads finish, hung tabs enter their busy loop
+
+    asyncio.run(run())
+
+
+def test_busy_shared_browser_hung_tabs_do_not_block_start_or_focus(chrome_cdp, supervisor_registry):
+    """t_9d780493: frozen/busy tabs in a shared Chrome made start() fail (Page.enable on the first
+    page target never answered) and focus_page wait per tab. Both must stay bounded and land on
+    the tab the task navigated."""
+    cdp_url, _port = chrome_cdp
+    server = _serve_tab_pages()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        _open_tabs(cdp_url, [f"{base}/hung/{i}" for i in range(8)] + [f"{base}/plain/{i}" for i in range(6)]
+                   + [f"{base}/signin?tid=A", f"{base}/signin?tid=B"])
+        supervisor_registry.note_page("pytest-busy", f"{base}/signin?tid=B")
+
+        t0 = time.monotonic()
+        supervisor = supervisor_registry.get_or_start(task_id="pytest-busy", cdp_url=cdp_url)
+        assert time.monotonic() - t0 < 8.0
+        assert supervisor.evaluate_runtime("location.href", timeout=3.0) == {
+            "ok": True, "result": f"{base}/signin?tid=B", "result_type": "string"}
+
+        for prefer in ("A", "B"):
+            t0 = time.monotonic()
+            res = supervisor.focus_page(base, accept="!!document.querySelector('input[type=password]')",
+                                        prefer_url=f"{base}/signin?tid={prefer}")
+            assert res == {"ok": True, "url": f"{base}/signin?tid={prefer}"}
+            assert time.monotonic() - t0 < 3.0  # the navigated tab answers first; hung tabs are not awaited
+            assert supervisor.evaluate_runtime("location.search", timeout=3.0)["result"] == f"?tid={prefer}"
+
+        t0 = time.monotonic()
+        res = supervisor.focus_page(base, accept="!!document.querySelector('#never')")
+        assert res["ok"] is False and "no responsive page" in res["error"]
+        assert time.monotonic() - t0 < 8.0
+    finally:
+        server.shutdown()

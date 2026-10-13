@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 # supervisor thread and warnings forever for the latter.
 MAX_POST_ATTACH_RECONNECT_FAILURES = 5
 
+# Per-call bound when probing page targets. A shared real-profile Chrome carries frozen
+# background tabs, tabs blocked in ``beforeunload`` and busy renderers; ANY session-scoped CDP
+# call into one of them (``Page.enable``, ``Runtime.evaluate``) never answers. Probes run in
+# parallel, so a hung tab costs this bound once, not once per tab.
+PAGE_PROBE_TIMEOUT_S = 3.0
+_PROBE_CONCURRENCY = 64
+
 
 def _redact_cdp_error_text(exc: object) -> str:
     """Redact CDP endpoint credentials from an exception's (or URL's) string form.
@@ -65,7 +72,35 @@ def _schedule(coro, loop, *, timeout: float):
     fut = safe_schedule_threadsafe(coro, loop)
     if fut is None:
         raise _LoopUnavailable("Browser supervisor loop unavailable")
-    return fut.result(timeout=timeout)
+    try:
+        return fut.result(timeout=timeout)
+    except TimeoutError:
+        # The caller gave up: cancel the coroutine too, or it keeps running on the loop and can
+        # still mutate supervisor state (e.g. retarget the page session) after we returned.
+        fut.cancel()
+        raise
+
+
+def _page_probe_js(accept: Optional[str]) -> str:
+    """``[visibilityState, accepted, href]`` for one tab; ``accepted`` is ``accept`` coerced to bool
+    (true when no ``accept`` is given) and false if it throws."""
+    check = f"!!({accept})" if accept else "true"
+    return ("(() => { let ok = false; try { ok = " + check + "; } catch (e) { ok = false; } "
+            "return [document.visibilityState, ok, location.href]; })()")
+
+
+def _strip_url(url: str) -> str:
+    return (url or "").split("#", 1)[0].split("?", 1)[0]
+
+
+def _page_rank(url: str, visibility: str, prefer_url: Optional[str]) -> int:
+    """Lower is better: the exact tab the session's browser tool last navigated, then that page
+    with a different query/fragment, then a visible (foreground) tab, then background tabs."""
+    if prefer_url and url == prefer_url:
+        return 0
+    if prefer_url and _strip_url(url) == _strip_url(prefer_url):
+        return 1
+    return 2 if visibility == "visible" else 3
 
 
 def _fail(error: str) -> dict[str, Any]:
@@ -130,6 +165,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
         # Dialog auto-dismiss watchdog handles (per dialog id) + id generator.
         self._dialog_watchdogs: dict[str, asyncio.TimerHandle] = {}
         self._dialog_seq = 0
+        # Strong refs to fire-and-forget loop tasks (probe-session detaches) so they are not GC'd mid-flight.
+        self._background_tasks: set[asyncio.Future] = set()
 
     # ── Public sync API ──────────────────────────────────────────────────────
 
@@ -265,23 +302,22 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             value = result_obj.get("description") or result_obj.get("unserializableValue")
         return {"ok": True, "result": value, "result_type": result_type}
 
-    def focus_page(self, origin: str, *, accept: Optional[str] = None, timeout: float = 10.0) -> dict[str, Any]:
+    def focus_page(self, origin: str, *, accept: Optional[str] = None, timeout: float = 10.0,
+                   prefer_url: Optional[str] = None, probe_timeout: float = PAGE_PROBE_TIMEOUT_S) -> dict[str, Any]:
         """Re-attach the supervisor's page session to an open page target on ``origin``
-        (``scheme://host[:port]``). The initial attach picks the FIRST page target, but tools
+        (``scheme://host[:port]``). The initial attach picks one page target, but tools
         that open their own tabs (browser_exec) put the login form somewhere else. With
-        ``accept`` (a JS expression) the first same-origin tab where it evaluates truthy wins,
-        so a login and a checkout tab on one site resolve to the right one. Returns
-        ``{"ok": True, "url"}`` or ``{"ok": False, "error"}``; on failure the previous session stays."""
+        ``accept`` (a JS expression) only same-origin tabs where it evaluates truthy qualify,
+        so a login and a checkout tab on one site resolve to the right one.
+
+        Every candidate is probed in parallel with ``probe_timeout`` per call, so frozen,
+        discarded or busy tabs in a shared browser are skipped instead of stalling the call.
+        Among the tabs that answer, ``prefer_url`` (the page this session's browser tool last
+        navigated) wins, then a visible tab, then the first background tab.
+        Returns ``{"ok": True, "url"}`` or ``{"ok": False, "error"}``; on failure the previous session stays."""
         loop = self._loop
         if loop is None or not loop.is_running():
             return _fail("supervisor loop is not running")
-
-        async def _attach(target_id: str) -> str:
-            attach = await self._cdp("Target.attachToTarget", {"targetId": target_id, "flatten": True}, timeout=timeout)
-            sid = attach["result"]["sessionId"]
-            await self._enable_page_domains(sid, timeout=timeout)
-            await self._install_dialog_bridge(sid)
-            return sid
 
         async def _focus() -> dict[str, Any]:
             from agent.vault_store import normalize_origin
@@ -296,23 +332,102 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                         candidates.append((t["targetId"], url))
                 except Exception:
                     continue
-            for target_id, url in candidates:
-                sid = await _attach(target_id)
-                if accept:
-                    probe = await self._cdp("Runtime.evaluate", {"expression": accept, "returnByValue": True},
-                                            session_id=sid, timeout=timeout)
-                    if not probe.get("result", {}).get("result", {}).get("value"):
-                        await self._cdp("Target.detachFromTarget", {"sessionId": sid}, timeout=timeout)
-                        continue
-                with self._state_lock:
-                    self._page_session_id = sid
-                return {"ok": True, "url": url}
-            return _fail(f"no open page on {origin or 'any site'}" + (" with the expected form" if accept and candidates else ""))
+            best = await self._pick_page(candidates, accept=accept, prefer_url=prefer_url, probe_timeout=probe_timeout)
+            if best is None:
+                where = origin or "any site"
+                if not candidates:
+                    return _fail(f"no open page on {where}")
+                return _fail(f"no responsive page on {where}" + (" with the expected form" if accept else "")
+                             + f" ({len(candidates)} candidate tab(s) probed)")
+            url, sid = best
+            try:
+                await self._enable_page_domains(sid, timeout=timeout)
+                await self._install_dialog_bridge(sid)
+            except BaseException:
+                # Selection owns this session until setup commits it, including on cancellation.
+                self._detach_soon(sid)
+                raise
+            with self._state_lock:
+                self._page_session_id = sid
+            return {"ok": True, "url": url}
 
         try:
             return _schedule(_focus(), loop, timeout=timeout + 1)
         except Exception as exc:
             return _err(exc)
+
+    async def _pick_page(self, candidates: list[tuple[str, str]], *, accept: Optional[str], prefer_url: Optional[str],
+                         probe_timeout: float) -> Optional[tuple[str, str]]:
+        """Probe ``(target_id, url)`` candidates in parallel and return ``(url, session_id)`` of the best
+        responsive one that passes ``accept`` (its session stays attached), or None. Every other probe
+        session is detached. Returns as soon as the exact ``prefer_url`` tab answers."""
+        if not candidates:
+            return None
+        expression = _page_probe_js(accept)
+        sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+
+        async def _probe(index: int, target_id: str, url: str) -> Optional[tuple[int, int, str, str]]:
+            sid: Optional[str] = None
+            try:
+                async with sem:
+                    attach = await self._cdp("Target.attachToTarget", {"targetId": target_id, "flatten": True},
+                                             timeout=probe_timeout)
+                    sid = attach["result"]["sessionId"]
+                    probe = await self._cdp("Runtime.evaluate", {"expression": expression, "returnByValue": True},
+                                            session_id=sid, timeout=probe_timeout)
+                value = probe.get("result", {}).get("result", {}).get("value")
+                if isinstance(value, list) and len(value) == 3 and value[1]:
+                    live_url = str(value[2] or url)
+                    return _page_rank(live_url, str(value[0] or ""), prefer_url), index, live_url, str(sid)
+                if accept is None and "exceptionDetails" not in probe.get("result", {}):
+                    # It answered, which is all a liveness probe needs; visibility unknown.
+                    return _page_rank(url, "", prefer_url), index, url, str(sid)
+            except asyncio.CancelledError:
+                if sid:
+                    self._detach_soon(sid)
+                raise
+            except Exception as exc:
+                logger.debug("page probe %s skipped (%s)", target_id[:8], type(exc).__name__)
+            if sid:
+                self._detach_soon(sid)
+            return None
+
+        tasks = [asyncio.ensure_future(_probe(i, tid, url)) for i, (tid, url) in enumerate(candidates)]
+        hits: list[tuple[int, int, str, str]] = []
+        good_enough = 0 if prefer_url else 2  # nothing can beat this rank: stop waiting out hung tabs
+        try:
+            for next_done in asyncio.as_completed(tasks):
+                hit = await next_done
+                if hit is None:
+                    continue
+                hits.append(hit)
+                if hit[0] <= good_enough:
+                    break
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            # A probe can complete between the break and the cancel: collect it so its session is released.
+            for task in tasks:
+                late = None if task.cancelled() or task.exception() is not None else task.result()
+                if late is not None and late not in hits:
+                    hits.append(late)
+        if not hits:
+            return None
+        hits.sort(key=lambda h: (h[0], h[1]))
+        _, _, url, sid = hits[0]
+        for _rank, _i, _u, other in hits[1:]:
+            self._detach_soon(other)
+        return url, sid
+
+    def _detach_soon(self, session_id: str) -> None:
+        """Fire-and-forget detach of a probe session (must run on the supervisor loop). Not awaited:
+        a detach from a hung tab's session must never hold up the caller."""
+        task = asyncio.ensure_future(self._cdp_quiet("Target.detachFromTarget", {"sessionId": session_id},
+                                                     session_id=None, timeout=2.0, what="probe detach"))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     # ── Supervisor loop internals ────────────────────────────────────────────
 
@@ -438,15 +553,43 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             backoff = min(backoff * 2, 10.0)
 
     async def _attach_initial_page(self) -> None:
-        """Find (or create) a page target, attach flattened, enable domains, install dialog bridge."""
+        """Pick (or create) a page target, attach flattened, enable domains, install dialog bridge.
+
+        On a shared browser the first page target is often a frozen or busy background tab whose
+        ``Page.enable`` never answers, which used to fail ``start()`` on every browser call. Probe all
+        pages in parallel with a short bound and prefer the tab this task's browser tool last
+        navigated, then a visible one. If no tab answers, attach the first one anyway and enable its
+        domains in the background: browser-level calls (``focus_page``) still work, and the
+        supervisor no longer refuses to start because one tab is wedged."""
         targets = (await self._cdp("Target.getTargets")).get("result", {}).get("targetInfos", [])
-        page_target = next((t for t in targets if t.get("type") == "page"), None)
-        if page_target is None:
+        pages = [(str(t["targetId"]), str(t.get("url") or "")) for t in targets if t.get("type") == "page"]
+        if not pages:
             page_target = (await self._cdp("Target.createTarget", {"url": "about:blank"}))["result"]
-        attach = await self._cdp("Target.attachToTarget", {"targetId": page_target["targetId"], "flatten": True})
+            attach = await self._cdp("Target.attachToTarget", {"targetId": page_target["targetId"], "flatten": True})
+            self._page_session_id = sid = attach["result"]["sessionId"]
+            await self._enable_page_domains(sid, timeout=10.0)
+            await self._install_dialog_bridge(sid)
+            return
+        best = await self._pick_page(pages, accept=None, prefer_url=SUPERVISOR_REGISTRY.page_hint(self.task_id),
+                                     probe_timeout=PAGE_PROBE_TIMEOUT_S)
+        if best is not None:
+            _url, sid = best
+            try:
+                await self._enable_page_domains(sid, timeout=10.0)
+                await self._install_dialog_bridge(sid)
+            except BaseException:
+                self._detach_soon(sid)
+                raise
+            self._page_session_id = sid
+            return
+        logger.debug("CDP supervisor %s: none of %s page targets answered; attaching the first without waiting",
+                     self.task_id, len(pages))
+        attach = await self._cdp("Target.attachToTarget", {"targetId": pages[0][0], "flatten": True},
+                                 timeout=PAGE_PROBE_TIMEOUT_S)
         self._page_session_id = sid = attach["result"]["sessionId"]
-        await self._enable_page_domains(sid, timeout=10.0)
-        await self._install_dialog_bridge(sid)
+        task = asyncio.ensure_future(self._enable_child_domains(sid))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def _cdp(self, method: str, params: Optional[dict[str, Any]] = None, *,
                    session_id: Optional[str] = None, timeout: Optional[float] = 10.0) -> dict[str, Any]:
@@ -504,6 +647,19 @@ class _SupervisorRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_task: dict[str, CDPSupervisor] = {}
+        # task_id -> URL that task's browser tool last navigated: lets the supervisor (re)attach to
+        # THAT tab in a browser shared with other agents and the human, not just any page.
+        self._page_hints: dict[str, str] = {}
+
+    def note_page(self, task_id: str, url: str) -> None:
+        """Record the page ``task_id``'s browser tool just navigated (hint for tab selection)."""
+        if task_id and url and url.startswith(("http://", "https://")):
+            with self._lock:
+                self._page_hints[task_id] = url
+
+    def page_hint(self, task_id: str) -> Optional[str]:
+        with self._lock:
+            return self._page_hints.get(task_id)
 
     def get(self, task_id: str) -> Optional[CDPSupervisor]:
         with self._lock:
@@ -549,6 +705,8 @@ class _SupervisorRegistry:
 
     def stop(self, task_id: str) -> None:
         supervisor = self._pop(task_id)
+        with self._lock:
+            self._page_hints.pop(task_id, None)
         if supervisor is not None:
             supervisor.stop()
 
@@ -557,6 +715,7 @@ class _SupervisorRegistry:
         with self._lock:
             items = list(self._by_task.values())
             self._by_task.clear()
+            self._page_hints.clear()
         for supervisor in items:
             supervisor.stop()
 
