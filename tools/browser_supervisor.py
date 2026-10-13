@@ -363,6 +363,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
         session is detached. Returns as soon as the exact ``prefer_url`` tab answers."""
         if not candidates:
             return None
+        from websockets.exceptions import WebSocketException
+
         expression = _page_probe_js(accept)
         sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
 
@@ -386,40 +388,40 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                 if sid:
                     self._detach_soon(sid)
                 raise
-            except Exception as exc:
+            except (OSError, RuntimeError, KeyError, TypeError, ValueError, WebSocketException) as exc:
                 logger.debug("page probe %s skipped (%s)", target_id[:8], type(exc).__name__)
             if sid:
                 self._detach_soon(sid)
             return None
 
         tasks = [asyncio.ensure_future(_probe(i, tid, url)) for i, (tid, url) in enumerate(candidates)]
-        hits: list[tuple[int, int, str, str]] = []
+        selected = None
         good_enough = 0 if prefer_url else 2  # nothing can beat this rank: stop waiting out hung tabs
         try:
-            for next_done in asyncio.as_completed(tasks):
-                hit = await next_done
-                if hit is None:
-                    continue
-                hits.append(hit)
-                if hit[0] <= good_enough:
-                    break
+            try:
+                for next_done in asyncio.as_completed(tasks):
+                    hit = await next_done
+                    if hit is not None and hit[0] <= good_enough:
+                        break
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            hits = [task.result() for task in tasks if not task.cancelled()
+                    and task.exception() is None and task.result() is not None]
+            if not hits:
+                return None
+            selected = min(hits, key=lambda h: (h[0], h[1]))
+            return selected[2], selected[3]
         finally:
+            # Selection owns every successful probe until it returns one to the caller.
+            # Cancellation must release completed probes as well as the still-running ones.
             for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            # A probe can complete between the break and the cancel: collect it so its session is released.
-            for task in tasks:
-                late = None if task.cancelled() or task.exception() is not None else task.result()
-                if late is not None and late not in hits:
-                    hits.append(late)
-        if not hits:
-            return None
-        hits.sort(key=lambda h: (h[0], h[1]))
-        _, _, url, sid = hits[0]
-        for _rank, _i, _u, other in hits[1:]:
-            self._detach_soon(other)
-        return url, sid
+                if task.done() and not task.cancelled() and task.exception() is None:
+                    hit = task.result()
+                    if hit is not None and hit != selected:
+                        self._detach_soon(hit[3])
 
     def _detach_soon(self, session_id: str) -> None:
         """Fire-and-forget detach of a probe session (must run on the supervisor loop). Not awaited:

@@ -408,3 +408,31 @@ def test_vault_supervisor_still_asks_the_daemon_for_a_local_session():
             patch.object(bs.SUPERVISOR_REGISTRY, "get_or_start", side_effect=AssertionError("no endpoint")):
         assert vt._ensure_supervisor("local-task") is None
     run.assert_called_once_with("local-task", "get", ["cdp-url"])
+
+
+def test_cancelling_selection_detaches_already_completed_probe_sessions(monkeypatch):
+    fake = FakeBrowser([Tab("ready", "https://shop.example/login", "hidden", form=True),
+                        Tab("hung", "https://shop.example/other", "hung")])
+    sup = _supervisor(fake)
+
+    async def run():
+        ranked = asyncio.Event()
+        original_rank = bs._page_rank
+
+        def mark_ranked(*args):
+            result = original_rank(*args)
+            ranked.set()
+            return result
+
+        monkeypatch.setattr(bs, "_page_rank", mark_ranked)
+        selection = asyncio.create_task(sup._pick_page(
+            [(i, fake.tabs[i].url) for i in fake.order], accept=PASSWORD_PROBE,
+            prefer_url="https://shop.example/missing", probe_timeout=30.0))
+        await asyncio.wait_for(ranked.wait(), timeout=5.0)
+        selection.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await selection
+        await asyncio.gather(*list(sup._background_tasks))
+        assert fake.detached() == {"S-ready", "S-hung"}
+
+    asyncio.run(run())

@@ -330,14 +330,23 @@ def _serve_tab_pages():
     import socketserver
     import threading
 
+    ready = threading.Condition()
+    loaded = set()
+    marker = b"<script>fetch('/ready' + location.pathname + location.search);</script>"
     pages = {
-        "/signin": b"<!doctype html><title>login</title><form><input name=u><input type=password name=p></form>",
-        "/hung": b"<!doctype html><title>hung</title><script>setTimeout(()=>{for(;;){}},200)</script>",
+        "/signin": b"<!doctype html><title>login</title><form><input name=u><input type=password name=p></form>" + marker,
+        "/hung": b"<!doctype html><title>hung</title>" + marker + b"<script>for(;;){}</script>",
     }
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            body = next((v for k, v in pages.items() if self.path.startswith(k)), b"<!doctype html><p>plain</p>")
+            if self.path.startswith("/ready/"):
+                with ready:
+                    loaded.add(self.path.removeprefix("/ready"))
+                    ready.notify_all()
+                body = b"ok"
+            else:
+                body = next((v for k, v in pages.items() if self.path.startswith(k)), b"<!doctype html><p>plain</p>" + marker)
             self.send_response(200)
             self.send_header("content-type", "text/html")
             self.end_headers()
@@ -348,6 +357,8 @@ def _serve_tab_pages():
 
     server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
+    server.ready = ready
+    server.loaded = loaded
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -361,7 +372,6 @@ def _open_tabs(cdp_url: str, urls: list[str]) -> None:
                 await ws.send(json.dumps({"id": i, "method": "Target.createTarget", "params": {"url": url}}))
                 while json.loads(await ws.recv()).get("id") != i:
                     pass
-        await asyncio.sleep(1.5)  # loads finish, hung tabs enter their busy loop
 
     asyncio.run(run())
 
@@ -376,6 +386,8 @@ def test_busy_shared_browser_hung_tabs_do_not_block_start_or_focus(chrome_cdp, s
         base = f"http://127.0.0.1:{server.server_address[1]}"
         _open_tabs(cdp_url, [f"{base}/hung/{i}" for i in range(8)] + [f"{base}/plain/{i}" for i in range(6)]
                    + [f"{base}/signin?tid=A", f"{base}/signin?tid=B"])
+        with server.ready:
+            assert server.ready.wait_for(lambda: len(server.loaded) == 16, timeout=15.0)
         supervisor_registry.note_page("pytest-busy", f"{base}/signin?tid=B")
 
         t0 = time.monotonic()

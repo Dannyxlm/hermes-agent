@@ -804,12 +804,10 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
 def _note_supervisor_page(task_id: str, session_key: str, url: str) -> None:
     """Tell the CDP supervisor which tab this task just navigated, so vault fills and supervisor
     (re)attaches in a browser shared with other agents pick THIS tab, not the first one."""
-    try:
-        from tools.browser_supervisor import SUPERVISOR_REGISTRY  # type: ignore[import-not-found]
-        for key in {task_id, session_key}:
-            SUPERVISOR_REGISTRY.note_page(key, str(url or ""))
-    except Exception as exc:
-        logger.debug("supervisor page hint failed: %s", exc)
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+
+    for key in {task_id, session_key}:
+        SUPERVISOR_REGISTRY.note_page(key, str(url or ""))
 
 
 def _add_navigate_warnings(response: dict[str, Any], title: str, first_nav_session: Optional[dict[str, Any]]) -> None:
