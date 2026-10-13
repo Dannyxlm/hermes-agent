@@ -136,9 +136,13 @@ be <=256000 serialized UTF-8 bytes. There is no remote HTTP enqueue endpoint.
 ### Accounts
 
 - GET `/provider/accounts`: `{ok,profile_id,generated_at,providers:[...]}`.
-- GET `/provider/accounts/usage?provider=anthropic|openai-codex&refresh=1`:
+- GET `/provider/accounts/usage?provider=anthropic|openai-codex|xai-oauth&refresh=1`:
   same inventory shape with each account's quota windows; explicit bounded probe,
   never inference, credential seed/heal/refresh or token fallback.
+  Grok (`xai-oauth`) reports used credits for the current week (or current period)
+  and the period end from the official billing endpoint, only for saved accounts
+  with an empty/default `https://api.x.ai/v1` route. Missing or invalid percentages
+  remain unknown (`null`), never zero.
 - POST `/provider/accounts/primary`: exact JSON fields
   `{provider,account_id,profile_id,revision}`; same inventory shape after native
   `CredentialPool.move_entry` and persisted readback, stale revision yields 409.
