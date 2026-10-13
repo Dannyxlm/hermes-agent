@@ -22,16 +22,19 @@ _WARNING_INTERVAL = 60
 
 # Active-list requests can overlap on the dispatch pool.
 _WARNING_LOCK = Lock()
+_WARNING_AT = None
 
 
-def _warn_unavailable(session, error):
+def _warn_unavailable(error):
     import logging
     import time
+    # Bound warnings across the whole process, not per runtime or profile.
+    global _WARNING_AT
     now = time.monotonic()
     with _WARNING_LOCK:
-        if now - session.get('_inbox_warning_at', -_WARNING_INTERVAL) < _WARNING_INTERVAL:
+        if _WARNING_AT is not None and now - _WARNING_AT < _WARNING_INTERVAL:
             return
-        session['_inbox_warning_at'] = now
+        _WARNING_AT = now
     logging.getLogger(__name__).warning('Inbox run summary unavailable (%s)', type(error).__name__)
 
 
@@ -79,15 +82,15 @@ def live_projections(entries, launch_home):
             for sid, key, session in members:
                 dest = destinations.get(key)
                 if dest is None:
-                    _warn_unavailable(session, ValueError('unknown stored session'))
+                    # Live IDs can precede persistence or outlive deleted rows.
+                    # Keep the live fallback; retry the projection on the next poll.
                     continue
                 result[sid]['title'] = dest['title']
                 if reply := replies.get(dest['root']['id']):
                     result[sid]['last_assistant_reply'] = reply
                 scopes[sid] = dest['scope'].key
         except (OSError, ValueError, sqlite3.Error, RuntimeError) as error:
-            for _sid, _key, session in members:
-                _warn_unavailable(session, error)
+            _warn_unavailable(error)
     path = Path(launch_home) / 'mobile-push' / 'outbox.sqlite3'
     if scopes and path.is_file():
         try:
@@ -96,8 +99,7 @@ def live_projections(entries, launch_home):
                 if key in runs:
                     result[sid]['latest_run'] = runs[key]
         except (OSError, sqlite3.Error) as error:
-            for _sid, _key, session in entries:
-                _warn_unavailable(session, error)
+            _warn_unavailable(error)
     return result
 
 
