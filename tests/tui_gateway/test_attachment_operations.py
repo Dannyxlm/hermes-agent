@@ -292,3 +292,41 @@ def test_runtime_replacement_during_selection_cannot_dispatch_old_files(session,
 
 
 
+
+
+def _launch_profile_is(monkeypatch, home):
+    """``_profile_home`` answers None for the launch profile; admission must treat that as home."""
+    monkeypatch.setattr(server, "_hermes_home", Path(home))
+    monkeypatch.setattr("hermes_cli.profiles.get_profile_dir", lambda _name: Path(home))
+    assert server._profile_home("default") is None
+
+
+def test_launch_profile_owns_its_own_attachment_operations(session, monkeypatch):
+    # Phone clients send profile="default" on every identified upload and every prompt.
+    _launch_profile_is(monkeypatch, session["profile_home"])
+    staged = upload()
+    assert "error" not in staged, staged
+    again = call("image.attach_bytes", profile="default", operation_id="image-operation", filename="shot.png",
+                 content_base64=base64.b64encode(b"image bytes").decode())
+    assert again == staged
+    status = call("attachment.operation.status", profile="default", operation_id="image-operation")
+    assert status["result"]["state"] == "staged", status
+
+    submitted = []
+    monkeypatch.setattr(server, "_submit_selected_attachments",
+                        lambda rid, *a: submitted.append(a[-1]) or server._ok(rid, {"status": "streaming"}))
+    response = call("prompt.submit", profile="default", text="hello", image_paths=[], attachment_operation_ids=[])
+    assert response["result"]["status"] == "streaming", response
+    assert submitted == [[]]
+    assert call("attachment.operation.detach", profile="default",
+                operation_id="image-operation")["result"]["state"] == "detached"
+
+
+def test_launch_profile_cannot_claim_a_secondary_profile_session(session, monkeypatch, tmp_path):
+    launch = tmp_path / "launch"
+    launch.mkdir()
+    _launch_profile_is(monkeypatch, launch)
+    response = call("prompt.submit", profile="default", text="wrong owner", attachment_operation_ids=[])
+    assert response["error"]["code"] == 4017
+    assert "does not own this session" in response["error"]["message"]
+    assert session["running"] is False
