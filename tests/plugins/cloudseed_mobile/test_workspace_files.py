@@ -180,3 +180,62 @@ def test_producer_resolved_legacy_media_and_browser_screenshots(client):
     assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(other / 'audio_cache/voice.mp3')}).status_code == 403
     (home / 'audio_cache/escape.mp3').symlink_to(other / 'audio_cache/voice.mp3')
     assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'media_path': str(home / 'audio_cache/escape.mp3')}).status_code == 403
+
+
+def test_generated_grant_is_profile_owned_and_not_a_profile_store_grant(client):
+    c, home = client
+    other = home / 'profiles/b'
+    other.mkdir(parents=True); (other / 'config.yaml').write_text('{}')
+    for profile, base in [('default', home), ('b', other)]:
+        root = base / 'cache/generated/images'; root.mkdir(parents=True)
+        (root / 'original.png').write_bytes(profile.encode())
+    grants = {}
+    for profile in ['default', 'b', 'default']:
+        items = c.get(P + '/workspaces', params={'profile': profile}).json()['items']
+        grant = next(w for w in items if w['name'] == 'Generated')
+        base = home if profile == 'default' else other
+        assert grant['root_path'] == str(base / 'cache/generated/images')
+        grants[profile] = grant
+        params = {'profile': profile, 'workspace_id': grant['id'], 'path': 'original.png'}
+        assert c.get(P + '/workspace-files/download', params=params).content == profile.encode()
+        listing = c.get(P + '/workspace-files', params={**params, 'path': ''}).json()
+        assert [r['name'] for r in listing['items']] == ['original.png']
+        assert c.get(P + '/workspace-files/download', params={**params, 'profile': 'b' if profile == 'default' else 'default'}).status_code == 404
+    assert grants['default']['id'] != grants['b']['id']
+    # Configured roots keep their existing denial, even with generation_roots.
+    (home / 'config.yaml').write_text('cloudseed_mobile:\n  generation_roots:\n    - ' + str(home) + '\n    - ' + str(home / 'cache') + '\n')
+    from plugins.cloudseed_mobile import workspace_files as files
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    token = set_hermes_home_override(home)
+    try:
+        assert not files.safe_root(home) and not files.safe_root(home / 'cache')
+        assert {w['root_path'] for w in files.workspaces('default', True)['items']} == {str(home / 'cache/generated/images')}
+    finally:
+        reset_hermes_home_override(token)
+
+
+@pytest.mark.platforms('posix')
+@pytest.mark.parametrize('escape', ['root_link', 'file_link', 'directory_link', 'fifo', 'directory'])
+def test_generated_grant_nofollow_and_nonregular_denials(client, escape):
+    c, home = client
+    root = home / 'cache/generated/images'; root.mkdir(parents=True)
+    outside = home / 'cache/other'; outside.mkdir()
+    (outside / 'original.png').write_bytes(b'not granted')
+    if escape == 'root_link':
+        root.rmdir(); root.symlink_to(outside, target_is_directory=True)
+        assert not c.get(P + '/workspaces', params={'profile': 'default'}).json()['items']
+        return
+    if escape == 'file_link': (root / 'original.png').symlink_to(outside / 'original.png')
+    elif escape == 'directory_link': (root / 'link').symlink_to(outside, target_is_directory=True)
+    elif escape == 'fifo': os.mkfifo(root / 'original.png')
+    else: (root / 'original.png').mkdir()
+    grant = next(w for w in c.get(P + '/workspaces', params={'profile': 'default'}).json()['items'] if w['name'] == 'Generated')
+    paths = ['link/original.png' if escape == 'directory_link' else 'original.png',
+             '../other/original.png', '../../config.yaml', '%2e%2e/config.yaml', '%252e%252e/config.yaml']
+    for path in paths:
+        for route in ['read', 'download', 'stream']:
+            assert c.get(P + '/workspace-files/' + route, params={'profile': 'default', 'workspace_id': grant['id'], 'path': path}).status_code in (400, 403, 404)
+    # A grant that existed before its directory was replaced cannot follow the replacement.
+    if escape == 'directory':
+        (root / 'original.png').rmdir(); root.rmdir(); root.symlink_to(outside, target_is_directory=True)
+        assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'workspace_id': grant['id'], 'path': 'original.png'}).status_code == 404

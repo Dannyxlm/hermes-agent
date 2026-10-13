@@ -21,7 +21,7 @@ MAX_NODES=512
 MAX_REFERENCES=500
 MUTATIONS={'write_file':'created','write':'created','patch':'edited','edit':'edited','edit_file':'edited','move':'edited','move_file':'edited','delete':'edited','delete_file':'edited','read_file':'read'}
 PRODUCERS={'image_generate','text_to_speech','write_file','pdf','powerpoint','docx','xlsx','browser_vision','capture_screenshot'}
-OUTPUT_KEYS={'path','file_path','output_path','image_url','audio_path','video_path','download_url','media','url'}
+OUTPUT_KEYS={'path','file_path','output_path','image','image_url','audio_path','video_path','download_url','media','url'}
 # These tools echo files, transcripts, page text or arbitrary program stdout.
 # A MEDIA example in that content is not a delivery by the enclosing tool.
 CONTENT_READERS={
@@ -32,6 +32,15 @@ CONTENT_READERS={
     'browser_console','browser_click','browser_back','browser_scroll',
     'browser_press','browser_type','browser_get_images',
 }
+
+
+def is_image(display_name, mime):
+    """Match the native reader's raster category; SVG stays a document."""
+    extension = PurePosixPath(display_name or '').suffix.lower().lstrip('.')
+    mime = (mime or '').lower().split(';', 1)[0].strip()
+    if extension in {'svg','pdf','html','htm'} or mime in {'image/svg+xml','application/pdf','text/html'}:
+        return False
+    return extension in {'png','jpg','jpeg','gif','webp','heic','bmp','tiff','ico'} or mime.startswith('image/')
 
 
 def decode(value):
@@ -186,6 +195,7 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
     seen=set(); count=0; ranks={}
     aliases=workspace_aliases(workspaces)
     roots={w['id']:w['root_path'] for w in workspaces}
+    generated_ids={w['id'] for w in workspaces if w.get('generated')}
     availability={}
     subagent=delegate_child(session)
     message_order={id(m):i for i,m in enumerate(messages)}
@@ -209,6 +219,8 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
         occurrence={'id':occurrence_id,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512]}
         row={'schema_version':SCHEMA_VERSION,'id':rid,'profile':profile,**loc,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],'display_type':mimetypes.guess_type(loc['display_name'])[0] or 'application/octet-stream','occurrences':[]}
         if subagent: row['subagent']=True
+        if loc.get('workspace_id') in generated_ids:
+            row['generated']=True
         if artifact:
             slug=artifact_slug(artifact['kind'],artifact['language'],artifact['title'])
             seq=message['id'] if isinstance(message.get('id'),int) else message_order.get(id(message),0)

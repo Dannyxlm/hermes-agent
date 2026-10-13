@@ -52,7 +52,7 @@ def test_versions_group_in_message_order_and_recent_collapses(client):
           [(1, 's', fence(V1), 100.0), (2, 's', fence(V2), 200.0), (3, 's', fence(V3), 300.0),
            (4, 's', fence(page('Other page')), 150.0)])
     built = index(home)
-    assert built.snapshot()['scan_version'] == 6
+    assert built.snapshot()['scan_version'] == ix.SCAN_VERSION
     recent = inline(built.query())
     pricing = [r for r in recent if r['artifact_title'] == 'Pricing page']
     assert len(pricing) == 1 and len(recent) == 2
@@ -175,7 +175,7 @@ def test_scan_version_bump_rebuilds_a_v5_cache(client):
         db.execute("UPDATE segments SET fingerprint='v5'")
     assert built.snapshot()['refresh_pending'] is True
     built.refresh(max_sessions=50)
-    assert built.snapshot()['scan_version'] == 6
+    assert built.snapshot()['scan_version'] == ix.SCAN_VERSION
     assert inline(built.query())[0]['version_count'] == 1
 
 

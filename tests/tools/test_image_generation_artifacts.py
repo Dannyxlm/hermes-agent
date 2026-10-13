@@ -3,6 +3,8 @@ import json
 import threading
 from types import SimpleNamespace
 
+from tests.plugins.test_cloudseed_mobile import client
+
 
 def test_postprocess_adds_agent_visible_image_for_active_ssh_env(monkeypatch, tmp_path):
     from tools import image_generation_tool
@@ -147,3 +149,48 @@ def test_handle_image_generate_postprocesses_plugin_result(monkeypatch, tmp_path
 
     assert seen_task_ids == ["plugin-task"]
     assert result["agent_visible_image"] == "/home/remote/.hermes/cache/images/plugin.png"
+
+
+def test_provider_dispatch_original_survives_cleanup_and_reaches_files(client, monkeypatch):
+    import base64
+    import importlib
+    import os
+    import time
+    from pathlib import Path
+    from gateway.platforms import base
+    from tests.plugins.cloudseed_mobile.test_deliverables_recent_exists import seed, image_page
+    from tests.plugins.test_cloudseed_mobile import P
+    from tools import image_generation_tool
+
+    c, home = client
+    meta = importlib.import_module('plugins.image_gen.meta-ai')
+    original = b'RIFFsynthetic-webp-original'
+    sdk = SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(images=SimpleNamespace(
+        generate=lambda **kwargs: SimpleNamespace(data=[SimpleNamespace(
+            b64_json=base64.b64encode(original).decode(), url=None)]))))
+    monkeypatch.setattr(meta, '_resolve_api_key', lambda: 'fixture')
+    monkeypatch.setattr(meta, 'import_openai', lambda *args: (sdk, None))
+    monkeypatch.setattr(image_generation_tool, '_get_plugin_provider', lambda *args, **kwargs: meta.MetaImageGenProvider())
+    (home / 'config.yaml').write_text('image_gen:\n  provider: meta-ai\n')
+    synced = []
+    env = SimpleNamespace(_remote_home='/home/fixture-remote',
+                          _sync_manager=SimpleNamespace(sync=lambda **kwargs: synced.append(kwargs)))
+    monkeypatch.setattr(image_generation_tool, '_active_terminal_env', lambda task_id: env)
+    result = json.loads(image_generation_tool._handle_image_generate({'prompt': 'synthetic'}, task_id='fixture'))
+    assert result['success'] and result['provider'] == 'meta-ai'
+    path = Path(result['image'])
+    assert path.parent == home / 'cache/generated/images'
+    assert path.read_bytes() == original and result['host_image'] == str(path)
+    assert result['agent_visible_image'] == '/home/fixture-remote/.hermes/cache/generated/images/' + path.name
+    assert synced == [{'force': True}]
+    monkeypatch.setattr(base, '_HERMES_ROOT', home)
+    transient = base.get_image_cache_dir() / 'old.png'
+    transient.write_bytes(b'transient')
+    old = time.time() - 25 * 3600
+    for p in [path, transient]: os.utime(p, (old, old))
+    base.cleanup_image_cache(max_age_hours=24)
+    assert not transient.exists() and path.read_bytes() == original
+    seed(home, home, [('tool', json.dumps(result), 'image_generate')])
+    image_page(c)
+    row = image_page(c)['items'][0]
+    assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'id': row['id']}).content == original
