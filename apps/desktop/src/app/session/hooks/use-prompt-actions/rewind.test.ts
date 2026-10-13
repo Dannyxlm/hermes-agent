@@ -16,6 +16,7 @@ import {
   planRestore,
   rebindSurvivorRowIds,
   resolveDurableRowId,
+  retryKeepsDeepConfirm,
   revalidateEditPlan,
   runRewindSubmit,
   survivorRowIdsFrom,
@@ -831,5 +832,20 @@ describe('revalidateEditPlan (#133716)', () => {
     expect(
       revalidateEditPlan(plan, planned, [...streamed, row('u3', 'user', 'unseen', { rowId: 15 })], edit)
     ).toBeNull()
+  })
+})
+
+describe('deep consent covers the actual later turns', () => {
+  it.each([
+    row('u3', 'user', 'unseen', { rowId: 15 }),
+    row('u2', 'user', 'changed content', { rowId: 13 }),
+    row('u2', 'user', 'seen', { rowId: 13, attachmentRefs: ['@file:unseen.txt'] })
+  ])('rejects an equally sized replacement after confirmation and on retry: %j', replacement => {
+    const planned = [row('u1', 'user', 'first', { rowId: 11 }), row('u2', 'user', 'seen', { rowId: 13 })]
+    const changed = [planned[0], replacement]
+    const edit = { role: 'user', sourceId: 'u1', parentId: null, content: [{ type: 'text', text: 'edited' }] } as never
+    const plan = { ...planEdit(planned, edit)!, confirmDeepTruncate: true }
+    expect(revalidateEditPlan(plan, planned, changed, edit)).toBeNull()
+    expect(retryKeepsDeepConfirm(plan, planned, planEdit(changed, edit), changed)).toBe(false)
   })
 })

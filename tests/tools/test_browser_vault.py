@@ -788,7 +788,8 @@ def test_every_vault_tool_is_in_the_browser_toolset():
     from tools import browser_vault_tool
     from tools.registry import registry
 
-    registered = {e.name for e in registry.get_all_entries() if e.name.startswith("browser_vault_")}
+    registered = {e.name for e in registry.get_all_entries() if e.name == "browser_vault" or e.name.startswith("browser_vault_")}
+    assert "browser_vault" in registered
     assert registered <= set(toolsets.TOOLSETS["browser"]["tools"]), registered - set(toolsets.TOOLSETS["browser"]["tools"])
 
 

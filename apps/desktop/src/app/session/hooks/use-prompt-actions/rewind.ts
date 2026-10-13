@@ -740,9 +740,21 @@ export async function planConfirmedEdit(
   return plan && confirmIfDeepCut(messages, plan, plan.sourceIndex, confirmDeep)
 }
 
-/** Visible user turns after *index*: what a cut there archives, and what a deep confirm covered. */
-export const laterVisibleUserTurns = (messages: ChatMessage[], index: number) =>
-  messages.filter((m, i) => i > index && isVisibleUserMessage(m)).length
+/** Consent covers the identity and content of later user turns, including attachments.
+ * Assistant streaming and cosmetic metadata do not change that consent. */
+function laterVisibleUserTurnSnapshot(messages: ChatMessage[], index: number): string {
+  return JSON.stringify(
+    messages
+      .slice(index + 1)
+      .filter(isVisibleUserMessage)
+      .map(({ id, rowId, parts, attachmentRefs }) => ({
+        id,
+        rowId,
+        parts,
+        attachmentRefs
+      }))
+  )
+}
 
 /**
  * After an awaited confirm, an edit plan still holds when the same turn is the target in the
@@ -757,13 +769,13 @@ export function revalidateEditPlan<P extends EditPlan>(
 ): P | null {
   const fresh = planEdit(current, edited)
 
-  // A new later user turn landed during the confirm: the user never answered for archiving it.
+  // New or replaced later user turns were not covered by the confirmation.
   if (
     !fresh ||
     fresh.truncateMessageId !== plan.truncateMessageId ||
     fresh.truncateRowId !== plan.truncateRowId ||
     fresh.truncateOrdinal !== plan.truncateOrdinal ||
-    laterVisibleUserTurns(current, fresh.sourceIndex) !== laterVisibleUserTurns(planned, plan.sourceIndex)
+    laterVisibleUserTurnSnapshot(current, fresh.sourceIndex) !== laterVisibleUserTurnSnapshot(planned, plan.sourceIndex)
   ) {
     return null
   }
@@ -805,8 +817,8 @@ export async function planEditAfterConfirm(opts: {
 
 /**
  * A stale-target retry re-addresses the same turn after a history refresh. The user's deep-cut
- * answer covers the later turns they saw; if the refresh shows more, the retry goes unconfirmed and
- * the server gate decides.
+ * answer covers only the later turns they saw. If any changed, the caller must renew consent
+ * locally: older gateways do not enforce the deep-cut flag.
  */
 export function retryKeepsDeepConfirm(
   plan: EditPlan & { confirmDeepTruncate: boolean },
@@ -817,7 +829,8 @@ export function retryKeepsDeepConfirm(
   return (
     plan.confirmDeepTruncate &&
     retryPlan !== null &&
-    laterVisibleUserTurns(refreshed, retryPlan.sourceIndex) === laterVisibleUserTurns(planned, plan.sourceIndex)
+    laterVisibleUserTurnSnapshot(refreshed, retryPlan.sourceIndex) ===
+      laterVisibleUserTurnSnapshot(planned, plan.sourceIndex)
   )
 }
 
