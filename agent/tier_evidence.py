@@ -165,6 +165,12 @@ def observe_tier_stream(wire, kwargs, create):
     except BaseException:
         observation.finish("error")
         raise
+    # Match Codex Relay's completed-response predicate before adding __iter__.
+    # Some factories return a completed Response even when stream=True.
+    if wire == "responses" and hasattr(stream, "output") and not hasattr(stream, "__iter__"):
+        observation.response(stream)
+        observation.finish("returned")
+        return stream
     return _ObservedStream(stream, observation)
 
 

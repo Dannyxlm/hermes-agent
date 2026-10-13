@@ -109,6 +109,37 @@ def test_stream_manager_enter_failure_preserves_exception(caplog):
     assert _rows(caplog)[1]["outcome"] == "error"
 
 
+def test_responses_iterable_with_output_still_observes_events_and_cleanup(caplog):
+    event = NS(type="response.completed", response=NS(service_tier="priority", status="completed"))
+    raw = SDKStream([event])
+    raw.output = []  # An output attribute alone must not select the completed-response path.
+    stream = observe_tier_stream("responses", {}, lambda **_k: raw)
+    assert len(_rows(caplog)) == 1  # No eager iteration or premature returned record.
+    assert list(stream) == [event]
+    stream.close()
+    assert raw.closed
+    _, response = _rows(caplog)
+    assert response["outcome"] == "terminal" and response["served_tier"] == "priority"
+
+
+@pytest.mark.parametrize("failure", ["open", "non_response"])
+def test_responses_stream_invalid_result_or_open_error_still_fails(caplog, failure):
+    error = RuntimeError("SENTINEL")
+
+    def create(**_kwargs):
+        if failure == "open":
+            raise error
+        return NS(service_tier="priority")  # Not a completed Response: no output.
+
+    with pytest.raises(RuntimeError if failure == "open" else TypeError) as raised:
+        list(observe_tier_stream("responses", {}, create))
+    if failure == "open":
+        assert raised.value is error
+    _, response = _rows(caplog)
+    assert response["outcome"] == "error"
+    assert response["served_tier"] == response["served_source"] == "absent"
+
+
 def test_raw_dict_codex_stream_never_infers_tier_from_request(caplog):
     event = {"type": "response.completed", "response": {"usage": None, "id": "SENTINEL"}}
     stream = observe_tier_stream("responses", {"service_tier": "priority"}, lambda **_k: iter([event]))

@@ -127,6 +127,35 @@ def test_codex_final_sdk_kwargs_and_raw_terminal_tier(monkeypatch, caplog, termi
     assert request["service_tier"] == "priority"
 
 
+@pytest.mark.parametrize("tier", ["priority", None, SENTINEL])
+def test_codex_completed_response_despite_stream_preserves_output_and_evidence(caplog, tier):
+    agent = _agent("responses")
+    message = NS(type="message", role="assistant", status="completed", id="synthetic-message",
+                 content=[NS(type="output_text", text=SENTINEL, annotations=[])])
+    completed = NS(output=[message], status="completed", service_tier=tier, id="synthetic-response",
+                   usage=NS(input_tokens=1, output_tokens=1, total_tokens=2), model="synthetic-model")
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return completed
+
+    agent.client = NS(responses=NS(create=create))
+    try:
+        result = agent._run_codex_stream({"model": "synthetic-model", "input": [],
+                                          "instructions": SENTINEL, "service_tier": "flex"})
+    finally:
+        agent.close()
+    assert len(calls) == 1 and calls[0]["stream"] is True
+    assert result is completed
+    assert result.output == [message] and result.output[0].content[0].text == SENTINEL
+    before, after = _pair(caplog)
+    assert before["req_service_tier"] == "flex"
+    assert after["served_tier"] == ("absent" if tier is None else "priority" if tier == "priority" else "unknown")
+    assert after["served_source"] == ("absent" if tier is None else "response")
+    assert after["response_status"] == "completed" and after["outcome"] == "returned"
+
+
 @pytest.mark.parametrize("tier", ["standard", None, SENTINEL, "x" * 10000, ["standard"], 42])
 def test_anthropic_main_stream_nested_tier_and_no_content(monkeypatch, caplog, tier):
     agent = _agent("anthropic_messages")
