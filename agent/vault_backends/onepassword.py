@@ -145,7 +145,8 @@ class OnePasswordLoginBackend(LoginBackend):
                 if self.payment_cards:
                     out.append(VaultItemMeta(
                         id=f"{self.prefix}{item_id}", kind="payment", label=str(item.get("title") or "Card"),
-                        origin=None, created_at=str(item.get("created_at") or ""), any_origin=True))
+                        origin=None, created_at=str(item.get("created_at") or ""), any_origin=True,
+                        last4=card_last4_from_list(str(item.get("additional_information") or ""))))
                 continue
             urls = [str(u["href"]) for u in item.get("urls") or [] if isinstance(u, dict) and u.get("href")]
             origins = _all_origins(urls)
@@ -173,6 +174,18 @@ class OnePasswordLoginBackend(LoginBackend):
             return None
         return code if code.isdigit() else None
 
+    def card_limit_text(self, handle: str) -> Optional[str]:
+        """The Credit Card item's built-in "credit limit" (or a custom "Limit") field. Plain text fields only:
+        ``--fields`` selects them by label, so no concealed value is ever read for this."""
+        for label in ("credit limit", "Limit"):
+            try:
+                value = self._item_get(handle, "--fields", f"label={label}").strip()
+            except Exception:
+                continue
+            if value:
+                return value[:40]
+        return None
+
     def resolve_secret(self, handle: str) -> dict[str, str]:
         """Card payload for a Credit Card item (server-side only); the password shape otherwise."""
         if not self.payment_cards:
@@ -181,6 +194,13 @@ class OnePasswordLoginBackend(LoginBackend):
         if str(item.get("category") or "").upper() != "CREDIT_CARD":
             return super().resolve_secret(handle)
         return card_payload(item.get("fields") or [])
+
+
+def card_last4_from_list(masked: str) -> Optional[str]:
+    """Last four digits from 1Password's masked card subtitle (``"4111 **** 4821"``). An unmasked string is
+    refused, so a full card number can never pass through here into metadata."""
+    m = re.fullmatch(r"(?:\d{4}\s*)?[*•·]+\s*(\d{4})", (masked or "").strip())
+    return m.group(1) if m else None
 
 
 def card_payload(fields: list) -> dict[str, str]:

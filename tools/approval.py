@@ -136,16 +136,29 @@ def unregister_gateway_notify(session_key: str) -> None:
             entry.event.set()
 
 
+APPROVAL_AUTH_LABELS = frozenset({"face_id", "touch_id", "optic_id", "passcode"})
+
+
+def normalize_approval_auth(auth) -> Optional[str]:
+    """How the approving device authenticated the human (a client-reported label shown on the payment
+    receipt), restricted to known labels so no client text reaches a tool result."""
+    return auth if isinstance(auth, str) and auth in APPROVAL_AUTH_LABELS else None
+
+
 def resolve_gateway_approval(session_key: str, choice: str,
                              resolve_all: bool = False,
                              reason: Optional[str] = None,
-                             request_id: Optional[str] = None) -> int:
+                             request_id: Optional[str] = None,
+                             auth: Optional[str] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
     *resolve_all* resolves every pending approval (``/approve all``); otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
-    relayed to the agent in the BLOCKED message. Returns the number resolved.
+    relayed to the agent in the BLOCKED message. *auth* is the device authentication a native
+    client reports with its answer (``face_id``/``passcode``…); unknown labels are dropped.
+    Returns the number resolved.
     """
+    auth = normalize_approval_auth(auth)
     with _lock:
         queue = _gateway_queues.get(session_key)
         if not queue:
@@ -169,6 +182,7 @@ def resolve_gateway_approval(session_key: str, choice: str,
             entry.result = choice
             if reason:
                 entry.reason = reason
+            entry.auth = auth
             entry.event.set()
     return len(targets)
 

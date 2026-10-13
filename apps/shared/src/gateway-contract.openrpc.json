@@ -6063,6 +6063,18 @@
             ],
             "default": null,
             "title": "All"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Auth"
           }
         },
         "required": [

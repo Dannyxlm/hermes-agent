@@ -124,6 +124,9 @@ class ApprovalRequestParams(ServerRequestParams):
 class ApprovalResult(Result):
     choice: ApprovalChoice
     all: bool | None = None
+    # How a native client authenticated the human before answering (face_id/touch_id/optic_id/passcode).
+    # Shown on payment receipts; unknown labels are dropped server-side.
+    auth: str | None = None
 
 
 server_request("approval", params=ApprovalRequestParams, result=ApprovalResult,

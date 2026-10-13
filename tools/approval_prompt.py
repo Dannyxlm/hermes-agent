@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from tools import approval_context as _ctx, approval_gateway_wait as _gw
 from tools.approval_human_wait import activity_heartbeat, human_wait_window
 from tools.interrupt import is_interrupted
@@ -279,20 +280,27 @@ def _transport_choice(attempt: dict, *, pattern_key: str, description: str):
 
 def _consent(choice, unresolved: str) -> str:
     """Map an approval choice to an elicitation verdict; *unresolved* is the no-answer outcome."""
-    if choice in ("once", "session", "always"):
+    if choice == "once":  # per-call confirmation never grants a reusable scope
         return "accept"
     return unresolved if choice in ("timeout", "cancelled") else "decline"
 
 
 def request_elicitation_consent(message: str, description: str, *,
                                 timeout_seconds: int | None = None,
-                                surface: str = "mcp-elicitation", title: str = "Confirm this action?") -> str:
+                                surface: str = "mcp-elicitation", title: str = "Confirm this action?",
+                                extra: dict | None = None, details: dict | None = None) -> str:
     """Route an MCP elicitation request to the surface owning the active session:
     gateway sessions through ``_await_gateway_decision``, CLI/TUI through
     ``prompt_dangerous_approval``. Always fails closed: a missing notify_cb in a
     gateway session, timeouts, and exceptions map to ``"decline"`` so a server
     treats them as "user did not approve" rather than retrying or hanging.
-    Returns ``"accept" | "decline" | "cancel"``."""
+    Returns ``"accept" | "decline" | "cancel"``.
+
+    *extra* adds structured, non-secret presentation fields to the gateway request (the vault-payment
+    card's ``payment`` block, ``surface``, offered scopes); it can never replace the command, description
+    or pattern keys. Elicitation is per-call consent: only ``once`` accepts, so a ``session``/``always``
+    answer from any surface is refused. *details*, when given, receives ``auth`` (device authentication
+    the native client reported) and ``decided_at`` for an answered request."""
     from tools import approval as _a
     try:
         session_key = _ctx.get_current_session_key()
@@ -315,11 +323,13 @@ def request_elicitation_consent(message: str, description: str, *,
             logger.warning("Elicitation requested in gateway session %s but no "
                            "notify_cb is registered — failing closed", session_key)
             return "decline"
+        approval_data = {k: v for k, v in (extra or {}).items()
+                         if k not in ("command", "description", "pattern_key", "pattern_keys", "request_id")}
+        # Per-call consent on every surface: no session/permanent scope is ever offered.
+        approval_data.update(command=message, description=description, pattern_key="mcp_elicitation",
+                             pattern_keys=["mcp_elicitation"], allow_session=False, allow_permanent=False)
         try:
-            decision = _gw._await_gateway_decision(
-                session_key, notify_cb, {"command": message, "description": description,
-                                         "pattern_key": "mcp_elicitation",
-                                         "pattern_keys": ["mcp_elicitation"]}, surface=surface)
+            decision = _gw._await_gateway_decision(session_key, notify_cb, approval_data, surface=surface)
         except Exception as exc:
             logger.error("Elicitation gateway dispatch failed: %s", exc, exc_info=True)
             return "decline"
@@ -327,6 +337,8 @@ def request_elicitation_consent(message: str, description: str, *,
             return "decline"
         if not decision.get("resolved") or decision.get("cancelled"):
             return "cancel"  # nobody answered (timeout / prompt withdrawn) — not a user refusal
+        if details is not None:
+            details.update(auth=decision.get("auth"), decided_at=time.time())
         return _consent(decision.get("choice"), "decline")
 
     # Nobody can answer a -q, cron or unattended-platform worker. A `hermes chat -q` turn still has the CLI's
@@ -346,9 +358,11 @@ def request_elicitation_consent(message: str, description: str, *,
         # allow_permanent=False: elicitation is a per-call confirmation — no pattern to remember.
         # Pass the agent thread's panel callback: without it prompt_toolkit fails the prompt closed unseen.
         choice = prompt_dangerous_approval(message, description, timeout_seconds=timeout_seconds,
-                                           allow_permanent=False, title=title,
+                                           allow_permanent=False, allow_session=False, title=title,
                                            approval_callback=_get_approval_callback())
         hook_choice = choice
+        if details is not None and choice not in ("timeout", "cancelled"):
+            details.update(auth=None, decided_at=time.time())
     except Exception as exc:
         logger.error("Elicitation CLI prompt failed: %s", exc, exc_info=True)
         return "decline"

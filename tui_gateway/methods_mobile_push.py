@@ -432,8 +432,28 @@ def _mobile_push_plan(session):
     return sum(1 for state in states if state == "completed"), len(states)
 
 
+def _mobile_push_payment_ask(payment: dict) -> str:
+    """Lock-screen copy for a card approval: total, exact host, card. No Approve action rides on it: approving
+    needs the app and Face ID."""
+    from urllib.parse import urlsplit
+    host = urlsplit(str(payment.get("origin") or "")).hostname or "this site"
+    total = payment.get("total") if isinstance(payment.get("total"), dict) else None
+    head = f"Approve {total.get('display')} at {host}?" if total and total.get("display") else \
+        f"Approve card fill at {host}?"
+    card = payment.get("card") if isinstance(payment.get("card"), dict) else {}
+    tail = str(card.get("label") or "card")
+    if card.get("last4"):
+        tail += f" ••{card['last4']}"
+    lines = payment.get("lines") if isinstance(payment.get("lines"), list) else []
+    if lines:
+        tail += f" · {len(lines)} item{'s' if len(lines) != 1 else ''}"
+    return f"{head} {tail}"
+
+
 def _mobile_push_ask(event, payload):
     if event == "approval.request":
+        if payload.get("surface") == "vault-payment" and isinstance(payload.get("payment"), dict):
+            return _mobile_push_payment_ask(payload["payment"])
         return str(payload.get("description") or payload.get("command") or "")
     questions = payload.get("questions")
     if isinstance(questions, list) and questions and isinstance(questions[0], dict):

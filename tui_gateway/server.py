@@ -868,8 +868,10 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
                                                     "(update the Hermes app)")
             return
         choice = str(result.get("choice") or "deny")
+        # A native client reports how the human authenticated (Face ID before a payment); known labels only.
         _approval.resolve_gateway_approval(session_key, choice, resolve_all=bool(result.get("all")),
-                                           request_id=request_id or None)
+                                           request_id=request_id or None,
+                                           auth=_approval.normalize_approval_auth(result.get("auth")))
 
     settle = server_requests.send_async("approval", sid, payload, on_result)
     # The wait can end between the frame going out and the hook attaching (the client answered by RPC, another

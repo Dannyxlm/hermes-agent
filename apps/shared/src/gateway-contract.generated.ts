@@ -5048,6 +5048,7 @@ export interface ApprovalRequestParams {
 export interface ApprovalResult {
   choice: ApprovalChoice
   all?: boolean | null
+  auth?: string | null
 }
 /** Original command, redacted server-side before any password-injection rewrite. */
 export interface SudoRequestParams {
