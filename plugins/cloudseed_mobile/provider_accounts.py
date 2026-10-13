@@ -18,7 +18,7 @@ from datetime import datetime, timezone, UTC
 from pathlib import Path
 from types import SimpleNamespace
 
-PROVIDERS = {"anthropic": "Anthropic", "openai-codex": "Codex"}
+PROVIDERS = {"anthropic": "Anthropic", "openai-codex": "Codex", "xai-oauth": "Grok"}
 _USAGE_TTL = 60
 _USAGE_RETRY = 15
 _USAGE_CAPACITY = 128
@@ -233,6 +233,23 @@ def _invalidate_usage(home, provider):
         # known windows; only older in-flight completions are fenced out.
 
 
+def _grok_billing_headers(token):
+    from plugins.cloudseed_mobile.account_render import _decode_jwt_claims_unverified
+
+    # This is a routing hint from THIS saved bearer, not local authentication.
+    # The billing service authenticates it. Pool row IDs are not Grok user IDs.
+    subject = _decode_jwt_claims_unverified(token).get("sub")
+    if (not isinstance(subject, str) or not 0 < len(subject) <= 1024
+            or any(not 33 <= ord(char) <= 126 for char in subject)):
+        raise ValueError("No usable saved Grok identity")
+    # Match grok-build's billing.rs / xai-grok-http contract at 2bdd1d6a6369.
+    # 1.0.45 is that client's compatibility version; this server probe is headless.
+    return {"Authorization": f"Bearer {token}", "X-XAI-Token-Auth": "xai-grok-cli",
+            "x-userid": subject, "x-grok-client-version": "1.0.45",
+            "x-grok-client-mode": "headless",
+            "Accept": "application/json", "Content-Type": "application/json"}
+
+
 def _probe_usage(provider, entry):
     """Use Hermes's usage HTTP/parsing primitives with THIS row's credential.
 
@@ -256,6 +273,22 @@ def _probe_usage(provider, entry):
         windows = usage._usage_windows(payload, (("five_hour", "Current session"), ("seven_day", "Current week"),
                     ("seven_day_opus", "Opus week"), ("seven_day_sonnet", "Sonnet week")),
                     "utilization", "resets_at", fraction=False)
+    elif provider == "xai-oauth":
+        if entry.base_url and entry.base_url.rstrip("/") != "https://api.x.ai/v1":
+            raise ValueError("Unsupported usage route")
+        headers = _grok_billing_headers(token)
+        payload = usage._get_json("https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, timeout=5.0)
+        config = payload.get("config") or {}
+        period = config.get("currentPeriod") or {}
+        used = config.get("creditUsagePercent")
+        # A missing/invalid percentage is unknown, not a fresh allowance. The
+        # range check also rejects NaN and infinities before serialization.
+        if not isinstance(used, (int, float)) or isinstance(used, bool) or not 0 <= used <= 100:
+            used = None
+        windows = [usage.AccountUsageWindow(
+            label="Current week" if period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY" else "Current period",
+            used_percent=used, reset_at=usage._parse_dt(period.get("end")),
+        )]
     else:
         # Only the official usage host receives subscription tokens. A proxy
         # credential is not an OAuth subscription and must never be forwarded.
