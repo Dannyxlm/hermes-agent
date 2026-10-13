@@ -452,7 +452,7 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         select_password_fill,
     )
     from agent.vault_backends import UnlockRequired, backend_for_handle
-    from agent.vault_store import ADDRESS_FIELDS, PAYMENT_FIELDS, scrub_secret_from_text
+    from agent.vault_store import ADDRESS_FIELDS, PAYMENT_FIELDS, VaultError, scrub_secret_from_text
 
     effective_task_id = task_id or "default"
     backend = backend_for_handle(handle)
@@ -604,7 +604,7 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         if receipt is not None:
             out["fresh_request_needed"] = True
         return with_receipt(out)
-    except Exception:
+    except (VaultError, OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError):
         # Resolution may fail before a secret dictionary exists to scrub against. Never echo
         # provider exception text: it may include a card, token or other credential.
         out = {"success": False, "error_type": "secret_resolution_failed",
@@ -614,9 +614,7 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         return with_receipt(out)
     if not fills:
         out = {"success": False, "error": f"No fillable {meta.kind} field matched the saved item on this page."}
-        if receipt is not None:
-            out["payment"] = receipt
-        return json.dumps(out)
+        return with_receipt(out)
 
     # Register the secret bytes with the model-egress redaction boundary
     # BEFORE they touch the page: any later browser_* result (including
@@ -669,11 +667,14 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
 
 def _payment_limits_config() -> dict:
     """``vault.payment_limits``: card label → ``{amount, currency, period}``. Missing → {}."""
+    from hermes_cli.config import load_config_readonly
+    from hermes_cli.config_home import HomeInitializationError
+
     try:
-        from hermes_cli.config import load_config_readonly
-        limits = (load_config_readonly().get("vault") or {}).get("payment_limits") or {}
-    except Exception:
+        vault = load_config_readonly().get("vault")
+    except (OSError, HomeInitializationError):
         return {}
+    limits = vault.get("payment_limits") if isinstance(vault, dict) else None
     return limits if isinstance(limits, dict) else {}
 
 
@@ -702,10 +703,12 @@ def _card_limit(backend, handle: str, label: str) -> Optional[dict]:
             period = str(entry.get("period") or "")
             return {"amount_minor": round(amount * 100), "currency": currency,
                     "period": period if period in ("per_purchase", "monthly") else "unknown", "source": "config"}
+    from agent.vault_backends import UnlockRequired
+
     getter = getattr(backend, "card_limit_text", None)
     try:
         text = getter(handle) if callable(getter) else None
-    except Exception:
+    except (UnlockRequired, RuntimeError, json.JSONDecodeError):
         text = None
     if not text:
         return None
@@ -724,11 +727,11 @@ def _checkout_summary(task_id: str) -> Optional[dict]:
 
     try:
         res = _eval_js(task_id, ORDER_SUMMARY_JS)
-        raw = _parse_json_result(res.get("result")) if res.get("success") else None
+        raw = _parse_json_result(res.get("result")) if isinstance(res, dict) and res.get("success") else None
         if isinstance(raw, str):
             raw = _parse_json_result(raw)
         return summarize_checkout(raw) if isinstance(raw, dict) else None
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -736,13 +739,15 @@ def _payment_approval_block(task_id: str, backend, handle: str, meta, origin: st
     """The ``payment`` block of a vault-payment approval (contract v1). ``origin`` is the browser's exact page
     origin and ``card`` comes from the vault; merchant/total/items are read deterministically from the page
     and labelled ``source: page``. The full card number, expiry and CVC never appear here."""
+    from agent.vault_backends import UnlockRequired
+    from agent.vault_store import VaultError
     from agent.vault_checkout_summary import summarize_checkout
 
     summary = _checkout_summary(task_id) or summarize_checkout(None)
     getter = getattr(backend, "card_last4", None)
     try:
         last4 = getter(handle) if callable(getter) else getattr(meta, "last4", None)
-    except Exception:
+    except (UnlockRequired, VaultError, OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError):
         last4 = None
     last4 = last4 if isinstance(last4, str) and len(last4) == 4 and last4.isdigit() else None
     limit = _card_limit(backend, handle, meta.label)
@@ -809,7 +814,7 @@ def _confirm_payment_fill(label: str, origin: str, payment: dict, *, unbound: bo
     command, description, title = _payment_copy(payment, unbound=unbound)
     try:
         timeout = max(float(_ctx._get_approval_timeout()), 0.0)
-    except Exception:
+    except (TypeError, ValueError, OverflowError, AttributeError):
         timeout = 300.0
     created = time.time()
     extra = {"surface": "vault-payment", "allow_session": False, "allow_permanent": False, "payment": payment,

@@ -15,20 +15,17 @@ def test_changed_checkout_needs_fresh_approval_before_secret_resolution(change):
 
     def consent(*args, **kwargs):
         verdict = human(*args, **kwargs)
-        if change == "total":
-            summary["rows"][-2] = "Order total USD $40.00"
-        elif change == "currency":
-            summary["rows"][-2] = "Order total CAD $32.77"
-        elif change == "merchant":
-            summary["site_name"] = "Different Merchant"
-        elif change == "item":
-            summary["rows"][0] = "Different licence ×1 $29.00"
-        elif change == "quantity":
-            summary["rows"][0] = "Plex Serif — Desktop licence ×2 $29.00"
-        elif change == "adjustment":
-            summary["rows"] = ["Plex Serif — Desktop licence ×1 $28.00", "Tax $4.77", "Order total USD $32.77"]
-        else:
-            summary.clear()
+        mutations = {
+            "total": lambda: summary["rows"].__setitem__(-2, "Order total USD $40.00"),
+            "currency": lambda: summary["rows"].__setitem__(-2, "Order total CAD $32.77"),
+            "merchant": lambda: summary.update(site_name="Different Merchant"),
+            "item": lambda: summary["rows"].__setitem__(0, "Different licence ×1 $29.00"),
+            "quantity": lambda: summary["rows"].__setitem__(0, "Plex Serif — Desktop licence ×2 $29.00"),
+            "adjustment": lambda: summary.update(rows=[
+                "Plex Serif — Desktop licence ×1 $28.00", "Tax $4.77", "Order total USD $32.77"]),
+            "missing": summary.clear,
+        }
+        mutations[change]()
         return verdict
 
     raw, writes, backend = _run(consent, summary=summary)

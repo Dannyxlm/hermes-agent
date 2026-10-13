@@ -180,7 +180,7 @@ class OnePasswordLoginBackend(LoginBackend):
         for label in ("credit limit", "Limit"):
             try:
                 value = self._item_get(handle, "--fields", f"label={label}").strip()
-            except Exception:
+            except (UnlockRequired, RuntimeError, json.JSONDecodeError):
                 continue
             if value:
                 return value[:40]
