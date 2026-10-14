@@ -50,13 +50,18 @@ def test_payment_copy_and_primary_move_together(enrolled, push_service):
     ("clarify", {"questions": [{"qid": "q", "question": "Earlier question?"}]}, "Earlier question?"),
     ("vault.code", {}, None),
 ])
-def test_payment_cannot_replace_earlier_question_or_secure_copy(enrolled, push_service, method, params, expected):
+def test_payment_cannot_replace_earlier_question_or_secure_copy(enrolled, push_service, method, params, expected, monkeypatch):
+    # Opaque selectors may legitimately contain the card's four digits.
+    monkeypatch.setattr(server_requests, "_INBOX_EPOCH", "d5d9313031234d72b518ab415c45910f")
     sid, _, _ = enrolled
     first = ask(sid, method, params)
     ask(sid, "approval", payment())
     result = payload(push_service)
     assert result["hermex.destination"]["human_input"]["request_id"] == first["id"]
-    assert "first.test" not in json.dumps(result) and "1234" not in json.dumps(result)
+    serialized = json.dumps(result)
+    assert not any(value in serialized for value in (
+        "first.test", "Fixture card", "$12.34", "••1234", '"last4"', '"amount_minor"',
+    ))
     if expected:
         assert result["aps"]["alert"]["body"] == expected
     else:
