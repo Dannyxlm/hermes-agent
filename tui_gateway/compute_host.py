@@ -217,7 +217,9 @@ class ComputeHost:
                 try:
                     result = child_call(server, sid, params["human_input"])
                     response = {"jsonrpc": "2.0", "id": request_id, "result": result}
-                except (ValueError, TypeError, KeyError, PermissionError, RuntimeError):
+                except (ValueError, TypeError, KeyError, PermissionError, RuntimeError) as exc:
+                    logging.getLogger(__name__).info(
+                        "Human input child rejected exception_class=%s", type(exc).__name__)
                     self._reply("respond.error", sid, request_id, message="Human input unavailable")
                     return
             elif isinstance(params.get("lock"), dict):

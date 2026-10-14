@@ -5,6 +5,7 @@ Saved connection/installation IDs are selectors, never authentication credential
 """
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import time
@@ -14,6 +15,20 @@ from .contracts.human_input import HumanInputScope, HumanInputRespondParams, Hum
 
 _server = None
 _MODELS = {'pending': HumanInputScope, 'respond': HumanInputRespondParams, 'action-status': HumanInputActionStatusParams}
+logger = logging.getLogger(__name__)
+_SAFE_FAILURE_REASONS = frozenset({
+    'Connection request has no chat owner', 'Runtime profile mismatch', 'Not an ordinary Chat',
+    'Canonical Bot scope required', 'Runtime generation changed', 'Approval queue scope is ambiguous',
+    'Owner required', 'Invalid human input request', 'Human input supervisor unavailable',
+})
+
+
+def _log_failure(exc, *, boundary, code=None):
+    # Exception text can contain secure values or paths. Only these fixed literals are diagnostic.
+    reason = exc.args[0] if len(exc.args) == 1 and type(exc.args[0]) is str else None
+    reason = reason if reason in _SAFE_FAILURE_REASONS else 'redacted'
+    logger.info('Human input rejected boundary=%s code=%s exception_class=%s reason=%s',
+                boundary, code, type(exc).__name__, reason)
 
 
 def _validate(operation, body):
@@ -134,7 +149,12 @@ def call(operation, body, *, principal):
         receipt = server_requests.action_status(body, scope=_scope_key(body, principal, home))
         if receipt['status'] != 'unknown' or body['session_id'] not in server._sessions:
             return receipt
-    scope, session = _scope(server, body, principal)
+    try:
+        scope, session = _scope(server, body, principal)
+    except (PermissionError, ValueError, TypeError, OSError) as exc:
+        # REST dispatches call() directly, bypassing the native RPC error boundary.
+        _log_failure(exc, boundary='scope')
+        raise
     if session is not None and server._session_uses_compute_host(session):
         return _compute(server, operation, body, scope)
     return _local(operation, body, scope)
@@ -155,11 +175,14 @@ def _rpc(server, operation, rid, body):
             raise PermissionError('Owner required')
         principal = hashlib.sha256(json.dumps(['cloudseed-mobile-owner-v1', identity['provider'], identity['user_id']], separators=(',', ':')).encode()).hexdigest()
         return server._ok(rid, call(operation, parsed, principal=principal))
-    except PermissionError:
+    except PermissionError as exc:
+        _log_failure(exc, boundary='rpc', code=4403)
         return server._err(rid, 4403, 'Human input scope denied')
-    except (ValueError, TypeError, FileNotFoundError):
+    except (ValueError, TypeError, FileNotFoundError) as exc:
+        _log_failure(exc, boundary='rpc', code=4400)
         return server._err(rid, 4400, 'Invalid human input request')
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError) as exc:
+        _log_failure(exc, boundary='rpc', code=4401)
         return server._err(rid, 4401, 'Human input unavailable')
 
 

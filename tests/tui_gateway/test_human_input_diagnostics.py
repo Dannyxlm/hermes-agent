@@ -83,6 +83,16 @@ def test_compute_swallow_logs_class_without_payload_or_exception_text(host, monk
     assert 'DUMMY-PRIVATE' not in caplog.text
 
 
+def test_rest_dispatch_scope_denial_is_logged_without_rpc(host, caplog):
+    with caplog.at_level(logging.INFO, logger=hi.__name__):
+        with pytest.raises(PermissionError, match='Runtime profile mismatch'):
+            hi.call('pending', {**request_body(), 'session_id': 'stale-runtime'}, principal='owner')
+    assert 'boundary=scope' in caplog.text
+    assert 'exception_class=PermissionError' in caplog.text
+    assert 'reason=Runtime profile mismatch' in caplog.text
+    assert 'stale-runtime' not in caplog.text
+
+
 def test_compute_chat_scope_survives_transport_reattach(host, monkeypatch):
     from tui_gateway import server
     from tui_gateway.transport import Transport
