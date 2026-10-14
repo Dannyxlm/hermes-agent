@@ -29,7 +29,13 @@ def test_tui_sudo_request_fires_human_input_hooks(monkeypatch):
     sid, session_key = "human-input-tui", "human-input-conversation"
     monkeypatch.setitem(server._sessions, sid, {"session_key": session_key, "source": "desktop"})
 
+    cancels = []
+
     def answer(frame):
+        # Settlement also tears the card down on every surface with request.cancel(resolved).
+        if frame.get("method") == "event":
+            cancels.append(frame["params"])
+            return True
         assert server_requests.resolve_response(
             {"jsonrpc": "2.0", "id": frame["id"], "result": {"value": PASSWORD}}
         )
@@ -59,3 +65,6 @@ def test_tui_sudo_request_fires_human_input_hooks(monkeypatch):
     assert "systemctl restart nginx" in request["prompt"]
     assert resolved["outcome"] == "provided"
     assert PASSWORD not in repr(calls)
+    assert [c["type"] for c in cancels] == ["request.cancel"]
+    assert cancels[0]["payload"]["method"] == "sudo" and cancels[0]["payload"]["reason"] == "resolved"
+    assert PASSWORD not in repr(cancels)

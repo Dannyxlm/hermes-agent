@@ -95,13 +95,27 @@ def validate_answer(method: str, params: dict, result: dict) -> dict:
     elif method == 'setup_choose':
         picked = value.get('picked')
         picks = picked if isinstance(picked, list) else [picked] if picked else []
-        options = {o['id']: o['label'] for o in params.get('options') or []}
-        if len(picks) != len(set(picks)) or not set(picks) <= options.keys() or (len(picks) > 1 and not params.get('multi_select')):
+        multi = bool(params.get('multi_select'))
+        if len(picks) != len(set(picks)) or (len(picks) > 1 and not multi):
             raise ValueError('Invalid setup choice')
         label = value.get('label')
         labels = label if isinstance(label, list) else [label] if label else []
-        if labels and labels != [options[pick] for pick in picks]:
-            raise ValueError('Invalid setup label')
+        options = {o['id']: o['label'] for o in params.get('options') or []}
+        if options:
+            # Server-drawn rows: a pick must be one of them and its label must be that row's name.
+            if not set(picks) <= options.keys():
+                raise ValueError('Invalid setup choice')
+            if labels and labels != [options[pick] for pick in picks]:
+                raise ValueError('Invalid setup label')
+        else:
+            # App-drawn rows (accent/theme/layout/connectors/plugins) or a free-text question card:
+            # the client owns the ids, so only shape is checked. A list needs a multi-select card,
+            # and any labels name the picks one-for-one in the same shape.
+            if isinstance(picked, list) and not multi:
+                raise ValueError('Invalid setup choice')
+            if label is not None and (isinstance(label, list) != isinstance(picked, list)
+                                      or len(label if isinstance(label, list) else [label]) != len(picks)):
+                raise ValueError('Invalid setup label')
     elif method == 'vault.save_login' and value.get('value'):
         try:
             login = json.loads(value['value'])

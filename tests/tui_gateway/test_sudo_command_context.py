@@ -37,9 +37,22 @@ def test_sudo_request_preserves_command_without_leaking_prompt_context(monkeypat
     )
     expected = _redact_approval_command(command)
     assert expected != command
-    frames, replays = [], []
+    frames, replays, cancels = [], [], []
+    # Every request frame also carries its frozen deadline/epoch envelope; the producer content is the rest.
+    envelope = {"created_at", "expires_at", "timeout_seconds", "server_time", "request_epoch", "request_revision"}
+
+    def content(params):
+        assert envelope <= set(params) and params["timeout_seconds"] > 0
+        return {key: value for key, value in params.items() if key not in envelope}
+
+    def unclocked(request):
+        return {**request, "params": {k: v for k, v in request["params"].items() if k != "server_time"}}
 
     def refuse(frame):
+        # Settlement also tears the card down on every surface with request.cancel(resolved).
+        if frame.get("method") == "event":
+            cancels.append(frame["params"])
+            return True
         frames.append(frame)
         replays.append(server_requests.open_requests(sid))
         assert server_requests.resolve_response(
@@ -55,17 +68,20 @@ def test_sudo_request_preserves_command_without_leaking_prompt_context(monkeypat
         assert len(frames) == 1
         frame = frames[0]
         assert frame["method"] == "sudo"
-        assert frame["params"] == {"session_id": sid, "command": expected}
-        assert replays == [[{key: frame[key] for key in ("id", "method", "params")}]]
+        assert content(frame["params"]) == {"session_id": sid, "command": expected}
+        assert [[unclocked(r) for r in replay] for replay in replays] == [
+            [unclocked({key: frame[key] for key in ("id", "method", "params")})]]
         assert server_requests.open_requests(sid) == []
+        assert cancels == [{"type": "request.cancel", "session_id": sid,
+                            "payload": {"id": frame["id"], "method": "sudo", "reason": "resolved"}}]
         assert terminal_tool_sudo._get_cached_sudo_password() == ""
         assert terminal_tool_sudo.get_sudo_prompt_command() == ""
 
         # A legacy zero-argument caller must not inherit the preceding command.
         assert terminal_tool._get_sudo_password_callback()() == ""
-        assert frames[-1]["params"] == {"session_id": sid, "command": ""}
+        assert content(frames[-1]["params"]) == {"session_id": sid, "command": ""}
         assert terminal_tool_sudo._prompt_for_sudo_password() == ""
-        assert frames[-1]["params"] == {"session_id": sid, "command": ""}
+        assert content(frames[-1]["params"]) == {"session_id": sid, "command": ""}
         assert SERVER_REQUESTS["sudo"].params(session_id=sid).command == ""
 
         def failed_legacy_callback():
@@ -75,6 +91,9 @@ def test_sudo_request_preserves_command_without_leaking_prompt_context(monkeypat
         terminal_tool.set_sudo_password_callback(failed_legacy_callback)
         assert terminal_tool_sudo._prompt_for_sudo_password(command=command) == ""
         assert terminal_tool_sudo.get_sudo_prompt_command() == ""
+        # Every sent request was torn down exactly once; no withdrawal carries the command.
+        assert [c["payload"]["id"] for c in cancels] == [f["id"] for f in frames]
+        assert command not in repr(cancels) and expected not in repr(cancels)
     finally:
         server._clear_session_context(tokens)
         server_requests.reset_for_tests()
