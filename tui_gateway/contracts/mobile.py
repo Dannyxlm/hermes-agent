@@ -5,17 +5,38 @@ from typing import Literal
 
 from pydantic import Field
 
-from .base import Params, Result
+from .base import Params, Payload, Result
 from .common import PendingApproval, TranscriptMessage
 from .media import VideoUploadLimits
 from .prompt_voice import PromptOrigin, PromptSubmitResult
-from .registry import method
+from .registry import event, method
 from .server_requests import ClarifyQuestion
 from .sessions import InflightTurn, OpenRequestEntry, QueuedPrompt, SessionInterruptResult, TodoState
 
 
+class HumanInputUpdatedPayload(Payload):
+    id: str
+    method: str
+    request_epoch: str
+    request_revision: int
+    remaining_question_ids: list[str]
+
+
+event("request.updated", HumanInputUpdatedPayload,
+      doc="Metadata-only partial human-input progress; not a new request or an answer authority.")
+
+
 class MobileEmptyParams(Params):
     pass
+
+
+class MobileHumanInputCapability(Result):
+    protocol_version: int = 1
+    methods: list[str]
+    secure_methods: list[str]
+    destinations: list[str]
+    rest_requires_owner_plugin: bool = True
+    receipt_scope: str = 'process_bounded'
 
 
 class MobileCapabilitiesResult(Result):
@@ -26,6 +47,7 @@ class MobileCapabilitiesResult(Result):
     max_history_limit: int
     max_roster_limit: int
     video_upload: VideoUploadLimits | None = None
+    human_input: MobileHumanInputCapability | None = None
 
 
 class MobileBotsParams(Params):
@@ -95,6 +117,12 @@ class MobileHistory(Result):
 
 
 class MobilePendingClarify(Result):
+    created_at: float | None = None
+    expires_at: float | None = None
+    timeout_seconds: float | None = None
+    server_time: float | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
     request_id: str
     session_id: str | None = None
     question: str | None = None
@@ -106,11 +134,37 @@ class MobilePendingClarify(Result):
     owning_client: str | None = None
 
 
+class MobilePendingInput(Result):
+    """APNs/ActivityKit selector only; requires fresh authenticated request admission."""
+    version: int = 1
+    method: str
+    session_id: str
+    request_id: str | None = None
+    operation_id: str | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
+    question_id: str | None = None
+    created_at: float | None = None
+    expires_at: float | None = None
+    category: Literal["HERMEX_APPROVAL_V1", "HERMEX_QUESTION_V1", "HERMEX_SECURE_INPUT_V1", "HERMEX_SETUP_V1"]
+    allowed_actions: list[Literal["open", "open_securely", "once", "deny", "suggest", "reply", "skip"]]
+
+
 class MobileNotificationRun(Result):
     run_id: str
     status: str
     started_at: float
     updated_at: float
+    pending_count: int | None = None
+    pending_input: MobilePendingInput | None = None
+    nearest_expires_at: float | None = None
+
+
+class MobilePendingApproval(PendingApproval):
+    scoped_approval_response: int | None = None
+    request_epoch: str | None = None
+    request_revision: int | None = None
+    expires_at: float | None = None
 
 
 class MobileSnapshotResult(Result):
@@ -123,7 +177,7 @@ class MobileSnapshotResult(Result):
     status: str
     inflight: InflightTurn | None
     queued: QueuedPrompt | None
-    pending_approvals: list[PendingApproval]
+    pending_approvals: list[MobilePendingApproval]
     pending_clarify: MobilePendingClarify | None
     notification_run: MobileNotificationRun | None
     open_requests: list[OpenRequestEntry] | None = None
@@ -144,6 +198,11 @@ class MobileSubmitResult(PromptSubmitResult):
 class MobileApprovalParams(MobileScopeParams):
     request_id: str
     choice: str  # handler rejects choices outside the exact pending request's offered set
+    scoped_approval_response: int | None = Field(default=None, strict=True)
+    request_epoch: str | None = None
+    request_revision: int | None = Field(default=None, strict=True, ge=1)
+    reason: str | None = Field(default=None, max_length=2000)
+    auth: str | None = None
 
 
 class MobileApprovalResult(Result):

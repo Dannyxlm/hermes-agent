@@ -896,6 +896,45 @@ def _ws_orphan_turn_activity_is_fresh(session: dict) -> bool:
         return False
 
 
+def _mirror_has_pending_human(sid: str, mirror) -> bool:
+    from tui_gateway.human_input import HUMAN_METHODS
+    if not isinstance(mirror, dict) or mirror.get("method") not in HUMAN_METHODS:
+        return False
+    metadata = mirror.get("params") or {}
+    if metadata.get("session_id") != sid:
+        return False
+    expires_at = metadata.get("expires_at", mirror.get("expires_at"))
+    if expires_at is None:
+        return ("expires_at" in metadata or "expires_at" in mirror) and mirror.get("method") in ("clarify", "setup_choose")
+    return isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool) and expires_at > time.time()
+
+
+def _session_has_pending_human(sid: str, session: dict) -> bool:
+    """Only THIS runtime's still-live human question may defer orphan cleanup.
+
+    Activity heartbeats cannot prove human wait liveness on opaque compute
+    children. Their mirrored deadline and the connector operation's own clock
+    are authoritative; expired mirrors must not become permanent orphan pins.
+    """
+    from tui_gateway import server_requests
+    from tools.connectors import live
+
+    if session.get("_turn_cancel_requested") or session.get("_client_gone_interrupt_requested"):
+        return False
+    if server_requests.has_pending_human(sid):
+        return True
+    mirrors = list((session.get("_compute_host_open_requests") or {}).values())
+    if not mirrors:
+        mirrors = [session.get("_compute_host_open_request")]
+    if session.get("_compute_host_turn_id"):
+        for mirror in mirrors:
+            if _mirror_has_pending_human(sid, mirror):
+                return True
+    key = str(session.get("session_key") or "")
+    operation = live.current(key, profile_home=session.get("profile_home")) if key else None
+    return bool(operation is not None and not operation.settled and operation.deadline_at > time.time())
+
+
 def _schedule_ws_orphan_reap(
     sid: str, *, delay_s: float | None = None, _expected_timer: threading.Timer | None = None,
 ) -> None:
@@ -955,12 +994,13 @@ def _schedule_ws_orphan_reap(
                 current.pop("_client_gone_interrupt_polls", None)
                 _pending_ws_reaps.pop(sid, None)
                 return
-            if _session_has_active_delegations(sid, current) or (
+            if _session_has_pending_human(sid, current) or _session_has_active_delegations(sid, current) or (
                     not current.get("running")
                     and not current.get("_client_gone_interrupt_requested")
                     and _session_owns_live_wakeup_schedule(current)):
-                # Live background work, or an active /loop or /heartbeat only this process's poller can fire. A
-                # settled client-gone interrupt wins over the schedule: its latches block every tick and reattach.
+                # Live human input, background work, or a schedule owned by
+                # this process's poller. A settled client-gone interrupt wins
+                # over the schedule: its latches block every tick and reattach.
                 reschedule_delay = _WS_ORPHAN_REAP_GRACE_S
             elif not current.get("running"):
                 session = _pop_session_by_id(sid)

@@ -21,9 +21,10 @@ class TestTuiApprovalEmitRedaction:
         from tui_gateway import server as tui_server, server_requests
 
         sent = {}
+        # send_async also takes the frozen wait (timeout/deadline_monotonic/created_at) as keywords.
         monkeypatch.setattr(server_requests, "send_async",
-                            lambda method, sid, params, on_result: (sent.update(method=method, sid=sid, params=params),
-                                                                    lambda reason: None)[1])
+                            lambda method, sid, params, on_result, **_wait: (sent.update(method=method, sid=sid, params=params),
+                                                                             lambda reason: None)[1])
         monkeypatch.setattr(tui_server, "_sessions", {"sess-1": {"session_key": "key-1"}})
         return tui_server, sent
 

@@ -167,6 +167,21 @@ You can also set `providers.<id>.stale_timeout_seconds` for the non-streaming st
 
 Leaving these unset keeps the legacy defaults (`HERMES_API_TIMEOUT=1800`s, `HERMES_API_CALL_STALE_TIMEOUT=90`s, native Anthropic 900s). The non-streaming stale detector is auto-disabled for local endpoints when left implicit and can scale upward for very large contexts. Not currently wired for AWS Bedrock (both `bedrock_converse` and AnthropicBedrock SDK paths use boto3 with its own timeout configuration). See the commented example in [`cli-config.yaml.example`](https://github.com/NousResearch/hermes-agent/blob/main/cli-config.yaml.example).
 
+## Human input timeout
+
+`human_input.timeout` sets the wait in seconds for non-approval questions, setup choices,
+and secure-entry prompts. The default is 300 seconds. Set a positive finite number in
+`config.yaml` for the owning profile:
+
+```yaml
+human_input:
+  timeout: 300
+```
+
+The server freezes the deadline when it publishes each request. Reconnecting or displaying
+its card does not restart the clock. Dangerous-command approvals keep their separate
+`approvals.timeout` policy.
+
 ## Update Behavior
 
 ### Background checks

@@ -17,6 +17,8 @@ import importlib
 import logging
 import os
 import threading
+import uuid
+import time
 from typing import Optional
 
 from utils import env_var_enabled, is_truthy_value
@@ -35,7 +37,7 @@ from tools.approval_floors import (
     _command_matches_permanent_allowlist, _hardline_block_result, _match_user_deny_rule, _sudo_stdin_block_result,
     _user_deny_block_result,
 )
-from tools.approval_gateway_wait import _await_gateway_decision
+from tools.approval_gateway_wait import _await_gateway_decision, _consent_kind, _settled_choice
 from tools.approval_prompt import _present_with_selected_transport, _transport_choice, prompt_dangerous_approval
 from tools.approval_smart import _smart_verdict
 
@@ -49,6 +51,8 @@ _YOLO_MODE_FROZEN: bool = is_truthy_value(os.getenv("HERMES_YOLO_MODE", ""))
 # --- Per-session approval state (thread-safe) -----------------------------------------------------------------------
 
 _lock = threading.Lock()
+# Queue-only surfaces use the same envelope from creation through exact settlement.
+_gateway_approval_epoch = uuid.uuid4().hex
 _pending: dict[str, dict] = {}
 _session_approved: dict[str, set] = {}
 _session_yolo: set[str] = set()
@@ -136,16 +140,31 @@ def unregister_gateway_notify(session_key: str) -> None:
             entry.event.set()
 
 
+APPROVAL_AUTH_LABELS = frozenset({"face_id", "touch_id", "optic_id", "passcode"})
+
+
+def normalize_approval_auth(auth) -> Optional[str]:
+    """Normalize client-reported receipt metadata; this grants no authority."""
+    return auth if isinstance(auth, str) and auth in APPROVAL_AUTH_LABELS else None
+
+
 def resolve_gateway_approval(session_key: str, choice: str,
                              resolve_all: bool = False,
                              reason: Optional[str] = None,
-                             request_id: Optional[str] = None) -> int:
+                             request_id: Optional[str] = None,
+                             auth: Optional[str] = None, *,
+                             expected_epoch: Optional[str] = None,
+                             expected_revision: Optional[int] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
-    *resolve_all* resolves every pending approval (``/approve all``); otherwise the oldest
+    *resolve_all* approves pending non-payments; bulk denial still includes payments.
+    Payments need individual consent. Otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
-    relayed to the agent in the BLOCKED message. Returns the number resolved.
+    relayed to the agent in the BLOCKED message. *auth* is the device authentication a native
+    client reports with its answer (``face_id``/``passcode``…); unknown labels are dropped.
+    Returns the number resolved.
     """
+    auth = normalize_approval_auth(auth)
     with _lock:
         queue = _gateway_queues.get(session_key)
         if not queue:
@@ -154,21 +173,36 @@ def resolve_gateway_approval(session_key: str, choice: str,
             targets = [entry for entry in queue if entry.data.get("request_id") == request_id]
             if not targets:
                 return 0
-            queue[:] = [entry for entry in queue if entry not in targets]
         elif resolve_all:
-            targets = list(queue)
-            queue.clear()
+            targets = [entry for entry in queue if choice == "deny" or _consent_kind(entry.data) != "payment"]
         else:
-            targets = [queue.pop(0)]
+            targets = [queue[0]]
+        if expected_epoch is not None or expected_revision is not None:
+            if (not request_id or resolve_all or len(targets) != 1 or type(expected_revision) is not int
+                    or expected_revision < 1 or not isinstance(expected_epoch, str)
+                    or any(entry.data.get("request_epoch") != expected_epoch
+                           or entry.data.get("request_revision") != expected_revision
+                           or entry.data.get("scoped_approval_response") != 1 for entry in targets)):
+                return 0
+        # Validate every surface before removing an entry or waking its callback. An owner's
+        # session/always on a Smart-DENY request settles as a one-time override (``_settled_choice``).
+        if (choice not in ("once", "session", "always", "deny")
+                or (reason is not None and (not isinstance(reason, str) or len(reason) > 2000 or choice != "deny"))
+                or any(_settled_choice(entry.data, choice) not in entry.data.get("choices", [])
+                       or (choice in ("session", "always") and _consent_kind(entry.data) is not None)
+                       or time.monotonic() >= entry.event.deadline_monotonic for entry in targets)):
+            return 0
+        queue[:] = [entry for entry in queue if entry not in targets]
         if not queue:
             _gateway_queues.pop(session_key, None)
         # Popping the entry and committing its outcome are ONE critical section: the waiter's
         # ``_drop_entry`` reads ``entry.result`` under this same lock after its deadline check, so a
         # choice acked to the client here can never be popped-and-lost as a timeout (#112548).
         for entry in targets:
-            entry.result = choice
+            entry.result = _settled_choice(entry.data, choice)
             if reason:
                 entry.reason = reason
+            entry.auth = auth
             entry.event.set()
     return len(targets)
 

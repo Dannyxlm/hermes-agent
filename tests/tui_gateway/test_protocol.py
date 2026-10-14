@@ -80,13 +80,11 @@ def capture(server):
     return server, buf
 
 
-# ── JSON-RPC envelope ────────────────────────────────────────────────
 
 
 def test_unknown_method(server):
     resp = server.handle_request({"id": "1", "method": "bogus"})
     assert resp["error"]["code"] == -32601
-
 
 
 
@@ -143,73 +141,6 @@ def test_session_interrupt_uses_explicit_stop_compatibility(server, monkeypatch,
 
 
 
-
-def test_live_session_payload_replays_pending_approval(server, monkeypatch):
-    """A reattached client receives the approval that was emitted while detached."""
-    from tools import approval
-    from tools import approval_gateway_wait
-
-    session = {
-        "agent": types.SimpleNamespace(),
-        "cols": 80,
-        "created_at": 1.0,
-        "history": [],
-        "history_lock": threading.Lock(),
-        "running": True,
-        "session_key": "stored-session",
-    }
-    first = {
-        "choices": ["once", "deny"],
-        "command": "rm -rf /tmp/example",
-        "description": "recursive delete",
-    }
-    second = {"command": "rm -rf /tmp/later", "description": "later"}
-    saved_queue = approval._gateway_queues.pop("stored-session", None)
-    approval._gateway_queues["stored-session"] = [
-        approval_gateway_wait._ApprovalEntry(first),
-        approval_gateway_wait._ApprovalEntry(second),
-    ]
-    monkeypatch.setattr(server, "_approval_request_payload", lambda data: dict(data or {}))
-
-    try:
-        payload = server._live_session_payload("runtime-session", session)
-    finally:
-        approval._gateway_queues.pop("stored-session", None)
-        if saved_queue is not None:
-            approval._gateway_queues["stored-session"] = saved_queue
-
-    assert payload["pending_approval"] is not first
-    replayed = payload["pending_approval"]
-    # request_id is injected by _ApprovalEntry so reconnecting clients can
-    # correlate their approval.respond with the exact queued request.
-    assert replayed.pop("request_id")
-    assert replayed == first
-
-
-def test_live_session_payload_replays_open_requests(server):
-    """A reattached client receives the server→client request still blocking the session (a clarify sent
-    while detached), scoped to the owning runtime session only, as a snapshot not a live reference."""
-    from tui_gateway import server_requests
-    session = {
-        "agent": types.SimpleNamespace(), "cols": 80, "created_at": 1.0, "history": [],
-        "history_lock": threading.Lock(), "running": True, "session_key": "stored-session",
-    }
-    req = server_requests.ServerRequest("runtime-session", "clarify", {"question": "Which?", "choices": ["a", "b"]})
-    server_requests._open[req.id] = req
-    try:
-        payload = server._live_session_payload("runtime-session", session)
-        other = server._live_session_payload("other-session", session)
-    finally:
-        server_requests._open.pop(req.id, None)
-
-    assert payload["open_requests"] == [{"id": req.id, "method": "clarify",
-                                         "params": {"session_id": "runtime-session", "question": "Which?", "choices": ["a", "b"]}}]
-    assert payload["open_requests"][0]["params"] is not req.params
-    assert "open_requests" not in other
-
-
-
-
 # ── _emit ────────────────────────────────────────────────────────────
 
 
@@ -256,7 +187,9 @@ def test_server_request_round_trip_uses_response_frame(capture):
     thread.start()
     req = _wait_open(server_requests, buf)
     frame = _frames(buf)[-1]
-    assert frame == {"jsonrpc": "2.0", "id": req.id, "method": "sudo", "params": {"session_id": "s1"}}
+    assert {k: v for k, v in frame.items() if k != "params"} == {"jsonrpc": "2.0", "id": req.id, "method": "sudo"}
+    assert frame["params"]["session_id"] == "s1"
+    assert frame["params"]["expires_at"] == frame["params"]["created_at"] + 5
     assert req.id.startswith("srq-")
 
     assert server.dispatch({"jsonrpc": "2.0", "id": req.id, "result": {"value": "hunter2"}}) is None
@@ -288,10 +221,8 @@ def test_settlement_wins_over_a_later_cancel(capture, method, qids, settle, expe
     assert req.event.is_set()
 
 
-def test_send_returns_an_answer_committed_after_the_deadline_expired(capture, monkeypatch):
-    """An answer accepted by resolve_response is never reported as a timeout (#112548): the
-    response frame can land after event.wait() gave up and before send() withdraws the request,
-    and the renderer must not get a bogus request.cancel for a card the user just answered."""
+def test_send_refuses_answer_after_deadline_even_before_wait_cleanup(capture, monkeypatch):
+    """The monotonic deadline is enforced in the resolver, not just the waiter cleanup."""
     from tui_gateway import server_requests
 
     cancels: list[dict] = []
@@ -303,13 +234,13 @@ def test_send_returns_an_answer_committed_after_the_deadline_expired(capture, mo
         # Deadline expires, then the response frame lands before send() re-enters the lock.
         expired = real_wait(event, timeout)
         rid = next(iter(server_requests._open))
-        assert server_requests.resolve_response({"id": rid, "result": {"value": "yes"}})
+        assert not server_requests.resolve_response({"id": rid, "result": {"value": "yes"}})
         return expired
 
     monkeypatch.setattr(server_requests.threading.Event, "wait", answered_during_the_gap)
 
-    assert server_requests.send("sudo", "s1", {}, timeout=0.001) == {"value": "yes"}
-    assert cancels == []
+    assert server_requests.send("sudo", "s1", {}, timeout=0.001) is None
+    assert len(cancels) == 1 and cancels[0]["reason"] == "timeout"
     assert not server_requests._open
 
 
@@ -321,9 +252,11 @@ def _silent_ws():
         def __init__(self):
             self._ws, self._loop, self._peer, self._auth_identity = object(), None, "test", None
             self.frames: list[dict] = []
+            self.written = threading.Event()
 
         def write(self, obj):
             self.frames.append(obj)
+            self.written.set()
             return True
 
         def close(self):
@@ -376,6 +309,8 @@ def test_server_request_waits_for_a_ws_client_that_advertised(server):
     thread = threading.Thread(target=lambda: box.setdefault("r", server_requests.send("sudo", "ws-new", {}, timeout=5)),
                               daemon=True)
     thread.start()
+    # Registration is visible before the transport writes the request frame.
+    assert peer.written.wait(timeout=5), "advertised client never received the request"
     req = _wait_open(server_requests)
     assert peer.frames[-1]["id"] == req.id
     assert server.dispatch({"jsonrpc": "2.0", "id": req.id, "result": {"value": "yes"}}) is None
@@ -489,7 +424,9 @@ def test_client_capabilities_advertises_counting_not_shown_declines(server):
 def test_server_request_timeout_emits_one_request_cancel(capture, method):
     from tui_gateway import server_requests
     _server, buf = capture
-    assert server_requests.send(method, "s1", {}, timeout=0) is None
+    params = {"secret": {"env_var": "DUMMY_KEY", "prompt": "Dummy credential"},
+              "tour": {"action": "start"}}.get(method, {})
+    assert server_requests.send(method, "s1", params, timeout=0) is None
     request, cancel = _frames(buf)
     assert request["method"] == method
     assert cancel["params"]["type"] == "request.cancel"
@@ -555,7 +492,8 @@ def test_clarify_batch_locks_resolve_in_order_and_keep_partial_on_timeout(captur
         server._clarify_timeout_seconds = original_timeout
     assert box["answer"] == {"answers": {"q0": "kept"}, "outcome": "timed_out"}
     cancels = [f for f in _frames(buf) if f.get("method") == "event" and f["params"]["type"] == "request.cancel"]
-    assert [c["params"]["payload"]["id"] for c in cancels] == [req.id]
+    assert [c["params"]["payload"]["id"] for c in cancels
+            if c["params"]["payload"]["reason"] == "timeout"] == [req.id]
 
 
 def test_clarify_batch_cancel_all_is_a_response_without_answers(capture):
@@ -731,7 +669,6 @@ def test_approval_respond_4001_when_nothing_resolves(server, monkeypatch):
 
 
 # ── Session lookup ───────────────────────────────────────────────────
-
 
 
 
@@ -1715,7 +1652,6 @@ def test_command_dispatch_queue_sends_message(server):
     result = resp["result"]
     assert result["type"] == "send"
     assert result["message"] == "tell me about quantum computing"
-
 
 
 

@@ -3,10 +3,15 @@
 Path text cut out of tool output or code (`+str(generation`, `example.pdf'`) used to
 reach Recent as "Delivered" files. Chat-scoped history still shows every reference.
 """
+import json
 import sqlite3
+
+import pytest
 from plugins.cloudseed_mobile import deliverables_index as ix
-from tests.plugins.test_cloudseed_mobile import client, P
+from tests.plugins.test_cloudseed_mobile import client as _client, P
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
+
+client = _client
 
 
 def seed(home, root, contents):
@@ -95,3 +100,142 @@ def test_recent_drops_remote_media_cut_out_of_code(client):
     index.refresh()
     urls = {r.get('url') for r in index.query()['items']}
     assert urls == {'https://cdn.example.com/real.png'}
+
+
+def image_page(c, **params):
+    response = c.get(P + '/deliverables', params={'profile': 'default', 'media_type': 'image', **params})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_generated_producer_receipt_reaches_route_and_original_transport(client):
+    import base64
+    from agent.image_gen_provider import save_b64_image, success_response
+    c, home = client
+    root, _ = setup_root(c, home)
+    data = b'\x89PNG\r\n\x1a\nsynthetic-original'
+    image = save_b64_image(base64.b64encode(data).decode(), prefix='fixture')
+    receipt = success_response(image=str(image), model='fixture', prompt='synthetic',
+                               aspect_ratio='square', provider='fixture')
+    seed(home, root, [('tool', json.dumps(receipt), 'image_generate')])
+    image_page(c)  # First read schedules the real index refresh.
+    rows = image_page(c)['items']
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['relative_path'] == image.name and row['action'] == 'created'
+    assert row['availability'] == 'available'
+    params = {'profile': 'default', 'id': row['id']}
+    url = P + '/workspace-files/download'
+    assert c.get(url, params=params).content == data
+    response = c.get(url, params=params, headers={'Range': 'bytes=2-5'})
+    assert response.status_code == 206 and response.content == data[2:6]
+    assert response.headers['content-range'] == f'bytes 2-5/{len(data)}'
+    assert c.head(url, params=params).headers['content-length'] == str(len(data))
+    assert c.head(url, params=params).content == b''
+    assert c.get(P + '/workspace-files/read', params=params).json()['byteSize'] == len(data)
+    image.unlink()
+    assert image_page(c)['items'] == []
+    assert c.get(url, params=params).status_code == 404
+
+
+def test_image_predicate_precedes_page_window_and_binds_cursor(client):
+    c, home = client
+    root, wid = setup_root(c, home)
+    contents = []
+    for i in range(65):
+        (root / f'outputs/{i}.png').write_bytes(b'image')
+        contents.append(('tool', json.dumps({'image': str(root / f'outputs/{i}.png')}), 'image_generate'))
+    # More documents than the Recent scan window, all newer than the images.
+    for i in range(220):
+        (root / f'outputs/{i}.md').write_text('synthetic')
+        contents.append(('tool', json.dumps({'path': str(root / f'outputs/{i}.md'), 'verified': True}), 'write_file'))
+    (root / 'outputs/drawing.svg').write_text('<svg/>')
+    contents.append(('assistant', 'MEDIA:' + str(root / 'outputs/drawing.svg'), None))
+    seed(home, root, contents)
+    image_page(c)
+    first = image_page(c)
+    assert len(first['items']) == 50 and first['next_cursor']
+    second = image_page(c, cursor=first['next_cursor'])
+    ids = [r['id'] for r in first['items'] + second['items']]
+    assert len(ids) == len(set(ids)) == 65 and second['next_cursor'] is None
+    for change in [{}, {'media_type': ''}, {'media_type': 'video'}, {'q': 'different'},
+                   {'workspace_id': wid}, {'session_id': 's'}, {'kind': 'file'}]:
+        params = {'profile': 'default', 'cursor': first['next_cursor']}
+        if change:
+            params['media_type'] = 'image'
+            params.update(change)
+        response = c.get(P + '/deliverables', params=params)
+        assert response.status_code == (400 if change.get('media_type') in ('', 'video') else 409)
+    other = home / 'profiles/b'; other.mkdir(parents=True)
+    (other / 'config.yaml').write_text('{}')
+    assert c.get(P + '/deliverables', params={'profile': 'b', 'media_type': 'image',
+                                            'cursor': first['next_cursor']}).status_code == 409
+    mixed = c.get(P + '/deliverables', params={'profile': 'default', 'kind': 'file'}).json()
+    assert len(mixed['items']) == 50 and mixed['items'][0]['display_name'] == 'drawing.svg'
+    with sqlite3.connect(home / 'state.db') as db:
+        db.execute("INSERT INTO messages(id,session_id,role,content,active) VALUES(999,'s','assistant',?,1)",
+                   ('MEDIA:' + str(root / 'outputs/0.png'),))
+    image_page(c)  # Completes the new source pass after returning the old snapshot.
+    assert c.get(P + '/deliverables', params={'profile': 'default', 'media_type': 'image',
+                                            'cursor': first['next_cursor']}).status_code == 409
+
+
+@pytest.mark.parametrize('tool,content', [
+    ('read_file', '{"image":"$IMAGE"}'),
+    ('read_file', 'MEDIA:$IMAGE'),
+    ('terminal', '{"image":"$IMAGE"}'),
+    ('image_generate', 'A reference MEDIA:$IMAGE in prose'),
+    ('image_generate', '```text\nMEDIA:$IMAGE\n```'),
+    ('image_generate', '{"success":false,"image":"$IMAGE"}'),
+])
+def test_generated_references_and_failed_producers_are_not_recent(client, tool, content):
+    c, home = client
+    root, _ = setup_root(c, home)
+    image = home / 'cache/generated/images/candidate.png'
+    image.parent.mkdir(parents=True); image.write_bytes(b'fixture')
+    seed(home, root, [('tool', content.replace('$IMAGE', str(image)), tool)])
+    image_page(c)
+    assert image_page(c)['items'] == []
+
+
+def test_generated_delegate_output_and_foreign_profile_do_not_leak(client):
+    c, home = client
+    root, _ = setup_root(c, home)
+    image = home / 'cache/generated/images/candidate.png'
+    image.parent.mkdir(parents=True); image.write_bytes(b'fixture')
+    seed(home, root, [('tool', json.dumps({'image': str(image)}), 'image_generate')])
+    with sqlite3.connect(home / 'state.db') as db:
+        db.execute('ALTER TABLE sessions ADD COLUMN source TEXT')
+        db.execute('ALTER TABLE sessions ADD COLUMN model_config TEXT')
+        db.execute("UPDATE sessions SET parent_session_id='parent',source='desktop',model_config=?",
+                   ('{"_delegate_from":"parent"}',))
+    image_page(c)
+    assert image_page(c)['items'] == []
+    other = home / 'profiles/b'; other.mkdir(parents=True)
+    (other / 'config.yaml').write_text('{}')
+    seed(other, root, [('tool', json.dumps({'image': str(image)}), 'image_generate')])
+    image_page(c, profile='b')
+    assert image_page(c, profile='b')['items'] == []
+    own = other / 'cache/generated/images/own.png'
+    own.parent.mkdir(parents=True); own.write_bytes(b'owned by b')
+    with sqlite3.connect(other / 'state.db') as db:
+        db.execute("INSERT INTO messages(id,session_id,role,content,tool_name,active) VALUES(999,'s','tool',?,'image_generate',1)",
+                   (json.dumps({'image': str(own)}),))
+    image_page(c, profile='b')
+    rows = image_page(c, profile='b')['items']
+    assert len(rows) == 1 and rows[0]['relative_path'] == 'own.png'
+    params = {'profile': 'b', 'id': rows[0]['id']}
+    assert c.get(P + '/workspace-files/download', params=params).content == b'owned by b'
+    assert c.get(P + '/workspace-files/download', params={**params, 'profile': 'default'}).status_code == 404
+
+
+def test_recent_refreshes_stale_unavailable_metadata_without_reindex(client):
+    c, home = client
+    root, _ = setup_root(c, home)
+    seed(home, root, [('assistant', 'MEDIA:' + str(root / 'outputs/later.png'), None)])
+    image_page(c)
+    assert image_page(c)['items'] == []
+    (root / 'outputs/later.png').write_bytes(b'now saved')
+    row = image_page(c)['items'][0]
+    assert row['availability'] == 'available'
+    assert c.get(P + '/workspace-files/download', params={'profile': 'default', 'id': row['id']}).content == b'now saved'

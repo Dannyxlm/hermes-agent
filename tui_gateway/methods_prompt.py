@@ -1487,18 +1487,54 @@ def _(rid, params: dict) -> dict:
                                     for pending in a.list_gateway_approvals(session["session_key"])])
 
 
-def _mobile_approval_respond(rid, session, request_id, choice):
-    """No stale-session search, oldest-request fallback, or persistent choice for native callers."""
+def _mobile_approval_respond(rid, session, request_id, choice, *, params=None, expected_sid=None):
+    """Exact runtime/queue association; no stale, oldest, bulk or reusable fallback."""
     from tools.approval import list_gateway_approvals, resolve_gateway_approval
-    pending = next((p for p in list_gateway_approvals(session["session_key"])
-                    if p.get("request_id") == request_id), None)
-    if pending is None:
-        return _ok(rid, {"resolved": 0})
-    offered = _approval_request_payload(pending).get("choices", [])
-    if choice not in ("once", "deny") or choice not in offered:
-        return _err(rid, 4403, "approval choice is not offered to mobile")
-    return _ok(rid, {"resolved": resolve_gateway_approval(
-        session["session_key"], choice, request_id=request_id, resolve_all=False)})
+    from tui_gateway import server_requests
+    from tui_gateway.human_input import approval_response_metadata, validate_team_approval
+    from pathlib import Path
+    import uuid
+    params = params or {}
+    try:
+        enhanced, metadata = approval_response_metadata(params, choice)
+        home = str(Path(session.get("profile_home") or _hermes_home).resolve())
+        if expected_sid is not None and _sessions.get(expected_sid) is not session:
+            raise PermissionError("Approval runtime changed")
+        if any(other is not session and other.get("session_key") == session.get("session_key")
+               and str(Path(other.get("profile_home") or _hermes_home).resolve()) != home
+               for other in list(_sessions.values())):
+            raise PermissionError("Approval profile scope is ambiguous")
+        requests = [req for req in server_requests.open_requests(expected_sid) if req["method"] == "approval"
+                    and (req["id"] == request_id or req["params"].get("request_id") == request_id)] if expected_sid else []
+        if len(requests) > 1:
+            raise PermissionError("Ambiguous approval request association")
+        if requests:
+            request = requests[0]
+            validate_team_approval(request["params"], choice, enhanced=enhanced, metadata=metadata)
+            result = {"choice": choice, **metadata}
+            if enhanced:
+                body = {"request_id": request["id"], "method": "approval", "session_id": expected_sid,
+                        "action_id": uuid.uuid4().hex, "request_epoch": params["request_epoch"],
+                        "request_revision": params["request_revision"], "result": result}
+                receipt = server_requests.scoped_respond(body, scope=("team", expected_sid, home))
+                resolved = int(receipt["status"] == "accepted")
+            else:
+                resolved = int(server_requests.resolve_response({"id": request["id"], "result": result},
+                    expected_sid=expected_sid, expected_method="approval", mobile=True))
+            return _ok(rid, {"resolved": resolved})
+        queued = [p for p in list_gateway_approvals(session["session_key"]) if p.get("request_id") == request_id]
+        if len(queued) > 1:
+            raise PermissionError("Ambiguous approval request identity")
+        pending = queued[0] if queued else None
+        if pending is None:
+            return _ok(rid, {"resolved": 0})
+        validate_team_approval(_approval_request_payload(pending), choice, enhanced=enhanced, metadata=metadata)
+        selectors = ({"expected_epoch": params["request_epoch"], "expected_revision": params["request_revision"]}
+                     if enhanced else {})
+        return _ok(rid, {"resolved": resolve_gateway_approval(session["session_key"], choice,
+            request_id=request_id, resolve_all=False, **metadata, **selectors)})
+    except (PermissionError, ValueError) as exc:
+        return _err(rid, 4403, str(exc))
 
 
 @method("approval.received")

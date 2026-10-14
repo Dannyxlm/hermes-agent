@@ -110,7 +110,12 @@ def _mobile_scope(params):
 
 @_mobile_handler("mobile.capabilities")
 def _(rid, params):
+    from .human_input import HUMAN_METHODS, SECURE_METHODS
     return _ok(rid, {"protocol_version": 1, "methods": list(_MOBILE_METHODS),
+        "human_input": {"protocol_version": 1, "methods": sorted(HUMAN_METHODS),
+                        "secure_methods": sorted(SECURE_METHODS),
+                        "destinations": ["chat", "bot", "connection"],
+                        "rest_requires_owner_plugin": True, "receipt_scope": "process_bounded"},
         "features": ["strict_canonical_open", "bounded_history", "scoped_interactions",
                      "queued_submit", "snapshot_reconciliation", "ordinary_session_push",
                      "ordinary_session_live_activity", "native_widget_snapshot_capability",
@@ -121,7 +126,7 @@ def _(rid, params):
                              "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
                              "session_change_cursor": 1, "inbox_silent_push": 1,
                              "activity_content": 2, "push_alert_policy": 1, "push_to_start": 1,
-                             "artifact_versions": 1, "attachment_operations": 1},
+                             "artifact_versions": 1, "attachment_operations": 1, "scoped_approval_response": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 
@@ -249,9 +254,19 @@ def _mobile_history_page(db, tip_id, chain, params):
 
 def _mobile_approvals(session, requests=()):
     from tools.approval import list_gateway_approvals
+    from tui_gateway import server_requests
+    local = {req["id"]: req for sid, record in list(_sessions.items()) if record is session
+             for req in server_requests.open_requests(sid) if req["method"] == "approval"}
     out = []
     for pending in list_gateway_approvals(session["session_key"]):
         safe = _approval_request_payload(pending)
+        associated = [req for req in local.values() if req["params"].get("request_id") == pending.get("request_id")]
+        if associated:
+            safe.pop("scoped_approval_response", None)
+        if len(associated) == 1:
+            safe.update({key: associated[0]["params"][key] for key in
+                         ("scoped_approval_response", "request_epoch", "request_revision", "expires_at")
+                         if key in associated[0]["params"]})
         safe["choices"] = [choice for choice in safe.get("choices", []) if choice in ("once", "deny")]
         out.append(safe)
     queue_ids = {pending.get("request_id") for pending in out}
@@ -259,8 +274,27 @@ def _mobile_approvals(session, requests=()):
         if request["method"] == "approval" and request["params"].get("request_id") not in queue_ids:
             safe = _approval_request_payload(request["params"])
             safe["request_id"] = request["id"]
+            if request["id"] not in local:
+                safe.pop("scoped_approval_response", None)
             safe["choices"] = [choice for choice in safe.get("choices", []) if choice in ("once", "deny")]
             out.append(safe)
+    return out
+
+
+def _mobile_open_requests(sid):
+    """Bot replay offers only Bot authority; never mutate the canonical Desktop request."""
+    from tui_gateway import server_requests
+    local_ids = {request["id"] for request in server_requests.open_requests(sid)}
+    out = []
+    for request in _open_requests(sid):
+        if request["method"] == "approval":
+            params = _approval_request_payload(request["params"])
+            params.update(allow_session=False, allow_permanent=False)
+            if request["id"] not in local_ids:
+                params.pop("scoped_approval_response", None)
+            params["choices"] = [choice for choice in params["choices"] if choice in ("once", "deny")]
+            request = {**request, "params": params}
+        out.append(request)
     return out
 
 
@@ -271,7 +305,7 @@ def _mobile_snapshot(params):
     with session["history_lock"]:
         inflight, queued = _inflight_snapshot(session), _queued_prompt_snapshot(session)
         running = bool(session.get("running"))
-    requests = _open_requests(sid)
+    requests = _mobile_open_requests(sid)
     pending_clarify = next(({**request["params"], "request_id": request["id"]}
                             for request in requests if request["method"] == "clarify"), None)
     if pending_clarify is not None and session.get("_compute_host_open_request", {}).get("id") == pending_clarify["request_id"]:
@@ -349,16 +383,8 @@ def _(rid, params):
         _profile, _home, sid, session, *_rest = _mobile_scope(params)
         with session["history_lock"]:
             _mobile_scope(params)
-            if request_id.startswith("srq-"):
-                from tui_gateway import server_requests
-                try:
-                    resolved = server_requests.resolve_response(
-                        {"id": request_id, "result": {"choice": choice}},
-                        expected_sid=sid, expected_method="approval", mobile=True)
-                except (PermissionError, ValueError) as exc:
-                    return _err(rid, 4403, str(exc))
-                return _ok(rid, {"resolved": int(resolved)})
-            return _mobile_approval_respond(rid, session, request_id, choice)
+            return _mobile_approval_respond(rid, session, request_id, choice,
+                                            params=params, expected_sid=sid)
 
 
 @_mobile_handler("mobile.clarify.respond")

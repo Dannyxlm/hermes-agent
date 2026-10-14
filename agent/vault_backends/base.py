@@ -53,6 +53,15 @@ class LoginBackend(ABC):
         Server-side only, like resolve_password."""
         return None
 
+    def card_last4(self, handle: str) -> Optional[str]:
+        """Last four digits of a payment item for the approval card, from metadata only. None when unknown."""
+        meta = self.get_meta(handle)
+        return getattr(meta, "last4", None) if meta is not None else None
+
+    def card_limit_text(self, handle: str) -> Optional[str]:
+        """The item's own spending-limit field as free text (e.g. "$50"), or None. Never a secret field."""
+        return None
+
     def resolve_secret(self, handle: str) -> dict[str, str]:
         """Full payload of a payment/address item (server-side only). External managers list only
         logins, so the base returns the password-only shape."""

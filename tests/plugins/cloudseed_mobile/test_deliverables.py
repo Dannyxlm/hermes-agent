@@ -1,4 +1,6 @@
 """Bounded provenance projection, synthetic stored message fixtures."""
+import pytest
+
 from plugins.cloudseed_mobile import deliverables as d
 
 
@@ -79,3 +81,18 @@ def test_real_shaped_tool_payloads_never_crash_projection():
     assert 'outputs/a.png' in paths and 'outputs/c.png' in paths
     b=next(r for r in rows if r['relative_path']=='outputs/b.md')
     assert b['action']=='pending', 'An unmatchable call id stays pending, never a crash or a false success'
+
+
+@pytest.mark.parametrize('name,mime,expected', [
+    ('original.HEIC', 'application/octet-stream', True),
+    ('icon.ico', None, True), ('photo.tiff', None, True),
+    ('download', 'IMAGE/PNG; charset=binary', True),
+    ('vector.svg', 'image/png', False),
+    ('vector', 'image/svg+xml', False),
+    ('document.pdf', 'image/jpeg', False),
+    ('document', 'application/pdf', False),
+    ('page.html', 'image/png', False),
+    ('archive.zip', 'application/zip', False),
+])
+def test_image_predicate_matches_native_raster_reader(name, mime, expected):
+    assert d.is_image(name, mime) is expected

@@ -797,6 +797,16 @@ def normalize_stream_usage(message_stream: Any) -> Any:
     return message_stream
 
 
+def open_anthropic_stream(client, api_kwargs: dict, stream_context: dict, *, log_prefix: str = ""):
+    """Open the final SDK payload; retain the manager for the caller's existing cleanup."""
+    from agent.tier_evidence import observe_tier_manager
+    final_kwargs = dict(api_kwargs)
+    sanitize_anthropic_kwargs(final_kwargs, log_prefix=log_prefix)
+    manager = observe_tier_manager(final_kwargs, client.messages.stream)
+    stream_context["manager"] = manager
+    return normalize_stream_usage(manager.__enter__())
+
+
 def _is_stream_unavailable_error(exc: Exception) -> bool:
     """True when an Anthropic stream call should fall back to create()."""
     err_lower = str(exc).lower()
@@ -812,7 +822,8 @@ def _is_stream_unavailable_error(exc: Exception) -> bool:
 
 def _stream_final_message(stream_fn, api_kwargs, log_prefix, on_stream_event, on_response):
     """``messages.stream()`` -> final Message, ticking the best-effort callbacks."""
-    with stream_fn(**{k: v for k, v in api_kwargs.items() if k != "stream"}) as stream:
+    from agent.tier_evidence import observe_tier_manager
+    with observe_tier_manager({k: v for k, v in api_kwargs.items() if k != "stream"}, stream_fn) as stream:
         stream = normalize_stream_usage(stream)  # MiniMax usage:null (#60683), same as the main turn
         if callable(on_response):
             try:
@@ -881,4 +892,5 @@ def create_anthropic_message(
             logger.debug(
                 "%sAnthropic Messages stream unavailable; falling back to messages.create(): %s", log_prefix, exc
             )
-    return messages_api.create(**{k: v for k, v in api_kwargs.items() if k != "stream"})
+    from agent.tier_evidence import observe_tier_call
+    return observe_tier_call("anthropic_messages", {k: v for k, v in api_kwargs.items() if k != "stream"}, messages_api.create)

@@ -174,6 +174,9 @@ class VaultItemMeta:
     # Unbound payment item from a password manager (cards carry no website): it may fill the current https
     # page, but only after the user approves that exact page origin, per fill.
     any_origin: bool = False
+    # Last four card digits for a payment item, parsed from the manager's masked list metadata. Shown on the
+    # payment approval card; never the full number. Deliberately not part of ``to_dict`` (model-facing list).
+    last4: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         out = {

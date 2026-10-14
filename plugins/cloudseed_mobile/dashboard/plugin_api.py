@@ -22,6 +22,7 @@ from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write
 from plugins.cloudseed_mobile.session_activity import session_activity, session_activity_batch
 from plugins.cloudseed_mobile import workspace_files as files
 from plugins.cloudseed_mobile import flight_recorder as recorder
+from plugins.cloudseed_mobile import human_input_adapter as human_input
 from plugins.cloudseed_mobile.deliverables_warmer import DeliverablesWarmer
 
 MAX_BODY = 1024 * 1024
@@ -199,6 +200,36 @@ for operation in REMINDER_OPS:
     router.add_api_route('/iphone-reminders/'+operation, reminder_endpoint(operation), methods=['POST'], name='reminder_'+operation)
 
 
+def human_input_endpoint(operation):
+    def endpoint(body: dict = Depends(payload), principal: str = Depends(owner)):
+        # Body profile is an assertion about the mounted scope, not a selector.
+        # Do this before native dispatch, including unavailable/hosted processes.
+        try:
+            mounted_profile = profile_id()
+        except ValueError:
+            raise HTTPException(403, 'Profile not found') from None
+        if body.get('profile') != mounted_profile:
+            raise HTTPException(403, 'Profile not found')
+        headers = {'Cache-Control': 'no-store'}
+        try:
+            result = human_input.call(operation, body, principal=principal)
+            return JSONResponse(result, headers=headers)
+        except PermissionError:
+            return JSONResponse({'error': 'Human input scope forbidden'}, status_code=403, headers=headers)
+        except (ValueError, TypeError, RecursionError):
+            # Includes Pydantic validation errors: never serialize errors()/inputs.
+            return JSONResponse({'error': 'Invalid human input request'}, status_code=400, headers=headers)
+        except Exception:  # health: allow BLE001 -- secure endpoint must not echo callback exceptions or credentials
+            # The secure boundary must not emit an exception containing a value,
+            # including unexpected callback errors. No logging or automatic retry.
+            return JSONResponse({'error': 'Human input unavailable'}, status_code=503, headers=headers)
+    return endpoint
+
+
+for operation in human_input.OPERATIONS:
+    router.add_api_route('/human-input/'+operation, human_input_endpoint(operation), methods=['POST'], name='human_input_'+operation)
+
+
 def deliverable_store(profile):
     from hermes_constants import get_hermes_home
     from plugins.cloudseed_mobile.deliverables_index import DeliverablesIndex
@@ -207,10 +238,10 @@ def deliverable_store(profile):
 
 
 @router.get('/deliverables')
-def deliverable_list(background_tasks: BackgroundTasks, profile: str, workspace_id: str | None = None, session_id: str | None = None, kind: str | None = None, q: str = '', cursor: str | None = None, limit: int = 50, reveal: bool = False):
+def deliverable_list(background_tasks: BackgroundTasks, profile: str, workspace_id: str | None = None, session_id: str | None = None, kind: str | None = None, q: str = '', cursor: str | None = None, limit: int = 50, reveal: bool = False, media_type: str | None = None):
     def run():
         index = deliverable_store(profile)
-        result = index.query(workspace_id, session_id, kind, q, cursor, limit, reveal)
+        result = index.query(workspace_id, session_id, kind, q, cursor, limit, reveal, media_type=media_type)
         background_tasks.add_task(index.refresh)
         return result
     return guarded(run)
@@ -255,14 +286,14 @@ def workspace_read(profile: str, workspace_id: str | None = None, path: str | No
     return guarded(run)
 
 
-@router.get('/workspace-files/download')
-def workspace_download(profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
+@router.api_route('/workspace-files/download', methods=['GET', 'HEAD'])
+def workspace_download(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
     def run():
         if media_path is not None:
             if any(value is not None for value in (workspace_id,path,id)): raise HTTPException(400,'Choose media path or workspace file')
-            return files.transport(profile,None,media_path,media=True)
+            return files.transport(profile,None,media_path,media=True,range_header=request.headers.get('range'),head=request.method=='HEAD')
         wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
-        return files.transport(profile, wid, rel, reveal, generation=bool(id))
+        return files.transport(profile, wid, rel, reveal, range_header=request.headers.get('range'),head=request.method=='HEAD',generation=bool(id))
     return guarded(run)
 
 

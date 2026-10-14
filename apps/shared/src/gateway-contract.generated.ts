@@ -1465,6 +1465,7 @@ export interface GroupsCapabilitiesResult {
   features: string[]
   methods: string[]
   max_log_limit: number
+  feature_versions?: Record<string, number> | null
 }
 /** ``enabled`` with ``profile``/``catalog``/``endpoint``, or disabled with a ``reason``. */
 export interface RoomLinkStatus {
@@ -1692,6 +1693,13 @@ export interface GroupsApproveParams {
   execution_generation: number
   choice: ApprovalChoice
   request_id: string
+  scoped_approval_response?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  reason?: string | null
+  auth?: string | null
+  expected_authority_gateway_id?: string | null
+  expected_authority_epoch?: number | null
 }
 export type ApprovalChoice = 'once' | 'session' | 'always' | 'deny'
 /** ``result`` is the local ``approval.respond`` answer or the peer's run-action receipt. */
@@ -1904,6 +1912,71 @@ export interface BrowserControllerParams {
 }
 export interface BrowserControllerDetachResult {
   detached?: boolean
+}
+export interface HumanInputScope {
+  profile: string
+  connection_id: string
+  installation_id: string
+  destination_kind: HumanInputDestination
+  session_id: string
+  stored_session_id?: string
+  canonical_root_id?: string
+}
+export type HumanInputDestination = 'chat' | 'bot' | 'connection'
+export interface HumanInputPendingResult {
+  protocol_version?: number
+  request_epoch: string
+  server_time: number
+  complete: boolean
+  unavailable: string[]
+  requests: HumanInputPendingRequest[]
+}
+export interface HumanInputPendingRequest {
+  id: string
+  method: string
+  params: Record<string, unknown>
+}
+export interface HumanInputRespondParams {
+  profile: string
+  connection_id: string
+  installation_id: string
+  destination_kind: HumanInputDestination
+  session_id: string
+  stored_session_id?: string
+  canonical_root_id?: string
+  request_id: string
+  method: string
+  request_epoch: string
+  request_revision: number
+  action_id: string
+  question_id?: string | null
+  result: Record<string, unknown>
+}
+export interface HumanInputReceipt {
+  protocol_version?: number
+  status: HumanInputStatus
+  action_id: string
+  request_id: string
+  method: string
+  request_epoch: string
+  request_revision: number
+  server_time: number
+}
+export type HumanInputStatus = 'accepted' | 'already_resolved' | 'expired' | 'cancelled' | 'conflict' | 'unknown' | 'outcome_unknown' | 'unavailable'
+export interface HumanInputActionStatusParams {
+  profile: string
+  connection_id: string
+  installation_id: string
+  destination_kind: HumanInputDestination
+  session_id: string
+  stored_session_id?: string
+  canonical_root_id?: string
+  request_id: string
+  method: string
+  request_epoch: string
+  request_revision: number
+  action_id: string
+  question_id?: string | null
 }
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
@@ -3181,6 +3254,24 @@ export interface MobileNotificationRun {
   status: string
   started_at: number
   updated_at: number
+  pending_count?: number | null
+  pending_input?: MobilePendingInput | null
+  nearest_expires_at?: number | null
+}
+/** APNs/ActivityKit selector only; requires fresh authenticated request admission. */
+export interface MobilePendingInput {
+  version?: number
+  method: string
+  session_id: string
+  request_id?: string | null
+  operation_id?: string | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  question_id?: string | null
+  created_at?: number | null
+  expires_at?: number | null
+  category: 'HERMEX_APPROVAL_V1' | 'HERMEX_QUESTION_V1' | 'HERMEX_SECURE_INPUT_V1' | 'HERMEX_SETUP_V1'
+  allowed_actions: ('open' | 'open_securely' | 'once' | 'deny' | 'suggest' | 'reply' | 'skip')[]
 }
 export interface MobilePushRefreshParams {
   installation_id: string
@@ -3284,6 +3375,7 @@ export interface MobileCapabilitiesResult {
   max_history_limit: number
   max_roster_limit: number
   video_upload?: VideoUploadLimits | null
+  human_input?: MobileHumanInputCapability | null
 }
 /** Advertised in ``mobile.capabilities.video_upload`` (feature ``video_upload`` v1). */
 export interface VideoUploadLimits {
@@ -3291,6 +3383,14 @@ export interface VideoUploadLimits {
   max_seconds: number
   chunk_bytes: number
   extensions: string[]
+}
+export interface MobileHumanInputCapability {
+  protocol_version?: number
+  methods: string[]
+  secure_methods: string[]
+  destinations: string[]
+  rest_requires_owner_plugin?: boolean
+  receipt_scope?: string
 }
 export interface MobileBotsParams {
   limit?: number
@@ -3344,7 +3444,7 @@ export interface MobileSnapshotResult {
   status: string
   inflight: InflightTurn | null
   queued: QueuedPrompt | null
-  pending_approvals: PendingApproval[]
+  pending_approvals: MobilePendingApproval[]
   pending_clarify: MobilePendingClarify | null
   notification_run: MobileNotificationRun | null
   open_requests?: OpenRequestEntry[] | null
@@ -3355,7 +3455,30 @@ export interface MobileHistory {
   has_more: boolean
   before_row_id: number | null
 }
+export interface MobilePendingApproval {
+  request_id?: string | null
+  command?: string | null
+  description?: string | null
+  pattern_key?: string | null
+  pattern_keys?: string[] | null
+  allow_permanent?: boolean | null
+  allow_session?: boolean | null
+  smart_denied?: boolean | null
+  choices?: string[] | null
+  tool_name?: string | null
+  scoped_approval_response?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  expires_at?: number | null
+  [key: string]: unknown
+}
 export interface MobilePendingClarify {
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   request_id: string
   session_id?: string | null
   question?: string | null
@@ -3408,6 +3531,11 @@ export interface MobileApprovalParams {
   session_id: string
   request_id: string
   choice: string
+  scoped_approval_response?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
+  reason?: string | null
+  auth?: string | null
 }
 export interface MobileApprovalResult {
   resolved: number
@@ -5037,6 +5165,12 @@ export interface PluginCatalogLookupEntry {
 /** ``answers`` rides only on a reconnect replay (locks the server already accepted; null = skipped). */
 export interface ClarifyRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   questions: ClarifyQuestion[]
   answers?: Record<string, string | null> | null
 }
@@ -5046,6 +5180,12 @@ export interface ClarifyResult {
 }
 export interface SetupChooseRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   kind: SetupChooseKind
   question: string
   options?: SetupChooseOption[] | null
@@ -5066,7 +5206,19 @@ export interface SetupChooseResult {
 /** ``tui_gateway/server.py::_approval_request_payload`` — the command is redacted server-side. */
 export interface ApprovalRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   request_id: string
+  kind?: ApprovalKind | null
+  risk?: 'read_only' | 'destructive' | 'sensitive' | 'unknown'
+  destructive?: boolean
+  sensitive?: boolean
+  quick_once?: boolean
+  payment?: PaymentApprovalContext | null
   command?: string
   description?: string
   choices?: ApprovalChoice[]
@@ -5074,16 +5226,79 @@ export interface ApprovalRequestParams {
   allow_session?: boolean | null
   smart_denied?: boolean | null
   tool_name?: string | null
+  surface?: string | null
+  workspace?: string | null
+  origin?: string | null
+  mcp_server?: string | null
   gateway_session_id?: string | null
   [key: string]: unknown
+}
+export type ApprovalKind = 'terminal' | 'tool' | 'payment' | 'mcp_trust' | 'mcp_elicitation'
+/** Frozen Pay v1 metadata; page facts are not issuer or origin authority. */
+export interface PaymentApprovalContext {
+  v: 1
+  origin: string
+  origin_bound: boolean
+  merchant?: PaymentMerchant | null
+  total?: PaymentTotal | null
+  lines?: PaymentLine[]
+  lines_truncated?: boolean
+  adjustments?: PaymentAdjustment[]
+  card: PaymentCard
+  checks: PaymentChecks
+}
+export interface PaymentMerchant {
+  name: string
+  source: 'page'
+}
+export interface PaymentTotal {
+  amount_minor: number
+  currency?: string | null
+  display: string
+  source: 'page'
+  label: string
+}
+export interface PaymentLine {
+  name: string
+  qty: number
+  amount_minor: number
+}
+export interface PaymentAdjustment {
+  kind: 'discount' | 'tax' | 'shipping' | 'fee'
+  amount_minor: number
+}
+/** Presentation metadata only; never PAN, expiry or CVC. */
+export interface PaymentCard {
+  label: string
+  last4?: string | null
+  backend?: string | null
+  limit?: PaymentLimit | null
+}
+export interface PaymentLimit {
+  amount_minor: number
+  currency?: string | null
+  period: 'per_purchase' | 'monthly' | 'unknown'
+  source: 'config' | 'vault'
+}
+export interface PaymentChecks {
+  total_found: boolean
+  over_limit?: boolean | null
 }
 export interface ApprovalResult {
   choice: ApprovalChoice
   all?: boolean | null
+  reason?: string | null
+  auth?: string | null
 }
 /** Original command, redacted server-side before any password-injection rewrite. */
 export interface SudoRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   command?: string
 }
 /** The answer to any one-string prompt (sudo, secret, vault prompts, desktop bridges): ``''`` means skipped / declined. */
@@ -5092,36 +5307,78 @@ export interface ValueResult {
 }
 export interface SecretRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   env_var: string
   prompt: string
   metadata?: Record<string, unknown> | null
 }
 export interface VaultUnlockRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   backend: string
   display_name: string
 }
 export interface VaultSaveLoginRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   origin: string
   site: string
 }
 export interface VaultCodeRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   site?: string | null
   hint?: string | null
 }
 export interface ReadRangeRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   start?: number | null
   count?: number | null
 }
 export interface EmptyRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
 }
 /** ``tools/drive_preview_tool.py`` and ``tools/annotate_preview_tool.py`` field sets. */
 export interface PreviewActRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   action: string
   ref?: string | null
   selector?: string | null
@@ -5137,6 +5394,12 @@ export interface PreviewActRequestParams {
 /** ``tools/tour_tool.py`` field set. */
 export interface TourRequestParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   action: string
   surface?: string | null
   selector?: string | null
@@ -5158,6 +5421,12 @@ export interface TourStep {
 export type TourPreset = 'quick' | 'full'
 export interface DisplayInstallSudoParams {
   session_id: string
+  created_at?: number | null
+  expires_at?: number | null
+  timeout_seconds?: number | null
+  server_time?: number | null
+  request_epoch?: string | null
+  request_revision?: number | null
   profile_key: string
 }
 /** ``methods_connectors._connection_update``: one target transition (``target``/``from``/``to``/ ``actor``) or the settlement (none of those), with the full snapshot. */
@@ -5623,6 +5892,13 @@ export interface SessionsChangedPayload {
   truncated?: boolean | null
   [key: string]: unknown
 }
+export interface HumanInputUpdatedPayload {
+  id: string
+  method: string
+  request_epoch: string
+  request_revision: number
+  remaining_question_ids: string[]
+}
 export type ConnectorErrorReason = 'INVALID_PARAMS' | 'NOT_OWNER' | 'UNSUPPORTED_RUNTIME' | 'CONNECTOR_REQUEST_FAILED' | 'INVALID_CONNECTOR_RESPONSE' | 'UNKNOWN_TARGET' | 'LINK_STILL_VALID' | 'REISSUE_REFUSED' | 'UNKNOWN_OPERATION' | 'INVALID_ANSWER' | 'NEEDS_NOUS_AUTH' | 'CONNECTOR_NOT_FOUND' | 'TOOLS_UNAVAILABLE' | 'CONNECTORS_UNAVAILABLE' | 'CATALOG_UNAVAILABLE' | 'ACCOUNTS_UNAVAILABLE' | 'CONNECTION_NOT_FOUND' | 'POLICY_UNAVAILABLE' | 'POLICY_CONFLICT' | 'FORBIDDEN_SCOPE' | 'ORG_REQUIRED' | 'ORG_ACCESS_DENIED' | 'INVALID_POLICY' | 'ALIAS_TAKEN'
 
 // ── Client→server methods ──
@@ -5631,7 +5907,7 @@ export interface RpcMethods {
   'agents.list': { params: AgentsListParams; result: AgentsListResult }
   /** Replay the approvals still waiting on this session (reconnect / polling). */
   'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult }
-  /** Tell the backend the card is on screen, so its timeout clock starts. */
+  /** Acknowledge display of the card. Its frozen timeout starts at publication, not display. */
   'approval.received': { params: ApprovalReceivedParams; result: ApprovalReceivedResult }
   /** Deliver the user's decision on a dangerous command (falls back to durable identity on a stale sid). */
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult }
@@ -5797,6 +6073,9 @@ export interface RpcMethods {
   'handoff.request': { params: HandoffRequestParams; result: HandoffRequestResult }
   /** Poll the handoff row for this session. */
   'handoff.state': { params: SessionParams; result: HandoffStateResult }
+  'human_input.action_status': { params: HumanInputActionStatusParams; result: HumanInputReceipt }
+  'human_input.pending': { params: HumanInputScope; result: HumanInputPendingResult }
+  'human_input.respond': { params: HumanInputRespondParams; result: HumanInputReceipt }
   /** Pack + overlay messages for one language and surface; the renderer merges them over its bundled catalog. */
   'i18n.catalog': { params: I18nCatalogParams; result: I18nCatalogResult }
   /** Every language some layer supplies (bundled ∪ user overlay ∪ plugin packs), en first. */
@@ -6286,6 +6565,9 @@ export const RPC_METHODS = [
   'handoff.fail',
   'handoff.request',
   'handoff.state',
+  'human_input.action_status',
+  'human_input.pending',
+  'human_input.respond',
   'i18n.catalog',
   'i18n.languages',
   'image.attach',
@@ -6504,7 +6786,7 @@ export const RPC_METHODS = [
 
 // ── Server→client requests ──
 export interface ServerRequestMap {
-  /** A dangerous command awaits the user's decision. */
+  /** An action awaits the user's exact offered consent. */
   approval: { params: ApprovalRequestParams; result: ApprovalResult }
   /** The clarify tool: ask the user 1-5 questions. */
   clarify: { params: ClarifyRequestParams; result: ClarifyResult }
@@ -6646,6 +6928,8 @@ export interface BackendGatewayEventMap {
   'reasoning.delta': StreamDeltaPayload
   /** The backend withdrew an open server→client request; clear the matching card only. */
   'request.cancel': RequestCancelPayload
+  /** Metadata-only partial human-input progress; not a new request or an answer authority. */
+  'request.updated': HumanInputUpdatedPayload
   /** Background review of the last turn finished. */
   'review.summary': ReviewSummaryPayload
   /** Persisted goal / loop / heartbeat state changed. */
@@ -6756,6 +7040,7 @@ export const GATEWAY_EVENT_TYPES = [
   'reasoning.available',
   'reasoning.delta',
   'request.cancel',
+  'request.updated',
   'review.summary',
   'session.control.update',
   'session.info',

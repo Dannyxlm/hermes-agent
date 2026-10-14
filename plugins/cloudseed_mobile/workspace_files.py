@@ -139,12 +139,27 @@ def workspaces(profile, include_generation=False):
                 except (OSError,HTTPException): quick[key]=False
         finally: os.close(fd)
         items.append({'id':digest([str(home.absolute()),profile,str(root)]),'name':name,'root_path':str(root),'quick_folders':quick})
+    items.extend(generated_workspace(home,profile))
     return {'items':sorted(items,key=lambda x:(x['name'],x['id'])),'partial':len(roots)>=1000}
+
+
+def generated_workspace(home,profile):
+    # Only this synthetic, profile-bound leaf can bypass registered-root denial.
+    # Discovery is read-only; a missing or symlinked tree grants nothing.
+    generated = home.absolute() / 'cache/generated/images'
+    try:
+        fd = open_absolute_directory(generated)
+    except (OSError, HTTPException):
+        return []
+    os.close(fd)
+    return [{'id':digest([str(home.absolute()),profile,str(generated)]),
+             'name':'Generated','root_path':str(generated),'generated':True,
+             'quick_folders':{}}]
 
 
 def workspace_aliases(workspaces):
     """Only direct parent links to already-granted sibling roots are aliases."""
-    granted = {Path(w['root_path']) for w in workspaces}
+    granted = {Path(w['root_path']) for w in workspaces if not w.get('generated')}
     aliases = {}
     for parent in {root.parent for root in granted}:
         try:
@@ -237,7 +252,7 @@ def transport(profile,wid,path,reveal=False,range_header=None,head=False,stream=
         os.close(fd); raise HTTPException(415,'Audio or video required')
     start,end,status=0,size-1,200
     headers={'Accept-Ranges':'bytes','X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}
-    if stream and range_header:
+    if range_header:
         match=re.fullmatch(r'bytes=(\d*)-(\d*)',range_header)
         try:
             if not match or not any(match.groups()): raise ValueError()

@@ -242,7 +242,8 @@ def _(rid, params: dict, _catalog=_local_catalog, _methods=_METHODS) -> dict:
             "authority_epoch", "coordinator_fencing", "room_identity", "monotonic_log",
             "idempotent_send", "replayable_disband", "typed_events", "actor_identity",
             "log_replication", "authority_takeover", "exact_task_stop"],
-        "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT})
+        "methods": list(_methods), "max_log_limit": MAX_LOG_LIMIT,
+        "feature_versions": {"scoped_approval_response": 1}})
 
 
 @_room_method("groups.peer.invite", code=4120, db=True)
@@ -456,8 +457,11 @@ def _(rid, params: dict, service) -> dict:
         str(params.get("room_id") or ""), member_id=str(params.get("member_id") or ""),
         task_id=str(params.get("task_id") or ""),
         execution_generation=int(params.get("execution_generation") or 0),
-        choice=str(params.get("choice") or ""), request_id=str(params.get("request_id") or ""))
-    return _ok(rid, {"approved": True, "result": result})
+        choice=str(params.get("choice") or ""), request_id=str(params.get("request_id") or ""),
+        **{key: params[key] for key in ("scoped_approval_response", "request_epoch", "request_revision", "reason", "auth",
+                                      "expected_authority_gateway_id", "expected_authority_epoch") if params.get(key) is not None})
+    from tui_gateway.human_input import approval_response_settled
+    return _ok(rid, {"approved": approval_response_settled(result), "result": result})
 
 
 @_room_method("groups.retry", code=5118, service_code=4115)

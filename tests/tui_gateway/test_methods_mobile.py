@@ -239,8 +239,9 @@ def test_mobile_owned_attachment_selection_uses_same_backend_as_desktop(mobile_h
 def test_exact_approval_rejects_other_profile_stale_and_persistent_choice(mobile_home, peer, monkeypatch):
     import tools.approval as approvals
     opened = open_bot()
-    event = threading.Event()
-    entry = SimpleNamespace(data={"request_id": "approval-1", "command": "echo safe"}, event=event, result=None)
+    from tools.approval_gateway_wait import _ApprovalEntry
+    entry = _ApprovalEntry({"request_id": "approval-1", "command": "echo safe"})
+    event = entry.event
     monkeypatch.setattr(approvals, "_gateway_queues", {"ops-root": [entry]})
     assert rpc("mobile.approval.respond", **scope(opened), request_id="other", choice="once")["result"]["resolved"] == 0
     assert "error" in rpc("mobile.approval.respond", **scope(opened), request_id="approval-1", choice="always")
@@ -441,8 +442,8 @@ def test_canonical_approval_routes_to_real_gateway_queue(mobile_home, peer, monk
     from tui_gateway import server_requests as requests
     import tools.approval as approvals
     opened = open_bot()
-    entry = SimpleNamespace(data={"request_id": "approval-real", "command": "echo safe", "choices": ["once", "deny"]},
-                            event=threading.Event(), result=None)
+    from tools.approval_gateway_wait import _ApprovalEntry
+    entry = _ApprovalEntry({"request_id": "approval-real", "command": "echo safe", "choices": ["once", "deny"]})
     monkeypatch.setattr(approvals, "_gateway_queues", {"ops-root": [entry]})
     server._emit_approval_request(opened["session_id"], entry.data)
     request = requests.open_requests(opened["session_id"])[0]

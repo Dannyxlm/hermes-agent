@@ -22,14 +22,68 @@ from tools.approval_human_wait import activity_heartbeat, human_wait_window
 logger = logging.getLogger("tools.approval")
 
 
+def _consent_kind(data: dict) -> str | None:
+    """Derive per-call constraints independently of producer-supplied offers."""
+    surface = data.get("surface") or ""
+    kind = data.get("kind")
+    if surface == "vault-payment" or kind == "payment" or data.get("payment") is not None:
+        return "payment"
+    family = surface.split("/", 1)[0]
+    if family in ("mcp-trust", "mcp-elicitation"):
+        return family.replace("-", "_")
+    return kind if kind in ("mcp_trust", "mcp_elicitation") else None
+
+
+def _settled_choice(data: dict, choice: str) -> str:
+    """The scope a *choice* settles as: an owner's ``session``/``always`` on a Smart-DENY request is a
+    one-time override for that request only (it never persists a grant). Consent kinds keep the raw
+    choice so their per-call refusal of reusable scopes still applies."""
+    if choice in ("session", "always") and data.get("smart_denied") and _consent_kind(data) is None:
+        return "once"
+    return choice
+
+
+class _ApprovalEvent(threading.Event):
+    """Wake signal carrying the queue owner's immutable monotonic deadline."""
+
+    def __init__(self, deadline_monotonic: float):
+        super().__init__()
+        self.deadline_monotonic = deadline_monotonic
+
+
+class _ApprovalNotice(dict):
+    """Replay-safe payload with process-local timing carried out of band."""
+
+    def __init__(self, data: dict, deadline_monotonic: float):
+        super().__init__(data)
+        self.deadline_monotonic = deadline_monotonic
+
+
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("acknowledged", "cancelled", "data", "event", "reason", "result", "settle")
+    __slots__ = ("acknowledged", "auth", "cancelled", "data", "event", "reason", "result", "settle")
 
-    def __init__(self, data: dict):
-        self.event = threading.Event()
+    def __init__(self, data: dict, *, timeout_seconds: float | None = None):
+        from agent.deadline import clamp_timeout
         self.data = dict(data)
         self.data.setdefault("request_id", uuid.uuid4().hex)
+        if _consent_kind(self.data) is not None:
+            self.data.update(allow_session=False, allow_permanent=False)
+        timeout = clamp_timeout(_ctx._get_approval_timeout() if timeout_seconds is None else timeout_seconds) or 0.0
+        from tools.approval import _gateway_approval_epoch
+        self.data.update(scoped_approval_response=1, request_epoch=_gateway_approval_epoch, request_revision=1)
+        self.data.update(created_at=time.time(), timeout_seconds=timeout)
+        self.data["expires_at"] = self.data["created_at"] + timeout
+        # Carry the producer's frozen budget with the wake signal. Publication
+        # and observer latency must not restart the queue's clock after sending.
+        self.event = _ApprovalEvent(time.monotonic() + timeout)
+        choices = ["once"]
+        if not self.data.get("smart_denied") and self.data.get("allow_session") is not False:
+            choices.append("session")
+            if self.data.get("allow_permanent") is not False:
+                choices.append("always")
+        offered = data.get("choices", choices + ["deny"])
+        self.data["choices"] = [choice for choice in choices + ["deny"] if choice in offered]
         self.acknowledged = False
         # Surface hook run once when the wait ends by ANY path (answer, timeout, interrupt, /approve from
         # another client): the tui_gateway withdraws its open server→client request through it.
@@ -37,12 +91,14 @@ class _ApprovalEntry:
         self.result: str | None = None  # "once"|"session"|"always"|"deny"
         # Free-text reason from ``/deny <reason>`` so the agent can adapt, not just hear "denied".
         self.reason: str | None = None
+        # Client-reported receipt metadata, never authentication proof.
+        self.auth: str | None = None
         # Why the prompt was withdrawn with nobody answering (interrupt cause, session teardown);
         # followers and teardown read it so a withdrawn prompt never renders as a user deny.
         self.cancelled: str | None = None
 
 
-def _poll_event(event: threading.Event, session_key: str, *, interrupt_log: str) -> str:
+def _poll_event(event: _ApprovalEvent, session_key: str, *, interrupt_log: str) -> str:
     """Wait on *event* until it fires, the turn is interrupted, or approvals.timeout
     elapses; returns ``"set"`` | ``"interrupted"`` | ``"timeout"``. Polls in ~1s
     slices so activity heartbeats reach the agent's inactivity tracker every ~10s —
@@ -55,7 +111,7 @@ def _poll_event(event: threading.Event, session_key: str, *, interrupt_log: str)
     per-thread interrupt-cause channel (``get_interrupt_reason()``, a trusted fixed
     category), never inferred from message text, so the caller can report a
     withdrawn prompt without inventing a user refusal."""
-    deadline = time.monotonic() + max(_ctx._get_approval_timeout(), 0)
+    deadline = event.deadline_monotonic
     heartbeat = activity_heartbeat("waiting for user approval")
     with human_wait_window(session_key):
         while True:
@@ -130,7 +186,8 @@ def _await_coalesced_leader(session_key: str, leader, payload: dict):
     return _finish(payload, resolved, choice, getattr(leader, "reason", None), coalesced=True, **extra)
 
 
-def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *, surface: str = "gateway") -> dict:
+def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *, surface: str = "gateway",
+                            timeout_seconds: float | None = None) -> dict:
     """Enqueue *approval_data*, notify the user, and block until resolved or timed
     out. Shared by the terminal command guard, the execute_code guard, the plugin
     escalation gate, and MCP elicitation. Returns ``{"resolved", "choice",
@@ -155,16 +212,23 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         "session_key": session_key, "surface": surface,
     }
     keys = list(approval_data.get("pattern_keys") or [])
+    can_coalesce = (_consent_kind({**approval_data, "surface": surface}) is None
+                    and approval_data.get("allow_session") is not False and not approval_data.get("smart_denied"))
     with _approval._lock:
         leader = next((e for e in _approval._gateway_queues.get(session_key, [])
-                       if e.data.get("command") == approval_data.get("command")
+                       if can_coalesce and _consent_kind(e.data) is None and e.data.get("allow_session") is not False
+                       and not e.data.get("smart_denied")
+                       and (e.data.get("allow_permanent") is not False) == (approval_data.get("allow_permanent") is not False)
+                       and e.data.get("surface", "gateway") == surface
+                       and e.event.deadline_monotonic > time.monotonic()
+                       and e.data.get("command") == approval_data.get("command")
                        and list(e.data.get("pattern_keys") or []) == keys), None)
     if leader is not None and not preparing_terminal_approval():
         adopted = _await_coalesced_leader(session_key, leader, payload)
         if adopted is not None:
             return adopted
 
-    entry = _ApprovalEntry(approval_data)
+    entry = _ApprovalEntry({**approval_data, "surface": surface}, timeout_seconds=timeout_seconds)
     with _approval._lock:
         register_prepared_approval(session_key, entry)
         _approval._gateway_queues.setdefault(session_key, []).append(entry)
@@ -177,6 +241,10 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         nothing was pending instead of being acked "ok" while the agent denies)."""
         with _approval._lock:
             choice = entry.result
+            if choice is not None:
+                choice = _settled_choice(entry.data, choice)
+            if choice is not None and choice not in entry.data["choices"]:
+                choice = "deny"  # another surface cannot broaden a per-call grant
             queue = _approval._gateway_queues.get(session_key, [])
             if entry in queue:
                 queue.remove(entry)
@@ -203,7 +271,9 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         _ctx._fire_approval_hook("pre_approval_request", **payload)
         # Bridges sync agent thread → async gateway.
         try:
-            notify_cb(dict(entry.data))
+            # A dict-compatible notice keeps existing callback/replay equality
+            # while carrying process-local timing outside the serialized body.
+            notify_cb(_ApprovalNotice(entry.data, entry.event.deadline_monotonic))
             approval_published()
         except Exception as exc:
             logger.warning("Gateway approval notify failed: %s", exc)
@@ -228,4 +298,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         resolved = state != "timeout" or choice is not None
         extra = {"cancelled": cancelled} if cancelled else {}
         human.outcome = _hook_choice(resolved, choice, extra)
-        return _finish(payload, resolved, choice, entry.reason, **extra)
+        decision = _finish(payload, resolved, choice, entry.reason, **extra)
+        if entry.auth and choice is not None and not cancelled:
+            decision["auth"] = entry.auth
+        return decision

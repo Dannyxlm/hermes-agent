@@ -222,6 +222,7 @@ def _apply_project_workspace(task_id: str, path: str, _name: str = "") -> None:
 
 
 def _wire_callbacks(sid: str):
+    from tui_gateway.human_input import human_timeout
     from tools.terminal_tool import set_sudo_password_callback
     from tools.terminal_tool_sudo import get_sudo_prompt_command
     from gateway.run import _redact_approval_command
@@ -247,14 +248,14 @@ def _wire_callbacks(sid: str):
             logger.info("secret prompt for %s refused: its UI session is closed", owner_sid)
             val = ""
         else:
-            val = _ask("secret", owner_sid, pl) if owner_sid else ""
+            val = _ask("secret", owner_sid, pl, timeout=human_timeout()) if owner_sid else ""
         if not val:
             return {"success": True, "stored_as": env_var, "validated": False, "skipped": True, "message": "skipped"}
         from hermes_cli.config import save_env_value_secure
         return {**save_env_value_secure(env_var, val), "skipped": False, "message": "ok"}
 
     set_sudo_password_callback(lambda: _ask(
-        "sudo", sid, {"command": _redact_approval_command(get_sudo_prompt_command())}, timeout=120))
+        "sudo", sid, {"command": _redact_approval_command(get_sudo_prompt_command())}, timeout=human_timeout()))
     set_project_workspace_callback(_apply_project_workspace)
     set_secret_capture_callback(secret_cb)
     # External password-manager unlock: the renderer shows a masked master-password card; the
@@ -263,11 +264,11 @@ def _wire_callbacks(sid: str):
                                              set_save_login_prompt_callback, set_unlock_prompt_callback)
     set_current_session_id(sid)  # an unlock made on this turn belongs to this session (released with it)
     set_unlock_prompt_callback(lambda backend, display_name: _ask(
-        "vault.unlock_prompt", sid, {"backend": backend, "display_name": display_name}, timeout=120))
+        "vault.unlock_prompt", sid, {"backend": backend, "display_name": display_name}, timeout=human_timeout()))
 
     def save_login_cb(origin, site):
         # The renderer shows identifier + masked password; the JSON answer goes straight to the vault store.
-        raw = _ask("vault.save_login", sid, {"origin": origin, "site": site}, timeout=180)
+        raw = _ask("vault.save_login", sid, {"origin": origin, "site": site}, timeout=human_timeout())
         try:
             data = json.loads(raw) if raw else None
         except ValueError:
@@ -276,7 +277,7 @@ def _wire_callbacks(sid: str):
 
     set_save_login_prompt_callback(save_login_cb)
     set_code_prompt_callback(lambda site, hint: _ask(
-        "vault.code", sid, {"site": site, "hint": hint}, timeout=180))
+        "vault.code", sid, {"site": site, "hint": hint}, timeout=human_timeout()))
 
 
 def _available_personalities(cfg: dict | None = None) -> dict:

@@ -791,17 +791,35 @@ def _broadcast_global_event(event: str, payload: dict | None = None) -> None:
 
 def _approval_request_payload(data: dict | None) -> dict:
     """Build the client-safe representation of a pending approval."""
+    from tui_gateway.contracts.server_requests import ApprovalKind
+
     payload = dict(data or {})
-    if "choices" not in payload:
-        choices = ["once"]
-        if not payload.get("smart_denied") and payload.get("allow_session") is not False:
-            choices.append("session")
-            if payload.get("allow_permanent") is not False:
-                choices.append("always")
-        payload["choices"] = choices + ["deny"]
-    if "command" in payload:
-        from gateway.run import _redact_approval_command
-        payload["command"] = _redact_approval_command(payload.get("command"))
+    kind = ApprovalKind.for_context(payload.get("surface"), payload.get("tool_name"),
+                                    payment=payload.get("payment") is not None)
+    consent = (ApprovalKind.payment, ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation)
+    declared = payload.get("kind")
+    if declared == ApprovalKind.payment or (kind not in consent and declared in consent):
+        kind = ApprovalKind(declared)
+    payload["kind"] = kind.value
+    if kind in consent:
+        payload.update(allow_session=False, allow_permanent=False)
+    if kind in (ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation):
+        _, _, target = str(payload.get("surface") or "").partition("/")
+        if target:
+            payload["mcp_server"] = target
+    if kind == ApprovalKind.payment and isinstance(payload.get("payment"), dict):
+        payload["origin"] = payload["payment"]["origin"]
+    choices = ["once"]
+    if not payload.get("smart_denied") and payload.get("allow_session") is not False:
+        choices.append("session")
+        if payload.get("allow_permanent") is not False:
+            choices.append("always")
+    offered = payload.get("choices", choices + ["deny"])
+    payload["choices"] = [choice for choice in choices + ["deny"] if choice in offered]
+    from gateway.run import _redact_approval_command
+    for key in ("command", "description"):
+        if key in payload:
+            payload[key] = _redact_approval_command(payload[key])
     return payload
 
 
@@ -816,6 +834,9 @@ def _open_requests(sid: str) -> list[dict]:
         return reqs
     if (session := _sessions.get(sid)) is not None:
         with session.get("history_lock", threading.Lock()):
+            mirrors = session.get("_compute_host_open_requests")
+            if mirrors:
+                return [dict(req) for req in mirrors.values()]
             mirrored = session.get("_compute_host_open_request")
             return [dict(mirrored)] if isinstance(mirrored, dict) else []
     return []
@@ -853,12 +874,19 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
     interrupt) withdraws the request with ``request.cancel``."""
     from tui_gateway import server_requests
     from tools import approval as _approval
+    deadline_monotonic = getattr(data, "deadline_monotonic", None)
+    data = dict(data or {})
+    timeout = data.pop("timeout_seconds", None)
+    created_at = data.pop("created_at", None)
+    data.pop("expires_at", None)  # the registry derives the public envelope
     payload = _approval_request_payload(data)
     request_id = str(payload.get("request_id") or "")
     session_key = str((_sessions.get(sid) or {}).get("session_key") or "")
 
-    def on_result(result: dict | None) -> None:
+    def on_result(result: dict | None) -> bool | None:
         if result is None:
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                return  # queue poll owns timeout attribution, not a client capability refusal
             # No client can answer this prompt: the request was never sent (the only attached client predates
             # server→client requests) or the client answered -32601 (no handler). Without withdrawing the
             # queue entry the agent would idle for the whole approvals.timeout with no prompt anywhere
@@ -869,10 +897,14 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
                                                     "(update the Hermes app)")
             return
         choice = str(result.get("choice") or "deny")
-        _approval.resolve_gateway_approval(session_key, choice, resolve_all=bool(result.get("all")),
-                                           request_id=request_id or None)
+        reason = result.get("reason")
+        reason = reason[:2000] if choice == "deny" and isinstance(reason, str) else None
+        return bool(_approval.resolve_gateway_approval(session_key, choice, resolve_all=False,
+                                                       request_id=request_id or None, reason=reason,
+                                                       auth=_approval.normalize_approval_auth(result.get("auth"))))
 
-    settle = server_requests.send_async("approval", sid, payload, on_result)
+    settle = server_requests.send_async("approval", sid, payload, on_result, timeout=timeout,
+                                       deadline_monotonic=deadline_monotonic, created_at=created_at)
     # The wait can end between the frame going out and the hook attaching (the client answered by RPC, another
     # surface resolved it): withdraw now, or the request stays in ``open_requests`` for every later resume.
     if request_id and not _approval.register_gateway_settle(session_key, request_id, settle):
@@ -3789,3 +3821,5 @@ for _m in (
     _methods_media, _methods_i18n, _methods_shared_metrics, _methods_start_chat, _methods_plugin_catalog):
     _m.register(sys.modules[__name__])
 del _m
+from tui_gateway import methods_human_input as _methods_human_input
+_methods_human_input.register(sys.modules[__name__], register_method)
