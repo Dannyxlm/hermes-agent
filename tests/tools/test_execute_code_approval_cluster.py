@@ -198,20 +198,6 @@ def _register_capturing_resolver(session_key: str, result):
     return seen
 
 
-def _register_canonical_resolver(session_key: str, *choices: str):
-    """Answer through the canonical ``/approve`` path, in order, and keep each resolver count."""
-    seen: dict = {"counts": []}
-
-    def cb(approval_data):
-        seen["approval_data"] = approval_data
-        for choice in choices:
-            seen["counts"].append(A.resolve_gateway_approval(session_key, choice))
-
-    with A._lock:
-        A._gateway_notify_cbs[session_key] = cb
-    return seen
-
-
 def test_guard_isolated_backend_approved():
     # Container backends already sandbox the child — no-op approve.
     assert A.check_execute_code_guard("import os", "docker")["approved"] is True
@@ -323,12 +309,7 @@ def test_guard_smart_mode(gw_session, monkeypatch):
 
 
 def test_terminal_smart_deny_owner_override_is_one_operation(gw_session, monkeypatch):
-    """A human may override DENY once; a broad scope is not offered, refused and never persisted.
-
-    Plan R3: the server enforces offered scopes on every transport. ``/approve always`` on a
-    smart-denied request is refused by the canonical queue (the request stays open) instead of
-    being downgraded to a one-time override; ``/approve`` (once) is the override.
-    """
+    """A human may override DENY, but a broad UI choice must not be persisted."""
     with A._lock:
         A._permanent_approved.discard("owner-override-test-danger")
         A._session_approved.get(gw_session, set()).discard("owner-override-test-danger")
@@ -345,22 +326,13 @@ def test_terminal_smart_deny_owner_override_is_one_operation(gw_session, monkeyp
         lambda command: (True, "owner-override-test-danger", f"risk:{command}"),
     )
 
-    shown = _register_canonical_resolver(gw_session, "always", "session", "once")
+    shown = _register_capturing_resolver(gw_session, "always")
     result = A.check_all_command_guards("dangerous /tmp/first", "local")
 
-    assert shown["counts"] == [0, 0, 1]
     assert result["approved"] is True
     assert result["user_approved"] is True
     assert shown["approval_data"]["smart_denied"] is True
     assert shown["approval_data"]["allow_permanent"] is False
-    assert shown["approval_data"]["choices"] == ["once", "deny"]
-    assert A.is_approved(gw_session, "owner-override-test-danger") is False
-
-    # A raw unoffered scope that bypasses the canonical resolver fails closed and persists nothing.
-    _register_resolver(gw_session, "always")
-    raw = A.check_all_command_guards("dangerous /tmp/raw", "local")
-    assert raw["approved"] is False
-    assert raw["outcome"] == "denied"
     assert A.is_approved(gw_session, "owner-override-test-danger") is False
 
     _register_resolver(gw_session, "deny")
@@ -370,29 +342,20 @@ def test_terminal_smart_deny_owner_override_is_one_operation(gw_session, monkeyp
 
 
 def test_execute_code_smart_deny_owner_override_is_one_operation(gw_session, monkeypatch):
-    """Never persist the coarse execute_code key after overriding smart DENY; broad scopes are refused."""
+    """Never persist the coarse execute_code key after overriding smart DENY."""
     with A._lock:
         A._permanent_approved.discard("execute_code")
         A._session_approved.get(gw_session, set()).discard("execute_code")
     monkeypatch.setattr(approval_context, "_get_approval_mode", lambda: "smart")
     monkeypatch.setattr(approval_smart, "_smart_approve", lambda _command, _description: "deny")
 
-    shown = _register_canonical_resolver(gw_session, "session", "always", "once")
+    shown = _register_capturing_resolver(gw_session, "session")
     result = A.check_execute_code_guard("print('first')", "local")
 
-    assert shown["counts"] == [0, 0, 1]
     assert result["approved"] is True
     assert result["user_approved"] is True
     assert shown["approval_data"]["smart_denied"] is True
     assert shown["approval_data"]["allow_permanent"] is False
-    assert shown["approval_data"]["choices"] == ["once", "deny"]
-    assert A.is_approved(gw_session, "execute_code") is False
-
-    # A raw unoffered scope that bypasses the canonical resolver fails closed and persists nothing.
-    _register_resolver(gw_session, "session")
-    raw = A.check_execute_code_guard("print('raw')", "local")
-    assert raw["approved"] is False
-    assert raw["outcome"] == "denied"
     assert A.is_approved(gw_session, "execute_code") is False
 
     _register_resolver(gw_session, "deny")

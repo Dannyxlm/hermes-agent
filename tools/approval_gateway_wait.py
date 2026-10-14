@@ -34,6 +34,15 @@ def _consent_kind(data: dict) -> str | None:
     return kind if kind in ("mcp_trust", "mcp_elicitation") else None
 
 
+def _settled_choice(data: dict, choice: str) -> str:
+    """The scope a *choice* settles as: an owner's ``session``/``always`` on a Smart-DENY request is a
+    one-time override for that request only (it never persists a grant). Consent kinds keep the raw
+    choice so their per-call refusal of reusable scopes still applies."""
+    if choice in ("session", "always") and data.get("smart_denied") and _consent_kind(data) is None:
+        return "once"
+    return choice
+
+
 class _ApprovalEvent(threading.Event):
     """Wake signal carrying the queue owner's immutable monotonic deadline."""
 
@@ -232,6 +241,8 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         nothing was pending instead of being acked "ok" while the agent denies)."""
         with _approval._lock:
             choice = entry.result
+            if choice is not None:
+                choice = _settled_choice(entry.data, choice)
             if choice is not None and choice not in entry.data["choices"]:
                 choice = "deny"  # another surface cannot broaden a per-call grant
             queue = _approval._gateway_queues.get(session_key, [])

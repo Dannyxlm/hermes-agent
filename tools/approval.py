@@ -37,7 +37,7 @@ from tools.approval_floors import (
     _command_matches_permanent_allowlist, _hardline_block_result, _match_user_deny_rule, _sudo_stdin_block_result,
     _user_deny_block_result,
 )
-from tools.approval_gateway_wait import _await_gateway_decision, _consent_kind
+from tools.approval_gateway_wait import _await_gateway_decision, _consent_kind, _settled_choice
 from tools.approval_prompt import _present_with_selected_transport, _transport_choice, prompt_dangerous_approval
 from tools.approval_smart import _smart_verdict
 
@@ -184,10 +184,11 @@ def resolve_gateway_approval(session_key: str, choice: str,
                            or entry.data.get("request_revision") != expected_revision
                            or entry.data.get("scoped_approval_response") != 1 for entry in targets)):
                 return 0
-        # Validate every surface before removing an entry or waking its callback.
+        # Validate every surface before removing an entry or waking its callback. An owner's
+        # session/always on a Smart-DENY request settles as a one-time override (``_settled_choice``).
         if (choice not in ("once", "session", "always", "deny")
                 or (reason is not None and (not isinstance(reason, str) or len(reason) > 2000 or choice != "deny"))
-                or any(choice not in entry.data.get("choices", [])
+                or any(_settled_choice(entry.data, choice) not in entry.data.get("choices", [])
                        or (choice in ("session", "always") and _consent_kind(entry.data) is not None)
                        or time.monotonic() >= entry.event.deadline_monotonic for entry in targets)):
             return 0
@@ -198,7 +199,7 @@ def resolve_gateway_approval(session_key: str, choice: str,
         # ``_drop_entry`` reads ``entry.result`` under this same lock after its deadline check, so a
         # choice acked to the client here can never be popped-and-lost as a timeout (#112548).
         for entry in targets:
-            entry.result = choice
+            entry.result = _settled_choice(entry.data, choice)
             if reason:
                 entry.reason = reason
             entry.auth = auth
