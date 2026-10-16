@@ -87,6 +87,18 @@ def _sanitize_error(text: str) -> str:
     return _CREDENTIAL_PATTERN.sub("[REDACTED]", text)
 
 
+def _sanitize_error_data(value: Any) -> Any:
+    """Redact string leaves without corrupting structured native error JSON."""
+    if isinstance(value, str):
+        return _sanitize_error(value)
+    if isinstance(value, dict):
+        return {_sanitize_error(key) if isinstance(key, str) else key: _sanitize_error_data(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_error_data(item) for item in value]
+    return value
+
+
 def _exc_str(exc: BaseException) -> str:
     """Non-empty string for *exc*: some exceptions (``anyio.ClosedResourceError``) carry no
     message, so fall back to ``repr`` to keep diagnostics."""
