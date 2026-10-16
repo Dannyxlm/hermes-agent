@@ -29,4 +29,11 @@ def mcp_envelope(raw: Any, cap: int) -> dict[str, Any]:
     for key in ("structuredContent", "_meta", "truncated"):
         if key in parsed:
             envelope[key] = parsed[key]
+    if "error" in parsed:
+        from tools.mcp_tool_error_projection import project_error_data, project_error_meta, project_error_text
+        envelope["error"] = project_error_text(str(parsed["error"]))
+        if "structuredContent" in envelope:
+            envelope["structuredContent"] = project_error_data(envelope["structuredContent"])
+        if "_meta" in envelope:
+            envelope["_meta"] = project_error_meta(envelope["_meta"])
     return envelope

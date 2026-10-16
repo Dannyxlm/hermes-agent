@@ -435,8 +435,11 @@ async def _call_tool_racing_stdio_death(server, server_name: str, tool_name: str
 def _error_result_text(result) -> str:
     """Concatenated text of an ``isError`` result's blocks (EmbeddedResource error payloads
     carry text under ``.resource.text``)."""
+    from tools.mcp_tool_error_projection import project_error_text
     texts = (getattr(b, "text", None) or getattr(getattr(b, "resource", None), "text", None) for b in (result.content or []))
-    return "".join(str(t) for t in texts if t)
+    # Project each block before joining: a prose prefix must not hide a JSON
+    # diagnostics block from the structured-field projection.
+    return "".join(project_error_text(str(t)) for t in texts if t)
 
 
 def _render_content_blocks(result, server_name: str) -> tuple[str, int, list[str]]:
@@ -535,9 +538,9 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
     used. ``structuredContent`` fills ``result`` when the blocks rendered effectively empty
     (structuredContent-only servers); ``_meta`` minus reserved keys is always surfaced."""
     if mcp_field(result, "is_error", "isError", False):
-        from tools.mcp_tool_common import _sanitize_error_data
-        raw_text = _truncate_mcp_text_result(_error_result_text(result) or "MCP tool returned an error")
-        payload = {"error": _sanitize_error(raw_text)}
+        from tools.mcp_tool_error_projection import project_error_data, project_error_meta, project_error_text
+        raw_text = _error_result_text(result) or "MCP tool returned an error"
+        payload = {"error": _truncate_mcp_text_result(project_error_text(raw_text))}
         structured = _capped_structured_content(result)
         if structured is None:
             try:
@@ -545,10 +548,10 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
             except ValueError:
                 structured = None
         if structured is not None:
-            payload["structuredContent"] = _sanitize_error_data(structured)
-        meta = _strip_reserved_meta_keys(mcp_field(result, "meta", "meta"))
-        if meta is not None:
-            payload["_meta"] = _sanitize_error_data(meta)
+            payload["structuredContent"] = project_error_data(structured)
+        meta = project_error_meta(_strip_reserved_meta_keys(mcp_field(result, "meta", "meta")))
+        if meta:
+            payload["_meta"] = meta
         return json.dumps(payload, ensure_ascii=False)
     text_result, usable_parts, cached_images = _render_content_blocks(result, server_name)
     if image_paths is not None:
