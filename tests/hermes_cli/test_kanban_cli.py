@@ -207,7 +207,7 @@ def test_board_override_is_isolated_per_concurrent_call(kanban_home, monkeypatch
     failures: list[str] = []
 
     def worker(board: str, title: str) -> None:
-        args = parser.parse_args(["kanban", "--board", board, "create", title])
+        args = parser.parse_args(["kanban", "--board", board, "create", title, "--model", "test-model"])
         rc = kc.kanban_command(args)
         if rc != 0:
             failures.append(f"{board}:{rc}")

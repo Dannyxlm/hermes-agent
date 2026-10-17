@@ -187,7 +187,7 @@ def test_cleanup_workspace_keeps_scratch_when_other_boards_cannot_be_listed(boar
     with kbc.connect_closing() as conn:
         archived = kb.create_task(conn, title="archived on default")
     with kbc.connect_closing(board="other") as other:
-        live = kb.create_task(other, title="live on other")
+        live = kb.create_task(other, model_override="test-model", title="live on other")
     for board_slug, task_id, status in ((None, archived, "archived"), ("other", live, "ready")):
         with kbc.connect_closing(board=board_slug) as conn, kb.write_txn(conn):
             conn.execute(
