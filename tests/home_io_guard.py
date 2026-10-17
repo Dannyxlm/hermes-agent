@@ -47,8 +47,9 @@ def _contains(path: str, prefix: str) -> bool:
 
 
 class HomeIOGuard:
-    def __init__(self, roots, installed_apps=lambda: ()):
+    def __init__(self, roots, installed_apps=lambda: (), kanban_roots=lambda: ()):
         self.roots = roots
+        self.kanban_roots = kanban_roots
         # The machine's installed desktop app (``packaged_gui_app_paths()`` before any test ran):
         # deleting, replacing or writing into it is refused. Reads stay allowed: several update
         # paths only probe it.
@@ -156,6 +157,25 @@ class HomeIOGuard:
             for entry in path.split(os.pathsep) if entry
         )
 
+    def check_kanban_db(self, value):
+        from urllib.parse import urlsplit
+        from urllib.request import url2pathname
+
+        if value is None or value == ":memory:":
+            return
+        candidate = os.fsdecode(value)
+        if candidate.startswith("file:"):
+            candidate = url2pathname(urlsplit(candidate).path)
+        absolute = _normcase(os.path.abspath(candidate))
+        resolved = _normcase(os.path.realpath(absolute))
+        for root in self.kanban_roots():
+            prefix = _normcase(os.fspath(root))
+            if _within(absolute, prefix) or _within(resolved, prefix):
+                raise AssertionError(
+                    "TEST BUG: SQLite I/O against the REAL shared Kanban board; "
+                    "set HERMES_KANBAN_HOME to isolate Kanban"
+                )
+
     def install(self, monkeypatch):
         def wrap(module, name, parameters, *, metadata=False, destructive=False):
             original = getattr(module, name)
@@ -185,7 +205,15 @@ class HomeIOGuard:
         for name in ("rename", "replace"):
             wrap(os, name, (("src", "src_dir_fd"), ("dst", "dst_dir_fd")), destructive=True)
         wrap(shutil, "rmtree", (("path", "dir_fd"),), destructive=True)
-        wrap(sqlite3, "connect", (("database", None),))
+        original_connect = sqlite3.connect
+
+        @wraps(original_connect)
+        def guarded_connect(database, *args, **kwargs):
+            self.check_kanban_db(database)
+            self.check(database)
+            return original_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", guarded_connect)
 
         original_open, original_close = os.open, os.close
 

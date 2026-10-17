@@ -763,7 +763,7 @@ def test_create_explicit_scratch_ignores_ambient_board_project(
 
     def create(**extra):
         result = json.loads(kt._handle_create(
-            {"board": "target", "title": "card", "assignee": "peer", **extra}))
+            {"board": "target", "title": "card", "assignee": "peer", "model": "test-model", **extra}))
         assert result["ok"] is True
         return result["workspace_kind"], result["project_id"]
 
@@ -1285,6 +1285,7 @@ def test_create_respects_auto_subscribe_on_create_false(monkeypatch, worker_env,
     out = kt._handle_create({
         "title": "no sub gated",
         "assignee": "peer",
+        "model": "test-model",
     })
     d = json.loads(out)
     assert d["ok"] is True

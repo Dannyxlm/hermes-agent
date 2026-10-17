@@ -109,7 +109,7 @@ def test_task_on_scoped_board_inherits_project(client, project):
         "/api/plugins/kanban/boards",
         json={"slug": "widget", "name": "Widget", "project_id": project["id"]},
     )
-    r = client.post("/api/plugins/kanban/tasks?board=widget", json={"title": "do the thing"})
+    r = client.post("/api/plugins/kanban/tasks?board=widget", json={"title": "do the thing", "model_override": "test-model"})
     assert r.status_code == 200, r.text
     task_id = r.json()["task"]["id"]
 

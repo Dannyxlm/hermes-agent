@@ -116,75 +116,22 @@ _SYSTEMD_SCOPE_PROBE_TTL_SECONDS = 60.0
 # systemd >= 254 expands ``$$``/``${X}`` in a ``--scope`` command line itself unless told not to;
 # older systemd-run rejects the option (and never expanded there), so the probe drops it on rejection.
 _SYSTEMD_RUN_NO_EXPAND = True
-_MIN_WORKER_MEMORY_MAX_BYTES = 64 * 1024 * 1024
-_DEFAULT_WORKER_MEMORY_MAX_BYTES = 1024 * 1024 * 1024
-_WORKER_MEMORY_MAX_CAP_BYTES = 4 * 1024 * 1024 * 1024
 
 
-def _worker_memory_max_bytes() -> int:
-    """Finite per-worker cgroup limit that can never widen host risk.
-    ``TERMINAL_LOCAL_MEMORY_MAX_MB`` is honored only when it *tightens* the safe
-    bound (min of the gateway's cgroup-v2 ``memory.max`` and half of physical RAM,
-    capped at 4 GiB), so an oversized override cannot exceed the enclosing slice.
-
-    The proposed local-memory-guard environment override is honored when it tightens the safe bound, so this
-    isolation composes with PR #57121 instead of inventing a second knob.
-    """
-    override_bound: Optional[int] = None
-    override = os.getenv("TERMINAL_LOCAL_MEMORY_MAX_MB", "").strip()
-    if override:
-        try:
-            parsed = int(override) * 1024 * 1024
-        except ValueError:
-            parsed = -1
-        if parsed >= _MIN_WORKER_MEMORY_MAX_BYTES:
-            override_bound = parsed
-        else:
-            logger.warning(
-                "Ignoring invalid TERMINAL_LOCAL_MEMORY_MAX_MB=%r; "
-                "expected an integer representing at least %d MiB",
-                override, _MIN_WORKER_MEMORY_MAX_BYTES // (1024 * 1024))
-    candidates: list[int] = []
-    try:
-        for line in Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines():
-            if line.startswith("0::"):
-                relative = line.partition("::")[2].lstrip("/")
-                raw_limit = (
-                    Path("/sys/fs/cgroup") / relative / "memory.max"
-                ).read_text(encoding="utf-8-sig").strip()
-                if raw_limit.isdigit():
-                    cgroup_limit = int(raw_limit)
-                    if cgroup_limit >= _MIN_WORKER_MEMORY_MAX_BYTES:
-                        candidates.append(cgroup_limit)
-                break
-    except (OSError, ValueError):
-        pass
-
-    try:
-        physical_bytes = int(os.sysconf("SC_PHYS_PAGES")) * int(
-            os.sysconf("SC_PAGE_SIZE")
-        )
-        physical_bound = min(
-            _WORKER_MEMORY_MAX_CAP_BYTES,
-            max(_MIN_WORKER_MEMORY_MAX_BYTES, physical_bytes // 2),
-        )
-        candidates.append(physical_bound)
-    except (OSError, ValueError, TypeError):
-        pass
-    safe_bound = min(candidates) if candidates else _DEFAULT_WORKER_MEMORY_MAX_BYTES
-    return min(override_bound, safe_bound) if override_bound else safe_bound
-
-
-def _systemd_scope_argv(binary: str, unit_name: str, *argv: str) -> list[str]:
+def _systemd_scope_argv(
+    binary: str, unit_name: str, *argv: str, memory_max: int | None = None,
+) -> list[str]:
     """``systemd-run --user --scope`` argv shared by the probe and real spawns.
-    ``--collect`` self-cleans the scope after exit; ``--unit`` names it for systemctl.
+    Non-Kanban commands use MemoryMax=infinity. Finite-budget scopes retain failed
+    Result=oom-kill until the dispatcher records it, then resets the failed unit.
     No ``OOMPolicy=``: transient scopes reject it on systemd <253 (#102486).
     ``--expand-environment=no`` keeps the command byte-identical (#132385)."""
     no_expand = ["--expand-environment=no"] if _SYSTEMD_RUN_NO_EXPAND else []
     return [
-        binary, "--user", "--scope", "--quiet", *no_expand, "--unit", unit_name, "--collect",
+        binary, "--user", "--scope", "--quiet", *no_expand, "--unit", unit_name,
+        *(["--collect"] if memory_max is None else []),
         "--property", "MemoryAccounting=yes",
-        "--property", f"MemoryMax={_worker_memory_max_bytes()}",
+        "--property", f"MemoryMax={memory_max if memory_max is not None else 'infinity'}",
         "--", *argv,
     ]
 
@@ -326,9 +273,12 @@ def _is_supervised_gateway_process() -> bool:
         return False
 
 
-def _build_systemd_scope_argv(shell_argv: list[str], unit_suffix: str) -> list[str]:
+def _build_systemd_scope_argv(
+    shell_argv: list[str], unit_suffix: str, *, memory_max: int | None = None,
+) -> list[str]:
     """Wrap *shell_argv* in a ``systemd-run --user --scope`` invocation with its own
-    memory accounting, so an OOM in the worker cannot kill the gateway cgroup.
+    memory accounting outside the gateway cgroup. Only Kanban passes a finite
+    memory budget; interactive executors remain unlimited.
 
     ``--collect`` makes the transient scope self-clean after exit; ``--unit`` gives it a recognisable name
     for ``systemctl --user status`` / journalctl. See #70716.
@@ -339,7 +289,7 @@ def _build_systemd_scope_argv(shell_argv: list[str], unit_suffix: str) -> list[s
     if binary is None:
         # Caller should have probed availability; never pass None into Popen anyway.
         return shell_argv
-    return _systemd_scope_argv(binary, f"hermes-worker-{unit_suffix}", *shell_argv)
+    return _systemd_scope_argv(binary, f"hermes-worker-{unit_suffix}", *shell_argv, memory_max=memory_max)
 
 
 _scope_degraded_warned = False
@@ -415,7 +365,7 @@ def scoped_spawn_lost_user_bus(spawn_env: dict[str, str]) -> bool:
 
 def restart_safe_gateway_child_argv(
     command: list[str], *, unit_suffix: str, require_restart_safe_scope: bool,
-    outlives_parent: bool = False,
+    outlives_parent: bool = False, memory_max: int | None = None,
 ) -> GatewayChildDispatch:
     """Place a managed-systemd gateway child outside the gateway cgroup.
 
@@ -463,7 +413,8 @@ def restart_safe_gateway_child_argv(
             f"/run/user/{os.getuid()}/bus). On a system-level service install, run "  # windows-footgun: ok — behind the _IS_LINUX return above
             "`sudo loginctl enable-linger <gateway-user>` and restart the gateway."
         )
-    scoped = _build_systemd_scope_argv(command, unit_suffix=unit_suffix)
+    scoped = (_build_systemd_scope_argv(command, unit_suffix=unit_suffix, memory_max=memory_max)
+              if memory_max is not None else _build_systemd_scope_argv(command, unit_suffix=unit_suffix))
     if scoped == command:
         return _degrade("systemd-run disappeared after the availability probe")
     return GatewayChildDispatch("scoped", scoped)
@@ -1126,8 +1077,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin):
     def _scope_argv(self, session: ProcessSession, safe_command: str, unit_suffix: str, label: str) -> list[str]:
         """Login-shell argv for *safe_command* (parity with LocalEnvironment: rc files
         sourced, user tools on PATH), wrapped in a transient systemd scope when we are
-        the supervised gateway (own cgroup: an OOM kills only the worker, not the
-        gateway and its messaging control plane)."""
+        the supervised gateway. Main-chat executors keep their own cgroup but
+        deliberately have no per-command memory cap."""
         argv = [_find_shell(), "-lic", f"set +m; {safe_command}"]
         # This applies to both pipe mode and the PTY path above. See #70716.
         in_supervised_gateway = _IS_LINUX and _is_supervised_gateway_process()

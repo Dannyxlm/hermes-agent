@@ -1377,7 +1377,7 @@ def test_dead_worker_reap_reads_the_log_of_the_dispatching_board(kanban_home):
     kb.create_board(board)  # explicit creation; connect() must not create boards (#43243)
     conn = kbc.connect(board=board)
     try:
-        tid = kb.create_task(conn, title="handoff", assignee="worker")
+        tid = kb.create_task(conn, title="handoff", model_override="test-model", assignee="worker")
         log_path = kb.worker_log_path(tid, board=board)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(_WORKER_LOG_TAIL)
