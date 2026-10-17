@@ -466,6 +466,19 @@ class _ProviderCollector:
     def register_cli_command(self, *args, **kwargs):
         pass  # CLI registration happens via discover_plugin_cli_commands()
 
+    def call_mcp(self, *args, **kwargs):
+        """Use the host's grant-checked native connection, including from isolated providers."""
+        return self._plugin_context().call_mcp(*args, **kwargs)
+
+    def get_config(self, key, default=None):
+        """Read this provider's plugin settings, never another profile's settings."""
+        return self._plugin_context().get_config(key, default)
+
+    @property
+    def state(self):
+        """Use Hermes' existing durable plugin state for operation references."""
+        return self._plugin_context().state
+
     def __getattr__(self, attr: str):
         """Delegate any other ``register_*`` call to a real ``PluginContext`` (a
         hand-maintained stub drifted: unknown calls raised and cost the provider).
