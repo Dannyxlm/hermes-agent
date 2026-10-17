@@ -245,6 +245,11 @@ def _preflight_check_delivery(job: dict) -> Optional[str]:
     lane_values = [deliver_value]
     if failure_deliver_value != deliver_value:
         lane_values.append(failure_deliver_value)
+    from cron.session_delivery import validate_delivery
+    try:
+        validate_delivery(lane_values)
+    except ValueError as exc:
+        return str(exc)
     platform_parts: list[str] = []
     for lane_value in lane_values:
         for part in lane_value.split(","):
@@ -252,7 +257,7 @@ def _preflight_check_delivery(job: dict) -> Optional[str]:
             if not part or part.lower() in {"local", "origin", "all"}:
                 continue
             # bot-chat targets deliver via a local subprocess; failures land in last_delivery_error.
-            if _delivery.parse_bot_chat_deliver_token(part) is not None:
+            if _delivery.parse_bot_chat_deliver_token(part) is not None or part.startswith("session:"):
                 continue
             platform_parts.append(part.split(":", 1)[0].strip())
     if not platform_parts:

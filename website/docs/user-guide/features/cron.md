@@ -584,6 +584,7 @@ When scheduling jobs, you specify where the output goes:
 | `"weixin"` | Weixin (WeChat) | |
 | `"bluebubbles"` | BlueBubbles (iMessage) | |
 | `"qqbot"` | QQ Bot (Tencent QQ) | |
+| `"session:EXACT_ID"` | Scheduled wake in an existing chat in this profile | Exact local ID; preserves history |
 | `"bot-chat"` | This profile's canonical Bot Chat — the bot reads the output and responds | Machine-local |
 | `"bot-chat:research"` | Another local profile's Bot Chat | Validated at create time |
 | `"all"` | Fan out to every connected home channel | Resolved at fire time |
@@ -614,9 +615,45 @@ error. A delivery failure does not count toward the job's `failure_streak`
 (the agent did its job); the next fully successful run returns the status to
 `ok`.
 
+### Scheduled wakes in an existing chat (`session:<id>`)
+
+Use an exact session ID from `hermes sessions list` to send scheduled output as an
+incoming turn in an existing conversation, rather than redirecting it to Bot Chat:
+
+```bash
+hermes cron create 'every 5m' --script check-ready.sh --no-agent \
+  --deliver 'session:EXACT_SESSION_ID' --failure-deliver local --name owner-check
+```
+
+The script lives under this profile's `scripts/` directory. Empty stdout stays
+silent. Nonempty stdout costs the target chat a full agent turn, even though the
+check itself uses `--no-agent`.
+
+- The session must already exist in the job's own profile. Creation, edits and
+  run preflight reject missing or foreign-profile IDs with instructions to choose
+  an exact local ID or switch profiles. Titles, prefixes and cross-profile lookup
+  are not supported. Compression follows the existing conversation's lineage.
+- Desktop, dashboard and TUI owners consume the durable mailbox at their normal
+  idle boundary, preserving history and queued local work. A busy owner is not a
+  second-writer invitation. An unsupported live owner keeps the wake deferred.
+- Without an owner, a later scheduler tick claims the deferred wake before
+  resuming that exact session through the CLI's normal ownership checks. No new
+  conversation is created. A serving scheduler is still required after restart.
+- The incoming turn starts with `[Scheduled wake from cron job ... , not the user.]`
+  and includes the execution ID. Logs identify the scheduled wake and receipt.
+- The same execution inspects its permanent receipt instead of sending again.
+  Queued or claimed means admission, not completion. Claimed or ambiguous work
+  is never automatically replayed after a crash. Inspect the chat and receipt
+  before explicitly rearming. Historical cron status is not refreshed when a
+  deferred wake completes; see the receipt under `cron/bot_chat_pending/` or
+  `runtime/bot_live_delivery/` in this profile.
+- The option also works in `--failure-deliver`, respects warning-notification
+  policy for failures, composes with other explicit targets, and is not part of
+  `all`. Remove the exact job when finished and verify with `hermes cron list --all`.
+
 ### Bot Chat delivery (`bot-chat`)
 
-`bot-chat` delivers the output **into a profile's canonical "Bot Chat" session as a real message**. Unlike every other target — where the recipient is a human reading a channel — the recipient here is the bot itself: it receives the output as an incoming message, acts on anything that needs action, and responds in its chat. Use it when scheduled output should be *processed*, not just posted.
+`bot-chat` delivers the output **into a profile's canonical "Bot Chat" session as a real message**. Unlike ordinary channel targets — where the recipient is a human reading a channel — the recipient here is the bot itself: it receives the output as an incoming message, acts on anything that needs action, and responds in its chat. Use it when scheduled output should be *processed*, not just posted.
 
 - `bot-chat` (bare) targets the job's own profile.
 - `bot-chat:<profile>` targets another profile **on the same machine**. Names are validated against `hermes profile list` when the job is created; profiles on other gateways or machines can never be targeted, so same-named profiles across machines are unambiguous.

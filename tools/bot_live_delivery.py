@@ -61,6 +61,33 @@ def find_canonical_live_owner(profile_home: Path | str) -> dict[str, Any] | None
     return None
 
 
+def find_session_owner(profile_home: Path | str, session_id: str) -> dict[str, Any] | None:
+    """Find an exact conversation's current writer, following only its compression lineage."""
+    from hermes_cli.active_sessions import active_session_registry_snapshot
+    from hermes_state import SessionDB
+
+    home = Path(profile_home).resolve()
+    db = SessionDB(db_path=home / "state.db", read_only=True)
+    try:
+        tip = db.get_compression_tip(session_id)
+    finally:
+        db.close()
+    for entry in active_session_registry_snapshot(registry_home=home):
+        if entry["session_id"] == tip:
+            return {**entry, "profile_home": str(home)}
+    return None
+
+
+def find_session_live_owner(profile_home: Path | str, session_id: str) -> dict[str, Any] | None:
+    """Use the same advertised consumer and lease pins as canonical Bot Chat delivery."""
+    entry = find_session_owner(profile_home, session_id)
+    meta = (entry or {}).get("metadata") or {}
+    if entry and meta.get("bot_live_delivery_consumer") is True and meta.get("live_session_id"):
+        return {key: entry[key] for key in ("profile_home", "session_id", "lease_id")} | {
+            "live_session_id": meta["live_session_id"]}
+    return None
+
+
 def _owner(home: Path | str, owner: dict[str, Any]) -> dict[str, str]:
     pinned = {key: owner.get(key) for key in _OWNER_KEYS}
     if not all(isinstance(value, str) and value for value in pinned.values()):
@@ -241,8 +268,8 @@ def _matches(home: Path | str, record: dict, owner: dict) -> bool:
 
 
 def owner_holds_delivery(profile_home: Path | str, record: dict) -> bool:
-    """Whether the canonical live owner is still one that could claim ``record``."""
-    owner = find_canonical_live_owner(profile_home)
+    """Whether the pinned live owner is still one that could claim ``record``."""
+    owner = find_session_live_owner(profile_home, record["session_id"])
     return owner is not None and _matches(profile_home, record, owner)
 
 

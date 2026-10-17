@@ -57,7 +57,8 @@ def _records(root: Path) -> list[tuple[Path, dict]]:
 
 
 def defer(key: str, job: dict, content: str, profile: str, home: Path, *,
-          for_failure: bool = False, suppressed: bool = False, degraded: bool = False) -> dict:
+          for_failure: bool = False, suppressed: bool = False, degraded: bool = False,
+          session_id: str | None = None) -> dict:
     """``degraded`` marks the short notice queued after a CLI-lane turn timed out; the record
     carries it so the consumer recognizes the marker by the record, never by its text."""
     root = _root()
@@ -66,7 +67,7 @@ def defer(key: str, job: dict, content: str, profile: str, home: Path, *,
         record = read_pending(key)
         if record is not None:
             if (record["content"] != content or record["home"] != str(home)
-                    or bool(record.get("for_failure")) != for_failure):
+                    or bool(record.get("for_failure")) != for_failure or record.get("session_id") != session_id):
                 raise ValueError("delivery id already belongs to a different payload")
             if suppressed and record["status"] == "queued":
                 record.update(status="suppressed", error=None)
@@ -75,6 +76,8 @@ def defer(key: str, job: dict, content: str, profile: str, home: Path, *,
         sequence = max((record["sequence"] for _, record in _records(root)), default=0) + 1
         record = dict(id=key, status="suppressed" if suppressed else "queued", job=job, content=content,
                       profile=profile, home=str(home), sequence=sequence)
+        if session_id is not None:
+            record["session_id"] = session_id
         if for_failure:
             record["for_failure"] = True
         if degraded:
@@ -94,10 +97,27 @@ def drain(root: Path | None = None) -> None:
                 _drain(root)
 
 
+def _unsupported_owner(home: Path, record: dict) -> bool:
+    from tools.bot_live_delivery import (
+        find_canonical_live_owner, find_canonical_owner, find_session_live_owner, find_session_owner,
+    )
+    if session_id := record.get("session_id"):
+        return find_session_owner(home, session_id) is not None and find_session_live_owner(home, session_id) is None
+    return find_canonical_owner(home) is not None and find_canonical_live_owner(home) is None
+
+
+def _deliver_pending(job: dict, record: dict) -> str | None:
+    from cron.scheduler_delivery import _deliver_to_bot_chat
+    from cron.session_delivery import deliver_to_session
+
+    if session_id := record.get("session_id"):
+        return deliver_to_session(job, record["content"], session_id, deferred=record,
+                                  for_failure=bool(record.get("for_failure")))
+    return _deliver_to_bot_chat(job, record["content"], record["profile"], deferred=record)
+
+
 def _drain(root: Path) -> None:
     """Claim before execution. Errors/interruptions never authorize another turn."""
-    from cron.scheduler_delivery import _deliver_to_bot_chat
-    from tools.bot_live_delivery import find_canonical_live_owner, find_canonical_owner
 
     with _FileLock(root / ".lock"):
         records = sorted(_records(root), key=lambda item: item[1]["sequence"])
@@ -118,8 +138,7 @@ def _drain(root: Path) -> None:
                 atomic_json_write(path, record, fsync_dir=True, mode=0o600)
                 continue
             try:
-                owner = find_canonical_owner(home)
-                if owner is not None and find_canonical_live_owner(home) is None:
+                if _unsupported_owner(home, record):
                     continue
             except Exception:
                 # Discovery uncertainty is not permission to launch.
@@ -129,12 +148,13 @@ def _drain(root: Path) -> None:
         job = record["job"]
         job.pop("_bot_chat_delivery_receipts", None)
         try:
-            error = _deliver_to_bot_chat(job, record["content"], record["profile"], deferred=record)
+            error = _deliver_pending(job, record)
         except Exception as exc:
             # The claim survives uncertainty; one failed attempt must not stop peers.
             error = f"{type(exc).__name__}: {exc}"
             logger.exception("Deferred Bot Chat delivery %s failed", record["id"])
         receipt = job.get("_bot_chat_delivery_receipts", {}).get(
+            f"session:{record['session_id']}" if record.get("session_id") else
             f"bot-chat:{record['profile'] or '(own)'}")
         status = "transferred" if receipt else "ambiguous" if error else "settled"
         if job.get("_notification_all_targets_suppressed"):

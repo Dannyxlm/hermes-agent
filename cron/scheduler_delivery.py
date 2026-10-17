@@ -615,6 +615,9 @@ def _resolve_single_delivery_target(
     token (``all``) rather than written by the user; broadcast expansions carry no mirror
     provenance (fan-out is never continuable), while a user-written bare platform token is a
     deliberate home-channel address and gets the ``home`` tag."""
+    from cron.session_delivery import session_target
+    if (session_id := session_target(deliver_value)) is not None:
+        return {"platform": "session", "chat_id": session_id, "thread_id": None}
     origin = _resolve_origin(job)
     if deliver_value == "local":
         return None
@@ -1992,7 +1995,7 @@ def _deliver_result(
     external_execution = os.environ.get("_HERMES_CRON_EXTERNAL_WORKER", "")
     if (external_execution and adapters is None
             and external_execution == str(job.get("execution_id") or "")
-            and any(target["platform"] != BOT_CHAT_PLATFORM for target in targets)):
+            and any(target["platform"] not in {BOT_CHAT_PLATFORM, "session"} for target in targets)):
         from cron.delivery_queue import enqueue_and_wait
 
         _record_delivery_verification(job, [])
@@ -2080,21 +2083,16 @@ def _deliver_result(
         # A failure notice for a platform that hides warning notifications is a suppressed
         # disposition, not a send; requested (non-failure) results are never gated.
         from gateway.warning_notifications import warning_notifications_enabled
-        if (for_failure and target["platform"] != BOT_CHAT_PLATFORM
+        if (for_failure and target["platform"] not in {BOT_CHAT_PLATFORM, "session"}
                 and not warning_notifications_enabled(target["platform"], user_cfg)):
             suppressed_targets += 1
             continue
         # Bot Chat owns admission; never concurrently resume a live owner's transcript.
-        if target["platform"] == BOT_CHAT_PLATFORM:
-            bot_chat_error = _deliver_to_bot_chat(job, content, target["chat_id"], for_failure=for_failure)
-            suppressed_targets += job.pop("_notification_all_targets_suppressed", False)
-            if bot_chat_error:
-                receipt_target = f"bot-chat:{target['chat_id'] or '(own)'}"
-                receipt = job.get("_bot_chat_delivery_receipts", {}).get(receipt_target)
-                if not receipt or receipt["status"] not in ("queued", "claimed"):
-                    delivery_errors.append(bot_chat_error)
-                if receipt and receipt["status"] == "ambiguous":
-                    unverified_targets.append(bot_chat_error)
+        if target["platform"] in {BOT_CHAT_PLATFORM, "session"}:
+            from cron.session_delivery import deliver_chat_turn
+            suppressed_targets += deliver_chat_turn(
+                job, content, target, for_failure=for_failure,
+                delivery_errors=delivery_errors, unverified_targets=unverified_targets)
             continue
 
         t = _prepare_target_delivery(
