@@ -17,7 +17,7 @@ def _spawn(monkeypatch, tmp_path, *, provider="openai-codex", config=None):
     }))
     monkeypatch.setattr(profiles, "resolve_profile_env", lambda _: str(home))
     monkeypatch.setattr(dispatch, "_resolve_hermes_argv", lambda: ["hermes"])
-    monkeypatch.setattr(dispatch, "_restart_safe_worker_argv", lambda task, cmd: cmd)
+    monkeypatch.setattr(dispatch, "_restart_safe_worker_argv", lambda task, cmd, resources=None: cmd)
     monkeypatch.setattr(dispatch, "_retag_legacy_worker_sessions", lambda _: None)
     captured = {}
 

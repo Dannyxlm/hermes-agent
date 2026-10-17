@@ -665,6 +665,7 @@ class Task:
     block_kind: Optional[str] = None
     block_recurrences: int = 0               # unblock-loop counter, see BLOCK_RECURRENCE_LIMIT
     completion_contract: Optional[str] = None
+    resource_class: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Task:
@@ -700,7 +701,7 @@ _TASK_OPTIONAL_COLUMNS = (
 )
 # Text columns where "" is stored/read as "not set".
 _TASK_EMPTY_IS_NULL_COLUMNS = (
-    "model_override", "provider_override", "reasoning_effort", "goal_max_turns", "block_kind",
+    "model_override", "provider_override", "reasoning_effort", "goal_max_turns", "block_kind", "resource_class",
 )
 
 
@@ -866,6 +867,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- passes --reasoning <level> so the worker runs at that depth regardless
     -- of the profile's agent.reasoning_effort. NULL = profile setting.
     reasoning_effort     TEXT,
+    resource_class       TEXT,
     -- Per-task override for the consecutive-failure circuit breaker.
     -- The value is the failure count at which the breaker trips — e.g.
     -- ``max_retries=1`` blocks on the first failure. NULL (the common
@@ -940,7 +942,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     profile             TEXT,
     step_key            TEXT,
     status              TEXT NOT NULL,
-    -- status: running | done | blocked | crashed | timed_out | failed | released
+    -- status: running | done | blocked | crashed | oom_killed | timed_out | failed | released
     claim_lock          TEXT,
     claim_expires       INTEGER,
     worker_pid          INTEGER,
@@ -953,7 +955,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     started_at          INTEGER NOT NULL,
     ended_at            INTEGER,
     outcome             TEXT,
-    -- outcome: completed | blocked | crashed | timed_out | spawn_failed |
+    -- outcome: completed | blocked | crashed | oom_killed | timed_out | spawn_failed |
     --          gave_up | reclaimed | (null while still running)
     summary             TEXT,
     metadata            TEXT,
@@ -1194,7 +1196,7 @@ def create_task(
     session_id: Optional[str] = None, board: Optional[str] = None, project_id: Optional[str] = None,
     project_source_task_id: Optional[str] = None,
     creator_task_id: Optional[str] = None,
-    completion_contract: Optional[str] = None,
+    completion_contract: Optional[str] = None, resource_class: Optional[str] = None,
 ) -> str:
     """Create a task (optionally under ``parents``); returns its id.
 
@@ -1214,6 +1216,9 @@ def create_task(
     from hermes_cli.kanban_db_graph import initial_task_state, inherit_creator_origin
     from hermes_cli.kanban_pr_acceptance import validate_contract
 
+    from hermes_cli.kanban_resources import validate_resource_class
+
+    resource_class = validate_resource_class(resource_class)
     completion_contract = validate_contract(completion_contract)
     model_override, provider_override = _validate_model_override(model_override, provider_override)
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
@@ -1294,8 +1299,8 @@ def create_task(
                         max_runtime_seconds,
                         skills, max_retries, model_override, provider_override,
                         reasoning_effort,
-                        goal_mode, goal_max_turns, session_id, completion_contract
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        goal_mode, goal_max_turns, session_id, completion_contract, resource_class
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id, title.strip(), body, assignee, task_status, priority,
@@ -1304,7 +1309,7 @@ def create_task(
                         _opt_int(max_runtime_seconds),
                         json.dumps(skills_list) if skills_list is not None else None,
                         _opt_int(max_retries), model_override, provider_override, reasoning_effort,
-                        1 if goal_mode else 0, _opt_int(goal_max_turns), session_id, completion_contract,
+                        1 if goal_mode else 0, _opt_int(goal_max_turns), session_id, completion_contract, resource_class,
                     ),
                 )
                 for pid in parents:
@@ -1896,6 +1901,9 @@ def _end_run(
     run_id = _current_run_id(conn, task_id)
     if run_id is None:
         return None
+    from hermes_cli.kanban_resources import merge_run_resources
+
+    metadata = merge_run_resources(conn, run_id, metadata)
     conn.execute(
         """
         UPDATE task_runs
@@ -3065,81 +3073,7 @@ def _unique_attachment_path(directory: Path, filename: str, used: set[Path]) -> 
     return candidate
 
 
-def edit_task(
-    conn: sqlite3.Connection, task_id: str, *, title: Optional[str] = None,
-    body: Optional[str] = None, priority: Optional[int] = None,
-    result: Optional[str] = None, summary: Optional[str] = None,
-    metadata: Optional[dict] = None, board: Optional[str] = None,
-) -> bool:
-    """Edit task fields, optionally backfilling a completed task's result."""
-    changed_fields = [
-        field for field, value in (("title", title), ("body", body), ("priority", priority))
-        if value is not None
-    ]
-    with write_txn(conn):
-        status = _task_status(conn, task_id)
-        if status is None or (result is not None and status != "done"):
-            return False
-        assignments = []
-        params = []
-        for field, value in (("title", title), ("body", body), ("priority", priority)):
-            if value is not None:
-                assignments.append(f"{field} = ?")
-                params.append(value)
-        if result is not None:
-            assignments.append("result = ?")
-            params.append(result)
-            changed_fields.append("result")
-        if not assignments:
-            return False
-        conn.execute(
-            f"UPDATE tasks SET {', '.join(assignments)} WHERE id = ?",
-            (*params, task_id),
-        )
-        if priority is not None:
-            _append_event(conn, task_id, "reprioritized", {"priority": priority})
-        if result is None:
-            non_priority_fields = [field for field in changed_fields if field != "priority"]
-            if non_priority_fields:
-                _append_event(conn, task_id, "edited", {"fields": non_priority_fields})
-        else:
-            handoff_summary = summary if summary is not None else result
-            changed_fields.append("summary")
-            if metadata is not None:
-                changed_fields.append("metadata")
-            run = conn.execute(
-            """
-            SELECT id FROM task_runs
-             WHERE task_id = ?
-               AND outcome = 'completed'
-             ORDER BY COALESCE(ended_at, started_at, 0) DESC, id DESC
-             LIMIT 1
-            """,
-            (task_id,),
-        ).fetchone()
-            if run is None:
-                run_id = _synthesize_ended_run(
-                    conn, task_id, outcome="completed", summary=handoff_summary, metadata=metadata,
-                )
-            else:
-                run_id = int(run["id"])
-                conn.execute("UPDATE task_runs SET summary = ? WHERE id = ?", (handoff_summary, run_id))
-                if metadata is not None:
-                    conn.execute(
-                        "UPDATE task_runs SET metadata = ? WHERE id = ?",
-                        (json.dumps(metadata, ensure_ascii=False), run_id),
-                    )
-            _append_event(
-                conn, task_id, "edited",
-                {
-                    "fields": ["result", "summary"] + (["metadata"] if metadata is not None else []),
-                    "result_len": len(result) if result else 0,
-                    "summary": _first_line(handoff_summary, 400) or None,
-                },
-                run_id=run_id,
-            )
-    notify_task_updated(conn, task_id, changed_fields, board=board)
-    return True
+from hermes_cli.kanban_db_edit import edit_task
 
 
 def block_task(

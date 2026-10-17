@@ -502,6 +502,7 @@ KANBAN_CREATE_SCHEMA = _schema(
                 "open-ended cards where one shot rarely finishes the "
                 "work. Defaults to false (classic single-shot worker)."
         )),
+        "resource_class": _prop("string", "Worker memory class, e.g. standard or heavy. Omit to inherit the board default."),
         "completion_contract": _prop("string", (
             "Declare at creation: local-only (default), OWNER/REPO for PR publication, or an exact GitHub PR URL. "
             "PR tasks cannot complete until repository-required exact-head CI passes. On publication pass metadata.published_pr."
