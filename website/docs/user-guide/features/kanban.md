@@ -848,6 +848,69 @@ The decomposer's routing decisions depend on profile descriptions, which is a pe
 
 `kanban.orchestrator_profile` does not load that profile's prompt, skills, or custom logic into the decomposition call. It controls who owns the root/orchestration task after fan-out. To change the decomposer's model/provider, configure `auxiliary.kanban_decomposer`. To use a profile's custom task-splitting logic instead of the built-in decomposer, switch to Manual mode and have that profile create or decompose tasks explicitly.
 
+### Worker memory resource classes
+
+Memory budgets apply only to Kanban workers, including their subagents and test
+processes. Interactive/main chats and their background commands are explicitly
+unlimited (`MemoryMax=infinity`); they retain separate scopes for isolation.
+Cron children also receive no Kanban memory budget.
+
+Configure the dispatching profile's `config.yaml` under `kanban`:
+
+```yaml
+kanban:
+  default_resource_class: standard
+  board_resource_classes:
+    build-board: heavy
+  resource_classes:
+    standard:
+      memory_max_mb: 4096
+      ram_fraction: 0.5
+    heavy:
+      memory_max_mb: null
+      ram_fraction: 0.75
+```
+
+The card override wins over the board map, then `default_resource_class`.
+`standard` defaults to the smaller of 4 GiB and half the available capacity;
+`heavy` defaults to 75% of that capacity. Capacity is physical RAM, tightened by
+finite cgroup ancestor limits. `memory_max_mb` is MiB, or `null` for no absolute
+ceiling. `ram_fraction` must be greater than zero and at most 0.9. Unknown class
+names and invalid budgets refuse launch. Existing cards inherit their board
+without a migration decision. The former `TERMINAL_LOCAL_MEMORY_MAX_MB` scope
+override is replaced by these Kanban settings and does not limit main chats.
+
+```bash
+hermes kanban create "Run large test suite" --assignee default --resource-class heavy
+hermes kanban edit TASK_ID --resource-class heavy
+hermes kanban edit TASK_ID --resource-class ""  # inherit the board again
+```
+
+The dashboard API accepts `resource_class` on create, PATCH and bulk requests;
+PATCH an empty string to clear it. `kanban_create` accepts it too. Changes affect
+the next run, not a currently running worker. The resolved class, byte limit and
+scope name are frozen in each run's `metadata.worker_resources`.
+
+On Linux with systemd user scopes, failed Kanban scopes are kept until the
+dispatcher reads `Result=oom-kill`. Unlike a bare SIGKILL, this is kernel-backed
+OOM evidence and survives both cgroup removal and a gateway restart. The run
+outcome becomes `oom_killed`, the card blocks immediately rather than spending
+retries on the same cap, and its visible reason names the budget and remedy:
+
+> worker OOM-killed with the 4 GiB memory cap (resource class standard); rerun with resource class heavy
+
+Set the class and unblock the card to retry. Heavy/custom class failures advise
+raising that class's budget or reducing the workload. After the reason is
+committed, the dispatcher resets the failed scope. Without systemd scopes, the
+existing direct/degraded launch behavior remains and no memory cap or OOM
+attribution is promised. A manual SIGKILL is not mislabeled as an OOM.
+`Result=oom-kill` identifies an OOM in the scope, not whether host-wide pressure
+or the per-worker cap caused it, so the reason says "with the cap", not "by the cap".
+
+Budgets are per worker, not reserved capacity. Keep `kanban.max_in_progress`
+conservative when running several heavy cards; the existing host-pressure
+and concurrency guards still apply.
+
 Config knobs (all under `kanban:` in `~/.hermes/config.yaml`):
 
 | Key | Default | Purpose |

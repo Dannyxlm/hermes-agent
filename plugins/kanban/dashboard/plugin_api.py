@@ -426,6 +426,7 @@ class CreateTaskBody(BaseModel):
     skills: Optional[list[str]] = None
     goal_mode: bool = False
     goal_max_turns: Optional[int] = None
+    resource_class: Optional[str] = None  # empty string clears to board default
     model_override: Optional[str] = None
     provider_override: Optional[str] = None
     reasoning_effort: Optional[str] = None  # none|minimal|…|ultra; None inherits the profile's level
@@ -544,6 +545,7 @@ class UpdateTaskBody(BaseModel):
     # In a PATCH ``None`` means "field not sent", so ``clear_*=True`` is the explicit clear signal.
     # ``reasoning_effort="none"`` is a VALUE (thinking off); it is cleared separately so
     # dropping a model override doesn't silently reset the depth.
+    resource_class: Optional[str] = None  # empty string clears to board default
     model_override: Optional[str] = None
     provider_override: Optional[str] = None
     clear_model_override: bool = False
@@ -562,6 +564,7 @@ class BulkTaskBody(BaseModel):
     metadata: Optional[dict] = None
     reclaim_first: bool = False
     # Same semantics as UpdateTaskBody.
+    resource_class: Optional[str] = None  # empty string clears to board default
     model_override: Optional[str] = None
     provider_override: Optional[str] = None
     clear_model_override: bool = False
@@ -630,6 +633,9 @@ def _apply_reasoning_effort(conn, task_id: str, p) -> bool:
 
 # Override knobs shared by PATCH and bulk: (payload wants it?, apply, bulk refusal message).
 _OVERRIDE_OPS = (
+    (lambda p: p.resource_class is not None,
+     lambda conn, tid, p: kanban_db.edit_task(conn, tid, resource_class=p.resource_class),
+     "resource class override refused"),
     (lambda p: p.clear_model_override or p.model_override is not None, _apply_model_override, "model override refused"),
     (lambda p: p.clear_reasoning_effort or p.reasoning_effort is not None, _apply_reasoning_effort, "reasoning override refused"),
 )

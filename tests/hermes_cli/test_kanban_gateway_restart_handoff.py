@@ -74,7 +74,7 @@ def test_managed_gateway_worker_is_spawned_in_restart_safe_scope(
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     monkeypatch.setattr("tools.process_registry._is_supervised_gateway_process", lambda: True)
     monkeypatch.setattr("tools.process_registry._systemd_run_user_scope_available", lambda: True)
-    monkeypatch.setattr("tools.process_registry._worker_memory_max_bytes", lambda: 536_870_912)
+    monkeypatch.setattr("hermes_cli.kanban_resources._capacity_bytes", lambda: 1_073_741_824)
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/systemd-run")
 
     assert kbd._default_spawn(task, str(workspace)) == 4242
@@ -167,7 +167,7 @@ def test_oneshot_unit_dispatcher_scope_wraps_or_warns_never_dooms_silently(
     monkeypatch.setattr(process_registry, "_systemd_run_user_scope_available", lambda: True)
     monkeypatch.setattr(
         process_registry, "_build_systemd_scope_argv",
-        lambda cmd, unit_suffix: ["systemd-run", "--user", "--scope", "--unit", f"hermes-worker-{unit_suffix}", *cmd],
+        lambda cmd, unit_suffix, memory_max=None: ["systemd-run", "--user", "--scope", "--unit", f"hermes-worker-{unit_suffix}", *cmd],
     )
 
     kbd._default_spawn(task, str(workspace))
