@@ -33,6 +33,7 @@ from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM, FIRE_CLAIM_SKEW_SECOND
 from cron.env_settings import cron_env_setting
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import store_health
+from cron.session_delivery import validate_delivery
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
 
 logger = logging.getLogger(__name__)
@@ -1744,6 +1745,7 @@ def _normalize_reasoning_effort(value: Any) -> Optional[str]:
 # Normalizers for create_job (all fields) / update_job (present fields). Invalid values raise BEFORE
 # storing.
 _CREATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
+    "deliver": validate_delivery,
     "model": _normalize_job_optional_text,
     "provider": _normalize_job_optional_text,
     "base_url": _normalize_base_url,
@@ -1754,7 +1756,7 @@ _CREATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
     "workdir": _normalize_workdir,
     "no_agent": bool,
     "context_from": _normalize_context_from,
-    "failure_deliver": _normalize_failure_deliver,
+    "failure_deliver": lambda v: _normalize_failure_deliver(validate_delivery(v)),
     "interpreter": _normalize_job_optional_text,
 }
 _UPDATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
@@ -1765,6 +1767,8 @@ _UPDATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
     "monitor_url": _normalize_job_optional_text,
     "interpreter": _normalize_job_optional_text,
     "reasoning_effort": _normalize_reasoning_effort,
+    "deliver": validate_delivery,
+    "failure_deliver": lambda v: _normalize_failure_deliver(validate_delivery(v)),
 }
 
 
@@ -1923,7 +1927,7 @@ def create_job(
         # Most recent failed run ({at, detail}); NOT cleared by a later success (#118354).
         "last_failure": None,
         "failure_streak": 0,
-        "deliver": deliver,
+        "deliver": f["deliver"],
         "origin": origin,  # Tracks where job was created for "origin" delivery
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
