@@ -145,7 +145,9 @@ def _assert_not_delegated_child_mutation(path: str | Path | None = None) -> None
     lineage's own board (``kanban_home()``).
     """
     from agent.delegation_context import kanban_path_is_fenced
+    from hermes_cli.kanban_policy import assert_storage_intent
 
+    assert_storage_intent(Path(kanban_home() if path is None else path))
     if kanban_path_is_fenced(kanban_home() if path is None else path):
         raise PermissionError("delegate_task child contexts cannot mutate Kanban tasks or boards")
 
@@ -1220,7 +1222,6 @@ def create_task(
 
     resource_class = validate_resource_class(resource_class)
     completion_contract = validate_contract(completion_contract)
-    model_override, provider_override = _validate_model_override(model_override, provider_override)
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     assignee = _canonical_assignee(assignee)
     if not title or not title.strip():
@@ -1265,6 +1266,9 @@ def create_task(
         if row:
             return row["id"]
 
+    from hermes_cli.kanban_policy import creation_model
+
+    model_override, provider_override = creation_model(conn, model_override, provider_override, board)
     now = int(time.time())
 
     # Only persistent kinds inherit the board ``default_workdir``: a scratch
@@ -1514,21 +1518,6 @@ def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) 
     # Observer fires AFTER commit so subscribers see durable state.
     notify_task_updated(conn, task_id, ("assignee",))
     return True
-
-
-def set_model_override(
-    conn: sqlite3.Connection, task_id: str, model: Optional[str], provider: Optional[str] = None,
-) -> bool:
-    """Set (empty ``model`` clears BOTH) the per-task model/provider override.
-    Allowed while ``running``: it applies on the NEXT dispatch, which is the
-    rate-limit-recovery flow (set, then reclaim/retry)."""
-    model, provider = _validate_model_override(model, provider)
-    return _set_task_override(
-        conn, task_id,
-        "UPDATE tasks SET model_override = ?, provider_override = ? WHERE id = ?", (model, provider),
-        "model_override_set", {"model": model, "provider": provider},
-        ("model_override", "provider_override"), archived_msg="cannot set model override",
-    )
 
 
 def _set_task_override(
@@ -4348,6 +4337,7 @@ def current_run_started_ats(conn: sqlite3.Connection, task_ids: Iterable[str]) -
 
 
 # --- Split modules (imported at the tail: they import this module as ``_kb``) ---
+from hermes_cli.kanban_policy import set_model_override
 from hermes_cli.kanban_db_boards import (
     _default_board_display_name,
     _dir_holds_board,

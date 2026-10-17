@@ -92,6 +92,8 @@ def write_board_metadata(
     if not meta.get("created_at"):
         meta["created_at"] = int(time.time())
     path = board_metadata_path(slug)
+    if not path.exists() and not _kb.kanban_db_path(slug).exists():
+        meta["require_model"] = True
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",

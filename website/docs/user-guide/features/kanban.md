@@ -705,7 +705,53 @@ hermes kanban set-model t_abcd claude-opus-4.6 --provider anthropic
 hermes kanban set-model t_abcd none    # clear the override
 ```
 
-The dispatcher spawns the worker with the pinned model (`--provider <name>` is passed when set; `--provider` requires a model). The dashboard's per-task model dropdown drives the same `model_override` field. With no override, the worker uses its profile's configured model.
+New boards require a model **at creation**, before a dispatcher can claim the card. This
+includes the default board bootstrapped by the CLI, tool, or dashboard. Choose an explicit
+`--model` (optionally `--provider`), or configure a per-board default in the creating
+profile's `config.yaml`:
+
+```yaml
+kanban:
+  require_model: true
+  board_models:
+    default:
+      model: your-worker-model
+      provider: your-provider
+```
+
+You can set the same defaults with `hermes config set kanban.board_models.default.model MODEL`
+and `hermes config set kanban.board_models.default.provider PROVIDER`. Board defaults are
+copied into `model_override` / `provider_override` in the creation transaction and its event.
+Changing defaults later does not change queued cards. An explicit model never inherits a
+possibly incompatible provider from a different board model.
+
+The CLI, `kanban_create` tool (`model` / `provider`), and dashboard API
+(`model_override` / `provider_override`) share this policy. A missing model is refused with
+`no model for this card` and the exact configuration commands that fix it. The dispatcher
+spawns the pinned model; it passes `--provider` when set.
+
+Compatibility: `kanban.require_model` defaults to `null`, which follows board metadata.
+New board metadata stores `require_model: true`. Existing DBs without that marker keep
+their previous profile-default behavior, including low-level DB initialization. Set
+`kanban.require_model: true` to enforce pins on those boards too, or explicitly set it to
+`false` for legacy automation. This avoids silently breaking installed boards on upgrade.
+
+`set-model` and the dashboard reject model edits on **running** cards: the error states
+that the running worker keeps its model. Wait for completion, or stop/reclaim the worker
+before pinning the next run. Clearing an override on a non-running card is still an
+explicit request to use the worker profile default on its next dispatch.
+
+### Isolating smoke tests
+
+Kanban storage is shared across profiles by design. Setting `HERMES_HOME` alone does not
+necessarily isolate it: a sandbox nested inside the default Hermes root still resolves to
+the shared board. Kanban refuses connections and mutations in this ambiguous case, before
+initialization writes or migrations. Set `HERMES_KANBAN_HOME` to a disposable directory to
+isolate the board. To intentionally share from an unusual home, explicitly set it to the
+shared root instead. Normal `profiles/<name>` homes still share the board without an extra
+setting. Custom homes whose resolved storage is already outside the default root are
+unaffected. The test harness additionally refuses raw SQLite connections to its captured
+real Kanban root, including SQLite URI paths.
 
 ### Cost strategy: frontier orchestrator, inexpensive workers
 
