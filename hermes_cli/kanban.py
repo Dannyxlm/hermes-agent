@@ -184,6 +184,9 @@ def kanban_command(args: argparse.Namespace) -> int:
         # init_db is idempotent (one sqlite_master SELECT when tables exist) and prevents
         # "no such table: tasks" on first use from a fresh HERMES_HOME.
         try:
+            from hermes_cli.kanban_policy import prepare_board
+
+            prepare_board()
             kb.init_db()
         except Exception as exc:
             return _err(f"kanban: could not initialize database: {exc}")

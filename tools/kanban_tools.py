@@ -315,6 +315,9 @@ def _board(board: Optional[str], *, quiet_close: bool = False):
     overrides it per call. ``quiet_close`` swallows close() errors (best-effort bridges)."""
     from hermes_cli import kanban_db as kb
     from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli.kanban_policy import prepare_board
+
+    prepare_board(board)
     conn = kbc.connect(board=board)
     try:
         yield kb, conn
@@ -1111,7 +1114,6 @@ def _handle_create(args: dict, **kw) -> str:
         _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
         _parse_bool_arg(args, "goal_mode"))
     model_override, provider_override = args.get("model"), args.get("provider")
-    _check(model_override or not provider_override, "'provider' requires 'model' to be set as well")
     parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
     with _board(args.get("board")) as (kb, conn):
         from gateway.session_context import get_session_env

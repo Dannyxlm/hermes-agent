@@ -1,6 +1,9 @@
 """Kanban defaults shared by the config registry and runtime policy."""
 
 DEFAULT_KANBAN_CONFIG = {
+        # None preserves legacy boards; newly created boards require a creation pin.
+        "require_model": None,
+        "board_models": {},
         "default_resource_class": "standard",
         "board_resource_classes": {},
         "resource_classes": {

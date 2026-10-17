@@ -65,10 +65,10 @@ def _seed_board(slug: str = "alpha") -> dict[str, str]:
     ids = {}
     with kbc.connect_closing(board=slug) as conn:
         ids["scratch"] = kb.create_task(
-            conn, title="scratch task", body="body", assignee="coder"
+            conn, model_override="test-model", title="scratch task", body="body", assignee="coder"
         )
         ids["worktree"] = kb.create_task(
-            conn, title="worktree task", assignee="coder",
+            conn, model_override="test-model", title="worktree task", assignee="coder",
             workspace_kind="worktree", workspace_path="/exporter/repo",
         )
         kb.add_comment(conn, ids["scratch"], "brooklyn", "a comment")

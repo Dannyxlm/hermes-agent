@@ -151,7 +151,7 @@ def test_cli_board_flag_trumps_worker_env_pin_end_to_end(monkeypatch, tmp_path):
     parser = argparse.ArgumentParser(prog="hermes", add_help=False)
     sub = parser.add_subparsers(dest="command")
     kc.build_parser(sub)
-    args = parser.parse_args(["kanban", "--board", "target-board", "create", "cross-board task"])
+    args = parser.parse_args(["kanban", "--board", "target-board", "create", "cross-board task", "--model", "test-model"])
     rc = kc.kanban_command(args)
     assert rc == 0
 

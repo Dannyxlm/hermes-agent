@@ -1058,6 +1058,7 @@ def test_specify_resolves_each_profiles_key_under_multiplex(kanban_home, tmp_pat
     from tui_gateway import launch_profile_policy
     from unittest.mock import MagicMock
 
+    monkeypatch.setenv("HERMES_KANBAN_HOME", str(kanban_home))
     (kanban_home / ".env").write_text("KANBAN_AUX_SCOPE_TEST_KEY=key-of-launch-a\n")
     profiles_root = tmp_path / "profiles"
     (profiles_root / "workerb").mkdir(parents=True)

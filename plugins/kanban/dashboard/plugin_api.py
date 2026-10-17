@@ -91,6 +91,10 @@ def _existing_board_slug(slug: str) -> str:
 def _conn(board: Optional[str] = None):
     """Connect to the already-normalised ``board`` (``None`` = active). ``init_db`` is
     idempotent; running it here lets a fresh install self-heal if POST /tasks arrives first."""
+    from hermes_cli.kanban_policy import prepare_board
+
+    with _map_errors(400, ValueError, PermissionError):
+        prepare_board(board)
     try:
         kanban_db.init_db(board=board)
     except Exception as exc:

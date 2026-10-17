@@ -120,7 +120,7 @@ def test_max_in_progress_counts_other_boards(
     # Two workers already running on the second board.
     with kbc.connect(board="second") as conn:
         for title in ("busy-1", "busy-2"):
-            tid = kb.create_task(conn, title=title, assignee="alice")
+            tid = kb.create_task(conn, title=title, model_override="test-model", assignee="alice")
             assert kb.claim_task(conn, tid) is not None
 
     spawns: list = []
@@ -141,7 +141,7 @@ def test_max_in_progress_partial_budget_across_boards(
     kb.create_board("second")
 
     with kbc.connect(board="second") as conn:
-        tid = kb.create_task(conn, title="busy", assignee="alice")
+        tid = kb.create_task(conn, title="busy", model_override="test-model", assignee="alice")
         assert kb.claim_task(conn, tid) is not None
 
     spawns: list = []
@@ -172,7 +172,7 @@ def test_max_spawn_stays_per_board(kanban_home, all_assignees_spawnable):
     """``max_spawn`` keeps its historical per-board semantics."""
     kb.create_board("second")
     with kbc.connect(board="second") as conn:
-        tid = kb.create_task(conn, title="busy", assignee="alice")
+        tid = kb.create_task(conn, title="busy", model_override="test-model", assignee="alice")
         assert kb.claim_task(conn, tid) is not None
 
     spawns: list = []

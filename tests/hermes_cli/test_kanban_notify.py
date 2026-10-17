@@ -630,7 +630,7 @@ async def test_gateway_create_autosubscribes_on_explicit_board(kanban_home):
         user_id="u1",
     )
     event = SimpleNamespace(
-        text='/kanban --board projx create "hello" --assignee alice',
+        text='/kanban --board projx create "hello" --assignee alice --model test-model',
         source=source,
         message_id="462",
         reply_to_message_id=None,
