@@ -618,7 +618,7 @@ def open_request_count() -> int:
 _INBOX_KINDS = {
     "approval": "approval", "clarify": "clarify", "sudo": "input", "secret": "input",
     "vault.unlock_prompt": "input", "vault.save_login": "input", "vault.code": "input",
-    "display.install.sudo": "input", "setup_choose": "input",
+    "display.install.sudo": "input",
 }
 _INBOX_EPOCH = uuid.uuid4().hex
 
