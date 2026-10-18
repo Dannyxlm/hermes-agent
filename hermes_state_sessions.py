@@ -24,6 +24,7 @@ from hermes_state_common import (
     escape_like as _escape_like, _SQL_IN_CHUNK, _id_chunks, _placeholders as _session_ids_placeholders,
 )
 from hermes_state_compression import _CHAIN_CAP
+from hermes_state_sessions_turn_leases import fence_delete_turn_leases
 
 # caplog tests pin the "hermes_state" logger name.
 logger = logging.getLogger("hermes_state")
@@ -1888,25 +1889,8 @@ class SessionSessionsMixin:
                     expanded = self._expand_compression_lineage(conn, existing)
                 else:
                     expanded = existing
-            from hermes_state_errors import SessionTurnLeaseLostError
-            from hermes_state import _compression_lock_holder_process_is_dead
-            delegate_ids = _collect_delegate_child_ids(conn, expanded)
-            now, checked_keys = time.time(), set()
-            for target_id in [*expanded, *delegate_ids]:
-                conversation_id = self._session_turn_lease_key_on_conn(conn, target_id)
-                if conversation_id in checked_keys:
-                    continue
-                checked_keys.add(conversation_id)
-                lease = conn.execute("SELECT holder, expires_at FROM session_turn_leases WHERE conversation_id = ?",
-                                     (conversation_id,)).fetchone()
-                if lease is None:
-                    continue
-                holder = lease["holder"]
-                if float(lease["expires_at"]) <= now or _compression_lock_holder_process_is_dead(holder):
-                    conn.execute("DELETE FROM session_turn_leases WHERE conversation_id = ? AND holder = ?",
-                                 (conversation_id, holder))
-                elif not turn_lease_holder or holder != turn_lease_holder:
-                    raise SessionTurnLeaseLostError(f"Session {target_id!r} has an active delegated turn")
+            fence_delete_turn_leases(self, conn, [*expanded, *_collect_delegate_child_ids(conn, expanded)],
+                                     turn_lease_holder)
             removed_ids.extend(_delete_delegate_children(conn, expanded))
             for chunk in _id_chunks(expanded):
                 ph = _session_ids_placeholders(chunk)
