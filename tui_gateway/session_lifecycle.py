@@ -905,7 +905,7 @@ def _mirror_has_pending_human(sid: str, mirror) -> bool:
         return False
     expires_at = metadata.get("expires_at", mirror.get("expires_at"))
     if expires_at is None:
-        return ("expires_at" in metadata or "expires_at" in mirror) and mirror.get("method") in ("clarify", "setup_choose")
+        return ("expires_at" in metadata or "expires_at" in mirror) and mirror.get("method") == "clarify"
     return isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool) and expires_at > time.time()
 
 

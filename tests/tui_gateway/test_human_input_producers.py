@@ -93,11 +93,6 @@ def test_secure_callbacks_share_policy_without_shortening_clarify(monkeypatch):
         "sudo": 421, "secret": 421, "vault.unlock_prompt": 421,
         "vault.save_login": 421, "vault.code": 421}
     assert policy.call_count == 5
-    monkeypatch.setattr(server, "_clarify_timeout_seconds", lambda: None)
-    send = Mock(return_value={"picked": "ok"})
-    monkeypatch.setattr(server_requests, "send", send)
-    server._setup_choose_request("sid", {"kind": "question", "question": "Choose"})
-    assert send.call_args.kwargs["timeout"] is None
 
 
 @pytest.fixture

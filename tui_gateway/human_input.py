@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 import math
 
-HUMAN_METHODS = frozenset({'approval', 'clarify', 'setup_choose', 'sudo', 'secret',
+HUMAN_METHODS = frozenset({'approval', 'clarify', 'sudo', 'secret',
     'vault.unlock_prompt', 'vault.save_login', 'vault.code', 'display.install.sudo'})
-SECURE_METHODS = HUMAN_METHODS - {'approval', 'clarify', 'setup_choose'}
+SECURE_METHODS = HUMAN_METHODS - {'approval', 'clarify'}
 MAX_ANSWER_BYTES = 65536
 APPROVAL_RESPONSE_FIELDS = ('scoped_approval_response', 'request_epoch', 'request_revision', 'reason', 'auth')
 
@@ -92,30 +92,6 @@ def validate_answer(method: str, params: dict, result: dict) -> dict:
         qids = {q['qid'] for q in params.get('questions', [])}
         if answers is not None and not set(answers) <= qids:
             raise ValueError('Unknown question')
-    elif method == 'setup_choose':
-        picked = value.get('picked')
-        picks = picked if isinstance(picked, list) else [picked] if picked else []
-        multi = bool(params.get('multi_select'))
-        if len(picks) != len(set(picks)) or (len(picks) > 1 and not multi):
-            raise ValueError('Invalid setup choice')
-        label = value.get('label')
-        labels = label if isinstance(label, list) else [label] if label else []
-        options = {o['id']: o['label'] for o in params.get('options') or []}
-        if options:
-            # Server-drawn rows: a pick must be one of them and its label must be that row's name.
-            if not set(picks) <= options.keys():
-                raise ValueError('Invalid setup choice')
-            if labels and labels != [options[pick] for pick in picks]:
-                raise ValueError('Invalid setup label')
-        else:
-            # App-drawn rows (accent/theme/layout/connectors/plugins) or a free-text question card:
-            # the client owns the ids, so only shape is checked. A list needs a multi-select card,
-            # and any labels name the picks one-for-one in the same shape.
-            if isinstance(picked, list) and not multi:
-                raise ValueError('Invalid setup choice')
-            if label is not None and (isinstance(label, list) != isinstance(picked, list)
-                                      or len(label if isinstance(label, list) else [label]) != len(picks)):
-                raise ValueError('Invalid setup label')
     elif method == 'vault.save_login' and value.get('value'):
         try:
             login = json.loads(value['value'])

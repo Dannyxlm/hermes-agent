@@ -459,13 +459,14 @@ def lock_answer(request_id: str, question_id: str, answer: str | None, *,
     return remaining
 
 
-def cancel(sid: str | None = None, reason: str = "interrupted") -> int:
+def cancel(sid: str | None = None, reason: str = "interrupted", *, method: str | None = None) -> int:
     """Withdraw open requests — only *sid*'s (session.interrupt must not touch other sessions'), or
-    every one when *sid* is None (shutdown). Blocked waits return None (a batch returns its locked
-    answers with ``outcome: cancelled``); queue-backed requests run ``on_result(None)`` so their
-    owner can settle. Returns the number withdrawn."""
+    every one when *sid* is None (shutdown); *method* narrows it to one request kind. Blocked waits
+    return None (a batch returns its locked answers with ``outcome: cancelled``); queue-backed requests
+    run ``on_result(None)`` so their owner can settle. Returns the number withdrawn."""
     with _lock:
-        targets = [req for req in _open.values() if sid is None or req.sid == sid]
+        targets = [req for req in _open.values()
+                   if (sid is None or req.sid == sid) and (method is None or req.method == method)]
         for req in targets:
             _remember_terminal(req, "expired" if reason == "timeout" else "cancelled")
             _open.pop(req.id, None)
@@ -617,7 +618,7 @@ def open_request_count() -> int:
 _INBOX_KINDS = {
     "approval": "approval", "clarify": "clarify", "sudo": "input", "secret": "input",
     "vault.unlock_prompt": "input", "vault.save_login": "input", "vault.code": "input",
-    "display.install.sudo": "input", "setup_choose": "input",
+    "display.install.sudo": "input",
 }
 _INBOX_EPOCH = uuid.uuid4().hex
 

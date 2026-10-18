@@ -284,7 +284,8 @@ def test_connector_owner_and_setup_count_without_apns(push, mobile_home, monkeyp
         assert summary["same"]["kind"] == "input" and summary["same"]["count"] == 1
         # Push-disabled is not Inbox-disabled. Its pre-existing silent hint still observes the change.
         assert "ops" in hints._pending_profiles
-        settle_setup = server_requests.send_async("setup_choose", sid, {"kind": "question", "question": "Setup?"}, lambda result: None)
+        settle_setup = server_requests.send_async("clarify", sid, {"questions": [{"qid": "q1", "question": "Setup?"}]},
+                                                  lambda result: None)
         assert page_attention([{"id": "same"}], home)["same"]["count"] == 2
         settle_setup("answered")
         op.settle(SettleReason.all_resolved)

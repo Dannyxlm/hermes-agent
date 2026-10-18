@@ -8,7 +8,7 @@ import math
 from .human_input import HUMAN_METHODS, SECURE_METHODS, approval_quick_once
 
 CATEGORIES = {"approval": "HERMEX_APPROVAL_V1", "clarify": "HERMEX_QUESTION_V1",
-              "setup_choose": "HERMEX_SETUP_V1", "connection.request": "HERMEX_SETUP_V1"}
+              "connection.request": "HERMEX_SETUP_V1"}
 SECURE_CATEGORY = "HERMEX_SECURE_INPUT_V1"
 
 
@@ -45,8 +45,6 @@ def descriptor(frame):
             target["question_id"] = remaining[0]["qid"]
         if len(remaining) == 1 and not remaining[0].get("multi_select"):
             target["allowed_actions"] += ["reply", "skip"]
-    elif method == "setup_choose":
-        target["allowed_actions"].append("skip")
     return target
 
 

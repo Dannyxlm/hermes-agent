@@ -24,6 +24,7 @@ from hermes_state_common import (
     escape_like as _escape_like, _SQL_IN_CHUNK, _id_chunks, _placeholders as _session_ids_placeholders,
 )
 from hermes_state_compression import _CHAIN_CAP
+from hermes_state_sessions_turn_leases import fence_delete_turn_leases
 
 # caplog tests pin the "hermes_state" logger name.
 logger = logging.getLogger("hermes_state")
@@ -831,6 +832,35 @@ class SessionSessionsMixin:
         """Read one key out of a session's model_config JSON (tolerant parse)."""
         session = self.get_session(session_id) or {}
         return _parse_model_config(session.get("model_config")).get(key, default)
+
+    def update_conversation_model_config_value(self, session_id: str, key: str,
+                                               update: Callable[[Any], Any]) -> Optional[str]:
+        """Read a conversation-wide ``key`` at *session_id*'s compression tip and write ``update(value)``
+        back, in one write transaction: a concurrent writer of the key cannot be overwritten with a stale
+        copy, and a rotation cannot publish between finding the tip and writing it (the child would keep
+        the old copy). ``update`` may run more than once (lock retry) and must be pure; returning None
+        removes the key. Returns the id written, None when the row does not exist."""
+        def _do(conn) -> Optional[str]:
+            tip = self._compression_tip_on(conn, session_id)
+            row = conn.execute("SELECT model_config FROM sessions WHERE id = ?", (tip,)).fetchone()
+            if row is None:
+                return None
+            config = _parse_model_config(row[0])
+            if (value := update(config.get(key))) is None:
+                config.pop(key, None)
+            else:
+                config[key] = value
+            conn.execute("UPDATE sessions SET model_config = ? WHERE id = ?", (json.dumps(config), tip))
+            return tip
+        return self._execute_write(_do)
+
+    def session_ids_with_model_config_key(self, key: str) -> list[str]:
+        """Ids of the sessions whose model_config carries ``key``, newest first."""
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                f"SELECT id FROM sessions WHERE {_sql_json_extract('model_config', '$.' + key)} IS NOT NULL "
+                "ORDER BY started_at DESC").fetchall()
+        return [row["id"] for row in rows]
 
     def update_session_runtime_lock(
         self, session_id: str, *, model: Optional[str] = None, provider: Optional[str] = None,
@@ -1859,25 +1889,8 @@ class SessionSessionsMixin:
                     expanded = self._expand_compression_lineage(conn, existing)
                 else:
                     expanded = existing
-            from hermes_state_errors import SessionTurnLeaseLostError
-            from hermes_state import _compression_lock_holder_process_is_dead
-            delegate_ids = _collect_delegate_child_ids(conn, expanded)
-            now, checked_keys = time.time(), set()
-            for target_id in [*expanded, *delegate_ids]:
-                conversation_id = self._session_turn_lease_key_on_conn(conn, target_id)
-                if conversation_id in checked_keys:
-                    continue
-                checked_keys.add(conversation_id)
-                lease = conn.execute("SELECT holder, expires_at FROM session_turn_leases WHERE conversation_id = ?",
-                                     (conversation_id,)).fetchone()
-                if lease is None:
-                    continue
-                holder = lease["holder"]
-                if float(lease["expires_at"]) <= now or _compression_lock_holder_process_is_dead(holder):
-                    conn.execute("DELETE FROM session_turn_leases WHERE conversation_id = ? AND holder = ?",
-                                 (conversation_id, holder))
-                elif not turn_lease_holder or holder != turn_lease_holder:
-                    raise SessionTurnLeaseLostError(f"Session {target_id!r} has an active delegated turn")
+            fence_delete_turn_leases(self, conn, [*expanded, *_collect_delegate_child_ids(conn, expanded)],
+                                     turn_lease_holder)
             removed_ids.extend(_delete_delegate_children(conn, expanded))
             for chunk in _id_chunks(expanded):
                 ph = _session_ids_placeholders(chunk)
