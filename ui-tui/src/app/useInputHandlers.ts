@@ -462,7 +462,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
               cActions.pushHistory(cState.input)
             }
 
-            return cActions.clearIn()
+            return cActions.discardIn()
           }
         }
       }
@@ -748,7 +748,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       })
 
       if (ctrlC === 'clear') {
-        return cActions.clearIn()
+        return cActions.discardIn()
       }
 
       if (ctrlC === 'interrupt' && live.sid) {
