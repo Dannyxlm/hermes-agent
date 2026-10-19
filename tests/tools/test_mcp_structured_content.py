@@ -199,6 +199,57 @@ class TestMetaPassthrough:
         data = json.loads(handler({}))
         assert data == {"result": "done"}
 
+    def test_meta_exclude_drops_named_keys(self, _patch_mcp_server):
+        """A server's ``meta_exclude`` keeps those exact keys out; other keys still ride."""
+        session = _patch_mcp_server
+        mcp_tool._servers["test-server"]._config = {"meta_exclude": ["brain_hot_memory"]}
+        session.call_tool = AsyncMock(
+            return_value=_FakeCallToolResult(
+                content=[_FakeContentBlock("done")],
+                meta={"brain_hot_memory": {"facts": [{"fact": "x"}]}, "retrieval": {"rows": 3}},
+            )
+        )
+        handler = _mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)
+        data = json.loads(handler({}))
+        assert data == {"result": "done", "_meta": {"retrieval": {"rows": 3}}}
+
+    def test_meta_exclude_of_every_key_omits_field(self, _patch_mcp_server):
+        session = _patch_mcp_server
+        mcp_tool._servers["test-server"]._config = {"meta_exclude": ["brain_hot_memory"]}
+        session.call_tool = AsyncMock(
+            return_value=_FakeCallToolResult(
+                content=[_FakeContentBlock("done")],
+                meta={"brain_hot_memory": {"facts": []}},
+            )
+        )
+        handler = _mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)
+        data = json.loads(handler({}))
+        assert data == {"result": "done"}
+
+    def test_malformed_meta_exclude_is_ignored(self, _patch_mcp_server):
+        """Only a list of strings excludes anything; a bare string must not match by substring."""
+        session = _patch_mcp_server
+        mcp_tool._servers["test-server"]._config = {"meta_exclude": "brain_hot_memory"}
+        session.call_tool = AsyncMock(
+            return_value=_FakeCallToolResult(
+                content=[_FakeContentBlock("done")],
+                meta={"brain_hot_memory": {"facts": []}},
+            )
+        )
+        handler = _mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)
+        data = json.loads(handler({}))
+        assert data["_meta"] == {"brain_hot_memory": {"facts": []}}
+
+class TestMetaExcludeKeys:
+    def test_list_of_strings(self):
+        assert _mcp_content._meta_exclude_keys({"meta_exclude": ["a", "b", ""]}) == frozenset({"a", "b"})
+
+    def test_absent_or_malformed(self):
+        assert _mcp_content._meta_exclude_keys(None) == frozenset()
+        assert _mcp_content._meta_exclude_keys({}) == frozenset()
+        assert _mcp_content._meta_exclude_keys({"meta_exclude": "a"}) == frozenset()
+        assert _mcp_content._meta_exclude_keys({"meta_exclude": [1, None, "a"]}) == frozenset({"a"})
+
 class TestReservedMetaKeyPredicate:
     def test_reserved_prefixes(self):
         assert _mcp_content._is_reserved_mcp_meta_key("modelcontextprotocol.io/x")
