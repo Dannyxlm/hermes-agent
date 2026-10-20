@@ -70,6 +70,15 @@ def _fold_moa_usage(agent, canonical_usage):
     return _moa_client, canonical_usage, _moa_ref_cost
 
 
+def _queue_usage_less_call(agent):
+    db = getattr(agent, "_session_db", None)
+    if db is not None and agent.session_id:
+        with suppress(Exception):
+            db.queue_token_counts(agent.session_id, model=agent.model, billing_provider=agent.provider,
+                                  api_call_count=1, turn_id=getattr(agent, "_current_turn_id", None),
+                                  source=_agent_session_source(agent))
+
+
 def record_response_usage(
     agent: Any, response: Any, *, messages: list[dict[str, Any]], api_call_count: int,
     api_duration: float, compression_attempts: int, max_compression_attempts: int,
@@ -84,6 +93,7 @@ def record_response_usage(
     # must remain observable.
     agent.session_api_calls += 1
     if not (hasattr(response, 'usage') and response.usage):
+        _queue_usage_less_call(agent)
         if getattr(compressor, "awaiting_real_usage_after_compression", False):
             # No usage -> cannot adjudicate the prior compaction; consume the
             # pending verdict so later readings aren't charged to it and
@@ -283,6 +293,7 @@ def record_response_usage(
                 if cost_result.status == "included" else None,
                 model=agent.model,
                 api_call_count=1,
+                turn_id=getattr(agent, "_current_turn_id", None),
                 task=getattr(agent, "_turn_route_task", "") or "",
             )
         except Exception as e:  # silent loss here undercounts analytics
