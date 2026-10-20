@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import mobile_inbox_invalidation
 from .mobile_push_payloads import Scope
-from .mobile_push_provider import APNsProvider
+from .mobile_push_provider import APNsProvider, send_shape
 from .mobile_push_store import PushStore
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,13 @@ class PushService:
                 job = self.store.claim()
                 if job is None:
                     break
-                result = self.sender.send(job)
+                sent_at = self._clock()
+                try:
+                    result = self.sender.send(job)
+                except Exception:
+                    logger.info("mobile push shape %s", send_shape(job, "exception", sent_at))
+                    raise
+                logger.info("mobile push shape %s", send_shape(job, result.outcome, sent_at))
                 self.store.finish(job, result)
                 count += 1
             return count

@@ -132,6 +132,33 @@ def test_predecessor_keeps_working_after_a_round_trip_through_the_current_store(
         current.close()
 
 
+def test_upgrade_of_an_already_finished_activity_replays_only_a_silent_end(tmp_path, old):
+    OldStore, OldScope = old
+    path = tmp_path / "finished.sqlite"
+    now = [1800000000.0]
+    legacy = OldStore(path, lambda: now[0])
+    scope = OldScope("native_session", "ops", "finished")
+    run = legacy.start_run(scope)
+    legacy.register("principal", scope, **ids(), token="cd" * 32, environment="production",
+                    kind="activity", activity_id="legacy", run_id=run["run_id"])
+    now[0] += 2
+    legacy.record(scope, run["run_id"], "done", "complete")
+    delivered = legacy.claim()
+    assert delivered["payload"]["aps"]["event"] == "end"
+    legacy.finish(delivered, DeliveryResult("accepted"))
+    legacy.close()
+    now[0] += 1
+    current = PushStore(path, lambda: now[0])
+    try:
+        current.maintain()
+        replay = current.claim()
+        assert replay["payload"]["aps"]["event"] == "end"
+        assert "alert" not in replay["payload"]["aps"]
+        assert replay["payload"]["aps"]["dismissal-date"] == run["started_at"] + 2 + 120
+    finally:
+        current.close()
+
+
 def test_runs_made_by_the_predecessor_during_a_rollback_read_back_as_legacy(tmp_path, old):
     OldStore, OldScope = old
     path = tmp_path / "push.sqlite"

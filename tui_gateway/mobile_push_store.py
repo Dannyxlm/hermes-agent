@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .mobile_push_widgets import WidgetPushStore, reader_digest
+from .mobile_push_activity import ACTIVITY_SCHEMA, ActivityPushStore
 
 from .mobile_push_payloads import (
     ATTENTION, LABELS, TERMINAL, AlertPreview, Scope, activity_payload, alert_payload, generic_alert,
@@ -145,7 +146,7 @@ def _notification_category(status):
     return "attention" if status in ATTENTION or status == "failed" else "completion"
 
 
-class PushStore(WidgetPushStore):
+class PushStore(ActivityPushStore, WidgetPushStore):
     def __init__(self, path, clock):
         self.clock = clock
         self.path = Path(path)
@@ -160,7 +161,7 @@ class PushStore(WidgetPushStore):
         try:
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.execute("PRAGMA journal_mode=WAL")
-            self._db.executescript(_SCHEMA)
+            self._db.executescript(_SCHEMA + ACTIVITY_SCHEMA)
             # Serialize the additive migration across processes sharing this store.
             with self.transaction() as db:
                 for table, added in _ADDED_COLUMNS.items():
@@ -234,6 +235,7 @@ class PushStore(WidgetPushStore):
                 self._save_widget_reader(db, principal, installation_id, connection_id, read_token, expires)
             subscription = db.execute("SELECT * FROM subscriptions WHERE id=?", (sid,)).fetchone()
             if run:
+                self._register_activity_cleanup(db, subscription, now)
                 self._enqueue(db, subscription, run, scope, f"{run_id}:registered:{subscription['version']}")
         return {"subscription_id": sid, "expires_at": expires}
 
@@ -689,6 +691,9 @@ class PushStore(WidgetPushStore):
         now = self.clock()
         urgent = run["status"] in ATTENTION or run["status"] in TERMINAL
         activity = sub["kind"] == "activity"
+        if activity and run["status"] in TERMINAL:
+            self._enqueue_terminal_activity(db, sub, run, scope, preview)
+            return
         due = now if urgent else now + 10
         if run["status"] in TERMINAL:
             db.execute("""DELETE FROM outbox WHERE subscription_id=? AND run_id=?
@@ -710,6 +715,7 @@ class PushStore(WidgetPushStore):
             payload = activity_payload(run, scope, now, preview=preview, previews=self._device_previews(db, sub))
         else:
             payload = alert_payload(sub, run, scope, preview=preview)
+            self._quiet_activity_completion(db, sub, run["run_id"], payload)
         if not activity:
             payload["event_id"] = hashlib.sha256(event_id.encode()).hexdigest()
             # Optional display text must never make an otherwise valid alert too large.
@@ -742,21 +748,26 @@ class PushStore(WidgetPushStore):
                 s.principal, s.installation_id, s.connection_id, s.scope, s.profile
                 FROM outbox o JOIN subscriptions s ON o.subscription_id=s.id
                 WHERE o.state='pending' AND o.next_attempt<=? AND o.lease_until<=?
-                AND o.expires_at>? AND s.expires_at>?
+                AND o.expires_at>? AND (s.expires_at>? OR s.kind='activity' AND EXISTS
+                    (SELECT 1 FROM activity_cleanup c WHERE c.subscription_id=s.id AND c.cleanup_until>? AND c.finished_at>0))
                 AND (s.kind!='widget' OR s.token!='')
                 AND (s.kind!='activity' OR s.last_timestamp<?)
                 AND (s.kind IN ('activity','activity_start')
                      OR EXISTS (SELECT 1 FROM json_each(s.categories) WHERE value=o.category))
                 ORDER BY o.urgent DESC, o.next_attempt LIMIT 1""",
-                (now, now, now, now, int(now))).fetchone()
+                (now, now, now, now, now, int(now))).fetchone()
             if row is None:
                 return None
             db.execute("UPDATE outbox SET lease_until=?, attempts=attempts+1 WHERE job_id=?", (now + 30, row["job_id"]))
             job = dict(row)
             job["payload"] = json.loads(job["payload"])
+            if job["kind"] == "alert":
+                self._claim_completion_alert(db, job, now)
             # A preference change also governs alerts that were queued earlier.
             if job["kind"] == "alert" and not job["preview_enabled"]:
-                job["payload"]["aps"]["alert"] = generic_alert(job["payload"]["hermex.status"])
+                alert = job["payload"]["aps"]["alert"]
+                public = {"subtitle": alert["subtitle"]} if "subtitle" in alert else {}
+                job["payload"]["aps"]["alert"] = {**generic_alert(job["payload"]["hermex.status"]), **public}
             if job["kind"] in {"activity", "activity_start"} and not self._device_previews(db, job):
                 redact = redact_start if job["kind"] == "activity_start" else (
                     lambda aps, profile: redact_content_state(aps["content-state"], profile))
@@ -792,11 +803,14 @@ class PushStore(WidgetPushStore):
                         (job["subscription_id"], now)).fetchone()
                     if alert is not None and not self._foreground(db, alert):
                         aps["alert"] = generic_alert(aps["content-state"]["status"])
+                self._claim_activity_finish(db, job, now)
                 aps["timestamp"] = int(now)
                 from .mobile_push_attention import freshness
-                aps["dismissal-date" if aps["event"] == "end" else "stale-date"] = (
-                    int(now + 300) if aps["event"] == "end" else freshness(aps, now))
+                if aps["event"] != "end":
+                    aps["stale-date"] = freshness(aps, now)
                 db.execute("UPDATE subscriptions SET last_timestamp=? WHERE id=?", (int(now), job["subscription_id"]))
+            if job["kind"] in {"activity", "activity_start"}:
+                job["payload"]["event_id"] = hashlib.sha256(job["event_id"].encode()).hexdigest()
             return job
 
     def finish(self, job, result):
@@ -822,7 +836,11 @@ class PushStore(WidgetPushStore):
                 else:
                     db.execute("DELETE FROM subscriptions WHERE id=? AND version=?",
                                (job["subscription_id"], job["token_version"]))
-            retry = (result.outcome == "retry" or (result.outcome == "invalid" and rotated)) and job["attempts"] < 8
+            end = job["kind"] == "activity" and job["payload"]["aps"]["event"] == "end"
+            if end and result.outcome == "accepted":
+                db.execute("UPDATE activity_cleanup SET completed=1 WHERE subscription_id=?", (job["subscription_id"],))
+            retry = (result.outcome == "retry" or end and result.outcome == "failed"
+                     or result.outcome == "invalid" and rotated) and (end or job["attempts"] < 8)
             state = "pending" if retry else "accepted" if result.outcome == "accepted" else "failed"
             db.execute("""UPDATE outbox SET state=?, reason=?, next_attempt=?, lease_until=0
                 WHERE job_id=? AND attempts=?""", (state, result.reason, now + min(900, 2 ** job["attempts"] * 5),
@@ -831,26 +849,15 @@ class PushStore(WidgetPushStore):
     def maintain(self):
         now = self.clock()
         with self.transaction() as db:
-            # Activity lifetime is not agent lifetime. End only the expiring projection;
-            # long-running canonical work still gets its eventual completion alert.
-            stale = db.execute("""SELECT * FROM subscriptions WHERE kind='activity'
-                AND expires_at<=? AND expires_at>?""", (now + 120, now)).fetchall()
-            for sub in stale:
-                event_id = f"{sub['id']}:lifetime-end"
-                if db.execute("INSERT OR IGNORE INTO events VALUES (?,?)", (event_id, now)).rowcount == 0:
-                    continue
-                run = db.execute(f"{_RUNS} WHERE run_id=?", (sub["run_id"],)).fetchone()
-                if run is not None:
-                    projected = {**dict(run), "status": "cancelled", "updated_at": max(now, run["updated_at"]),
-                                 "activity_expired": True}
-                    self._enqueue(db, sub, projected, Scope(sub["surface"], sub["profile"], sub["session_id"]), event_id)
+            self._maintain_activity_cleanup(db, now)
         with self.transaction() as db:
             db.execute("DELETE FROM mobile_presence WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM widget_readers WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM alert_policies WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM activity_start_tokens WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM human_origins WHERE updated_at<?", (now - 30 * 86400,))
-            db.execute("DELETE FROM subscriptions WHERE expires_at<=?", (now,))
+            db.execute("""DELETE FROM subscriptions WHERE expires_at<=? AND id NOT IN
+                (SELECT subscription_id FROM activity_cleanup WHERE cleanup_until>?)""", (now, now))
             db.execute("DELETE FROM outbox WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM events WHERE created_at<?", (now - 30 * 86400,))
             db.execute("DELETE FROM runs WHERE updated_at<?", (now - 30 * 86400,))

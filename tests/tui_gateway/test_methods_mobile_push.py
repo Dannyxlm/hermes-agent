@@ -81,6 +81,24 @@ def test_activity_registration_requires_current_valid_scope_and_known_run(push_s
     assert push_service.sender.jobs[-1]["payload"]["aps"]["content-state"]["status"] == "cancelled"
 
 
+def test_finish_is_persisted_even_when_push_worker_is_unavailable(push_service, peer, monkeypatch):
+    peer.auth_identity = {"user_id": "test-user", "provider": "test-auth"}
+    opened = open_bot()
+    params = registration(opened)
+    params.pop("device_token")
+    server._emit("message.start", opened["session_id"])
+    run = rpc("mobile.snapshot", **scope(opened))["result"]["notification_run"]
+    params.update(activity_token="cd" * 32, activity_id="worker-down", run_id=run["run_id"])
+    assert "result" in rpc("mobile.activity.register", **params)
+    monkeypatch.setattr(server, "_mobile_push_service", lambda: None)
+    from tui_gateway import mobile_push
+    monkeypatch.setattr(mobile_push, "service_for_home", lambda _: None)
+    server._mobile_push_finish(server._sessions[opened["session_id"]], "error")
+    assert push_service.store.current_run(server._sessions[opened["session_id"]]["_mobile_push_scope"])["status"] == "failed"
+    push_service.drain_once()
+    assert push_service.sender.jobs[-1]["payload"]["aps"]["event"] == "end"
+
+
 def test_projection_storage_failure_does_not_drop_canonical_frame(push_service, peer, monkeypatch):
     import sqlite3
     opened = open_bot()
