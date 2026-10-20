@@ -936,6 +936,8 @@ class SessionSchemaMixin:
         report_startup_progress(600.0, phase="state_db_init_schema")
         cursor = self._conn.cursor()
         cursor.executescript(SCHEMA_SQL)
+        if cursor.execute("SELECT 1 FROM state_meta WHERE key='usage_events_since'").fetchone() is None:
+            cursor.execute("INSERT OR IGNORE INTO state_meta(key,value) VALUES ('usage_events_since', ?)", (str(time.time()),))
 
         # Column reconciliation, then the two table-shape repairs ADD COLUMN cannot express.
         self._reconcile_columns(cursor)

@@ -82,6 +82,8 @@ _MODEL_USAGE_FIELDS = frozenset((
 class SessionUsageMixin:
     """Coalesced token writer, per-model usage rows, billing route."""
 
+    _TOKEN_DELTA_EVENT_FIELDS = ("usage_timestamp", "turn_id", "usage_events")
+
     def update_session_billing_route(
         self, session_id: str, *, provider: str, base_url: str, billing_mode: Optional[str] = None,
     ) -> None:
@@ -107,6 +109,8 @@ class SessionUsageMixin:
         """Enqueue a token/cost delta for the background writer (same kwargs as
         :meth:`update_token_counts`). After close() stopped the writer, falls back to the
         synchronous path and may raise."""
+        # Timestamp before queueing: writer delay must not move a call across midnight.
+        kwargs.setdefault("usage_timestamp", time.time())
         with self._token_queue_cond:
             thread = self._token_writer_thread
             writer_alive = thread is not None and thread.is_alive()
@@ -219,6 +223,7 @@ class SessionUsageMixin:
                 key = (session_id, *(kwargs.get(f) for f in self._TOKEN_DELTA_ROUTE_FIELDS))
             if groups and key is not None and groups[-1][0] == key:
                 merged = groups[-1][2]
+                merged["usage_events"].extend(kwargs.get("usage_events") or [dict(kwargs)])
                 for f in self._TOKEN_DELTA_SUM_FIELDS:
                     merged[f] = merged.get(f, 0) + kwargs.get(f, 0)
                 for f in self._TOKEN_DELTA_COST_FIELDS:
@@ -227,7 +232,10 @@ class SessionUsageMixin:
                         # All-None runs stay None so COALESCE keeps the stored value.
                         merged[f] = (merged.get(f) or 0.0) + value
             else:
-                groups.append((key, session_id, dict(kwargs)))
+                fields = dict(kwargs)
+                if not kwargs.get("absolute"):
+                    fields["usage_events"] = list(kwargs.get("usage_events") or [dict(kwargs)])
+                groups.append((key, session_id, fields))
         return [(sid, kw) for _, sid, kw in groups]
 
     def _stop_token_writer(self, join_timeout: float = 10.0) -> None:
@@ -276,7 +284,8 @@ class SessionUsageMixin:
         actual_cost_usd: Optional[float]=None, cost_status: Optional[str]=None, cost_source: Optional[str]=None,
         pricing_version: Optional[str]=None, billing_provider: Optional[str]=None, billing_base_url: Optional[str]=None,
         billing_mode: Optional[str]=None, api_call_count: int=0, absolute: bool=False,
-        source: Optional[str]=None, task: str = "",
+        source: Optional[str]=None, task: str = "", usage_timestamp: Optional[float]=None, turn_id: Optional[str]=None,
+        usage_events: Optional[list[dict]]=None,
     ) -> None:
         """Update token counters and backfill model if unset. *absolute*=False increments
         (per-API-call deltas, CLI path); *absolute*=True sets directly (gateway path,
@@ -333,7 +342,7 @@ class SessionUsageMixin:
                        WHERE id = ?""", (model, billing_provider, billing_base_url, billing_mode, session_id))
             conn.execute(sql, params)
             if record_model_usage:
-                self._record_model_usage(conn, session_id, task=task, **usage)
+                self._record_model_usage(conn, session_id, task=task, usage_timestamp=usage_timestamp, turn_id=turn_id, usage_events=usage_events, **usage)
         self._execute_write(_do)
 
     def _record_model_usage(
@@ -342,6 +351,7 @@ class SessionUsageMixin:
         output_tokens: int=0, cache_read_tokens: int=0, cache_write_tokens: int=0, reasoning_tokens: int=0,
         estimated_cost_usd: Optional[float]=None, actual_cost_usd: Optional[float]=None,
         cost_status: Optional[str]=None, cost_source: Optional[str]=None, api_call_count: int=0, task: str="",
+        usage_timestamp: Optional[float]=None, turn_id: Optional[str]=None, usage_events: Optional[list[dict]]=None,
     ) -> None:
         """Accumulate a per-API-call usage delta into session_model_usage, inside the caller's
         write txn after the ``sessions`` UPDATE. A missing model/provider falls back to
@@ -365,6 +375,13 @@ class SessionUsageMixin:
             billing_base_url or sess.get("billing_base_url") or "",
             billing_mode or sess.get("billing_mode") or "", task or "", api_call_count or 0, *counts,
             float(estimated_cost_usd or 0.0), float(actual_cost_usd or 0.0), cost_status, cost_source, now, now))
+        from hermes_state_rollup import record_usage_event
+        event_counts = dict(zip((*_TOKEN_COUNTERS, "api_call_count"), (*counts, api_call_count)))
+        events = usage_events or [{**event_counts, "turn_id": turn_id, "usage_timestamp": usage_timestamp}]
+        for event in events:
+            record_usage_event(conn, session_id, model=model or sess.get("model") or "unknown",
+                               provider=billing_provider or sess.get("billing_provider") or "",
+                               counts=event, task=task, turn_id=event.get("turn_id"), occurred_at=event.get("usage_timestamp"))
 
     def record_auxiliary_usage(
         self, session_id: str, task: str, *, model: Optional[str]=None, billing_provider: Optional[str]=None,

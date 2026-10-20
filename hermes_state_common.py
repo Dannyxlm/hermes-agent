@@ -501,10 +501,35 @@ CREATE TABLE IF NOT EXISTS session_model_usage (
     PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
 );
 
+-- Immutable per-call accounting, separate from cumulative checkpoints. No message bodies.
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    chat_id TEXT NOT NULL,
+    occurred_at REAL NOT NULL,
+    turn_id TEXT,
+    model TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    task TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_tokens INTEGER NOT NULL,
+    reasoning_tokens INTEGER NOT NULL,
+    api_call_count INTEGER NOT NULL,
+    estimated_cost_usd REAL,
+    price_reason TEXT,
+    pricing_date TEXT NOT NULL,
+    source_url TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_usage_events_chat_time ON usage_events(chat_id, occurred_at);
+
 CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
 
 CREATE TABLE IF NOT EXISTS gateway_routing (
     scope TEXT NOT NULL DEFAULT '',

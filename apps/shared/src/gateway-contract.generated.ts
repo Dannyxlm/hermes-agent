@@ -5181,6 +5181,206 @@ export interface PluginCatalogLookupEntry {
   sha: string
   subdir: string
 }
+export interface UsageEstimateParams {
+  provider: string
+  model: string
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+}
+export interface ApiValue {
+  estimated_cost_usd: number | null
+  status: 'est' | 'unknown'
+  reason: string | null
+  pricing_date: string
+  source_url: string | null
+  basis: 'standard_api_list_price'
+  currency: 'USD'
+}
+export interface UsageRollupParams {
+  profile?: string | null
+  window?: 'today' | '7d' | '30d'
+  timezone?: string
+  session_id?: string | null
+  limit?: number
+}
+export interface UsageRollupResult {
+  profile: string
+  start: number
+  end: number
+  timezone: string
+  totals: UsageMetrics
+  agents: AgentUsage[]
+  models: ModelUsage[]
+  providers: ProviderUsageTotals[]
+  days: DailyUsage[]
+  top_chats: ChatUsage[]
+  chat_count: number
+  coverage_since: number | null
+  partial: boolean
+  coverage_reason: string
+  basis: 'standard_api_list_price'
+  currency: 'USD'
+}
+export interface UsageMetrics {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+}
+export interface AgentUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  profile: string
+}
+export interface ModelUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  model: string
+  provider: string
+}
+export interface ProviderUsageTotals {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  provider: string
+}
+export interface DailyUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  provider: string
+  day: string
+}
+export interface ChatUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  session_id: string
+  title: string | null
+}
+export interface DefaultsGetParams {
+  profile: string
+}
+export interface DefaultsResult {
+  reasoning: string
+  reasoning_levels: string[]
+  delegation_model: string
+  delegation_provider: string
+  main_model: string
+  applies_to: 'new_chats_and_delegations'
+  reasoning_precedence: string
+}
+export interface DefaultsSetParams {
+  profile: string
+  key: 'reasoning' | 'delegation'
+  value: string
+  provider?: string
+  confirm?: boolean
+}
+export interface DefaultsSetResult {
+  reasoning: string
+  reasoning_levels: string[]
+  delegation_model: string
+  delegation_provider: string
+  main_model: string
+  applies_to: 'new_chats_and_delegations'
+  reasoning_precedence: string
+  changed: boolean
+  operation_id: string | null
+}
 /** ``answers`` rides only on a reconnect replay (locks the server already accepted; null = skipped). */
 export interface ClarifyRequestParams {
   session_id: string
@@ -6060,6 +6260,10 @@ export interface RpcMethods {
   'complete.path': { params: CompletePathParams; result: CompletionItemsResult }
   /** Ranked slash-command / skill completions for a ``/`` token. */
   'complete.slash': { params: CompleteSlashParams; result: CompleteSlashResult }
+  /** Read profile-wide new-chat reasoning/delegation defaults, separate from session controls. */
+  'config.defaults.get': { params: DefaultsGetParams; result: DefaultsResult }
+  /** Confirmed authenticated new-chat default write, audited and state-idempotent, with disk readback. */
+  'config.defaults.set': { params: DefaultsSetParams; result: DefaultsSetResult }
   /** Read one normalised config value (or the whole effective config) the way the UIs render it. */
   'config.get': { params: ConfigGetParams; result: ConfigGetResult }
   /** Change one config key (persisted or session-scoped) and read back the normalised value. */
@@ -6538,6 +6742,10 @@ export interface RpcMethods {
   'toolsets.list': { params: _SessionScoped; result: ToolsetsListResult }
   /** Two-bar dollar usage view shared by /usage, /topup and /subscription; fail-open to unavailable. */
   'usage.bars': { params: ProfileParams; result: UsageModel }
+  /** Offline, sourced standard API value (est), independent of subscription billing. */
+  'usage.estimate': { params: UsageEstimateParams; result: ApiValue }
+  /** Read indexed timestamped usage for one profile; no transcript scan or historical inference. */
+  'usage.rollup': { params: UsageRollupParams; result: UsageRollupResult }
   /** Add a login / payment / address item to the local vault. */
   'vault.add': { params: VaultAddParams; result: VaultAddResult }
   /** Metadata-only listing across the local vault and every unlocked password manager. */
@@ -6608,6 +6816,8 @@ export const RPC_METHODS = [
   'commands.catalog',
   'complete.path',
   'complete.slash',
+  'config.defaults.get',
+  'config.defaults.set',
   'config.get',
   'config.set',
   'config.show',
@@ -6860,6 +7070,8 @@ export const RPC_METHODS = [
   'tools.show',
   'toolsets.list',
   'usage.bars',
+  'usage.estimate',
+  'usage.rollup',
   'vault.add',
   'vault.list',
   'vault.lock',
