@@ -715,7 +715,6 @@ class PushStore(ActivityPushStore, WidgetPushStore):
             payload = activity_payload(run, scope, now, preview=preview, previews=self._device_previews(db, sub))
         else:
             payload = alert_payload(sub, run, scope, preview=preview)
-            self._quiet_activity_completion(db, sub, run["run_id"], payload)
         if not activity:
             payload["event_id"] = hashlib.sha256(event_id.encode()).hexdigest()
             # Optional display text must never make an otherwise valid alert too large.

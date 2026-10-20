@@ -1,7 +1,6 @@
 """ActivityKit completion contracts through the real store/worker, with no Apple traffic."""
 import hashlib
 import json
-import logging
 import uuid
 
 import pytest
@@ -112,8 +111,10 @@ def test_terminal_recorded_after_lease_expiry_still_owns_end(delivery):
     now[0] += 8 * 3600 + 20
     service.record(scope, run["run_id"], "done", "failed")
     service.drain_once()
-    assert activities(sender)[-1]["payload"]["aps"]["event"] == "end"
-    assert activities(sender)[-1]["payload"]["aps"]["content-state"]["status"] == "failed"
+    jobs = activities(sender)
+    assert len(jobs) == 1
+    assert jobs[0]["payload"]["aps"].get("event") == "end"
+    assert jobs[0]["payload"]["aps"]["content-state"].get("status") == "failed"
 
 
 def test_uncertain_done_send_does_not_repeat_visible_alert_and_end_keeps_retrying(delivery):
@@ -144,7 +145,7 @@ def test_one_sound_is_scoped_to_device_and_run_even_with_duplicate_activities(de
     service.record(scope, run["run_id"], "done", "complete")
     service.drain_once()
     alerts = {j["token"]: j["payload"]["aps"] for j in sender.jobs if j["kind"] == "alert"}
-    assert alerts["aa" * 32]["interruption-level"] == "passive"
+    assert alerts.get("aa" * 32, {}).get("interruption-level") == "passive"
     assert alerts["bb" * 32]["sound"] == "default"
     assert "interruption-level" not in alerts["bb" * 32]
     assert sum("alert" in j["payload"]["aps"] for j in activities(sender)) == 1
@@ -205,22 +206,23 @@ def test_long_step_heartbeat_refreshes_stale_date_without_changing_content(deliv
 
 
 @pytest.mark.parametrize("outcome", ["accepted", "retry", "invalid", "failed"])
-def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, caplog, outcome):
+def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome):
     service, sender, _, ids, scope = delivery
     sender.result = DeliveryResult(outcome)
     service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
     run = service.start_run(scope)
     service.record(scope, run["run_id"], "PRIVATE_EVENT", "complete",
                    preview=AlertPreview(title="PRIVATE_TITLE", reply="PRIVATE_BODY"))
-    with caplog.at_level(logging.INFO, logger="tui_gateway.mobile_push"):
-        service.drain_once()
-    records = [r for r in caplog.records if r.msg == "mobile push shape %s"]
+    service.drain_once()
+    audit = service.store.path.parent / "push-shape-audit.jsonl"
+    assert audit.is_file()
+    text = audit.read_text()
+    records = [json.loads(line) for line in text.splitlines()]
     assert len(records) == 1
-    shape = records[0].args  # logging unwraps a single mapping argument
-    assert shape == {"kind": "alert", "status": "complete", "title_length": 13, "body_length": 12,
-                     "event_id": hashlib.sha256(f"{scope.key}:{run['run_id']}:PRIVATE_EVENT".encode()).hexdigest(),
-                     "outcome": outcome, "sent_at": service._clock()}
-    assert all(value not in caplog.text for value in ("PRIVATE_TITLE", "PRIVATE_BODY", "PRIVATE_EVENT", "aa" * 32))
+    assert records[0] == {"kind": "alert", "status": "complete", "title_length": 13, "body_length": 12,
+                          "event_id": hashlib.sha256(f"{scope.key}:{run['run_id']}:PRIVATE_EVENT".encode()).hexdigest(),
+                          "outcome": outcome, "sent_at": service._clock()}
+    assert all(value not in text for value in ("PRIVATE_TITLE", "PRIVATE_BODY", "PRIVATE_EVENT", "aa" * 32))
 
 
 def test_registered_push_started_activity_gets_silent_late_end(delivery):

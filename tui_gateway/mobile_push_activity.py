@@ -34,32 +34,38 @@ class ActivityPushStore:
     def _register_activity_cleanup(self, db, sub, now):
         db.execute("""INSERT OR IGNORE INTO activity_cleanup (subscription_id, cleanup_until)
             VALUES (?,?)""", (sub["id"], now + 12 * 3600))
-        db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
-                   (_device_event(sub, sub["run_id"], "carried"), now))
 
     @staticmethod
-    def _activity_carried(db, sub, run_id):
-        marker = db.execute("SELECT 1 FROM events WHERE event_id=?",
-                            (_device_event(sub, run_id, "carried"),)).fetchone()
-        registered = db.execute("""SELECT 1 FROM subscriptions WHERE kind='activity' AND principal=?
-            AND installation_id=? AND connection_id=? AND scope=? AND run_id=?""",
-            (sub["principal"], sub["installation_id"], sub["connection_id"], sub["scope"], run_id)).fetchone()
-        return marker is not None or registered is not None
-
-    def _quiet_activity_completion(self, db, sub, run_id, payload):
-        if payload.get("hermex.status") == "complete" and self._activity_carried(db, sub, run_id):
-            payload["aps"]["interruption-level"] = "passive"
-            payload["aps"].pop("sound", None)
+    def _activity_can_finish(db, sub, run_id, now):
+        # Registration history cannot stand in for a still-addressable Done moment.
+        registered = db.execute("""SELECT 1 FROM subscriptions s
+            JOIN activity_cleanup c ON c.subscription_id=s.id
+            WHERE s.kind='activity' AND s.principal=? AND s.installation_id=?
+            AND s.connection_id=? AND s.scope=? AND s.run_id=? AND s.expires_at>?
+            AND c.cleanup_until>? AND c.completed=0
+            AND ((c.finished_at=0 AND s.expires_at>?) OR
+                 (c.finished_at+120>? AND c.announced_at=0
+                  AND json_extract(c.payload, '$.aps.content-state.status')='complete'))""",
+            (sub["principal"], sub["installation_id"], sub["connection_id"], sub["scope"], run_id,
+             now, now, now + 120, now)).fetchone()
+        return registered is not None
 
     def _claim_completion_alert(self, db, job, now):
         payload = job["payload"]
-        self._quiet_activity_completion(db, job, job["run_id"], payload)
-        if payload.get("hermex.status") == "complete" and payload["aps"].get("sound"):
-            first = db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
-                               (_device_event(job, job["run_id"], "done-alert"), now)).rowcount
-            if not first:
-                payload["aps"]["interruption-level"] = "passive"
-                payload["aps"].pop("sound", None)
+        if payload.get("hermex.status") != "complete":
+            return
+        reserved = db.execute("SELECT 1 FROM events WHERE event_id=?",
+                              (_device_event(job, job["run_id"], "done-alert"),)).fetchone()
+        aps = payload["aps"]
+        if reserved or self._activity_can_finish(db, job, job["run_id"], now):
+            aps["interruption-level"] = "passive"
+            aps.pop("sound", None)
+        else:
+            # Restore pre-upgrade queued payloads whose sound was stripped at enqueue.
+            aps.pop("interruption-level", None)
+            aps["sound"] = "default"
+            db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
+                       (_device_event(job, job["run_id"], "done-alert"), now))
 
     def _enqueue_terminal_activity(self, db, sub, run, scope, preview=None, *, announce=True):
         now = self.clock()
