@@ -66,6 +66,11 @@ explicitly mark windows predating installation as partial. Do not infer historic
 cumulative counters or render uncovered days as measured zero. Incremental accounting records
 events inside its existing transaction; cumulative absolute checkpoints do not double charge.
 Coalesced writes preserve each call's original timestamp, turn and pricing context.
+Auxiliary aggregates also preserve original per-call events when supplied. A counters-only
+aggregate (`api_call_count > 1`, including current background-review checkpoints) has null
+API value with reason `aggregate usage: original call boundaries unavailable`. Its single
+ledger timestamp is checkpoint receipt time, not inferred call history; tokens/calls remain
+included. Counts are never split evenly and past call timestamps are never invented.
 
 Requests open SQLite `mode=ro`, `query_only`, with timestamp/chat-time indexes. They never
 create storage, migrate, flush writers or scan transcripts. Results may lag the async writer.
@@ -83,7 +88,10 @@ and precedence: session > per-model > profile default.
 ```
 
 Explicit nonblank profile, authenticated non-internal human transport and confirmation are
-required. Reasoning accepts `none` plus the server vocabulary; display words are not levels.
+required. Writes validate real profile IDs before compatibility resolution: `.hermes` and
+missing `hermes` are rejected with `4064`, without config/audit changes. Read/session aliases
+remain compatible; an existing named `hermes` profile remains a valid target.
+Reasoning accepts `none` plus the server vocabulary; display words are not levels.
 Use model capabilities to display the model-appropriate subset. Delegation requires a
 recognized, accepted, persistable model from the existing provider/catalog validator.
 Empty delegation model+provider restore inheritance. A configured direct delegation endpoint
@@ -92,7 +100,9 @@ or key is refused by this short control: changing its route belongs in full sett
 Result is the GET shape plus `changed` and opaque `operation_id`. Equal values do not rewrite
 config or duplicate audit records (`changed:false`, `operation_id:null`). New values use the
 existing dashboard config lock and canonical atomic YAML writer, with durable intent/applied
-audit records and disk readback. Clients should GET the same profile after success. After a
+audit records and disk readback. Audit appends require a regular file and tighten its opened
+file descriptor to `0600` even when it already exists; symlinks remain refused. Clients should
+GET the same profile after success. After a
 write/audit error, read back before deciding whether to retry; never blindly replay a write.
 
 Reasoning affects newly constructed chats; existing live settings are untouched. Delegation

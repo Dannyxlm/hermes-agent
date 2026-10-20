@@ -1,6 +1,7 @@
 """Windowed usage reads metadata only and never recharges absolute checkpoints."""
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -150,3 +151,34 @@ def test_compression_delegation_and_explicit_branch_attribution(tmp_path, monkey
         chats = {row["session_id"]: row["input_tokens"] for row in rpc()["result"]["top_chats"]}
         assert chats == {"root": 30, "fork": 40}
         assert rpc(session_id="tip")["result"]["totals"]["input_tokens"] == 30
+
+
+@pytest.mark.parametrize("with_events", [False, True])
+def test_background_review_aggregate_requires_original_call_boundaries(tmp_path, monkeypatch, with_events):
+    from agent.background_review import _record_review_usage_to_parent
+    now = time.time()
+    usage = {"model": "gpt-6.1-sol", "provider": "openai-codex", "input_tokens": 400000, "api_calls": 2}
+    stamps = [now - 10, now - 5]
+    if with_events:
+        usage["usage_events"] = [{"input_tokens": 200000, "api_call_count": 1, "usage_timestamp": stamp}
+                                 for stamp in stamps]
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        monkeypatch.setattr(server, "_hermes_home", tmp_path)
+        db.create_session("parent", "desktop")
+        parent = SimpleNamespace(_session_db=db, session_id="parent")
+        _record_review_usage_to_parent(parent, usage)
+        result = rpc()["result"]["totals"]
+        assert result["input_tokens"] == 400000
+        assert result["api_call_count"] == 2
+        if with_events:
+            assert result["estimated_cost_usd"] == pytest.approx(0.8)
+            assert result["event_count"] == 2
+            recorded = [row[0] for row in db._conn.execute("SELECT occurred_at FROM usage_events ORDER BY occurred_at")]
+            assert recorded == stamps
+        else:
+            assert result["estimated_cost_usd"] is None
+            assert result["unknown_price_events"] == 1
+            assert "call boundaries" in result["cost_reason"]
+            assert result["event_count"] == 1
+        # The auxiliary checkpoint must still leave the parent's main-loop counters alone.
+        assert db.get_session("parent")["input_tokens"] == 0

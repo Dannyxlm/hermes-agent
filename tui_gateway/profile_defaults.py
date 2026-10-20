@@ -3,6 +3,7 @@ No agent construction, session mutation, environment changes or credential write
 """
 import json
 import os
+import stat
 import time
 import uuid
 
@@ -43,6 +44,10 @@ def _audit(path, record):
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise OSError("defaults audit must be a regular file")
+        # The creation mode does not tighten a restored/pre-existing audit.
+        os.fchmod(stream.fileno(), 0o600)
         stream.write(json.dumps(record, separators=(",", ":")) + "\n")
         stream.flush()
         os.fsync(stream.fileno())

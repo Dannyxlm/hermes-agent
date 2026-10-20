@@ -46,7 +46,10 @@ def _chat_id(conn, session_id):
 def record_usage_event(conn, session_id, *, model, provider, counts, task="", turn_id=None, occurred_at=None):
     usage = CanonicalUsage(**{key: int(counts.get(key) or 0) for key in _COUNTERS if key != "api_call_count"})
     value = estimate_api_value(model, usage, provider=provider)
-    if not usage.total_tokens and counts.get("api_call_count"):
+    if int(counts.get("api_call_count") or 0) > 1:
+        # Cumulative checkpoints cannot establish per-request context tiers.
+        value.update(estimated_cost_usd=None, reason="aggregate usage: original call boundaries unavailable")
+    elif not usage.total_tokens and counts.get("api_call_count"):
         value.update(estimated_cost_usd=None, reason="token usage unavailable for completed call")
     conn.execute("""INSERT INTO usage_events (
         session_id, chat_id, occurred_at, turn_id, model, provider, task,

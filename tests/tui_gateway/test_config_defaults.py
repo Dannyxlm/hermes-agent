@@ -1,5 +1,7 @@
 """Profile defaults are explicit, audited and leave live session pins unchanged."""
 import json
+import stat
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,12 +17,16 @@ def rpc(method, **params):
 
 @pytest.fixture
 def defaults_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "_hermes_home", tmp_path)
-    monkeypatch.setattr(server, "_profile_home", lambda p: None if p == "default" else tmp_path / p)
-    (tmp_path / "config.yaml").write_text("# preserve me\nagent:\n  reasoning_effort: high\ndelegation:\n  model: ''\n  provider: ''\n")
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(server, "_hermes_home", home)
+    monkeypatch.setattr(server, "_served_profile_homes", set())
+    (home / "config.yaml").write_text("# preserve me\nagent:\n  reasoning_effort: high\ndelegation:\n  model: ''\n  provider: ''\n")
     transport = SimpleNamespace(auth_identity={"provider": "test", "user_id": "owner"})
     token = bind_transport(transport)
-    yield tmp_path
+    yield home
     reset_transport(token)
 
 
@@ -70,8 +76,8 @@ def test_defaults_reject_invalid_or_unconfirmed_writes(defaults_home):
 
 
 def test_secondary_default_write_and_audit_failure_do_not_touch_launch(defaults_home, monkeypatch):
-    secondary = defaults_home / "secondary"
-    secondary.mkdir()
+    secondary = defaults_home / "profiles" / "secondary"
+    secondary.mkdir(parents=True)
     (secondary / "config.yaml").write_text("agent:\n  reasoning_effort: medium\n")
     launch = (defaults_home / "config.yaml").read_bytes()
     result = rpc("config.defaults.set", profile="secondary", key="reasoning", value="max", confirm=True)
@@ -102,3 +108,30 @@ def test_unlisted_delegation_and_internal_identity_cannot_write(defaults_home, m
     finally:
         reset_transport(token)
     assert (defaults_home / "config.yaml").read_bytes() == before
+
+
+@pytest.mark.parametrize("profile", [".hermes", "hermes", "missing"])
+def test_explicit_defaults_target_never_uses_session_alias(defaults_home, profile):
+    # Seed both files so a rejected mutation must preserve content AND metadata.
+    assert "result" in rpc("config.defaults.set", profile="default", key="reasoning", value="low", confirm=True)
+    paths = [defaults_home / "config.yaml", defaults_home / "logs" / "defaults-audit.jsonl"]
+    before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths]
+    response = rpc("config.defaults.set", profile=profile, key="reasoning", value="medium", confirm=True)
+    assert response.get("error", {}).get("code") == 4064, response
+    assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths] == before
+    if profile in {".hermes", "hermes"}:
+        assert rpc("config.defaults.get", profile=profile)["result"]["reasoning"] == "low"
+
+
+@pytest.mark.platforms("posix")
+def test_existing_audit_is_tightened_before_defaults_append(defaults_home):
+    audit_path = defaults_home / "logs" / "defaults-audit.jsonl"
+    audit_path.parent.mkdir()
+    audit_path.write_text('{"status":"existing"}\n')
+    audit_path.chmod(0o644)
+    response = rpc("config.defaults.set", profile="default", key="reasoning", value="low", confirm=True)
+    assert "result" in response, response
+    assert stat.S_IMODE(audit_path.stat().st_mode) == 0o600
+    records = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert [item["status"] for item in records] == ["existing", "intent", "applied"]
+    assert rpc("config.defaults.get", profile="default")["result"]["reasoning"] == "low"

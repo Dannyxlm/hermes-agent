@@ -88,7 +88,7 @@ def register(server):
     bind_module(globals(), server, skip=("_",))
     # Core admission rejects unknown keys only. These new methods also validate
     # types/required values BEFORE profile resolution or any write side effect.
-    def validated(handler, model):
+    def validated(handler, model, *, explicit_target=False):
         def call(rid, params):
             try:
                 values = model.model_validate(params).model_dump()
@@ -96,7 +96,14 @@ def register(server):
                     return server._err(rid, 4002, "explicit non-empty profile required")
             except ValidationError:
                 return server._err(rid, 4002, "invalid or missing method parameters")
+            if explicit_target:
+                from hermes_cli.profiles import profile_exists
+                # Mutation IDs must be real profiles, not session-info home aliases.
+                # Do this before the handler's compatibility-aware profile scope.
+                if not profile_exists(values["profile"]):
+                    return server._err(rid, 4064, "Requested profile does not exist")
             return handler(rid, values)
         return call
     for name in _registry.names():
-        server._methods[name] = validated(server._methods[name], METHODS[name].params)
+        server._methods[name] = validated(server._methods[name], METHODS[name].params,
+                                          explicit_target=name == "config.defaults.set")

@@ -773,8 +773,9 @@ def _snapshot_review_usage(review_agent: Any) -> dict[str, Any]:
 def _record_review_usage_to_parent(parent_agent: Any, usage: dict[str, Any]) -> None:
     """Record a fork's usage against the parent session (best-effort, never raises). The fork has
     ``_session_db = None`` so conversation_loop's DB-gated accounting never sees its calls; route
-    them through the aux-accounting chokepoint, which writes only ``session_model_usage`` — never
-    the transcript or ``sessions`` row."""
+    them through the aux-accounting chokepoint (model totals and usage ledger), never the
+    transcript or main-loop ``sessions`` counters. Preserve original events when supplied;
+    counters-only forks cannot establish per-call pricing boundaries."""
     try:
         session_db = getattr(parent_agent, "_session_db", None)
         session_id = getattr(parent_agent, "session_id", None)
@@ -785,6 +786,7 @@ def _record_review_usage_to_parent(parent_agent: Any, usage: dict[str, Any]) -> 
             session_id, task="background_review", model=usage.get("model"),
             billing_provider=usage.get("provider"), billing_base_url=usage.get("base_url"),
             estimated_cost_usd=usage.get("estimated_cost_usd"),
+            usage_events=usage.get("usage_events"),
             api_call_count=counts.pop("api_calls"), **counts,
         )
     except Exception as e:

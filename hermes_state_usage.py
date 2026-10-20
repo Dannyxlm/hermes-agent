@@ -387,7 +387,7 @@ class SessionUsageMixin:
         self, session_id: str, task: str, *, model: Optional[str]=None, billing_provider: Optional[str]=None,
         billing_base_url: Optional[str]=None, input_tokens: int=0, output_tokens: int=0, cache_read_tokens: int=0,
         cache_write_tokens: int=0, reasoning_tokens: int=0, estimated_cost_usd: Optional[float]=None,
-        api_call_count: int=1,
+        api_call_count: int=1, usage_events: Optional[list[dict]]=None,
     ) -> None:
         """Record an auxiliary LLM call's usage (vision, compression, title generation, ...)
         as a per-(model, provider, task) delta in ``session_model_usage`` WITHOUT touching
@@ -396,7 +396,9 @@ class SessionUsageMixin:
 
         See #23270.
         Background-review forks record an aggregate of N fork API calls in one write with
-        ``task='background_review'`` (issue #87250).
+        ``task='background_review'`` (issue #87250). Producers with original per-call
+        events pass ``usage_events`` to retain timestamps and context-tier pricing; an
+        aggregate without call boundaries has unknown ledger API value.
         """
         usage = {k: v for k, v in locals().items() if k in _MODEL_USAGE_FIELDS}
         if not session_id or not task:
@@ -405,7 +407,8 @@ class SessionUsageMixin:
         # FK to sessions.id: same guard as update_token_counts; the aux path carries no surface, so
         # the placeholder stays repairable by the creator's upsert (_insert_session_row).
         self._insert_session_row(session_id, "unknown")
-        self._execute_write(lambda conn: self._record_model_usage(conn, session_id, task=task, **usage))
+        self._execute_write(lambda conn: self._record_model_usage(
+            conn, session_id, task=task, usage_events=usage_events, **usage))
 
     def auxiliary_usage_by_task(self, session_id: str) -> dict[str, dict[str, float]]:
         """Per-task auxiliary usage (``task != ''``: vision, compression, title_generation, ...) summed
