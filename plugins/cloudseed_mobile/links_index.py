@@ -135,8 +135,13 @@ def project_attachments(messages, add, status, *, enabled=True):
     if not enabled:
         return
     for message in messages:
-        if message.get('active', 1) == 0 or message.get('display_kind') in {'reasoning', 'thinking', 'scratchpad'}:
+        if message.get('role') != 'user' or message.get('active', 1) == 0 or message.get('display_kind') in {'reasoning', 'thinking', 'scratchpad'}:
             continue
+        content = decode(message.get('content'))
+        if isinstance(content, list) and len(content) > 512:
+            status['attachments_partial'] = True
+        if isinstance(content, str) and len(content) > MAX_STRING and content.lstrip().startswith('['):
+            status['attachments_partial'] = True
         metadata = decode(message.get('display_metadata'))
         attachments = metadata.get('attachments') if isinstance(metadata, dict) else None
         if isinstance(attachments, list) and len(attachments) > 512:
