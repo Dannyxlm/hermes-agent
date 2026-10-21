@@ -5200,11 +5200,12 @@ export interface ApiValue {
 }
 export interface UsageRollupParams {
   profile?: string | null
-  window?: 'today' | '7d' | '30d'
+  window?: 'today' | '7d' | '30d' | 'all'
   timezone?: string
   session_id?: string | null
   limit?: number
 }
+export type UsageRollupWireResult = UsageRollupResult | AllTimeUsageRollupResult
 export interface UsageRollupResult {
   profile: string
   start: number
@@ -5230,9 +5231,6 @@ export interface UsageMetrics {
   cache_write_tokens: number
   reasoning_tokens: number
   api_call_count: number
-  turn_count: number
-  event_count: number
-  unattributed_turn_events: number
   total_tokens: number
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
@@ -5242,6 +5240,9 @@ export interface UsageMetrics {
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
 }
 export interface AgentUsage {
   input_tokens: number
@@ -5250,9 +5251,6 @@ export interface AgentUsage {
   cache_write_tokens: number
   reasoning_tokens: number
   api_call_count: number
-  turn_count: number
-  event_count: number
-  unattributed_turn_events: number
   total_tokens: number
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
@@ -5262,6 +5260,9 @@ export interface AgentUsage {
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
   profile: string
 }
 export interface ModelUsage {
@@ -5271,9 +5272,6 @@ export interface ModelUsage {
   cache_write_tokens: number
   reasoning_tokens: number
   api_call_count: number
-  turn_count: number
-  event_count: number
-  unattributed_turn_events: number
   total_tokens: number
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
@@ -5283,6 +5281,9 @@ export interface ModelUsage {
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
   model: string
   provider: string
 }
@@ -5293,9 +5294,6 @@ export interface ProviderUsageTotals {
   cache_write_tokens: number
   reasoning_tokens: number
   api_call_count: number
-  turn_count: number
-  event_count: number
-  unattributed_turn_events: number
   total_tokens: number
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
@@ -5305,6 +5303,9 @@ export interface ProviderUsageTotals {
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
   provider: string
 }
 export interface DailyUsage {
@@ -5314,9 +5315,6 @@ export interface DailyUsage {
   cache_write_tokens: number
   reasoning_tokens: number
   api_call_count: number
-  turn_count: number
-  event_count: number
-  unattributed_turn_events: number
   total_tokens: number
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
@@ -5326,6 +5324,9 @@ export interface DailyUsage {
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
   provider: string
   day: string
 }
@@ -5336,9 +5337,6 @@ export interface ChatUsage {
   cache_write_tokens: number
   reasoning_tokens: number
   api_call_count: number
-  turn_count: number
-  event_count: number
-  unattributed_turn_events: number
   total_tokens: number
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
@@ -5348,8 +5346,144 @@ export interface ChatUsage {
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  turn_count: number
+  event_count: number
+  unattributed_turn_events: number
   session_id: string
   title: string | null
+}
+export interface AllTimeUsageRollupResult {
+  profile: string
+  window: 'all'
+  source: 'session_totals'
+  start: number | null
+  end: number
+  timezone: string
+  totals: AllTimeMetrics
+  agents: AllTimeAgentUsage[]
+  models: AllTimeModelUsage[]
+  providers: AllTimeProviderUsage[]
+  days: DailyUsage[]
+  top_chats: AllTimeChatUsage[]
+  chat_count: number
+  coverage: ProviderCoverage[]
+  coverage_since: number | null
+  partial: true
+  coverage_reason: string
+  basis: 'standard_api_list_price'
+  currency: 'USD'
+}
+export interface AllTimeMetrics {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  turn_count: null
+  event_count: null
+  unattributed_turn_events: null
+}
+export interface AllTimeAgentUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  turn_count: null
+  event_count: null
+  unattributed_turn_events: null
+  profile: string
+}
+export interface AllTimeModelUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  turn_count: null
+  event_count: null
+  unattributed_turn_events: null
+  model: string
+  provider: string
+}
+export interface AllTimeProviderUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  turn_count: null
+  event_count: null
+  unattributed_turn_events: null
+  provider: string
+}
+export interface AllTimeChatUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  api_call_count: number
+  total_tokens: number
+  cache_hit_percent: number | null
+  estimated_cost_usd: number | null
+  known_estimated_cost_usd: number
+  unknown_price_events: number
+  cost_status: 'est' | 'unknown'
+  cost_reason: string | null
+  pricing_dates: string[]
+  price_sources: string[]
+  turn_count: null
+  event_count: null
+  unattributed_turn_events: null
+  session_id: string
+  title: string | null
+}
+export interface ProviderCoverage {
+  provider: string
+  since: number
+  chat_count: number
+  session_count: number
 }
 export interface DefaultsGetParams {
   profile: string
@@ -6744,8 +6878,8 @@ export interface RpcMethods {
   'usage.bars': { params: ProfileParams; result: UsageModel }
   /** Offline, sourced standard API value (est), independent of subscription billing. */
   'usage.estimate': { params: UsageEstimateParams; result: ApiValue }
-  /** Read indexed timestamped usage for one profile; no transcript scan or historical inference. */
-  'usage.rollup': { params: UsageRollupParams; result: UsageRollupResult }
+  /** Read one profile's timestamped windows or retained all-time session totals; no transcript scan. */
+  'usage.rollup': { params: UsageRollupParams; result: UsageRollupWireResult }
   /** Add a login / payment / address item to the local vault. */
   'vault.add': { params: VaultAddParams; result: VaultAddResult }
   /** Metadata-only listing across the local vault and every unlocked password manager. */

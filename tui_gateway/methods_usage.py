@@ -28,8 +28,8 @@ def _(rid, params):
     except (ZoneInfoNotFoundError, ValueError):
         return _err(rid, 4002, "unknown IANA timezone")
     now = datetime.now(zone)
-    days = {"today": 1, "7d": 7, "30d": 30}[params.get("window", "7d")]
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+    days = {"today": 1, "7d": 7, "30d": 30}.get(params.get("window", "7d"))
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=(days or 1) - 1)
     path = _active_config_path().parent / "state.db"
     try:
         conn = sqlite3.connect(read_only_db_uri(path), uri=True, timeout=2.0)
@@ -37,10 +37,14 @@ def _(rid, params):
         with conn:
             conn.execute("PRAGMA query_only=ON")
             conn.execute("BEGIN")
-            result = read_usage_rollup(conn, start=start.timestamp(), end=now.timestamp(),
-                                       profile=params.get("profile") or _current_profile_name(),
-                                       session_id=params.get("session_id"), limit=params.get("limit", 20),
-                                       timezone_name=params.get("timezone", "UTC"))
+            common = {"end": now.timestamp(), "profile": params.get("profile") or _current_profile_name(),
+                      "session_id": params.get("session_id"), "limit": params.get("limit", 20),
+                      "timezone_name": params.get("timezone", "UTC")}
+            if params.get("window") == "all":
+                from hermes_state_alltime import read_alltime_usage
+                result = read_alltime_usage(conn, **common)
+            else:
+                result = read_usage_rollup(conn, start=start.timestamp(), **common)
         return _ok(rid, result)
     except sqlite3.Error:
         return _err(rid, 5036, "Timestamped usage storage unavailable; no transcript-scan fallback")

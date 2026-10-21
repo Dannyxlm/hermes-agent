@@ -5120,7 +5120,7 @@
     },
     {
       "name": "usage.rollup",
-      "summary": "Read indexed timestamped usage for one profile; no transcript scan or historical inference.",
+      "summary": "Read one profile's timestamped windows or retained all-time session totals; no transcript scan.",
       "params": [
         {
           "name": "params",
@@ -5132,7 +5132,7 @@
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/UsageRollupResult"
+          "$ref": "#/components/schemas/UsageRollupWireResult"
         }
       }
     },
@@ -5856,6 +5856,73 @@
             "title": "Api Call Count",
             "type": "integer"
           },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
           "turn_count": {
             "title": "Turn Count",
             "type": "integer"
@@ -5866,6 +5933,95 @@
           },
           "unattributed_turn_events": {
             "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_status",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "profile"
+        ],
+        "title": "AgentUsage",
+        "type": "object"
+      },
+      "AgentsListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "title": "AgentsListParams",
+        "type": "object"
+      },
+      "AgentsListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "processes": {
+            "items": {
+              "$ref": "#/components/schemas/AgentProcessRow"
+            },
+            "title": "Processes",
+            "type": "array"
+          }
+        },
+        "title": "AgentsListResult",
+        "type": "object"
+      },
+      "AllTimeAgentUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
             "type": "integer"
           },
           "total_tokens": {
@@ -5935,6 +6091,18 @@
             "title": "Price Sources",
             "type": "array"
           },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
           "profile": {
             "title": "Profile",
             "type": "string"
@@ -5947,9 +6115,6 @@
           "cache_write_tokens",
           "reasoning_tokens",
           "api_call_count",
-          "turn_count",
-          "event_count",
-          "unattributed_turn_events",
           "total_tokens",
           "cache_hit_percent",
           "estimated_cost_usd",
@@ -5959,15 +6124,84 @@
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
           "profile"
         ],
-        "title": "AgentUsage",
+        "title": "AllTimeAgentUsage",
         "type": "object"
       },
-      "AgentsListParams": {
+      "AllTimeChatUsage": {
         "additionalProperties": false,
         "properties": {
-          "profile": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "cost_reason": {
             "anyOf": [
               {
                 "type": "string"
@@ -5976,25 +6210,619 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "title": "Profile"
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
           }
         },
-        "title": "AgentsListParams",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_status",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "session_id",
+          "title"
+        ],
+        "title": "AllTimeChatUsage",
         "type": "object"
       },
-      "AgentsListResult": {
+      "AllTimeMetrics": {
         "additionalProperties": false,
         "properties": {
-          "processes": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
             "items": {
-              "$ref": "#/components/schemas/AgentProcessRow"
+              "type": "string"
             },
-            "title": "Processes",
+            "title": "Pricing Dates",
             "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
           }
         },
-        "title": "AgentsListResult",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_status",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events"
+        ],
+        "title": "AllTimeMetrics",
+        "type": "object"
+      },
+      "AllTimeModelUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_status",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "model",
+          "provider"
+        ],
+        "title": "AllTimeModelUsage",
+        "type": "object"
+      },
+      "AllTimeProviderUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_status",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "provider"
+        ],
+        "title": "AllTimeProviderUsage",
+        "type": "object"
+      },
+      "AllTimeUsageRollupResult": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "window": {
+            "const": "all",
+            "title": "Window",
+            "type": "string"
+          },
+          "source": {
+            "const": "session_totals",
+            "title": "Source",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AllTimeMetrics"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeAgentUsage"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeModelUsage"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeProviderUsage"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DailyUsage"
+            },
+            "maxItems": 0,
+            "title": "Days",
+            "type": "array"
+          },
+          "top_chats": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeChatUsage"
+            },
+            "title": "Top Chats",
+            "type": "array"
+          },
+          "chat_count": {
+            "title": "Chat Count",
+            "type": "integer"
+          },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderCoverage"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "coverage_since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Since"
+          },
+          "partial": {
+            "const": true,
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "coverage_reason": {
+            "title": "Coverage Reason",
+            "type": "string"
+          },
+          "basis": {
+            "const": "standard_api_list_price",
+            "title": "Basis",
+            "type": "string"
+          },
+          "currency": {
+            "const": "USD",
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "window",
+          "source",
+          "start",
+          "end",
+          "timezone",
+          "totals",
+          "agents",
+          "models",
+          "providers",
+          "days",
+          "top_chats",
+          "chat_count",
+          "coverage",
+          "coverage_since",
+          "partial",
+          "coverage_reason",
+          "basis",
+          "currency"
+        ],
+        "title": "AllTimeUsageRollupResult",
         "type": "object"
       },
       "ApiValue": {
@@ -9182,18 +10010,6 @@
             "title": "Api Call Count",
             "type": "integer"
           },
-          "turn_count": {
-            "title": "Turn Count",
-            "type": "integer"
-          },
-          "event_count": {
-            "title": "Event Count",
-            "type": "integer"
-          },
-          "unattributed_turn_events": {
-            "title": "Unattributed Turn Events",
-            "type": "integer"
-          },
           "total_tokens": {
             "title": "Total Tokens",
             "type": "integer"
@@ -9261,6 +10077,18 @@
             "title": "Price Sources",
             "type": "array"
           },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -9284,9 +10112,6 @@
           "cache_write_tokens",
           "reasoning_tokens",
           "api_call_count",
-          "turn_count",
-          "event_count",
-          "unattributed_turn_events",
           "total_tokens",
           "cache_hit_percent",
           "estimated_cost_usd",
@@ -9296,6 +10121,9 @@
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
           "session_id",
           "title"
         ],
@@ -14162,18 +14990,6 @@
             "title": "Api Call Count",
             "type": "integer"
           },
-          "turn_count": {
-            "title": "Turn Count",
-            "type": "integer"
-          },
-          "event_count": {
-            "title": "Event Count",
-            "type": "integer"
-          },
-          "unattributed_turn_events": {
-            "title": "Unattributed Turn Events",
-            "type": "integer"
-          },
           "total_tokens": {
             "title": "Total Tokens",
             "type": "integer"
@@ -14241,6 +15057,18 @@
             "title": "Price Sources",
             "type": "array"
           },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -14257,9 +15085,6 @@
           "cache_write_tokens",
           "reasoning_tokens",
           "api_call_count",
-          "turn_count",
-          "event_count",
-          "unattributed_turn_events",
           "total_tokens",
           "cache_hit_percent",
           "estimated_cost_usd",
@@ -14269,6 +15094,9 @@
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
           "provider",
           "day"
         ],
@@ -25731,18 +26559,6 @@
             "title": "Api Call Count",
             "type": "integer"
           },
-          "turn_count": {
-            "title": "Turn Count",
-            "type": "integer"
-          },
-          "event_count": {
-            "title": "Event Count",
-            "type": "integer"
-          },
-          "unattributed_turn_events": {
-            "title": "Unattributed Turn Events",
-            "type": "integer"
-          },
           "total_tokens": {
             "title": "Total Tokens",
             "type": "integer"
@@ -25810,6 +26626,18 @@
             "title": "Price Sources",
             "type": "array"
           },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
           "model": {
             "title": "Model",
             "type": "string"
@@ -25826,9 +26654,6 @@
           "cache_write_tokens",
           "reasoning_tokens",
           "api_call_count",
-          "turn_count",
-          "event_count",
-          "unattributed_turn_events",
           "total_tokens",
           "cache_hit_percent",
           "estimated_cost_usd",
@@ -25838,6 +26663,9 @@
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
           "model",
           "provider"
         ],
@@ -33599,6 +34427,35 @@
         "title": "PromptSubmitStatus",
         "type": "string"
       },
+      "ProviderCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "since": {
+            "title": "Since",
+            "type": "number"
+          },
+          "chat_count": {
+            "title": "Chat Count",
+            "type": "integer"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "provider",
+          "since",
+          "chat_count",
+          "session_count"
+        ],
+        "title": "ProviderCoverage",
+        "type": "object"
+      },
       "ProviderLimit": {
         "additionalProperties": false,
         "description": "``hermes_cli/inventory.py::_apply_limits`` \u2014 ``account``: the whole login is rate-limited until\n``resets_at`` (ISO, absent when unknown); ``models``: only these models are, each until its time.",
@@ -33752,18 +34609,6 @@
             "title": "Api Call Count",
             "type": "integer"
           },
-          "turn_count": {
-            "title": "Turn Count",
-            "type": "integer"
-          },
-          "event_count": {
-            "title": "Event Count",
-            "type": "integer"
-          },
-          "unattributed_turn_events": {
-            "title": "Unattributed Turn Events",
-            "type": "integer"
-          },
           "total_tokens": {
             "title": "Total Tokens",
             "type": "integer"
@@ -33831,6 +34676,18 @@
             "title": "Price Sources",
             "type": "array"
           },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
           "provider": {
             "title": "Provider",
             "type": "string"
@@ -33843,9 +34700,6 @@
           "cache_write_tokens",
           "reasoning_tokens",
           "api_call_count",
-          "turn_count",
-          "event_count",
-          "unattributed_turn_events",
           "total_tokens",
           "cache_hit_percent",
           "estimated_cost_usd",
@@ -33855,6 +34709,9 @@
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
           "provider"
         ],
         "title": "ProviderUsageTotals",
@@ -46697,18 +47554,6 @@
             "title": "Api Call Count",
             "type": "integer"
           },
-          "turn_count": {
-            "title": "Turn Count",
-            "type": "integer"
-          },
-          "event_count": {
-            "title": "Event Count",
-            "type": "integer"
-          },
-          "unattributed_turn_events": {
-            "title": "Unattributed Turn Events",
-            "type": "integer"
-          },
           "total_tokens": {
             "title": "Total Tokens",
             "type": "integer"
@@ -46775,6 +47620,18 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
           }
         },
         "required": [
@@ -46784,9 +47641,6 @@
           "cache_write_tokens",
           "reasoning_tokens",
           "api_call_count",
-          "turn_count",
-          "event_count",
-          "unattributed_turn_events",
           "total_tokens",
           "cache_hit_percent",
           "estimated_cost_usd",
@@ -46795,7 +47649,10 @@
           "cost_status",
           "cost_reason",
           "pricing_dates",
-          "price_sources"
+          "price_sources",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events"
         ],
         "title": "UsageMetrics",
         "type": "object"
@@ -46965,7 +47822,8 @@
             "enum": [
               "today",
               "7d",
-              "30d"
+              "30d",
+              "all"
             ],
             "title": "Window",
             "type": "string"
@@ -47109,6 +47967,17 @@
         ],
         "title": "UsageRollupResult",
         "type": "object"
+      },
+      "UsageRollupWireResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/UsageRollupResult"
+          },
+          {
+            "$ref": "#/components/schemas/AllTimeUsageRollupResult"
+          }
+        ],
+        "title": "UsageRollupWireResult"
       },
       "ValueResult": {
         "additionalProperties": false,

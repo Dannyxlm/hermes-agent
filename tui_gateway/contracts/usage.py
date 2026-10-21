@@ -1,7 +1,7 @@
 """Native usage/API-value and new-chat defaults contracts."""
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, RootModel
 
 from .base import Params, Result
 from .common import ProfileParams
@@ -28,22 +28,19 @@ class ApiValue(Result):
 
 
 class UsageRollupParams(ProfileParams):
-    window: Literal["today", "7d", "30d"] = "7d"
+    window: Literal["today", "7d", "30d", "all"] = "7d"
     timezone: str = "UTC"  # IANA zone; calendar windows and chart use the same zone
     session_id: str | None = None  # stored ID, never a runtime ID
     limit: int = Field(default=20, ge=1, le=100, strict=True)
 
 
-class UsageMetrics(Result):
+class UsageTokenMetrics(Result):
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
     reasoning_tokens: int
     api_call_count: int
-    turn_count: int
-    event_count: int
-    unattributed_turn_events: int
     total_tokens: int
     cache_hit_percent: float | None
     estimated_cost_usd: float | None
@@ -53,6 +50,12 @@ class UsageMetrics(Result):
     cost_reason: str | None
     pricing_dates: list[str]
     price_sources: list[str]
+
+
+class UsageMetrics(UsageTokenMetrics):
+    turn_count: int
+    event_count: int
+    unattributed_turn_events: int
 
 
 class AgentUsage(UsageMetrics):
@@ -96,6 +99,63 @@ class UsageRollupResult(Result):
     currency: Literal["USD"]
 
 
+class AllTimeMetrics(UsageTokenMetrics):
+    turn_count: None
+    event_count: None
+    unattributed_turn_events: None
+
+
+class AllTimeAgentUsage(AllTimeMetrics):
+    profile: str
+
+
+class AllTimeChatUsage(AllTimeMetrics):
+    session_id: str
+    title: str | None
+
+
+class AllTimeModelUsage(AllTimeMetrics):
+    model: str
+    provider: str
+
+
+class AllTimeProviderUsage(AllTimeMetrics):
+    provider: str
+
+
+class ProviderCoverage(Result):
+    provider: str
+    since: float
+    chat_count: int
+    session_count: int
+
+
+class AllTimeUsageRollupResult(Result):
+    profile: str
+    window: Literal["all"]
+    source: Literal["session_totals"]
+    start: float | None
+    end: float
+    timezone: str
+    totals: AllTimeMetrics
+    agents: list[AllTimeAgentUsage]
+    models: list[AllTimeModelUsage]
+    providers: list[AllTimeProviderUsage]
+    days: list[DailyUsage] = Field(max_length=0)
+    top_chats: list[AllTimeChatUsage]
+    chat_count: int
+    coverage: list[ProviderCoverage]
+    coverage_since: float | None
+    partial: Literal[True]
+    coverage_reason: str
+    basis: Literal["standard_api_list_price"]
+    currency: Literal["USD"]
+
+
+class UsageRollupWireResult(RootModel[UsageRollupResult | AllTimeUsageRollupResult]):
+    pass
+
+
 class DefaultsGetParams(Params):
     profile: str = Field(min_length=1)
 
@@ -124,8 +184,8 @@ class DefaultsSetResult(DefaultsResult):
 
 method("usage.estimate", params=UsageEstimateParams, result=ApiValue,
        doc="Offline, sourced standard API value (est), independent of subscription billing.")
-method("usage.rollup", params=UsageRollupParams, result=UsageRollupResult,
-       doc="Read indexed timestamped usage for one profile; no transcript scan or historical inference.")
+method("usage.rollup", params=UsageRollupParams, result=UsageRollupWireResult,
+       doc="Read one profile's timestamped windows or retained all-time session totals; no transcript scan.")
 method("config.defaults.get", params=DefaultsGetParams, result=DefaultsResult,
        doc="Read profile-wide new-chat reasoning/delegation defaults, separate from session controls.")
 method("config.defaults.set", params=DefaultsSetParams, result=DefaultsSetResult,
