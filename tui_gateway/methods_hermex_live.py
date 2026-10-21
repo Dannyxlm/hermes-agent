@@ -18,6 +18,7 @@ def _hermex_principal():
 def _hermex_rpc(name, operation):
     def handler(rid, params):
         import sqlite3
+        from tui_gateway.server import ProfileUnavailableError
         from hermes_state import SessionDB
         from hermex_live_reads import LiveConflict
         from pydantic import ValidationError
@@ -37,9 +38,11 @@ def _hermex_rpc(name, operation):
             return _ok(rid, result)
         except LiveConflict as exc:
             return _err(rid, 4091, str(exc))
-        except (ValueError, FileNotFoundError):
+        except ProfileUnavailableError:
+            return _err(rid, 4064, "Hermex profile unavailable")
+        except (ValueError, FileNotFoundError, RuntimeError):
             return _err(rid, 4400, "Hermex target unavailable in this profile")
-        except (OSError, sqlite3.Error, RuntimeError):
+        except (OSError, sqlite3.Error):
             return _err(rid, 4401, "Hermex state unavailable; read back before retrying a decision")
     return method(name)(handler)
 

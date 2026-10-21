@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from collections import OrderedDict
 from datetime import UTC, datetime
+from dataclasses import dataclass
 import hashlib
 import hmac
 import json
@@ -183,8 +184,6 @@ def catalog_metadata(cat, skills, *, profile, scope, since_revision, successful)
 
 def lineage_rows_sql(db, conn, chain):
     """Native SQLite identities for legacy rows, durable display order when indexed."""
-    from hermes_state_timeline import _register_functions
-    _register_functions(db, conn)
     slots = ','.join('?' for _ in chain)
     indexed = conn.execute(
         f"SELECT 1 FROM messages WHERE session_id IN ({slots}) AND (active=1 OR compacted=1) "
@@ -195,14 +194,39 @@ def lineage_rows_sql(db, conn, chain):
                    MIN(display_order) AS logical_id FROM messages
             WHERE session_id IN ({slots}) AND (active=1 OR compacted=1){DISPLAY_VISIBLE_SQL}
             GROUP BY display_identity)"""
-    return f"""WITH identities AS (
+    _register_lineage_functions(db, conn)
+    return f"""WITH normalized AS (
+        SELECT id, active, role, content, timestamp, tool_call_id, tool_calls, tool_name,
+               display_kind, display_metadata,
+               CASE WHEN role='assistant' AND tool_calls IS NOT NULL
+                    THEN hermex_stable_calls(tool_calls) END AS stable_calls
+        FROM messages WHERE session_id IN ({slots}) AND (active=1 OR compacted=1){DISPLAY_VISIBLE_SQL}
+    ), identities AS (
         SELECT id, active, MIN(id) OVER identity AS logical_id,
                ROW_NUMBER() OVER (identity ORDER BY active DESC, id DESC) AS preference
-        FROM messages WHERE session_id IN ({slots}) AND (active=1 OR compacted=1){DISPLAY_VISIBLE_SQL}
+        FROM normalized
         WINDOW identity AS (PARTITION BY role,
-            CASE WHEN role='user' THEN timeline_identity_content(content, display_kind) ELSE content END,
-            timestamp, tool_call_id, tool_calls, tool_name)
+            CASE WHEN stable_calls IS NOT NULL THEN NULL
+                 WHEN role='user' THEN hermex_user_content(content, display_kind, display_metadata) ELSE content END,
+            timestamp, tool_call_id, COALESCE(stable_calls, tool_calls), tool_name)
     ), display_rows AS (SELECT id AS row_id, logical_id FROM identities WHERE preference=1)"""
+
+
+def _register_lineage_functions(db, conn):
+    from hermes_state_identity import _stable_tool_key
+
+    def stable_calls(calls):
+        key = _stable_tool_key({"role": "assistant", "tool_calls": calls,
+                                "timestamp": None, "tool_call_id": None, "tool_name": None})
+        return json.dumps(key[4]) if key is not None else None
+
+    def user_content(content, kind, metadata):
+        return db._display_dedupe_key({"role": "user", "content": content, "display_kind": kind,
+            "display_metadata": metadata, "timestamp": None, "tool_call_id": None,
+            "tool_calls": None, "tool_name": None})[1]
+
+    conn.create_function("hermex_stable_calls", 1, stable_calls, deterministic=True)
+    conn.create_function("hermex_user_content", 3, user_content, deterministic=True)
 
 
 def lineage_generation(conn, chain):
@@ -219,6 +243,12 @@ def _lineage_rows(db, conn, chain):
                         + "SELECT row_id, logical_id FROM display_rows ORDER BY logical_id", chain).fetchall()
 
 
+@dataclass(frozen=True)
+class _LineageIndex:
+    logical_ids: dict[int, str]
+    generation: str
+
+
 def _display_messages(db, rows, home):
     from hermes_cli.web_routers.sessions import _project_for_display
     messages = [db._row_to_message_dict(row, warn_context="Hermex window", summary_flag=True) for row in rows]
@@ -232,8 +262,8 @@ def _snippet(message, query):
              if token.upper() not in {"AND", "OR", "NOT", "NEAR"}]
     terms = [term for term in terms if term]
     pattern = re.compile("|".join(re.escape(term) for term in terms), re.IGNORECASE) if terms else None
-    hits = list(pattern.finditer(text)) if pattern else []
-    start = max(0, hits[0].start() - 120) if hits else 0
+    first = pattern.search(text) if pattern else None
+    start = max(0, first.start() - 120) if first else 0
     snippet = text[start:start + 400]
     ranges = [{"start": len(snippet[:m.start()].encode("utf-16-le")) // 2,
                "length": len(m.group().encode("utf-16-le")) // 2} for m in pattern.finditer(snippet)] if pattern else []
@@ -256,8 +286,10 @@ def _search_batch(db, conn, home, hits, profile, cache, representatives, query):
     selected = {}
     for chain, candidates in batches.items():
         if chain not in representatives:
-            representatives[chain] = {r["row_id"]: str(r["logical_id"]) for r in _lineage_rows(db, conn, chain)}
-        logical_ids = representatives[chain]
+            representatives[chain] = _LineageIndex(
+                {r["row_id"]: str(r["logical_id"]) for r in _lineage_rows(db, conn, chain)},
+                lineage_generation(conn, chain))
+        logical_ids = representatives[chain].logical_ids
         ids = [hit["id"] for hit in candidates if hit["id"] in logical_ids]
         if not ids:
             continue
@@ -346,6 +378,7 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
     profile, query = params["profile"], params["query"]
     target = params.get("session_id")
     target_chain = owned_lineage(db, target, profile, conn=conn) if target else None
+    target_generation = lineage_generation(conn, target_chain) if target_chain else None
     scope = ["search", principal, profile, str(home), query, target, _store_identity(home)]
     if params.get("cursor"):
         phase, high_water, after = cursor_decode(params["cursor"], scope)
@@ -361,9 +394,11 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
             token if token.startswith('"') or token.endswith("*") or token.upper() in {"AND", "OR", "NOT"}
             else token + "*" for token in re.findall(r'"[^"]*"|\S+', query.strip())))
         while consumed < 1000 and time.monotonic() < deadline - 0.15:
+            batch = min(64, 1000 - consumed)
             try:
                 hits, examined, exhausted = candidates(
-                    db, conn, prefix, target_chain, after, high_water, deadline=deadline, cancelled=cancelled)
+                    db, conn, prefix, target_chain, after, high_water,
+                    deadline=deadline, cancelled=cancelled, batch=batch)
                 selected = _search_batch(db, conn, home, hits, profile, cache, representatives, query)
             except sqlite3.OperationalError as exc:
                 if str(exc) != "interrupted" or cancelled.is_set():
@@ -385,7 +420,7 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
             if matched >= limit:
                 break
             after = examined
-            consumed += 64
+            consumed += batch
             if exhausted:
                 next_position = ["metadata", high_water, 0] if target is None else None
                 break
@@ -404,9 +439,9 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
         raise LiveConflict("search superseded")
     if db._db_file_was_replaced():
         raise LiveConflict("history store replaced; search again")
-    generations = {digest(chain): lineage_generation(conn, chain) for chain in representatives}
+    generations = {digest(chain): index.generation for chain, index in representatives.items()}
     if target_chain:
-        generations[digest(tuple(target_chain))] = lineage_generation(conn, target_chain)
+        generations[digest(tuple(target_chain))] = target_generation
     revision_scope = _revision_scope(principal, profile, home)
     revision = digest([revision_scope, generations])
     with _SEARCH_LOCK:

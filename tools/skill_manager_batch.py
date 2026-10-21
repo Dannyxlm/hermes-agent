@@ -265,9 +265,10 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
         from tools import skill_ledger
         ledger_before, ledger_complete = {}, {}
         with suppress(Exception):
-            from hermex_skill_changes import capture_is_complete
             ledger_before = {nm: skill_ledger.capture_before(pre_dir)
                              for nm, (pre_dir, _snap, _existed) in snapshots.items()}
+        with suppress(Exception):
+            from hermex_skill_changes import capture_is_complete
             ledger_complete = {nm: capture_is_complete(pre_dir, ledger_before.get(nm))
                                for nm, (pre_dir, _snap, _existed) in snapshots.items()}
         results = []

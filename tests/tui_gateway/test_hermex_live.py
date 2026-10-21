@@ -340,3 +340,48 @@ def test_legacy_tool_call_copies_keep_the_canonical_representative(live_home):
     window = result("session.messages.window", session_id="chat", message_id=str(newer),
                     expected_revision=found["revision"])
     assert [m["id"] for m in window["messages"]] == [newer]
+
+
+def test_new_search_cancels_stale_search_for_the_same_principal(live_home, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    import hermex_live_reads as reads
+    append(live_home, "chat", "assistant", "needle")
+    original = reads._search_batch
+    first_started, release = threading.Event(), threading.Event()
+    guard, calls = threading.Lock(), []
+    def gated(*args, **kwargs):
+        with guard:
+            calls.append(1)
+            number = len(calls)
+        if number == 1:
+            first_started.set()
+            assert release.wait(5)
+        else:
+            release.set()
+        return original(*args, **kwargs)
+    monkeypatch.setattr(reads, "_search_batch", gated)
+    def request():
+        token = bind_transport(SimpleNamespace(auth_identity={"user_id":"owner", "provider":"test"}))
+        try:
+            return rpc("session.search", query="needle", session_id="chat")
+        finally:
+            reset_transport(token)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(request)
+        assert first_started.wait(5)
+        second = pool.submit(request)
+        try:
+            second_response = second.result(timeout=10)
+            first_response = first.result(timeout=10)
+        finally:
+            release.set()
+    assert "result" in second_response, second_response
+    assert first_response["error"]["code"] == 4091
+
+
+def test_freshness_only_failure_keeps_the_legacy_catalog(live_home, monkeypatch):
+    baseline = result("commands.catalog")
+    monkeypatch.setattr(server, "_load_cfg", lambda: {"terminal":{"not_json":object()}})
+    response = result("commands.catalog", since_revision=None)
+    assert response == baseline

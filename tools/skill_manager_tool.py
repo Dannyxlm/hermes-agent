@@ -807,14 +807,15 @@ def skill_manage(
         # complete it from the newest curator backup or a restore is hollow.
         # Audit ledger (tracker #79686 P3): capture the pre-mutation state of the skill directory so every
         # mutation — any actor — lands in the append-only JSONL ledger with before/after blobs.
-        _ledger_before = None
+        _ledger_before = _pre = None
         _ledger_complete = False
         with suppress(Exception):
             from tools import skill_ledger as _ledger
-            from hermex_skill_changes import capture_is_complete
             _pre = _find_skill(name)
             _ledger_before = _ledger.capture_before(
                 _pre["path"] if _pre else None, complete_package=(action == "delete"), skill=name)
+        with suppress(Exception):
+            from hermex_skill_changes import capture_is_complete
             _ledger_complete = capture_is_complete(_pre["path"] if _pre else None, _ledger_before)
         handler = _ACTION_HANDLERS.get(action, lambda a: _err(
             f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"))

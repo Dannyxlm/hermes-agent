@@ -291,3 +291,25 @@ def test_review_import_failure_preserves_mutation_before_capture(change_home, mo
     row = skill_ledger.list_entries()[0]
     assert row["before"]
     assert row["before"][0]["sha256"] == hashlib.sha256(original).hexdigest()
+
+
+def test_lost_undo_acknowledgement_does_not_duplicate_audit_or_usage(change_home, monkeypatch):
+    import hermex_skill_changes as changes
+    from tools import skill_ledger, skill_usage
+    item = make_change()
+    original = changes._save_journal
+    def lose_completion(journal):
+        if any(a["status"] == "complete" for a in journal["actions"].values()):
+            raise OSError("lost acknowledgement")
+        return original(journal)
+    monkeypatch.setattr(changes, "_save_journal", lose_completion)
+    failed = rpc("skills.changes.decide", change_id=item["change_id"], decision="undo",
+                 expected_revision=item["revision"], client_action_id="lost-ack")
+    assert failed["error"]["code"] == 4401
+    assert len([e for e in skill_ledger.list_entries() if e["action"] == "undo"]) == 1
+    patched = skill_usage.load_usage()["proof"]["patch_count"]
+    monkeypatch.setattr(changes, "_save_journal", original)
+    recovered = result("skills.changes.get", change_id=item["change_id"])
+    assert recovered["decision"] == "undone"
+    assert len([e for e in skill_ledger.list_entries() if e["action"] == "undo"]) == 1
+    assert skill_usage.load_usage()["proof"]["patch_count"] == patched
