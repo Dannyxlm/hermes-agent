@@ -10965,6 +10965,11 @@
             ],
             "default": null,
             "title": "Since Revision"
+          },
+          "include_entries": {
+            "default": false,
+            "title": "Include Entries",
+            "type": "boolean"
           }
         },
         "title": "CommandsCatalogParams",

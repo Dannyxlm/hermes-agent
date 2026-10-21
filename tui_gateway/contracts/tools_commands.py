@@ -193,6 +193,7 @@ class CommandsCatalogParams(Params):
     session_id: str | None = None
     profile: str | None = None
     since_revision: str | None = None
+    include_entries: bool = False
 
 
 class ArgumentMode(WireEnum):

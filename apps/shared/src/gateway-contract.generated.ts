@@ -4565,6 +4565,7 @@ export interface CommandsCatalogParams {
   session_id?: string | null
   profile?: string | null
   since_revision?: string | null
+  include_entries?: boolean
 }
 export interface CommandsCatalogResult {
   catalog_version?: number | null

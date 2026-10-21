@@ -234,7 +234,7 @@ def get_change(db, params):
                         if a["change_id"] == entry["id"] and a["status"] == "prepared"), None)
         if pending is not None:
             if pending["payload"]["decision"] == "undo":
-                _apply_undo(entry, recovering=True)
+                _apply_undo(entry, recovering=True, action=pending)
             pending["status"] = "complete"
             key = next(k for k, action in journal["actions"].items() if action is pending)
             journal["changes"][entry["id"]] = key
@@ -244,8 +244,9 @@ def get_change(db, params):
                 "diff": _diff(entry), "can_undo": _can_undo(entry, journal), "decision": state, "receipt_id": receipt}
 
 
-def _apply_undo(entry, recovering):
+def _apply_undo(entry, recovering, action):
     before, after, contents = _undo_plan(entry, recovering=recovering)
+    root = Path(action["undo_root"])
     for path, data in contents.items():
         if _current_hash(path) != before[path]:
             _durable_bytes(path, data)
@@ -255,6 +256,20 @@ def _apply_undo(entry, recovering):
             _sync_directory(path.parent)
     from agent.prompt_builder import clear_skills_system_prompt_cache
     clear_skills_system_prompt_cache(clear_snapshot=True)
+    receipt = action["receipt"]["receipt_id"]
+    if any(e.get("evidence", {}).get("undo_receipt") == receipt for e in skill_ledger.list_entries()):
+        return
+    audit_id = skill_ledger.record_mutation(
+        "undo", entry["skill"], before=action["undo_before"], after_root=root if root.exists() else None,
+        evidence={"undo_of": entry["id"], "undo_receipt": receipt,
+                  "session_id": entry["evidence"]["session_id"], "review_committed": False})
+    if audit_id is None and skill_ledger.ledger_enabled():
+        raise OSError("Undo audit write unavailable; recover the prepared receipt")
+    from tools import skill_usage
+    if entry["action"] == "create":
+        skill_usage.forget(entry["skill"])
+    else:
+        skill_usage.bump_patch(entry["skill"], session_id=entry["evidence"]["session_id"])
 
 
 def decide_change(db, params, principal):
@@ -282,10 +297,15 @@ def decide_change(db, params, principal):
             action = {"payload": payload, "change_id": entry["id"], "status": "prepared",
                       "receipt": {"change_id": entry["id"], "decision": decision,
                                   "revision": _revision(entry, decision), "receipt_id": uuid.uuid4().hex}}
+            if params["decision"] == "undo":
+                paths = [Path(item["path"]).parent for item in (entry.get("before") or []) + (entry.get("after") or [])]
+                root = Path(os.path.commonpath(paths))
+                action["undo_root"] = str(root)
+                action["undo_before"] = skill_ledger.capture_before(root)
             journal["actions"][key] = action
             _save_journal(journal)
         if params["decision"] == "undo":
-            _apply_undo(entry, recovering=True)
+            _apply_undo(entry, recovering=True, action=action)
         action["status"] = "complete"
         journal["changes"][entry["id"]] = key
         _save_journal(journal)
