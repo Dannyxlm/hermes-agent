@@ -55,7 +55,6 @@ def test_versioned_board_keeps_unknown_asks_unknown_and_known_waits_false(board_
         unbound = kb.create_task(conn, title="Owner input without principal", assignee="default")
         dependency = kb.create_task(conn, title="Dependency")
         ordinary = kb.create_task(conn, title="Ordinary")
-        conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (ordinary,))
         conn.execute("UPDATE tasks SET status='review' WHERE id=?", (review,))
         conn.execute("UPDATE tasks SET status='blocked',block_kind='needs_input' WHERE id=?", (unbound,))
         conn.execute("UPDATE tasks SET status='todo',block_kind='dependency' WHERE id=?", (dependency,))
@@ -98,9 +97,12 @@ def test_activity_is_persisted_card_activity_not_worker_heartbeat(board_client):
 
 def test_running_card_cannot_claim_no_owner_ask_without_coverage(board_client):
     with closing(kbc.connect()) as conn:
-        card = kb.create_task(conn, title="In progress", initial_status="running")
+        card = kb.create_task(conn, title="In progress")
+        conn.execute("UPDATE tasks SET status='running' WHERE id=?", (card,))
+        conn.commit()
     response = board_client.get("/api/plugins/kanban/board?presentation_version=1")
     assert response.status_code == 200, response.text
+    assert tasks(response.json())[card]["status"] == "running"
     assert tasks(response.json())[card]["owner_attention"] is None
     assert response.json()["attention_complete"] is False
 
@@ -122,8 +124,6 @@ def test_projection_does_not_change_other_board_or_tenant_counts(board_client):
     with closing(kbc.connect()) as conn:
         a = kb.create_task(conn, title="First", tenant="one")
         b = kb.create_task(conn, title="Second", tenant="two")
-        conn.execute("UPDATE tasks SET status='ready' WHERE id IN (?,?)", (a, b))
-        conn.commit()
     response = board_client.get("/api/plugins/kanban/board?board=default&tenant=one&presentation_version=1")
     assert response.status_code == 200, response.text
     result = response.json()
