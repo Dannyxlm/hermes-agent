@@ -385,3 +385,17 @@ def test_freshness_only_failure_keeps_the_legacy_catalog(live_home, monkeypatch)
     monkeypatch.setattr(server, "_load_cfg", lambda: {"terminal":{"not_json":object()}})
     response = result("commands.catalog", since_revision=None)
     assert response == baseline
+
+
+def test_global_pages_share_a_revision_for_all_accumulated_hits(live_home):
+    append(live_home, "chat", "assistant", "needle first conversation")
+    append(live_home, "other", "assistant", "needle second conversation")
+    first = result("session.search", query="needle", limit=1)
+    second = result("session.search", query="needle", limit=1, cursor=first["next_cursor"])
+    assert second["revision"] == first["revision"]
+    for page in (first, second):
+        group = page["results"][0]
+        anchor = group["matches"][0]["message_id"]
+        window = result("session.messages.window", session_id=group["session_id"], message_id=anchor,
+                        expected_revision=second["revision"])
+        assert str(window["messages"][0]["id"]) == anchor
