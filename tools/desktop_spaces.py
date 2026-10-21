@@ -8,6 +8,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
+import re
 from pathlib import Path
 import time
 from urllib.parse import urlsplit
@@ -17,15 +18,19 @@ from .desktop_space_lease import LeaseStore, digest, resource_id
 
 
 UNAVAILABLE = ['producer', 'control', 'history']
-BLOCKED_LOGIN_HOSTS = ('facebook.com', 'facebook.net', 'instagram.com', 'messenger.com', 'threads.net', 'threads.com')
+BLOCKED_LOGIN_HOSTS = ('facebook.com', 'facebook.net', 'instagram.com', 'messenger.com',
+                       'threads.net', 'threads.com', 'meta.com', 'fb.com', 'whatsapp.com')
+RETENTION_SECONDS = 30 * 24 * 60 * 60
+SCOPE_CAP = 1000
 
 
 def login_origin(origin: str) -> str:
     parsed = urlsplit(origin)
     host = parsed.hostname or ''
-    if (parsed.scheme != 'https' or not host or parsed.username is not None or parsed.password is not None
+    if (parsed.scheme != 'https' or not host or not host.isascii() or parsed.username is not None or parsed.password is not None
             or parsed.path or parsed.query or parsed.fragment or any(ch.isspace() for ch in origin)
             or '%' in origin or '\\' in origin or not '.' in host
+            or all(re.fullmatch(r'(?:[0-9]+|0x[0-9a-f]+)', label, re.IGNORECASE) for label in host.split('.'))
             or host.endswith(('.localhost', '.local', '.internal'))
             or any(host == blocked or host.endswith('.' + blocked) for blocked in BLOCKED_LOGIN_HOSTS)):
         raise ValueError('Desktop sign-in origin denied')
@@ -37,7 +42,7 @@ def login_origin(origin: str) -> str:
         raise ValueError('Desktop sign-in origin denied')
     if parsed.port not in (None, 443) or host != host.lower() or host.endswith('.'):
         raise ValueError('Desktop sign-in origin denied')
-    return origin
+    return f'https://{host}'
 
 
 def _revision(db, resource):
@@ -54,7 +59,7 @@ class SpaceStore:
     def __init__(self, path: Path):
         self.leases = LeaseStore(path)
 
-    def snapshot(self, resource: str, scope: str, *, now: float | None = None) -> dict:
+    def snapshot(self, resource: str, scope: str, *, limit: int = 20, now: float | None = None) -> dict:
         resource_id(resource)
         now = time.time() if now is None else now
         with self.leases.connection() as db:
@@ -68,8 +73,8 @@ class SpaceStore:
                               'origin': row['origin'], 'reason': row['reason'], 'allowed_actions': ['not_now'],
                               'login_handle': None, 'masked_identifier': None}
                 activity = [dict(row) for row in db.execute(
-                    'SELECT id,label,at FROM activity WHERE resource=? AND scope_hash=? ORDER BY at DESC,id DESC LIMIT 20',
-                    (resource, digest(scope)))]
+                    'SELECT id,label,at FROM activity WHERE resource=? AND scope_hash=? AND at>? ORDER BY at DESC,id DESC LIMIT ?',
+                    (resource, digest(scope), now - RETENTION_SECONDS, limit))]
             return {'protocol_version': 1, 'resource_id': resource, 'revision': _revision(db, resource),
                     'server_time': now, 'state': 'signin' if signin else 'watch', 'complete': False,
                     'unavailable': list(UNAVAILABLE), 'lease': lease.public(scope, now), 'active': None,
@@ -78,7 +83,7 @@ class SpaceStore:
     def publish_signin(self, resource: str, scope: str, *, request_id: str, revision: int,
                        origin: str, reason: str, expires_at: float) -> None:
         resource_id(resource)
-        login_origin(origin)
+        origin = login_origin(origin)
         if (not scope or not 0 < len(request_id) <= 128 or not 0 < len(reason) <= 512
                 or revision < 1 or not math.isfinite(expires_at)):
             raise ValueError('Invalid desktop sign-in request')
@@ -96,8 +101,8 @@ class SpaceStore:
         now = time.time() if now is None else now
         with self.leases.connection() as db:
             if db:
-                row = db.execute('SELECT payload FROM receipts WHERE resource=? AND scope_hash=? AND action_id=?',
-                                 (resource, digest(scope), action_id)).fetchone()
+                row = db.execute("SELECT payload FROM receipts WHERE resource=? AND scope_hash=? AND action_id=? AND json_extract(payload, '$.server_time')>?",
+                                 (resource, digest(scope), action_id, now - RETENTION_SECONDS)).fetchone()
                 if row:
                     return json.loads(row['payload'])
             return _receipt(action_id, 'unknown', _revision(db, resource), self.leases.lease_in(db, resource).epoch, now)
@@ -105,8 +110,11 @@ class SpaceStore:
     def not_now(self, resource: str, scope: str, body: dict, *, now: float | None = None) -> dict:
         resource_id(resource)
         now = time.time() if now is None else now
-        fingerprint = digest(json.dumps(body, sort_keys=True, separators=(',', ':'), allow_nan=False))
+        intent = {key: value for key, value in body.items()
+                  if key not in ('profile', 'space', 'connection_id', 'installation_id')}
+        fingerprint = digest(json.dumps(intent, sort_keys=True, separators=(',', ':'), allow_nan=False))
         with self.leases.connection(write=True) as db:
+            self._prune(db, resource, scope, now)
             revision = _revision(db, resource)
             lease = self.leases.lease_in(db, resource)
             old = db.execute('SELECT * FROM receipts WHERE resource=? AND scope_hash=? AND action_id=?',
@@ -123,7 +131,22 @@ class SpaceStore:
             receipt = _receipt(body['action_id'], status, revision, lease.epoch, now)
             db.execute('INSERT INTO receipts VALUES(?,?,?,?,?)',
                        (resource, digest(scope), body['action_id'], fingerprint, json.dumps(receipt)))
+            self._prune(db, resource, scope, now)
             return receipt
+
+    @staticmethod
+    def _prune(db, resource, scope, now):
+        cutoff = now - RETENTION_SECONDS
+        db.execute("DELETE FROM receipts WHERE json_extract(payload, '$.server_time')<=?", (cutoff,))
+        db.execute('DELETE FROM activity WHERE at<=?', (cutoff,))
+        db.execute("""DELETE FROM receipts WHERE rowid IN (
+            SELECT rowid FROM receipts WHERE resource=? AND scope_hash=?
+            ORDER BY json_extract(payload, '$.server_time') DESC, rowid DESC LIMIT -1 OFFSET ?)""",
+            (resource, digest(scope), SCOPE_CAP))
+        db.execute("""DELETE FROM activity WHERE rowid IN (
+            SELECT rowid FROM activity WHERE resource=? AND scope_hash=?
+            ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)""",
+            (resource, digest(scope), SCOPE_CAP))
 
     @staticmethod
     def _decide_not_now(db, resource, scope, body, revision, epoch, now):

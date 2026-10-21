@@ -15460,12 +15460,14 @@
             "type": "string"
           },
           "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Connection Id",
             "type": "string"
           },
           "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -15602,12 +15604,14 @@
             "type": "string"
           },
           "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Connection Id",
             "type": "string"
           },
           "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -15809,12 +15813,14 @@
             "type": "string"
           },
           "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Connection Id",
             "type": "string"
           },
           "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -16187,12 +16193,14 @@
             "type": "string"
           },
           "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Connection Id",
             "type": "string"
           },
           "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -16205,6 +16213,7 @@
           },
           "limit": {
             "default": 20,
+            "description": "Maximum retained activity events, newest first.",
             "maximum": 100,
             "minimum": 1,
             "title": "Limit",

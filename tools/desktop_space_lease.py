@@ -144,6 +144,6 @@ class LeaseStore:
     def permits(self, resource: str, scope: str, viewer: str, epoch: int, *, now: float | None = None) -> bool:
         return self.read(resource).human_matches(scope, viewer, epoch, time.time() if now is None else now)
 
-    def agent_permitted(self, resource: str, epoch: int, *, now: float | None = None) -> bool:
+    def agent_permitted(self, resource: str, epoch: int) -> bool:
         lease = self.read(resource)
         return lease.holder == 'agent' and lease.epoch == epoch

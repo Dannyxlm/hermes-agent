@@ -15,14 +15,14 @@ def test_shared_resource_foreign_holder_and_expiry(tmp_path):
     with pytest.raises(LeaseConflict):
         b.release('studio', 'profile-b', 'viewer-a', expected_epoch=1, now=11)
     assert not a.permits('studio', 'profile-a', 'viewer-a', 1, now=40)
-    assert not a.agent_permitted('studio', 1, now=40)
+    assert not a.agent_permitted('studio', 1)
     second = b.acquire('studio', 'profile-b', 'viewer-b', expected_epoch=1, now=41, ttl=30)
     assert second.epoch == 2
     with pytest.raises(LeaseConflict):
         a.release('studio', 'profile-a', 'viewer-a', expected_epoch=1, now=42)
     released = b.release('studio', 'profile-b', 'viewer-b', expected_epoch=2, now=42)
     assert released.holder == 'agent' and released.epoch == 3
-    assert b.agent_permitted('studio', 3, now=43)
+    assert b.agent_permitted('studio', 3)
     assert not b.permits('studio', 'profile-b', 'viewer-b', 2, now=43)
 
 

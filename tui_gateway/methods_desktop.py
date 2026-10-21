@@ -3,28 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 import sqlite3
-import threading
-import weakref
 
 
 _OPERATIONS = ('snapshot', 'observe', 'action', 'action_status')
-_TRANSPORT_IDS = weakref.WeakKeyDictionary()
-_TRANSPORT_LOCK = threading.Lock()
 
 
 class DesktopDenied(PermissionError):
     pass
-
-
-def _desktop_transport_id(transport) -> str:
-    with _TRANSPORT_LOCK:
-        identity = _TRANSPORT_IDS.get(transport)
-        if identity is None:
-            identity = secrets.token_hex(24)
-            _TRANSPORT_IDS[transport] = identity
-        return identity
 
 
 def _desktop_scope(server, params):
@@ -45,7 +31,7 @@ def _desktop_scope(server, params):
     validate_profile_name(params['profile'])
     home = server._profile_home(params['profile']) or server._hermes_home
     binding = [identity['provider'], identity['user_id'], str(home.resolve()),
-               params['connection_id'], params['installation_id'], _desktop_transport_id(transport)]
+               params['space'], params['installation_id']]
     scope = hashlib.sha256(json.dumps(binding, separators=(',', ':')).encode()).hexdigest()
     return root, home, scope
 
@@ -63,7 +49,7 @@ def _desktop_rpc(server, operation, rid, params):
             store = SpaceStore(root / 'desktop-spaces.sqlite')
             resource = params['space']
             if operation == 'snapshot':
-                result = store.snapshot(resource, scope)
+                result = store.snapshot(resource, scope, limit=params['limit'])
             elif operation == 'action_status':
                 result = store.action_status(resource, scope, params['action_id'])
             elif operation == 'action' and params['action'] == 'not_now':
@@ -76,8 +62,10 @@ def _desktop_rpc(server, operation, rid, params):
         return server._err(rid, 4064, 'Desktop profile unavailable')
     except DesktopDenied:
         return server._err(rid, 4403, 'Desktop scope denied')
-    except (ValueError, TypeError):
+    except ValueError:
         return server._err(rid, 4000, 'Invalid desktop request')
+    except TypeError:
+        return server._err(rid, -32603, 'Desktop operation failed')
     except (OSError, sqlite3.Error):
         return server._err(rid, 5401, 'Desktop state unavailable')
 
