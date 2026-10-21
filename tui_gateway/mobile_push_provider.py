@@ -1,5 +1,6 @@
 """Fixed-topic Apple HTTP/2 sender. No tokens, keys or response bodies enter logs."""
 
+import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,23 @@ from .mobile_push_payloads import TOPIC
 class DeliveryResult:
     outcome: str  # accepted, retry, invalid, failed
     reason: str = ""
+
+
+def send_shape(job, outcome, now):
+    """Only allowlisted shape metadata crosses the logging boundary, never payload text."""
+    from .mobile_push_payloads import LABELS
+    payload = job["payload"]
+    aps = payload.get("aps", {})
+    alert = aps.get("alert", {})
+    status = payload.get("hermex.status", aps.get("content-state", {}).get("status", ""))
+    kind = job["kind"]
+    return {"kind": kind if kind in {"alert", "activity", "activity_start", "widget", "background"} else "unknown",
+            "status": status if status in LABELS else "",
+            "title_length": len(alert.get("title", "")) if isinstance(alert, dict) else 0,
+            "body_length": len(alert.get("body", "")) if isinstance(alert, dict) else 0,
+            "event_id": hashlib.sha256(job["event_id"].encode()).hexdigest(),
+            "outcome": outcome if outcome in {"accepted", "retry", "invalid", "failed"} else "exception",
+            "sent_at": now}
 
 
 class APNsProvider:

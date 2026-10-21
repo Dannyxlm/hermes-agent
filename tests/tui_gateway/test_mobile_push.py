@@ -150,6 +150,10 @@ def test_activity_is_permission_independent_scoped_coalesced_and_ended(delivery)
     service.record(scope, run["run_id"], "done", "complete")
     now[0] += 1
     service.drain_once()
+    assert sender.jobs[-1]["payload"]["aps"]["event"] == "update"
+    assert sender.jobs[-1]["payload"]["aps"]["content-state"]["isFinal"]
+    now[0] += 8
+    service.drain_once()
     assert sender.jobs[-1]["payload"]["aps"]["event"] == "end"
     service.register("p", scope, **ids, token="dd" * 32, environment="production",
         kind="activity", activity_id="apple-activity", run_id=run["run_id"])
@@ -382,7 +386,7 @@ def test_detached_activity_refresh_never_recreates_and_replays_terminal(delivery
     options = dict(**ids, token="dd" * 32, environment="production", kind="activity",
                    activity_id="live", run_id=run["run_id"], accepts_scope=lambda value: value == scope)
     assert service.refresh("p", **options)["updated"] == 1
-    now[0] += 1
+    now[0] += 8  # terminal update is followed by the end, using the recovered token
     service.drain_once()
     assert sender.jobs[-1]["token"] == "dd" * 32
     assert sender.jobs[-1]["payload"]["aps"]["event"] == "end"

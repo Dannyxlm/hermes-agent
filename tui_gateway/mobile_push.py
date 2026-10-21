@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from . import mobile_inbox_invalidation
+from .mobile_push_audit import audit_send
 from .mobile_push_payloads import Scope
 from .mobile_push_provider import APNsProvider
 from .mobile_push_store import PushStore
@@ -103,7 +104,13 @@ class PushService:
                 job = self.store.claim()
                 if job is None:
                     break
-                result = self.sender.send(job)
+                sent_at = self._clock()
+                try:
+                    result = self.sender.send(job)
+                except Exception:
+                    audit_send(self.store.path, job, "exception", sent_at)
+                    raise
+                audit_send(self.store.path, job, result.outcome, sent_at)
                 self.store.finish(job, result)
                 count += 1
             return count
