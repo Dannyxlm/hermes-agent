@@ -853,6 +853,24 @@
       }
     },
     {
+      "name": "cron.summary",
+      "summary": "Read-only bounded execution receipts with nullable aggregate coverage and scope-bound paging.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CronSummaryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CronSummaryResult"
+        }
+      }
+    },
+    {
       "name": "delegation.pause",
       "summary": "Block/unblock NEW spawns globally (active children keep running); returns the new state.",
       "params": [
@@ -1083,6 +1101,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/FileAttachResult"
+        }
+      }
+    },
+    {
+      "name": "files.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FilesIndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FilesIndexResult"
         }
       }
     },
@@ -1839,6 +1875,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/LearningFramesResult"
+        }
+      }
+    },
+    {
+      "name": "links.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/IndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LinksIndexResult"
         }
       }
     },
@@ -5083,6 +5137,24 @@
       }
     },
     {
+      "name": "team.activity",
+      "summary": "Owner-scoped verified positive runtime activity; unknown coverage never means free.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TeamActivityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TeamActivityResult"
+        }
+      }
+    },
+    {
       "name": "terminal.resize",
       "summary": "Record the client's column width for server-side rendering.",
       "params": [
@@ -5976,6 +6048,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6008,6 +6084,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -6041,6 +6118,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -6144,6 +6222,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6172,10 +6254,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6214,11 +6292,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6285,6 +6363,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6313,10 +6395,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6366,11 +6444,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6438,6 +6516,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6466,10 +6548,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6504,11 +6582,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6574,6 +6652,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6602,10 +6684,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6648,11 +6726,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6720,6 +6798,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6748,10 +6830,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6790,11 +6868,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -10160,6 +10238,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -10192,6 +10274,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -10236,6 +10319,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -15021,6 +15105,255 @@
         "title": "CronRemovedJob",
         "type": "object"
       },
+      "CronSummaryCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "succeeded": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Succeeded"
+          },
+          "retried": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retried"
+          },
+          "needs_attention": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Needs Attention"
+          }
+        },
+        "required": [
+          "expected",
+          "succeeded",
+          "retried",
+          "needs_attention"
+        ],
+        "title": "CronSummaryCounts",
+        "type": "object"
+      },
+      "CronSummaryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          },
+          "timezone": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "required": [
+          "profiles",
+          "timezone",
+          "start",
+          "end"
+        ],
+        "title": "CronSummaryParams",
+        "type": "object"
+      },
+      "CronSummaryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CronSummaryCounts"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/CronSummaryRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "timezone",
+          "start",
+          "end",
+          "complete",
+          "counts",
+          "runs",
+          "next_cursor"
+        ],
+        "title": "CronSummaryResult",
+        "type": "object"
+      },
+      "CronSummaryRun": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "delivery_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Summary"
+          }
+        },
+        "required": [
+          "profile",
+          "job_id",
+          "occurrence_id",
+          "started_at",
+          "finished_at",
+          "outcome",
+          "retry_of",
+          "delivery_summary"
+        ],
+        "title": "CronSummaryRun",
+        "type": "object"
+      },
       "CurrentSubscription": {
         "additionalProperties": false,
         "properties": {
@@ -15212,6 +15545,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -15244,6 +15581,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -15281,6 +15619,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -17318,6 +17657,392 @@
           "uploaded"
         ],
         "title": "FileAttachResult",
+        "type": "object"
+      },
+      "FileCollection": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "picked_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picked Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "member_ids",
+          "picked_id"
+        ],
+        "title": "FileCollection",
+        "type": "object"
+      },
+      "FileIndexItem": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Session Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Relative Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "is_directory": {
+            "title": "Is Directory",
+            "type": "boolean"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileCollection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurrences": {
+            "items": {},
+            "title": "Occurrences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "kind",
+          "display_name",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "is_directory",
+          "mention_text",
+          "collection"
+        ],
+        "title": "FileIndexItem",
+        "type": "object"
+      },
+      "FilesIndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          },
+          "category": {
+            "default": "all",
+            "enum": [
+              "all",
+              "media",
+              "files"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "include_workspace": {
+            "default": false,
+            "title": "Include Workspace",
+            "type": "boolean"
+          },
+          "directory_path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Directory Path"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "FilesIndexParams",
+        "type": "object"
+      },
+      "FilesIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FileIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "FilesIndexResult",
         "type": "object"
       },
       "ForeignSessionRow": {
@@ -20588,6 +21313,187 @@
         "title": "InboxSummaryScope",
         "type": "object"
       },
+      "IndexCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "refresh_pending": {
+            "title": "Refresh Pending",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "complete",
+          "refresh_pending",
+          "updated_at"
+        ],
+        "title": "IndexCoverage",
+        "type": "object"
+      },
+      "IndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "IndexParams",
+        "type": "object"
+      },
+      "IndexTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files"
+          },
+          "links": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Links"
+          },
+          "messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages"
+          }
+        },
+        "required": [
+          "media",
+          "files",
+          "links",
+          "messages"
+        ],
+        "title": "IndexTotals",
+        "type": "object"
+      },
       "InflightTurn": {
         "additionalProperties": false,
         "description": "``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting\nclient rebuilds its bubbles from.",
@@ -21478,6 +22384,196 @@
           "enabled"
         ],
         "title": "LegacyPluginRow",
+        "type": "object"
+      },
+      "LinkIndexItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preview",
+                  "internal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "url",
+          "title",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "tag",
+          "mention_text"
+        ],
+        "title": "LinkIndexItem",
+        "type": "object"
+      },
+      "LinksIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LinkIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "LinksIndexResult",
         "type": "object"
       },
       "LiveCatalogEntry": {
@@ -27216,6 +28312,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -27248,6 +28348,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -27285,6 +28386,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -35266,6 +36368,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -35298,6 +36404,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -35331,6 +36438,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -46642,6 +47750,199 @@
         "title": "TaskIdResult",
         "type": "object"
       },
+      "TeamActivityParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "TeamActivityParams",
+        "type": "object"
+      },
+      "TeamActivityResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "now": {
+            "title": "Now",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "working_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working Count"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/TeamAgentActivity"
+            },
+            "title": "Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "now",
+          "complete",
+          "working_count",
+          "agents"
+        ],
+        "title": "TeamActivityResult",
+        "type": "object"
+      },
+      "TeamAgentActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "working": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working"
+          },
+          "last_human_chat_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Human Chat At"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamCurrent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "working",
+          "last_human_chat_at",
+          "current"
+        ],
+        "title": "TeamAgentActivity",
+        "type": "object"
+      },
+      "TeamChat": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id"
+        ],
+        "title": "TeamChat",
+        "type": "object"
+      },
+      "TeamCurrent": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "work_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Label"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "open_chat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamChat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "work_label",
+          "started_at",
+          "open_chat"
+        ],
+        "title": "TeamCurrent",
+        "type": "object"
+      },
       "TerminalClosePayload": {
         "additionalProperties": false,
         "properties": {
@@ -48576,6 +49877,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -48608,6 +49913,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -48637,6 +49943,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
