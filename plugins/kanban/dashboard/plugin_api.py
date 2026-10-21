@@ -296,10 +296,10 @@ def _admit_board_presentation(version, identity):
         return
     if identity is None:
         raise HTTPException(401, "Owner login required")
-    from tui_gateway.team_schedule_projection import owner_principal
+    from tui_gateway.team_schedule_projection import OwnerDenied, owner_principal
     try:
         owner_principal(identity)
-    except PermissionError:
+    except OwnerDenied:
         raise HTTPException(403, "Configured owner required") from None
 
 

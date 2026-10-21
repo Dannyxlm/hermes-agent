@@ -275,7 +275,7 @@ def test_named_launch_owner_admission_does_not_hydrate_root_secrets(homes, metho
 
 
 @pytest.mark.parametrize("source,hidden,expected_last,opens", [
-    ("desktop", 1, None, False), (None, 0, 100, True)])
+    ("desktop", 1, None, False), (None, 0, 100, True), ("desktop", None, 100, True)])
 def test_team_ordinary_chat_matches_hidden_and_null_source_listing(homes, source, hidden, expected_last, opens):
     _, named, _ = homes
     with sqlite3.connect(named / "state.db") as conn:
@@ -283,13 +283,19 @@ def test_team_ordinary_chat_matches_hidden_and_null_source_listing(homes, source
             conn.execute("ALTER TABLE sessions RENAME COLUMN source TO original_source")
             conn.execute("ALTER TABLE sessions ADD COLUMN source TEXT")
             conn.execute("UPDATE sessions SET source=original_source")
-        conn.execute("UPDATE sessions SET source=?,hidden=? WHERE id='same-id'", (source, hidden))
+        if hidden is None:
+            conn.execute("ALTER TABLE sessions RENAME COLUMN hidden TO original_hidden")
+        else:
+            conn.execute("UPDATE sessions SET source=?,hidden=? WHERE id='same-id'", (source, hidden))
     server._sessions["runtime"] = {"profile_home": str(named), "session_key": "same-id", "running": True}
     response = rpc("team.activity", profiles=["ops"])
     assert "result" in response, response
     agent = response["result"]["agents"][0]
     assert agent["last_human_chat_at"] == expected_last
     assert (agent["current"]["open_chat"] is not None) is opens
+    if hidden is None:
+        with sqlite3.connect(named / "state.db") as conn:
+            assert "hidden" not in {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
 
 
 @pytest.mark.parametrize("method", ["team.activity", "cron.summary"])

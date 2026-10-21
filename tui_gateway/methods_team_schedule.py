@@ -6,7 +6,11 @@ def _call(server, name, rid, params):
     from tui_gateway import team_schedule_projection as projection
     from tui_gateway.contracts.registry import METHODS
     try:
-        principal = projection.owner_principal(getattr(server.current_transport(), "auth_identity", None))
+        from hermes_cli.profiles import get_profile_dir
+        root_scope = server._session_profile_runtime_scope(
+            {"profile_home": str(get_profile_dir("default"))}, hydrate_secrets=False)
+        principal = projection.owner_principal(
+            getattr(server.current_transport(), "auth_identity", None), config_scope=root_scope)
         parsed = METHODS[name].params.model_validate(params).model_dump()
         homes = projection.profile_homes(parsed["profiles"])
         if name == "team.activity":
@@ -17,9 +21,9 @@ def _call(server, name, rid, params):
         else:
             result = projection.cron_summary(homes, parsed, principal)
         return server._ok(rid, result)
-    except PermissionError:
+    except projection.OwnerDenied:
         return server._err(rid, 4403, "Configured owner required")
-    except FileNotFoundError:
+    except projection.UnknownProfile:
         return server._err(rid, 4064, "Requested profile does not exist")
     except ValueError:
         return server._err(rid, 4002, "Invalid Team or schedule parameters; reload after a changed cursor")

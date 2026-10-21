@@ -17,17 +17,27 @@ class ProjectionUnavailable(RuntimeError):
     pass
 
 
-def owner_principal(identity):
+class OwnerDenied(Exception):
+    pass
+
+
+class UnknownProfile(Exception):
+    pass
+
+
+def owner_principal(identity, *, config_scope=None):
     from hermes_cli.config import load_config_readonly
     from hermes_cli.web_server_profiles import _config_profile_scope
     from tui_gateway.methods_browser_control import _is_authenticated_identity
     if not _is_authenticated_identity(identity):
-        raise PermissionError("Configured owner required")
-    with _config_profile_scope("default"):
+        raise OwnerDenied("Configured owner required")
+    if config_scope is None:
+        config_scope = _config_profile_scope("default")
+    with config_scope:
         config = load_config_readonly().get("cloudseed_mobile", {})
     if not isinstance(config, dict) or (identity["provider"], identity["user_id"]) != (
             config.get("owner_provider"), config.get("owner_user_id")):
-        raise PermissionError("Configured owner required")
+        raise OwnerDenied("Configured owner required")
     return _digest([identity["provider"], identity["user_id"]])
 
 
@@ -40,7 +50,7 @@ def profile_homes(names):
         validate_profile_name(name)
         home = Path(get_profile_dir(name))
         if not profile_exists(name) or not home.is_dir():
-            raise FileNotFoundError("Requested profile does not exist")
+            raise UnknownProfile("Requested profile does not exist")
         homes.append((name, home.resolve()))
     return homes
 
@@ -78,7 +88,7 @@ def _epoch(value):
 
 def _ordinary_chat(row):
     from tui_gateway.mobile_session_scope import UNLISTED_SOURCES
-    if row is None or row["archived"] or (row["source"] or "").strip().lower() in UNLISTED_SOURCES | {"unknown"}:
+    if row is None or row["archived"] or row["hidden"] or (row["source"] or "").strip().lower() in UNLISTED_SOURCES | {"unknown"}:
         return False
     try:
         config = json.loads(row["model_config"] or "{}")
@@ -108,16 +118,19 @@ def _session_activity(home, profile, runtimes):
     from hermes_state_common import _sql_json_extract
     hidden = tuple(sorted(UNLISTED_SOURCES | {"unknown"}))
     with _read_store(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        hidden_filter = " AND hidden=0" if "hidden" in columns else ""
+        hidden_column = "hidden" if "hidden" in columns else "0 AS hidden"
         row = conn.execute(f"""WITH RECURSIVE bots(id) AS (
             SELECT id FROM sessions WHERE title='Bot Chat'
             UNION SELECT s.id FROM sessions s JOIN bots b ON s.parent_session_id=b.id)
             SELECT MAX(COALESCE(last_activity_at,started_at)) AS stamp FROM sessions
-            WHERE archived=0 AND lower(trim(source)) NOT IN ({','.join('?' for _ in hidden)})
+            WHERE archived=0{hidden_filter} AND lower(trim(COALESCE(source,''))) NOT IN ({','.join('?' for _ in hidden)})
             AND COALESCE({_sql_json_extract('model_config', '$._delegate_from')}, '') = ''
             AND id NOT IN (SELECT id FROM bots)""", hidden).fetchone()
         last = _epoch(row["stamp"])
         for runtime in runtimes:
-            row = conn.execute("SELECT id,title,source,archived,model_config FROM sessions WHERE id=?",
+            row = conn.execute(f"SELECT id,title,source,archived,model_config,{hidden_column} FROM sessions WHERE id=?",
                                (runtime.get("session_key"),)).fetchone()
             ordinary = _ordinary_chat(row) and not _canonical_lineage(conn, row["id"])
             title = (row["title"] or "").strip() if row is not None else ""
