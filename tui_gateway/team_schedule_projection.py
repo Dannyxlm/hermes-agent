@@ -241,7 +241,10 @@ def board_attention(conn, tasks):
     for table, columns in (("task_events", ("created_at",)), ("task_comments", ("created_at",)),
                            ("task_runs", ("started_at", "ended_at"))):
         for column in columns:
-            for row in conn.execute(f"SELECT task_id,{column} AS stamp FROM {table} WHERE task_id IN ({','.join('?' for _ in task_ids)})", task_ids):
+            event_filter = " AND kind != 'heartbeat'" if table == "task_events" else ""
+            for row in conn.execute(f"""SELECT task_id,MAX({column}) AS stamp FROM {table}
+                    WHERE task_id IN ({','.join('?' for _ in task_ids)}){event_filter}
+                    GROUP BY task_id""", task_ids):
                 stamp = _epoch(row["stamp"])
                 if stamp is not None:
                     activity[row["task_id"]] = max(activity.get(row["task_id"], 0), stamp)
@@ -250,8 +253,6 @@ def board_attention(conn, tasks):
         status = task.status
         attention = None
         if status in ("todo", "scheduled", "ready", "done", "archived"):
-            attention = False
-        if status == "blocked" and task.block_kind == "dependency":
             attention = False
         stamps = [_epoch(v) for v in (task.created_at, task.started_at, task.completed_at, activity.get(task.id))]
         result[task.id] = {"owner_attention": attention, "attention_reason": None, "attention_chat": None,
