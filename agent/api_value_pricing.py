@@ -49,10 +49,20 @@ _LONG_CONTEXT = frozenset({"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-lun
 
 
 def estimate_api_value(model: str, usage: CanonicalUsage, *, provider: str) -> dict:
+    """API-list-price wire value. Decimal calculation is shared with aggregate estimates."""
+    result = estimate_api_value_decimal(model, usage, provider=provider)
+    if result["estimated_cost_usd"] is not None:
+        result["estimated_cost_usd"] = float(result["estimated_cost_usd"])
+    return result
+
+
+def estimate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: str,
+                               standard_tier: bool = False) -> dict:
     """Standard processing API equivalent. Discounts, speed tiers, tools and tax excluded.
 
     This deliberately ignores subscription billing_mode. Above 272K prompt tokens,
     OpenAI's long-context rates apply to the whole request, not marginal tokens.
+    standard_tier skips that premium to bound cumulative usage with unknown call boundaries.
     """
     from agent.model_metadata import strip_codex_context_variant_suffix
     if provider == "openai-codex":
@@ -77,7 +87,7 @@ def estimate_api_value(model: str, usage: CanonicalUsage, *, provider: str) -> d
             return {**result, "reason": f"{name} price not published in the snapshot"}
         if rate is not None:
             multiplier = Decimal(1)
-            if model in _LONG_CONTEXT and usage.prompt_tokens > 272000:
+            if not standard_tier and model in _LONG_CONTEXT and usage.prompt_tokens > 272000:
                 multiplier = Decimal("1.5") if name == "output" else Decimal(2)
             cost += Decimal(tokens) * Decimal(rate) * multiplier / Decimal(1000000)
-    return {**result, "estimated_cost_usd": float(cost), "status": "est"}
+    return {**result, "estimated_cost_usd": cost, "status": "est"}

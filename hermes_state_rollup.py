@@ -18,6 +18,19 @@ _AGGREGATES = (_SUMS + ", COUNT(DISTINCT e.turn_id) AS turn_count, COUNT(*) AS e
                "GROUP_CONCAT(DISTINCT e.source_url) AS price_sources")
 
 
+def follows_usage_parent(source, model_config, parent_end_reason):
+    delegated = source in {"subagent", "delegate"}
+    if model_config:
+        try:
+            config = json.loads(model_config)
+            if isinstance(config, dict) and config.get("_branched_from"):
+                return False
+            delegated = delegated or isinstance(config, dict) and bool(config.get("_delegate_from"))
+        except (ValueError, TypeError):
+            pass
+    return parent_end_reason == "compression" or delegated
+
+
 def _chat_id(conn, session_id):
     """Compression and delegated work belong to the owning chat; explicit branches do not."""
     seen = set()
@@ -28,16 +41,7 @@ def _chat_id(conn, session_id):
                            (session_id,)).fetchone()
         if not row or not row[0]:
             break
-        delegated = row[1] in {"subagent", "delegate"}
-        if row[2]:
-            try:
-                config = json.loads(row[2])
-                if isinstance(config, dict) and config.get("_branched_from"):
-                    break  # A copied branch owns its spend, even when its parent later compressed.
-                delegated = delegated or isinstance(config, dict) and bool(config.get("_delegate_from"))
-            except (ValueError, TypeError):
-                pass  # Malformed metadata cannot authorize a parent attribution.
-        if row[3] != "compression" and not delegated:
+        if not follows_usage_parent(row[1], row[2], row[3]):
             break
         session_id = row[0]
     return session_id
