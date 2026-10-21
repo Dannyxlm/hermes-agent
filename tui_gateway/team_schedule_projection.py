@@ -249,7 +249,7 @@ def board_attention(conn, tasks):
     for task in tasks:
         status = task.status
         attention = None
-        if status in ("todo", "scheduled", "ready", "running", "done", "archived"):
+        if status in ("todo", "scheduled", "ready", "done", "archived"):
             attention = False
         if status == "blocked" and task.block_kind == "dependency":
             attention = False
