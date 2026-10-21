@@ -853,6 +853,24 @@
       }
     },
     {
+      "name": "cron.summary",
+      "summary": "Read-only bounded execution receipts with nullable aggregate coverage and scope-bound paging.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CronSummaryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CronSummaryResult"
+        }
+      }
+    },
+    {
       "name": "delegation.pause",
       "summary": "Block/unblock NEW spawns globally (active children keep running); returns the new state.",
       "params": [
@@ -4989,6 +5007,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SystemBatteryResult"
+        }
+      }
+    },
+    {
+      "name": "team.activity",
+      "summary": "Owner-scoped verified positive runtime activity; unknown coverage never means free.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TeamActivityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TeamActivityResult"
         }
       }
     },
@@ -14869,6 +14905,255 @@
           "id"
         ],
         "title": "CronRemovedJob",
+        "type": "object"
+      },
+      "CronSummaryCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "succeeded": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Succeeded"
+          },
+          "retried": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retried"
+          },
+          "needs_attention": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Needs Attention"
+          }
+        },
+        "required": [
+          "expected",
+          "succeeded",
+          "retried",
+          "needs_attention"
+        ],
+        "title": "CronSummaryCounts",
+        "type": "object"
+      },
+      "CronSummaryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          },
+          "timezone": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "required": [
+          "profiles",
+          "timezone",
+          "start",
+          "end"
+        ],
+        "title": "CronSummaryParams",
+        "type": "object"
+      },
+      "CronSummaryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CronSummaryCounts"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/CronSummaryRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "timezone",
+          "start",
+          "end",
+          "complete",
+          "counts",
+          "runs",
+          "next_cursor"
+        ],
+        "title": "CronSummaryResult",
+        "type": "object"
+      },
+      "CronSummaryRun": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "delivery_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Summary"
+          }
+        },
+        "required": [
+          "profile",
+          "job_id",
+          "occurrence_id",
+          "started_at",
+          "finished_at",
+          "outcome",
+          "retry_of",
+          "delivery_summary"
+        ],
+        "title": "CronSummaryRun",
         "type": "object"
       },
       "CurrentSubscription": {
@@ -45708,6 +45993,199 @@
           "task_id"
         ],
         "title": "TaskIdResult",
+        "type": "object"
+      },
+      "TeamActivityParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "TeamActivityParams",
+        "type": "object"
+      },
+      "TeamActivityResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "now": {
+            "title": "Now",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "working_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working Count"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/TeamAgentActivity"
+            },
+            "title": "Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "now",
+          "complete",
+          "working_count",
+          "agents"
+        ],
+        "title": "TeamActivityResult",
+        "type": "object"
+      },
+      "TeamAgentActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "working": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working"
+          },
+          "last_human_chat_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Human Chat At"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamCurrent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "working",
+          "last_human_chat_at",
+          "current"
+        ],
+        "title": "TeamAgentActivity",
+        "type": "object"
+      },
+      "TeamChat": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id"
+        ],
+        "title": "TeamChat",
+        "type": "object"
+      },
+      "TeamCurrent": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "work_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Label"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "open_chat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamChat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "work_label",
+          "started_at",
+          "open_chat"
+        ],
+        "title": "TeamCurrent",
         "type": "object"
       },
       "TerminalClosePayload": {
