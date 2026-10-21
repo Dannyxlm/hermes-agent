@@ -381,9 +381,18 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
     target_generation = lineage_generation(conn, target_chain) if target_chain else None
     scope = ["search", principal, profile, str(home), query, target, _store_identity(home)]
     if params.get("cursor"):
-        phase, high_water, after = cursor_decode(params["cursor"], scope)
+        phase, high_water, after, search_id = cursor_decode(params["cursor"], scope)
     else:
         phase, high_water, after = "messages", conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0], 0
+        search_id = secrets.token_hex(16)
+    revision_scope = _revision_scope(principal, profile, home)
+    revision = digest([revision_scope, query, target, high_water, search_id])
+    revision_key = (digest(revision_scope), revision)
+    with _SEARCH_LOCK:
+        observed = _REVISIONS.get(revision_key)
+    if params.get("cursor") and observed is None:
+        raise LiveConflict("search observation expired; search again")
+    observed = dict(observed or {})
     limit = params.get("limit", 20)
     groups, cache, representatives, consumed, matched = {}, {}, {}, 0, 0
     if target_chain:
@@ -403,7 +412,7 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
             except sqlite3.OperationalError as exc:
                 if str(exc) != "interrupted" or cancelled.is_set():
                     raise
-                next_position = ["messages", high_water, after]
+                next_position = ["messages", high_water, after, search_id]
                 break
             for hit in hits:
                 after = hit["id"]
@@ -415,25 +424,25 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
                     group["matches"].append(match)
                     matched += 1
                 if matched >= limit:
-                    next_position = ["messages", high_water, after]
+                    next_position = ["messages", high_water, after, search_id]
                     break
             if matched >= limit:
                 break
             after = examined
             consumed += batch
             if exhausted:
-                next_position = ["metadata", high_water, 0] if target is None else None
+                next_position = ["metadata", high_water, 0, search_id] if target is None else None
                 break
-            next_position = ["messages", high_water, after]
+            next_position = ["messages", high_water, after, search_id]
         else:
-            next_position = ["messages", high_water, after]
+            next_position = ["messages", high_water, after, search_id]
         results = list(groups.values())
     else:
         results, next_offset = _metadata_search(db, conn, profile, query, after, limit)
-        next_position = ["metadata", high_water, next_offset] if next_offset is not None else None
-    if not results and next_position == ["metadata", high_water, 0]:
+        next_position = ["metadata", high_water, next_offset, search_id] if next_offset is not None else None
+    if not results and next_position == ["metadata", high_water, 0, search_id]:
         results, next_offset = _metadata_search(db, conn, profile, query, 0, limit)
-        next_position = ["metadata", high_water, next_offset] if next_offset is not None else None
+        next_position = ["metadata", high_water, next_offset, search_id] if next_offset is not None else None
     conn.set_progress_handler(None, 0)
     if cancelled.is_set():
         raise LiveConflict("search superseded")
@@ -442,11 +451,10 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
     generations = {digest(chain): index.generation for chain, index in representatives.items()}
     if target_chain:
         generations[digest(tuple(target_chain))] = target_generation
-    revision_scope = _revision_scope(principal, profile, home)
-    revision = digest([revision_scope, generations])
+    generations.update(observed)
     with _SEARCH_LOCK:
-        _REVISIONS[(digest(revision_scope), revision)] = generations
-        _REVISIONS.move_to_end((digest(revision_scope), revision))
+        _REVISIONS[revision_key] = generations
+        _REVISIONS.move_to_end(revision_key)
         while len(_REVISIONS) > 512:
             _REVISIONS.popitem(last=False)
     return {"version": 1, "profile": profile, "query": query, "revision": revision,
