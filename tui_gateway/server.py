@@ -3801,6 +3801,7 @@ from . import (
     methods_vault as _methods_vault, methods_free_tier as _methods_free_tier, methods_mobile as _methods_mobile,
     methods_mobile_push as _methods_mobile_push, methods_connectors as _methods_connectors,
     methods_connectors_account as _methods_connectors_account,
+    methods_desktop as _methods_desktop,
     methods_display as _methods_display, methods_display_watch as _methods_display_watch,
     methods_onboarding as _methods_onboarding, methods_i18n as _methods_i18n, methods_machine as _methods_machine,
     methods_shared_metrics as _methods_shared_metrics, methods_media as _methods_media,
@@ -3816,7 +3817,7 @@ for _m in (
     _methods_bot_relay, _prompt_turn, _billing_view, _methods_projects, _methods_session_foreign,
     _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_mobile,
     _methods_mobile_push, _methods_connectors,
-    _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding,
+    _methods_connectors_account, _methods_desktop, _methods_display, _methods_display_watch, _methods_onboarding,
     _methods_media, _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog, _methods_team_schedule):
     _m.register(sys.modules[__name__])
 del _m

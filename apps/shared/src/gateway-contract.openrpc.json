@@ -907,6 +907,78 @@
       }
     },
     {
+      "name": "desktop.action",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopActionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopReceipt"
+        }
+      }
+    },
+    {
+      "name": "desktop.action_status",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopActionStatusParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopReceipt"
+        }
+      }
+    },
+    {
+      "name": "desktop.observe",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopObserveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopObservation"
+        }
+      }
+    },
+    {
+      "name": "desktop.snapshot",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopSnapshotParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopSnapshot"
+        }
+      }
+    },
+    {
       "name": "diagnostics.share_nous",
       "summary": "Upload a force-redacted debug bundle to Nous-internal diagnostics storage.",
       "params": [
@@ -15869,6 +15941,793 @@
           "max_concurrent_children"
         ],
         "title": "DelegationStatusResult",
+        "type": "object"
+      },
+      "DesktopActionParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "expected_lease_epoch": {
+            "minimum": 0,
+            "title": "Expected Lease Epoch",
+            "type": "integer"
+          },
+          "action": {
+            "enum": [
+              "take_over",
+              "hand_back",
+              "saved_login",
+              "paste_login",
+              "navigate_back",
+              "not_now",
+              "open_page"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "viewer_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Viewer Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
+          "login_handle": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Login Handle"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id",
+          "action_id",
+          "expected_revision",
+          "expected_lease_epoch",
+          "action"
+        ],
+        "title": "DesktopActionParams",
+        "type": "object"
+      },
+      "DesktopActionStatusParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Action Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id",
+          "action_id"
+        ],
+        "title": "DesktopActionStatusParams",
+        "type": "object"
+      },
+      "DesktopActive": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Session Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "title",
+          "stored_session_id",
+          "started_at"
+        ],
+        "title": "DesktopActive",
+        "type": "object"
+      },
+      "DesktopActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "at"
+        ],
+        "title": "DesktopActivity",
+        "type": "object"
+      },
+      "DesktopLease": {
+        "additionalProperties": false,
+        "properties": {
+          "holder": {
+            "enum": [
+              "agent",
+              "human",
+              "none"
+            ],
+            "title": "Holder",
+            "type": "string"
+          },
+          "epoch": {
+            "minimum": 0,
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "mine": {
+            "title": "Mine",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "holder",
+          "epoch",
+          "mine"
+        ],
+        "title": "DesktopLease",
+        "type": "object"
+      },
+      "DesktopObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          },
+          "viewer_id": {
+            "title": "Viewer Id",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "mode": {
+            "enum": [
+              "watch",
+              "control",
+              "replay"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "lease_epoch": {
+            "title": "Lease Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticket",
+          "viewer_id",
+          "url",
+          "expires_at",
+          "mode",
+          "lease_epoch"
+        ],
+        "title": "DesktopObservation",
+        "type": "object"
+      },
+      "DesktopObserveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "watch",
+              "control",
+              "replay"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "viewer_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Viewer Id"
+          },
+          "recording_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recording Id"
+          },
+          "expected_lease_epoch": {
+            "minimum": 0,
+            "title": "Expected Lease Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id",
+          "mode",
+          "expected_lease_epoch"
+        ],
+        "title": "DesktopObserveParams",
+        "type": "object"
+      },
+      "DesktopReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "conflict",
+              "expired",
+              "denied",
+              "outcome_unknown",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "lease_epoch": {
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          }
+        },
+        "required": [
+          "action_id",
+          "status",
+          "revision",
+          "lease_epoch",
+          "server_time"
+        ],
+        "title": "DesktopReceipt",
+        "type": "object"
+      },
+      "DesktopRecording": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Title"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "thumbnail_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Path"
+          },
+          "replay_available": {
+            "title": "Replay Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "agent",
+          "chat_title",
+          "started_at",
+          "duration_seconds",
+          "thumbnail_path",
+          "replay_available"
+        ],
+        "title": "DesktopRecording",
+        "type": "object"
+      },
+      "DesktopSignIn": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "login_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login Handle"
+          },
+          "masked_identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masked Identifier"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "expires_at",
+          "origin",
+          "reason",
+          "allowed_actions",
+          "login_handle",
+          "masked_identifier"
+        ],
+        "title": "DesktopSignIn",
+        "type": "object"
+      },
+      "DesktopSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "const": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "watch",
+              "signin",
+              "takeover",
+              "idle"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "unavailable": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable",
+            "type": "array"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/DesktopLease"
+          },
+          "active": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesktopActive"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesktopSignIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activity": {
+            "items": {
+              "$ref": "#/components/schemas/DesktopActivity"
+            },
+            "title": "Activity",
+            "type": "array"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/DesktopRecording"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "resource_id",
+          "revision",
+          "server_time",
+          "state",
+          "complete",
+          "unavailable",
+          "lease",
+          "active",
+          "signin",
+          "activity",
+          "history",
+          "next_cursor"
+        ],
+        "title": "DesktopSnapshot",
+        "type": "object"
+      },
+      "DesktopSnapshotParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "title": "Cursor",
+            "type": "null"
+          },
+          "limit": {
+            "default": 20,
+            "description": "Maximum retained activity events, newest first.",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id"
+        ],
+        "title": "DesktopSnapshotParams",
         "type": "object"
       },
       "DiagnosticsShareNousParams": {

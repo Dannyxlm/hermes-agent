@@ -1317,6 +1317,113 @@ export interface ConnectorPolicySetResult {
   revision: string
   effective: ConnectorPolicyEffectiveUnrestricted | ConnectorPolicyEffectiveDenyAll | ConnectorPolicyEffectiveAllow | ConnectorPolicyEffectiveDeny
 }
+export interface DesktopSnapshotParams {
+  profile: string
+  space: 'desktop' | 'studio'
+  connection_id: string
+  installation_id: string
+  cursor?: null
+  limit?: number
+}
+export interface DesktopSnapshot {
+  protocol_version: 1
+  resource_id: string
+  revision: number
+  server_time: number
+  state: 'watch' | 'signin' | 'takeover' | 'idle'
+  complete: boolean
+  unavailable: string[]
+  lease: DesktopLease
+  active: DesktopActive | null
+  signin: DesktopSignIn | null
+  activity: DesktopActivity[]
+  history: DesktopRecording[]
+  next_cursor: string | null
+}
+export interface DesktopLease {
+  holder: 'agent' | 'human' | 'none'
+  epoch: number
+  mine: boolean
+}
+export interface DesktopActive {
+  id: string
+  agent: string | null
+  title: string | null
+  stored_session_id: string | null
+  started_at: number | null
+}
+export interface DesktopSignIn {
+  id: string
+  revision: number
+  expires_at: number
+  origin: string
+  reason: string
+  allowed_actions: string[]
+  login_handle: string | null
+  masked_identifier: string | null
+}
+export interface DesktopActivity {
+  id: string
+  label: string
+  at: number
+}
+export interface DesktopRecording {
+  id: string
+  title: string
+  agent: string | null
+  chat_title: string | null
+  started_at: number
+  duration_seconds: number | null
+  thumbnail_path: string | null
+  replay_available: boolean
+}
+export interface DesktopObserveParams {
+  profile: string
+  space: 'desktop' | 'studio'
+  connection_id: string
+  installation_id: string
+  mode: 'watch' | 'control' | 'replay'
+  viewer_id?: string | null
+  recording_id?: string | null
+  expected_lease_epoch: number
+}
+export interface DesktopObservation {
+  ticket: string
+  viewer_id: string
+  url: string
+  expires_at: number
+  mode: 'watch' | 'control' | 'replay'
+  lease_epoch: number
+}
+export interface DesktopActionParams {
+  profile: string
+  space: 'desktop' | 'studio'
+  connection_id: string
+  installation_id: string
+  action_id: string
+  expected_revision: number
+  expected_lease_epoch: number
+  action: 'take_over' | 'hand_back' | 'saved_login' | 'paste_login' | 'navigate_back' | 'not_now' | 'open_page'
+  viewer_id?: string | null
+  request_id?: string | null
+  request_revision?: number | null
+  login_handle?: string | null
+  url?: string | null
+}
+export interface DesktopReceipt {
+  action_id: string
+  status: 'accepted' | 'conflict' | 'expired' | 'denied' | 'outcome_unknown' | 'unknown'
+  revision: number
+  lease_epoch: number
+  server_time: number
+}
+export interface DesktopActionStatusParams {
+  profile: string
+  space: 'desktop' | 'studio'
+  connection_id: string
+  installation_id: string
+  action_id: string
+}
 /** ``tools/bot_desktop/runtime.py::DesktopStatus`` plus the lease and the profile it speaks for. */
 export interface DisplayStatus {
   profile: string
@@ -6727,6 +6834,10 @@ export interface RpcMethods {
   'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult }
   /** Running subagent tree plus the spawn pause flag and limits. */
   'delegation.status': { params: ProfileParams; result: DelegationStatusResult }
+  'desktop.action': { params: DesktopActionParams; result: DesktopReceipt }
+  'desktop.action_status': { params: DesktopActionStatusParams; result: DesktopReceipt }
+  'desktop.observe': { params: DesktopObserveParams; result: DesktopObservation }
+  'desktop.snapshot': { params: DesktopSnapshotParams; result: DesktopSnapshot }
   /** Upload a force-redacted debug bundle to Nous-internal diagnostics storage. */
   'diagnostics.share_nous': { params: DiagnosticsShareNousParams; result: DiagnosticsShareNousResult }
   /** Run the distro package install on the gateway host; progress streams as display.install.log/.done. */
@@ -7278,6 +7389,10 @@ export const RPC_METHODS = [
   'cron.summary',
   'delegation.pause',
   'delegation.status',
+  'desktop.action',
+  'desktop.action_status',
+  'desktop.observe',
+  'desktop.snapshot',
   'diagnostics.share_nous',
   'display.install',
   'display.lease.acquire',
