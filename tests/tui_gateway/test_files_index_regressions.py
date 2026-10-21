@@ -205,6 +205,29 @@ def test_live_sized_evidence_completes_under_query_budget(indexed):
     assert all(page['totals']['files'] >= 10000 and page['items'] for page in pages)
 
 
+def test_unchanged_rebuild_retains_published_revision(indexed):
+    _home, _root, index, _wid = indexed
+    before = result()
+    with index.connection() as db:
+        db.execute('UPDATE meta SET value=? WHERE key=?', (json.dumps(index.scan_version - 1), 'scan_version'))
+    refresh(index)
+    after = result(snapshot_id=before['snapshot_id'])
+    assert after['totals'] == before['totals'] and after['coverage']['complete']
+
+
+def test_fully_scanned_empty_store_has_exact_zero_totals(indexed):
+    home, _root, _index, _wid = indexed
+    ops = home / 'profiles' / 'ops'
+    with sqlite3.connect(ops / 'state.db') as db:
+        db.execute('DELETE FROM sessions')
+    with server._session_profile_runtime_scope({'profile_home': str(ops)}, hydrate_secrets=False):
+        index = deliverable_store('ops', files_index=True)
+        refresh(index)
+    page = rpc('files.index', profile='ops')['result']
+    assert page['totals'] == dict(media=0, files=0, links=0, messages=0)
+    assert page['coverage']['complete']
+
+
 def test_legacy_raw_wal_signature_remains_compatible(indexed):
     from fastapi import BackgroundTasks
     from plugins.cloudseed_mobile.dashboard.plugin_api import deliverable_list
