@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import hermes_constants
 from hermes_cli import config, config_backups
 from hermes_cli.web_server_dashboard import _plugin_route_secret_scope
+from hermes_cli.web_server_profiles import _config_profile_scope
 from plugins.cloudseed_mobile.dashboard import plugin_api as api
 
 PROFILES = ('default', 'atlas', 'iris', 'matisse', 'nuru', 'vox')
@@ -61,6 +62,44 @@ def client(monkeypatch, tmp_path):
         yield test_client, home
 
 
+@pytest.fixture
+def probe_installation(client, monkeypatch):
+    c, home = client
+    (home / 'config.yaml').write_text(json.dumps({'cloudseed_mobile': OWNER, 'probe': '${PROBE}'}))
+    (home / '.env').write_text('PROBE=root\n')
+    (home / 'profiles' / 'atlas' / '.env').write_text('PROBE=atlas\n')
+    monkeypatch.setenv('PROBE', 'root')
+    return c, home
+
+
+def test_named_profile_owner_lookup_preserves_root_fallback_secrets(probe_installation):
+    c, home = probe_installation
+    response = c.post(
+        PREFIX + '/flight-recorder/batch', params={'profile': 'atlas'},
+        json=batch('atlas'), headers={'Authorization': 'Bearer fixture'},
+    )
+    assert response.status_code == 200, response.text
+    (home / 'config.yaml').write_text('cloudseed_mobile: [unclosed\n')
+    with _config_profile_scope(None):
+        assert config.load_config()['probe'] == 'root'
+
+
+def test_alternating_owner_lookups_rebuild_root_config_at_most_once(probe_installation, monkeypatch):
+    rebuilds = []
+    canonicalize = config._canonicalize_config
+
+    def counted_canonicalize(value):
+        rebuilds.append(1)
+        return canonicalize(value)
+
+    monkeypatch.setattr(config, '_canonicalize_config', counted_canonicalize)
+    for _ in range(10):
+        for profile in (None, 'atlas'):
+            with _config_profile_scope(profile):
+                assert api.owner_config() == OWNER
+    assert len(rebuilds) <= 1
+
+
 @pytest.mark.parametrize('profile', PROFILES)
 def test_installation_owner_can_upload_to_each_profile(client, profile):
     c, home = client
@@ -82,11 +121,15 @@ def test_installation_owner_can_upload_to_each_profile(client, profile):
 
 
 @pytest.mark.parametrize('profile', PROFILES)
-@pytest.mark.parametrize('case,status', [
-    ('foreign-user', 403), ('foreign-provider', 403), ('missing', 401),
-    ('cross-origin', 403), ('no-origin', 403), ('profile-mismatch', 403),
+@pytest.mark.parametrize('case,status,detail', [
+    ('foreign-user', 403, 'Configured owner required'),
+    ('foreign-provider', 403, 'Configured owner required'),
+    ('missing', 401, 'Owner login required'),
+    ('cross-origin', 403, 'Same-origin request required'),
+    ('no-origin', 403, 'Same-origin request required'),
+    ('profile-mismatch', 403, 'Profile not found'),
 ])
-def test_owner_admission_preserves_request_boundaries(client, profile, case, status):
+def test_owner_admission_preserves_request_boundaries(client, profile, case, status, detail):
     c, home = client
     body = batch(profile)
     headers = {'Authorization': 'Bearer fixture'}
@@ -98,6 +141,7 @@ def test_owner_admission_preserves_request_boundaries(client, profile, case, sta
         body['profile'] = 'atlas' if profile == 'default' else 'default'
     response = c.post(PREFIX + '/flight-recorder/batch', params={'profile': profile}, json=body, headers=headers)
     assert response.status_code == status
+    assert response.json()['detail'] == detail
     assert not (home / 'mobile' / 'flight-recorder' / 'events').exists()
 
 
