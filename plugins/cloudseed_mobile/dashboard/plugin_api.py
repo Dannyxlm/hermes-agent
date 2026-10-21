@@ -14,7 +14,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 from hermes_cli.config import load_config
-from hermes_constants import get_default_hermes_root, reset_hermes_home_override, set_hermes_home_override
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
 from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, PhotoStorageFull
 from plugins.cloudseed_mobile.iphone_reminders import ReminderOutbox, ReminderError
@@ -31,12 +30,12 @@ CLIENT_CLOSED_REQUEST = 499
 
 
 def owner_config():
-    # Owner authority belongs to the installation, not the requested content profile.
-    token = set_hermes_home_override(get_default_hermes_root())
-    try:
+    # owner_* is read only from the installation root config; per-profile owner
+    # settings are ignored so content profiles cannot redefine owner authority.
+    # A home-only override expands root ${VAR} refs with the content profile's secrets.
+    from hermes_cli.web_server_profiles import _config_profile_scope
+    with _config_profile_scope('default'):
         return load_config().get('cloudseed_mobile', {})
-    finally:
-        reset_hermes_home_override(token)
 
 
 def owner(request: Request):
