@@ -21,6 +21,7 @@ from . import (
     prompt_voice,
     server_requests,
     sessions,
+    team_schedule,
     tools_commands,
     tools_mcp_plugins,
     usage,

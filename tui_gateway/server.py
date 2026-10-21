@@ -181,7 +181,7 @@ _LONG_HANDLERS = frozenset({
     "session.foreign.list", "session.foreign.preview", "session.foreign.import",
     "billing.state", "subscription.state", "subscription.preview", "subscription.change",
     "subscription.resume", "subscription.upgrade", "usage.bars", "session.usage", "billing.step_up",
-    "usage.rollup", "config.defaults.get", "config.defaults.set",
+    "usage.rollup", "team.activity", "cron.summary", "config.defaults.get", "config.defaults.set",
     "session.info",  # _session_info: up to 0.5 s update-check wait + git subprocess (read-only snapshot)
     "browser.manage", "cli.exec", "complete.path", "complete.slash", "llm.oneshot", "model.options",
     "pet.cells", "pet.gallery", "pet.generate", "pet.hatch", "pet.info", "pet.select", "pet.thumb",
@@ -3790,6 +3790,7 @@ from . import (
     methods_browser_control as _methods_browser_control, methods_bot_relay as _methods_bot_relay,
     methods_complete as _methods_complete, methods_config as _methods_config,
     methods_config_set as _methods_config_set, methods_usage as _methods_usage, methods_images as _methods_images,
+    methods_team_schedule as _methods_team_schedule,
     methods_profiles as _methods_profiles, methods_prompt as _methods_prompt, methods_session as _methods_session,
     methods_tools as _methods_tools, methods_tools_plugin_servers as _methods_tools_plugin_servers,
     methods_projects as _methods_projects, methods_session_foreign as _methods_session_foreign,
@@ -3813,7 +3814,7 @@ for _m in (
     _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_mobile,
     _methods_mobile_push, _methods_connectors,
     _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding,
-    _methods_media, _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog):
+    _methods_media, _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog, _methods_team_schedule):
     _m.register(sys.modules[__name__])
 del _m
 from tui_gateway import methods_human_input as _methods_human_input
