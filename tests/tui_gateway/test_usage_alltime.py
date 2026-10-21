@@ -220,7 +220,7 @@ def test_alltime_never_prices_cumulative_context_as_one_request(store):
     totals = result()["totals"]
     assert totals["input_tokens"] == 400000
     assert totals["estimated_cost_usd"] is None
-    assert "call boundaries" in totals["cost_reason"]
+    assert totals["cost_reason"] == "per-chat totals: original call boundaries unavailable for context-tier pricing"
     assert totals["unknown_price_events"] == 1
 
 

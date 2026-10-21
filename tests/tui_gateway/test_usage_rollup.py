@@ -304,3 +304,33 @@ def test_timestamped_decimal_minimum_never_overshoots(tmp_path, monkeypatch):
         expected = Decimal("0.8100266") * 31
         observed = Decimal(str(totals["minimum_estimated_cost_usd"]))
         assert expected - Decimal("0.00000000000001") <= observed <= expected
+
+
+def test_large_window_prices_each_null_event_once_per_request(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    import hermes_state_rollup as rollup
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("many", "desktop")
+        db.update_token_counts("many", model="claude-opus-5-5", billing_provider="anthropic",
+                               input_tokens=100, api_call_count=1, turn_id="stored")
+        db._conn.execute("""WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<8200
+        ) INSERT INTO usage_events (
+            session_id, chat_id, occurred_at, model, provider, task,
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+            reasoning_tokens, api_call_count, estimated_cost_usd, pricing_date)
+        SELECT 'many', 'many', ?, 'claude-opus-5-5', 'anthropic', 'background_review',
+            i, 0, 0, 0, 0, 2, NULL, '2026-10-19' FROM n""", (time.time() - 1,))
+        db._conn.commit()
+        price = Mock(wraps=rollup.estimate_aggregate_api_value_decimal)
+        monkeypatch.setattr(rollup, "estimate_aggregate_api_value_decimal", price)
+        for _ in range(2):
+            price.reset_mock()
+            value = rpc(window="30d")["result"]
+            assert value["totals"]["event_count"] == 8201
+            assert value["totals"]["cost_status"] == "est"
+            assert value["totals"]["estimated_cost_usd"] == pytest.approx(134.4968)
+            assert price.call_count == 8200
+            for key in ("agents", "models", "providers", "days", "top_chats"):
+                assert sum(row["event_count"] for row in value[key]) == 8201
