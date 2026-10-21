@@ -182,7 +182,8 @@ def test_balanced_url_parentheses_survive(indexed):
     assert [row['url'] for row in result('links.index', q='wikipedia')['items']] == [url]
 
 
-def test_live_sized_evidence_completes_under_query_budget(indexed):
+@pytest.fixture
+def live_sized(indexed):
     _home, _root, index, wid = indexed
     template = result(session_id='root')['items'][0]
     with index.connection() as db:
@@ -199,10 +200,43 @@ def test_live_sized_evidence_completes_under_query_budget(indexed):
         index._stage(db, 'root', rows)
         while index._publish(db, 'root', generation, time.monotonic() + 30, None) is None:
             pass
+    return indexed
+
+
+def test_live_sized_evidence_completes_under_query_budget(live_sized):
     contexts = [contextvars.copy_context() for _ in range(2)]
     with ThreadPoolExecutor(max_workers=2) as executor:
         pages = list(executor.map(lambda ctx: ctx.run(result, limit=1), contexts))
     assert all(page['totals']['files'] >= 10000 and page['items'] for page in pages)
+
+
+def test_live_sized_readers_with_active_python_projection(live_sized, monkeypatch):
+    home, _root, index, _wid = live_sized
+    content = json.dumps({'rows': [str(ordinal) for ordinal in range(500)]})
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.create_session('refresh-load', 'desktop')
+        for _ in range(1500):
+            db.append_message('refresh-load', 'tool', content, tool_name='terminal')
+    entered = threading.Event()
+    original = index._project_segment
+    def project(session, *args):
+        if session['id'] == 'refresh-load':
+            entered.set()
+        return original(session, *args)
+    monkeypatch.setattr(index, '_project_segment', project)
+    def warm():
+        for _ in range(3):
+            index.refresh(max_sessions=1)
+    def read():
+        return [result(limit=1) for _ in range(3)]
+    contexts = [contextvars.copy_context() for _ in range(3)]
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        writer = pool.submit(contexts[0].run, warm)
+        assert entered.wait(5)
+        readers = [pool.submit(ctx.run, read) for ctx in contexts[1:]]
+        pages = [page for future in readers for page in future.result(timeout=20)]
+        writer.result(timeout=20)
+    assert all(page['items'] for page in pages)
 
 
 @pytest.mark.parametrize('role,storage', [('user', 'content'), ('assistant', 'display_metadata')])
