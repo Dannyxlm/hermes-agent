@@ -30,7 +30,12 @@ CLIENT_CLOSED_REQUEST = 499
 
 
 def owner_config():
-    return load_config().get('cloudseed_mobile', {})
+    # owner_* is read only from the installation root config; per-profile owner
+    # settings are ignored so content profiles cannot redefine owner authority.
+    # A home-only override expands root ${VAR} refs with the content profile's secrets.
+    from hermes_cli.web_server_profiles import _config_profile_scope
+    with _config_profile_scope('default'):
+        return load_config().get('cloudseed_mobile', {})
 
 
 def owner(request: Request):
