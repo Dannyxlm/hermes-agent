@@ -205,6 +205,29 @@ def test_live_sized_evidence_completes_under_query_budget(indexed):
     assert all(page['totals']['files'] >= 10000 and page['items'] for page in pages)
 
 
+def test_legacy_raw_wal_signature_remains_compatible(indexed):
+    from fastapi import BackgroundTasks
+    from plugins.cloudseed_mobile.dashboard.plugin_api import deliverable_list
+    from plugins.cloudseed_mobile.workspace_files import digest
+    home, _root, _index, _wid = indexed
+    legacy = deliverable_store('default')
+    refresh(legacy)
+    with sqlite3.connect(home / 'state.db') as source:
+        source.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    values = []
+    for name in ('state.db', 'state.db-wal'):
+        path = home / name
+        try:
+            info = path.stat()
+            values.append((name, info.st_ino, info.st_size, info.st_mtime_ns))
+        except FileNotFoundError:
+            values.append((name, None))
+    with legacy.connection() as db:
+        db.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', ('source_signature', json.dumps(digest(values))))
+    response = deliverable_list(BackgroundTasks(), 'default')
+    assert not response['coverage']['refresh_pending'] and response['refresh_status'] == 'ready'
+
+
 def test_unknown_profile_is_profile_denial(indexed):
     assert rpc('files.index', profile='missing')['error']['code'] == 4403
 
