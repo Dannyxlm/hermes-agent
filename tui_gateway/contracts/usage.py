@@ -45,6 +45,7 @@ class UsageTokenMetrics(Result):
     cache_hit_percent: float | None
     estimated_cost_usd: float | None
     known_estimated_cost_usd: float
+    minimum_estimated_cost_usd: float
     unknown_price_events: int
     cost_reason: str | None
     pricing_dates: list[str]
@@ -52,7 +53,7 @@ class UsageTokenMetrics(Result):
 
 
 class UsageMetrics(UsageTokenMetrics):
-    cost_status: Literal["est", "unknown"]
+    cost_status: Literal["est", "minimum", "unknown"]
     turn_count: int
     event_count: int
     unattributed_turn_events: int
@@ -100,7 +101,6 @@ class UsageRollupResult(Result):
 
 
 class AllTimeMetrics(UsageTokenMetrics):
-    minimum_estimated_cost_usd: float
     cost_status: Literal["est", "minimum", "unknown"]
     turn_count: None
     event_count: None
