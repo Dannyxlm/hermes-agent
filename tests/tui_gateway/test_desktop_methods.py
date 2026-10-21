@@ -162,7 +162,7 @@ def test_signin_not_now_and_lost_ack_through_public_rpc(rpc):
     try:
         foreign = server.handle_request({'id': 'foreign', 'method': 'desktop.action_status',
                                          'params': {**params, 'action_id': 'decision'}})
-        assert foreign['result']['status'] == 'unknown'
+        assert foreign['result'] == receipt
     finally:
         server.reset_transport(token)
 
