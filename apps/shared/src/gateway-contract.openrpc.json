@@ -5890,14 +5890,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -5922,6 +5914,14 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -5952,10 +5952,10 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -6058,14 +6058,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -6090,6 +6082,19 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -6120,10 +6125,11 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "minimum_estimated_cost_usd",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -6193,14 +6199,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -6225,6 +6223,19 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -6266,10 +6277,11 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "minimum_estimated_cost_usd",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -6340,14 +6352,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -6372,6 +6376,19 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -6398,10 +6415,11 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "minimum_estimated_cost_usd",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events"
@@ -6470,14 +6488,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -6502,6 +6512,19 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -6536,10 +6559,11 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "minimum_estimated_cost_usd",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -6610,14 +6634,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -6642,6 +6658,19 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -6672,10 +6701,11 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "minimum_estimated_cost_usd",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -10044,14 +10074,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -10076,6 +10098,14 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -10117,10 +10147,10 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -15024,14 +15054,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -15056,6 +15078,14 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -15090,10 +15120,10 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -26593,14 +26623,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -26625,6 +26647,14 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -26659,10 +26689,10 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -34643,14 +34673,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -34675,6 +34697,14 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -34705,10 +34735,10 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events",
@@ -47588,14 +47618,6 @@
             "title": "Unknown Price Events",
             "type": "integer"
           },
-          "cost_status": {
-            "enum": [
-              "est",
-              "unknown"
-            ],
-            "title": "Cost Status",
-            "type": "string"
-          },
           "cost_reason": {
             "anyOf": [
               {
@@ -47620,6 +47642,14 @@
             },
             "title": "Price Sources",
             "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
           },
           "turn_count": {
             "title": "Turn Count",
@@ -47646,10 +47676,10 @@
           "estimated_cost_usd",
           "known_estimated_cost_usd",
           "unknown_price_events",
-          "cost_status",
           "cost_reason",
           "pricing_dates",
           "price_sources",
+          "cost_status",
           "turn_count",
           "event_count",
           "unattributed_turn_events"

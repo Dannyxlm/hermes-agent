@@ -5236,10 +5236,10 @@ export interface UsageMetrics {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  cost_status: 'est' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5256,10 +5256,10 @@ export interface AgentUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  cost_status: 'est' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5277,10 +5277,10 @@ export interface ModelUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  cost_status: 'est' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5299,10 +5299,10 @@ export interface ProviderUsageTotals {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  cost_status: 'est' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5320,10 +5320,10 @@ export interface DailyUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  cost_status: 'est' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5342,10 +5342,10 @@ export interface ChatUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  cost_status: 'est' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5385,10 +5385,11 @@ export interface AllTimeMetrics {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  minimum_estimated_cost_usd: number
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
   unattributed_turn_events: null
@@ -5405,10 +5406,11 @@ export interface AllTimeAgentUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  minimum_estimated_cost_usd: number
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
   unattributed_turn_events: null
@@ -5426,10 +5428,11 @@ export interface AllTimeModelUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  minimum_estimated_cost_usd: number
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
   unattributed_turn_events: null
@@ -5448,10 +5451,11 @@ export interface AllTimeProviderUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  minimum_estimated_cost_usd: number
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
   unattributed_turn_events: null
@@ -5469,10 +5473,11 @@ export interface AllTimeChatUsage {
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
   unknown_price_events: number
-  cost_status: 'est' | 'unknown'
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
+  minimum_estimated_cost_usd: number
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
   unattributed_turn_events: null

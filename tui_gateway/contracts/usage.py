@@ -46,13 +46,13 @@ class UsageTokenMetrics(Result):
     estimated_cost_usd: float | None
     known_estimated_cost_usd: float
     unknown_price_events: int
-    cost_status: Literal["est", "unknown"]
     cost_reason: str | None
     pricing_dates: list[str]
     price_sources: list[str]
 
 
 class UsageMetrics(UsageTokenMetrics):
+    cost_status: Literal["est", "unknown"]
     turn_count: int
     event_count: int
     unattributed_turn_events: int
@@ -100,6 +100,8 @@ class UsageRollupResult(Result):
 
 
 class AllTimeMetrics(UsageTokenMetrics):
+    minimum_estimated_cost_usd: float
+    cost_status: Literal["est", "minimum", "unknown"]
     turn_count: None
     event_count: None
     unattributed_turn_events: None

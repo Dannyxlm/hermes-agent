@@ -79,6 +79,14 @@ _MODEL_USAGE_FIELDS = frozenset((
     "actual_cost_usd", "cost_status", "cost_source", "api_call_count"))
 
 
+AUXILIARY_USAGE_TASKS = frozenset({
+    "approval", "background_review", "call", "compression", "curator", "embedding",
+    "goal_judge", "kanban_decomposer", "kanban_estimator", "mcp", "memory_query_rewrite", "monitor",
+    "profile_describer", "session_search", "side_question", "title_generation", "triage_specifier",
+    "tts_audio_tags", "vision", "web_extract",
+})
+
+
 class SessionUsageMixin:
     """Coalesced token writer, per-model usage rows, billing route."""
 
@@ -399,6 +407,8 @@ class SessionUsageMixin:
         ``task='background_review'`` (issue #87250). Producers with original per-call
         events pass ``usage_events`` to retain timestamps and context-tier pricing; an
         aggregate without call boundaries has unknown ledger API value.
+        All-time readers include tasks in AUXILIARY_USAGE_TASKS, not per-turn routes
+        already counted by update_token_counts. New built-in auxiliary tasks belong in that set.
         """
         usage = {k: v for k, v in locals().items() if k in _MODEL_USAGE_FIELDS}
         if not session_id or not task:
