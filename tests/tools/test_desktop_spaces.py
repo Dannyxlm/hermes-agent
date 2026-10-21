@@ -45,7 +45,8 @@ def test_expired_and_replaced_requests_do_not_resolve(tmp_path):
     'https://instagram.com', 'https://127.0.0.1', 'https://messenger.com', 'https://threads.net',
     'https://127.1', 'https://0x7f.0.0.1', 'https://0177.0.0.1', 'https://0X7F.1',
     'https://1.2.3.4.5', 'https://auth.meta.com', 'https://meta.com', 'https://fb.com',
-    'https://login.fb.com', 'https://www.whatsapp.com', 'https://whatsapp.com'])
+    'https://login.fb.com', 'https://www.whatsapp.com', 'https://whatsapp.com',
+    'https://１２７.０.０.１', 'https://ｍｅｔａ.com'])
 def test_login_origin_restrictions(tmp_path, origin):
     from tools.desktop_spaces import SpaceStore
     with pytest.raises(ValueError):
