@@ -9,6 +9,7 @@ from . import (
     connectors_operation,
     display,
     events,
+    files,
     groups_bot_relay,
     human_input,
     i18n,
