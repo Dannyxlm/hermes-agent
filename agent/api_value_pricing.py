@@ -57,8 +57,10 @@ def estimate_api_value(model: str, usage: CanonicalUsage, *, provider: str) -> d
 
 
 def estimate_aggregate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: str,
-                                         api_call_count: int) -> dict:
+                                         api_call_count: int,
+                                         tier_reason: str = "aggregate usage: original call boundaries unavailable for context-tier pricing") -> dict:
     """Retained counters are exact only when missing boundaries cannot change rates."""
+    # Counter-only aggregates cannot identify omitted usage. Exactness assumes every counted call reported tokens.
     value = estimate_api_value_decimal(model, usage, provider=provider)
     minimum = value["estimated_cost_usd"]
     if minimum is not None:
@@ -68,8 +70,7 @@ def estimate_aggregate_api_value_decimal(model: str, usage: CanonicalUsage, *, p
         elif api_call_count != 1:
             standard = estimate_api_value_decimal(model, usage, provider=provider, standard_tier=True)
             if minimum != standard["estimated_cost_usd"]:
-                value.update(estimated_cost_usd=None, status="minimum",
-                             reason="aggregate usage: original call boundaries unavailable for context-tier pricing")
+                value.update(estimated_cost_usd=None, status="minimum", reason=tier_reason)
                 minimum = standard["estimated_cost_usd"]
     value["minimum_estimated_cost_usd"] = minimum
     return value

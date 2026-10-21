@@ -53,7 +53,8 @@ _TOTAL_TOKENS = "+".join(f"e.{key}" for key in _COUNTERS[:4])
 def _session_value(model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, api_call_count):
     usage = CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens,
                            cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
-    value = estimate_aggregate_api_value_decimal(model, usage, provider=provider, api_call_count=api_call_count)
+    value = estimate_aggregate_api_value_decimal(model, usage, provider=provider, api_call_count=api_call_count,
+        tier_reason="per-chat totals: original call boundaries unavailable for context-tier pricing")
     return json.dumps(value, default=str)
 
 

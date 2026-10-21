@@ -4,7 +4,6 @@ reads use indexed metadata only, never messages or JSONL transcripts.
 import json
 import time
 from decimal import Decimal
-from functools import lru_cache
 from math import nextafter
 
 from agent.api_value_pricing import estimate_aggregate_api_value_decimal
@@ -29,7 +28,7 @@ class _DecimalSum:
 
     def step(self, value):
         if value is not None:
-            self.total += Decimal(value)
+            self.total += Decimal(str(value)) if isinstance(value, float) else Decimal(value)
 
     def finalize(self):
         return str(self.total)
@@ -88,14 +87,10 @@ def record_usage_event(conn, session_id, *, model, provider, counts, task="", tu
 
 
 def _event_value(model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-                 api_call_count, exact, pricing_date, source_url):
-    if exact is not None:
-        value = {"estimated_cost_usd": str(exact), "minimum_estimated_cost_usd": str(exact),
-                 "reason": None, "pricing_date": pricing_date, "source_url": source_url}
-    else:
-        usage = CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens,
-                               cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
-        value = estimate_aggregate_api_value_decimal(model, usage, provider=provider, api_call_count=api_call_count)
+                 api_call_count):
+    usage = CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens,
+                           cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+    value = estimate_aggregate_api_value_decimal(model, usage, provider=provider, api_call_count=api_call_count)
     return json.dumps(value, default=str)
 
 
@@ -128,39 +123,57 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
     zone = ZoneInfo(timezone_name)
     conn.create_function("usage_day", 1, lambda stamp: datetime.fromtimestamp(stamp, zone).date().isoformat(),
                          deterministic=True)
-    conn.create_function("event_api_value", 10, lru_cache(maxsize=8192)(_event_value), deterministic=True)
+    conn.create_function("event_api_value", 7, _event_value, deterministic=True)
     conn.create_aggregate("decimal_sum", 1, _DecimalSum)
     where = "e.occurred_at>=? AND e.occurred_at<?"
     args = [start, end]
     if session_id:
         where += " AND e.chat_id=?"
         args.append(_chat_id(conn, session_id))
-    arguments = ", ".join(_COUNTERS[:4]) + ", api_call_count, estimated_cost_usd, pricing_date, source_url"
-    cte = (f"WITH priced AS MATERIALIZED (SELECT *, event_api_value(model, provider, {arguments}) AS price "
-           f"FROM usage_events e WHERE {where}), usage AS (SELECT "
+    arguments = ", ".join(_COUNTERS[:4]) + ", api_call_count"
+    cte = (f"WITH priced AS MATERIALIZED (SELECT *, CASE WHEN estimated_cost_usd IS NULL "
+           f"THEN event_api_value(model, provider, {arguments}) END AS price "
+           f"FROM usage_events e WHERE {where}), usage AS MATERIALIZED (SELECT "
            "chat_id, occurred_at, turn_id, model, provider, task, " + ", ".join(_COUNTERS) + ", "
-           "json_extract(price, '$.estimated_cost_usd') AS estimated_cost_usd, "
-           "json_extract(price, '$.minimum_estimated_cost_usd') AS minimum_estimated_cost_usd, "
-           "json_extract(price, '$.reason') AS price_reason, "
-           "json_extract(price, '$.pricing_date') AS pricing_date, "
-           "json_extract(price, '$.source_url') AS source_url FROM priced) ")
-    base = "FROM usage e"
-    totals = _metrics(conn.execute(f"{cte}SELECT {_AGGREGATES} {base}", args).fetchone())
-    def groups(columns, group, order="total_tokens DESC"):
-        rows = conn.execute(f"{cte}SELECT {columns}, {_AGGREGATES}, "
-                            "SUM(e.input_tokens+e.output_tokens+e.cache_read_tokens+e.cache_write_tokens) AS total_tokens "
-                            f"{base} GROUP BY {group} ORDER BY {order}", args).fetchall()
-        return [_metrics(row) for row in rows]
-    chats = groups("e.chat_id AS session_id", "e.chat_id", "total_tokens DESC, e.chat_id")
+           "CASE WHEN price IS NULL THEN estimated_cost_usd ELSE "
+           "json_extract(price, '$.estimated_cost_usd') END AS estimated_cost_usd, "
+           "CASE WHEN price IS NULL THEN estimated_cost_usd ELSE "
+           "json_extract(price, '$.minimum_estimated_cost_usd') END AS minimum_estimated_cost_usd, "
+           "CASE WHEN price IS NULL THEN NULL ELSE json_extract(price, '$.reason') END AS price_reason, "
+           "CASE WHEN price IS NULL THEN pricing_date ELSE "
+           "json_extract(price, '$.pricing_date') END AS pricing_date, "
+           "CASE WHEN price IS NULL THEN source_url ELSE "
+           "json_extract(price, '$.source_url') END AS source_url FROM priced) ")
+    projections = (
+        ("totals", "'{}'", ""),
+        ("top_chats", "json_object('session_id', e.chat_id)",
+         "GROUP BY e.chat_id ORDER BY total_tokens DESC, e.chat_id"),
+        ("models", "json_object('model', e.model, 'provider', e.provider)",
+         "GROUP BY e.model, e.provider ORDER BY total_tokens DESC"),
+        ("providers", "json_object('provider', e.provider)",
+         "GROUP BY e.provider ORDER BY total_tokens DESC"),
+        ("days", "json_object('day', usage_day(e.occurred_at), 'provider', e.provider)",
+         "GROUP BY usage_day(e.occurred_at), e.provider ORDER BY usage_day(e.occurred_at), e.provider"),
+    )
+    # One statement shares materialization across every grouping, even above the old cache limit.
+    queries = [f"SELECT * FROM (SELECT '{kind}' AS kind, {dimensions} AS dimensions, {_AGGREGATES}, "
+               "SUM(e.input_tokens+e.output_tokens+e.cache_read_tokens+e.cache_write_tokens) AS total_tokens "
+               f"FROM usage e {suffix})" for kind, dimensions, suffix in projections]
+    grouped = {kind: [] for kind, _, _ in projections}
+    for row in conn.execute(cte + " UNION ALL ".join(queries), args):
+        metric = dict(row)
+        kind = metric.pop("kind")
+        dimensions = json.loads(metric.pop("dimensions"))
+        grouped[kind].append({**dimensions, **_metrics(metric)})
+    totals = grouped["totals"][0]
+    chats = grouped["top_chats"]
     for chat in chats[:limit]:
         row = conn.execute("SELECT title FROM sessions WHERE id=?", (chat["session_id"],)).fetchone()
         chat["title"] = row[0] if row else None
     since = conn.execute("SELECT value FROM state_meta WHERE key='usage_events_since'").fetchone()
     return {"profile": profile, "start": start, "end": end, "timezone": timezone_name, "totals": totals,
             "agents": [{"profile": profile, **totals}],
-            "models": groups("e.model, e.provider", "e.model, e.provider"),
-            "providers": groups("e.provider", "e.provider"),
-            "days": groups("usage_day(e.occurred_at) AS day, e.provider", "day, e.provider", "day, e.provider"),
+            "models": grouped["models"], "providers": grouped["providers"], "days": grouped["days"],
             "top_chats": chats[:limit], "chat_count": len(chats),
             "coverage_since": float(since[0]) if since else None,
             "partial": not since or start < float(since[0]),
