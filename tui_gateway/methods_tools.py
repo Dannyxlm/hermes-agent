@@ -524,7 +524,7 @@ def _(rid, params: dict) -> dict:
     skills: dict[str, dict] = {}
     session = _sessions.get(params.get("session_id", ""))
     home = Path(session.get("profile_home") or _hermes_home).resolve() if session else Path(
-        _profile_home(params.get("profile")) or _hermes_home).resolve()
+        _profile_home(params.get("profile")) or (_hermes_home if params.get("profile") else _tools_mod("hermes_constants").get_hermes_home())).resolve()
     profile = (profile_name_for_home(str(home)) or _current_profile_name()) if session else _response_profile_name(params.get("profile"))
     freshness = params.get("include_entries") is True or "since_revision" in params
     freshness = freshness and (not session or not params.get("profile") or params["profile"] == profile)
