@@ -40,13 +40,13 @@ _LOCKS={}
 _LOCK_GUARD=threading.Lock()
 
 
-def source_signature(home):
+def source_signature(home, *, ignore_empty_wal=False):
     values=[]
     for name in ('state.db','state.db-wal'):
         path=home/name
         try:
             st=path.stat()
-            values.append((name,None) if name.endswith('-wal') and st.st_size<=32 else (name,st.st_ino,st.st_size,st.st_mtime_ns))
+            values.append((name,None) if ignore_empty_wal and name.endswith('-wal') and st.st_size<=32 else (name,st.st_ino,st.st_size,st.st_mtime_ns))
         except FileNotFoundError: values.append((name,None))
     return digest(values)
 
@@ -325,7 +325,7 @@ class DeliverablesIndex:
         source=None
         try:
             deadline=time.monotonic()+REFRESH_SECONDS
-            signature=source_signature(self.home)
+            signature=source_signature(self.home,ignore_empty_wal=self.files_index)
             grant_signature=digest(self.workspaces)
             with self.connection() as cache:
                 meta=self._meta(cache)
@@ -460,7 +460,7 @@ class DeliverablesIndex:
             publication=db.execute('SELECT sid,after_id FROM publication ORDER BY sid LIMIT 1').fetchone()
         source_available=(self.home/'state.db').is_file() and not (self.home/'state.db').is_symlink()
         grants_current=meta.get('grant_signature')==digest(self.workspaces)
-        source_current=meta.get('source_signature')==source_signature(self.home)
+        source_current=meta.get('source_signature')==source_signature(self.home,ignore_empty_wal=self.files_index)
         scan_current=not legacy and meta.get('scan_version')==self.scan_version
         if not grants_current or not source_available:
             meta.update(partial=True,refresh_status='refresh_pending',generation=None)
