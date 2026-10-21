@@ -7,6 +7,7 @@ from . import (
     config_free_tier_control,
     connectors,
     connectors_operation,
+    desktop,
     display,
     events,
     groups_bot_relay,
