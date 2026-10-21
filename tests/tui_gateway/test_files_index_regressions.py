@@ -336,3 +336,77 @@ def test_delegate_truncation_does_not_poison_public_counts(indexed):
     refresh(index)
     page = result()
     assert page['totals'] == before and page['coverage']['complete']
+
+
+@pytest.mark.parametrize('rebuild', [False, True])
+def test_totals_unknown_until_current_scan_pass_completes(indexed, monkeypatch, rebuild):
+    from plugins.cloudseed_mobile.links_index import workspace_counts
+    _home, _root, index, wid = indexed
+    expected = result()['totals']
+    expected_workspace = workspace_counts(index)[wid]
+    advance = index.refresh
+    monkeypatch.setattr(type(index), 'refresh', lambda *args, **kwargs: None)
+    if rebuild:
+        with index.connection() as db:
+            db.execute('UPDATE meta SET value=? WHERE key=?', (json.dumps(index.scan_version - 1), 'scan_version'))
+    else:
+        index.path.unlink()
+    partial_publications = 0
+    for _ in range(30):
+        meta = index.snapshot()
+        completed = bool(meta.get('source_signature') and meta.get('scan_version') == index.scan_version)
+        for method in ('files.index', 'links.index'):
+            page = result(method)
+            assert page['totals'] == (expected if completed else dict(media=None, files=None, links=None, messages=None))
+            assert page['coverage']['complete'] is completed
+        assert workspace_counts(index)[wid] == (expected_workspace if completed else None)
+        if completed:
+            assert partial_publications > 0
+            return
+        partial_publications += bool(meta.get('index_revision') and meta.get('indexed_sessions'))
+        advance(max_sessions=1)
+    pytest.fail('one-session slices did not complete the current scan pass')
+
+
+def test_dashboard_warmer_builds_mixed_index_without_rpc_reads(indexed):
+    from plugins.cloudseed_mobile.dashboard.plugin_api import warm_indexes
+    from plugins.cloudseed_mobile.deliverables_warmer import DeliverablesWarmer
+    _home, _root, index, _wid = indexed
+    expected = result()['totals']
+    index.path.unlink()
+    warmer = DeliverablesWarmer(warm_indexes, max_sessions=1)
+    for _ in range(30):
+        warmer.run_once()
+        if not index.snapshot()['warm_pending']:
+            break
+    assert index.snapshot().get('source_signature'), 'dashboard warmer must complete the mixed index without a Files open'
+    assert result()['totals'] == expected
+
+
+@pytest.mark.parametrize('filters', [{'q': 'example.com'}, {'q': 'unextracted'}, {'author': 'me'}, {'author': 'agents'}])
+def test_filtered_queries_keep_uncertainty_from_unmatched_sessions(indexed, filters):
+    home, root, index, _wid = indexed
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.create_session('uncertain', 'desktop', cwd=str(root))
+        db.append_message('uncertain', 'user', 'x' * (1024 * 1024 + 1) + ' https://example.com/unextracted')
+    refresh(index)
+    page = result('links.index', **filters)
+    assert page['totals']['links'] is None and page['totals']['messages'] is None
+    assert page['totals']['files'] is not None and page['totals']['media'] is not None
+    assert not page['coverage']['complete']
+    assert result(session_id='root', **filters)['coverage']['complete']
+
+
+def test_workspace_coverage_includes_entries_outside_session_cwd(indexed):
+    home, root, index, wid = indexed
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.create_session('cross-workspace', 'desktop', cwd=str(home.parent / 'elsewhere'))
+        db.append_message('cross-workspace', 'assistant', 'MEDIA: ' + str(root / 'outputs/report.md'))
+        db.append_message('cross-workspace', 'user', 'x' * (1024 * 1024 + 1))
+    refresh(index)
+    page = result(workspace_id=wid)
+    assert any(row['stored_session_id'] == 'cross-workspace' for row in page['items'])
+    assert page['totals']['links'] is None and page['totals']['messages'] is None
+    assert page['totals']['files'] == 1 and page['totals']['media'] == 1
+    assert not page['coverage']['complete']
+    assert result(session_id='root', workspace_id=wid)['coverage']['complete']
