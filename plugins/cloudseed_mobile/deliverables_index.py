@@ -320,6 +320,18 @@ class DeliverablesIndex:
         cache.execute('INSERT OR REPLACE INTO index_coverage VALUES(?,?,?,?)',(session['id'],*values))
         return old!=values
 
+    def _reset_meta(self,meta,grant_signature,generation,epoch):
+        updated={'scan_version':self.scan_version,'grant_signature':grant_signature,
+                 'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+        if self.files_index and generation:
+            updated['index_revision']=meta.get('index_revision')
+        return updated
+
+    def _finish_scan(self,meta):
+        meta['source_signature']=meta.pop('scan_signature')
+        if self.files_index and not meta.get('index_revision'):
+            meta['index_revision']=digest([meta['generation'],'published'])
+
     def refresh(self,max_sessions=20,cancel=None):
         if not self.lock.acquire(blocking=False): return
         source=None
@@ -340,7 +352,7 @@ class DeliverablesIndex:
                     reconcile_legacy=legacy or meta.get('scan_version')!=self.scan_version
                     generation=meta.get('generation') if meta.get('grant_signature')==grant_signature else None
                     epoch=cache.execute('SELECT COALESCE(MAX(scan_epoch),0) FROM session_nodes').fetchone()[0]
-                    meta={'scan_version':self.scan_version,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+                    meta=self._reset_meta(meta,grant_signature,generation,epoch)
                     if reconcile_legacy and cache.execute('SELECT 1 FROM segments LIMIT 1').fetchone():
                         meta['legacy_after']=None
                     cache.execute('DELETE FROM staged')
@@ -443,7 +455,7 @@ class DeliverablesIndex:
                             cleaned+=1
                         remaining=cleaned<len(stale)
                     if not remaining:
-                        meta['source_signature']=meta.pop('scan_signature')
+                        self._finish_scan(meta)
                     meta.update(partial=remaining or meta['incomplete_segments'],refresh_status='partial' if remaining or meta['incomplete_segments'] else 'ready',updated_at=time.time())
                 except sqlite3.Error as exc:
                     # A busy writer or expired read budget must not erase published files.
