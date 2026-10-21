@@ -168,7 +168,7 @@ def locator(value,session,workspaces,aliases=None):
         except ValueError: return None
         # No server fetch/proxy. Query is retained for explicit owner open only.
         return {'kind':'remote_media','url':value,'workspace_id':None,'relative_path':None,'display_name':PurePosixPath(u.path).name or host}
-    if re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:',value) or '\x00' in value: return None
+    if '://' in value or '\x00' in value or value.lower().startswith(('data:', 'javascript:', 'mailto:', 'blob:', 'about:', 'file:')) or re.match(r'^[A-Za-z]:[\\/]',value): return None
     path=PurePosixPath(value)
     if not path.is_absolute():
         cwd=session.get('cwd')
@@ -189,7 +189,7 @@ def locator(value,session,workspaces,aliases=None):
     return None
 
 
-def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_REFERENCES):
+def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_REFERENCES,*,index_evidence=False):
     from plugins.cloudseed_mobile.links_index import project_attachments, author_fields
     status={} if status is None else status
     rows={}; results={m.get('tool_call_id'):m for m in messages if m.get('role')=='tool' and isinstance(m.get('tool_call_id'),str) and m.get('tool_call_id') and m.get('active',1)!=0}
@@ -217,8 +217,9 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
         seen.add(occurrence_id); count+=1
         time=message.get('timestamp')
         if not isinstance(time,(float,int)) or not math.isfinite(time): time=None
-        occurrence={'id':occurrence_id,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],**author_fields(profile,message)}
-        row={'schema_version':SCHEMA_VERSION,'id':rid,'profile':profile,**loc,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],'display_type':mimetypes.guess_type(loc['display_name'])[0] or 'application/octet-stream','occurrences':[],**author_fields(profile,message)}
+        author=author_fields(profile,message) if index_evidence else {}
+        occurrence={'id':occurrence_id,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],**author}
+        row={'schema_version':SCHEMA_VERSION,'id':rid,'profile':profile,**loc,'stored_session_id':session['id'],'message_id':mid,'observed_at':time,'action':action,'outcome':action,'provenance':provenance,'source_chat_title':(session.get('title') or '')[:512],'display_type':mimetypes.guess_type(loc['display_name'])[0] or 'application/octet-stream','occurrences':[],**author}
         if subagent: row['subagent']=True
         if loc.get('workspace_id') in generated_ids:
             row['generated']=True
@@ -250,9 +251,9 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
         if loc['kind']=='file':
             low=loc['relative_path'].lower().split('/')
             row['private']=any(low[i:i+2] in (['outputs','private'],['evidence','private']) for i in range(len(low)))
-    project_attachments(messages,add,status)
+    project_attachments(messages,add,status,enabled=index_evidence)
     for m in messages:
-        if m.get('active',1)==0 or m.get('display_kind') in {'reasoning','thinking','scratchpad'}: continue
+        if m.get('active',1)==0 or m.get('display_kind') in ({'reasoning','thinking','scratchpad'} if index_evidence else {'reasoning','scratchpad'}): continue
         if m.get('role')=='assistant':
             content=m.get('content') or ''
             for _,text in strings(content,status):

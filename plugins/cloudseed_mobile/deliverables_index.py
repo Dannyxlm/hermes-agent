@@ -31,8 +31,8 @@ REFRESH_SECONDS=0.75
 # many candidates per requested row before handing back a cursor.
 RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
-# v8 adds admitted user attachments, author evidence and links in the same revision.
-SCAN_VERSION=8
+SCAN_VERSION=7
+FILES_SCAN_VERSION=9
 # Desktop keeps at most this many versions of one artifact; the versions route matches.
 MAX_ARTIFACT_VERSIONS=20
 MAX_LINEAGE_HOPS=64
@@ -75,9 +75,11 @@ def query_cursor(cursor,generation,scope):
 
 
 class DeliverablesIndex:
-    def __init__(self,home,profile,workspaces):
+    def __init__(self,home,profile,workspaces,*,files_index=False):
         self.home=Path(home); self.profile=profile; self.workspaces=workspaces
-        self.path=self.home/'plugin_data/cloudseed_mobile/deliverables.sqlite3'
+        self.files_index=files_index
+        self.scan_version=FILES_SCAN_VERSION if files_index else SCAN_VERSION
+        self.path=self.home/'plugin_data/cloudseed_mobile'/('files-index.sqlite3' if files_index else 'deliverables.sqlite3')
         with _LOCK_GUARD:
             self.lock=_LOCKS.setdefault(str(self.path),threading.Lock())
 
@@ -86,6 +88,7 @@ class DeliverablesIndex:
         self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         db=sqlite3.connect(self.path,timeout=1,uri=uri)
         try:
+            if self.files_index: db.execute('PRAGMA journal_mode=WAL')
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
                 CREATE TABLE IF NOT EXISTS segments(sid TEXT PRIMARY KEY,fingerprint TEXT,data TEXT);
@@ -104,6 +107,14 @@ class DeliverablesIndex:
                 CREATE TABLE IF NOT EXISTS staged(sid TEXT,id TEXT,data TEXT,inline_content TEXT,
                     PRIMARY KEY(sid,id));
                 CREATE TABLE IF NOT EXISTS publication(sid TEXT PRIMARY KEY,after_id TEXT,fingerprint TEXT);
+                CREATE TABLE IF NOT EXISTS index_coverage(
+                    sid TEXT PRIMARY KEY,workspace_id TEXT,files_partial INTEGER,links_partial INTEGER);
+                CREATE TABLE IF NOT EXISTS index_occurrences(
+                    sid TEXT,id TEXT,ordinal INTEGER,value TEXT,author_kind TEXT,category TEXT,
+                    sort_null INTEGER,sort_time REAL,oid TEXT,message_id TEXT,action TEXT,provenance TEXT,
+                    truncated INTEGER,PRIMARY KEY(sid,id,ordinal));
+                CREATE TABLE IF NOT EXISTS prepared_occurrences AS SELECT * FROM index_occurrences WHERE 0;
+                CREATE UNIQUE INDEX IF NOT EXISTS prepared_occurrences_key ON prepared_occurrences(sid,id,ordinal);
                 CREATE TABLE IF NOT EXISTS prepared_entries(
                     sid TEXT,id TEXT,generation TEXT,sort_time REAL,workspace_id TEXT,kind TEXT,
                     private INTEGER,recent INTEGER,search TEXT,data TEXT,inline_content TEXT,
@@ -124,7 +135,7 @@ class DeliverablesIndex:
                        [(k,json.dumps(v)) for k,v in meta.items() if k not in previous or previous[k]!=v])
 
     def _remember_session(self,cache,session,epoch):
-        sid=session['id']; parent=None if delegate_child(session) else session.get('parent_session_id'); compression=session.get('end_reason')=='compression'
+        sid=session['id']; parent=None if self.files_index and delegate_child(session) else session.get('parent_session_id'); compression=session.get('end_reason')=='compression'
         old=cache.execute('SELECT parent_id,compression FROM session_nodes WHERE sid=?',(sid,)).fetchone()
         cache.execute('''INSERT INTO session_nodes(sid,parent_id,compression,scan_epoch) VALUES(?,?,?,?)
                          ON CONFLICT(sid) DO UPDATE SET parent_id=excluded.parent_id,
@@ -173,6 +184,8 @@ class DeliverablesIndex:
             cache.execute('DELETE FROM entries WHERE sid=?',(sid,))
             cache.execute('DELETE FROM segments WHERE sid=?',(sid,))
             cache.execute('DELETE FROM session_nodes WHERE sid=?',(sid,))
+            cache.execute('DELETE FROM index_coverage WHERE sid=?',(sid,))
+            cache.execute('DELETE FROM index_occurrences WHERE sid=?',(sid,))
             changed=True
         if changed: meta['index_revision']=digest([meta.get('index_revision'),sid,time.time_ns()])
         meta['scan_cleanup']+=1
@@ -182,6 +195,7 @@ class DeliverablesIndex:
             # New messages may arrive between publication checkpoints.
             cache.execute('DELETE FROM publication WHERE sid=?',(sid,))
             cache.execute('DELETE FROM prepared_entries WHERE sid=?',(sid,))
+            cache.execute('DELETE FROM prepared_occurrences WHERE sid=?',(sid,))
         for row in rows:
             inline=row.pop('inline_content',None)
             old=cache.execute('SELECT data,inline_content FROM staged WHERE sid=? AND id=?',(sid,row['id'])).fetchone()
@@ -208,6 +222,7 @@ class DeliverablesIndex:
         for rid,data,inline in rows:
             if stopped(): break
             row=json.loads(data)
+            self._prepare_occurrences(cache,sid,row)
             generated_image=row.get('generated') and row.get('provenance','').startswith('producer:') and is_image(row.get('display_name'),row.get('display_type'))
             output_path=(row.get('relative_path') or '').startswith(('outputs/','docs/plans/','docs/reports/','evidence/summaries/'))
             recent=(not row.get('subagent',False) and row.get('availability')!='deleted'
@@ -229,11 +244,27 @@ class DeliverablesIndex:
             # swap. Readers see the previous complete projection until commit.
             cache.execute('DELETE FROM entries WHERE sid=?',(sid,))
             cache.execute('INSERT INTO entries SELECT * FROM prepared_entries WHERE sid=?',(sid,))
+            cache.execute('DELETE FROM index_occurrences WHERE sid=?',(sid,))
+            cache.execute('INSERT INTO index_occurrences SELECT * FROM prepared_occurrences WHERE sid=?',(sid,))
             cache.execute('INSERT OR REPLACE INTO segments VALUES(?,?,?)',(sid,revision,'[]'))
         cache.execute('DELETE FROM staged WHERE sid=?',(sid,))
         cache.execute('DELETE FROM publication WHERE sid=?',(sid,))
         cache.execute('DELETE FROM prepared_entries WHERE sid=?',(sid,))
+        cache.execute('DELETE FROM prepared_occurrences WHERE sid=?',(sid,))
         return changed
+
+    def _prepare_occurrences(self,cache,sid,row):
+        if not self.files_index: return
+        from plugins.cloudseed_mobile.links_index import media
+        category='links' if row['kind']=='link' else 'media' if media(row.get('display_name'),row.get('display_type')) else 'files'
+        cache.execute('DELETE FROM prepared_occurrences WHERE sid=? AND id=?',(sid,row['id']))
+        values=[]
+        for ordinal,occurrence in enumerate(row['occurrences']):
+            observed=occurrence.get('observed_at')
+            values.append((sid,row['id'],ordinal,json.dumps(occurrence),occurrence.get('author_kind','unknown'),category,
+                           int(observed is None),-(observed or 0),occurrence['id'],occurrence['message_id'],
+                           occurrence['action'],occurrence.get('provenance'),int(row.get('occurrences_partial',False))))
+        cache.executemany('INSERT INTO prepared_occurrences VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',values)
 
     def _messages(self,source,columns,sid,after):
         available=[c for c in ('id','session_id','role','tool_call_id','tool_name','timestamp','active','message_uid','display_kind') if c in columns]
@@ -263,6 +294,32 @@ class DeliverablesIndex:
             messages.extend(dict(row) for row in rows)
         return messages,last
 
+    def _project_segment(self,session,messages,root,status):
+        rows=project(self.profile,{**session,'lineage_root':root},messages,self.workspaces,
+                     status=status,reference_limit=None,index_evidence=self.files_index)
+        if self.files_index:
+            from plugins.cloudseed_mobile.links_index import project_links
+            link_status={}
+            rows.extend(project_links(self.profile,session,messages,self.workspaces,link_status))
+            status['links_partial']=link_status.get('links_partial',False)
+        return rows
+
+    def _stage_coverage(self,meta,status):
+        coverage=meta.setdefault('scan_coverage',{})
+        coverage['files_partial']=coverage.get('files_partial',False) or status.get('partial',False) or status.get('attachments_partial',False)
+        coverage['links_partial']=coverage.get('links_partial',False) or status.get('partial',False) or status.get('links_partial',False)
+
+    def _publish_coverage(self,cache,session,meta):
+        if not self.files_index: return False
+        cwd=Path(session.get('cwd') or '/')
+        workspace=next((w['id'] for w in sorted(self.workspaces,key=lambda w:len(w['root_path']),reverse=True)
+                        if cwd.is_relative_to(Path(w['root_path']))),None)
+        coverage=meta.get('scan_coverage',{})
+        values=(workspace,int(coverage.get('files_partial',False)),int(coverage.get('links_partial',False)))
+        old=cache.execute('SELECT workspace_id,files_partial,links_partial FROM index_coverage WHERE sid=?',(session['id'],)).fetchone()
+        cache.execute('INSERT OR REPLACE INTO index_coverage VALUES(?,?,?,?)',(session['id'],*values))
+        return old!=values
+
     def refresh(self,max_sessions=20,cancel=None):
         if not self.lock.acquire(blocking=False): return
         source=None
@@ -276,19 +333,20 @@ class DeliverablesIndex:
                 # Old runtimes upsert metadata without removing unknown keys.
                 # Their lineage write is the signal to rebuild after rollback.
                 legacy=cache.execute("SELECT 1 FROM meta WHERE key='lineage'").fetchone() is not None
-                if (not legacy and meta.get('scan_version')==SCAN_VERSION and meta.get('source_signature')==signature
+                if (not legacy and meta.get('scan_version')==self.scan_version and meta.get('source_signature')==signature
                     and meta.get('grant_signature')==grant_signature and 'scan_signature' not in meta
                     and meta.get('refresh_status') in {'ready','partial'}): return
-                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=SCAN_VERSION:
-                    reconcile_legacy=legacy or meta.get('scan_version')!=SCAN_VERSION
+                if legacy or meta.get('grant_signature')!=grant_signature or meta.get('scan_version')!=self.scan_version:
+                    reconcile_legacy=legacy or meta.get('scan_version')!=self.scan_version
                     generation=meta.get('generation') if meta.get('grant_signature')==grant_signature else None
                     epoch=cache.execute('SELECT COALESCE(MAX(scan_epoch),0) FROM session_nodes').fetchone()[0]
-                    meta={'scan_version':SCAN_VERSION,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
+                    meta={'scan_version':self.scan_version,'grant_signature':grant_signature,'generation':generation or digest([grant_signature,2]),'scan_epoch':epoch}
                     if reconcile_legacy and cache.execute('SELECT 1 FROM segments LIMIT 1').fetchone():
                         meta['legacy_after']=None
                     cache.execute('DELETE FROM staged')
                     cache.execute('DELETE FROM publication')
                     cache.execute('DELETE FROM prepared_entries')
+                    cache.execute('DELETE FROM prepared_occurrences')
                     cache.execute("DELETE FROM meta WHERE key='lineage'")
                 if not (self.home/'state.db').is_file() or (self.home/'state.db').is_symlink():
                     meta.update(partial=True,refresh_status='source_missing',generation=None,updated_at=None)
@@ -319,6 +377,7 @@ class DeliverablesIndex:
                     if meta.get('scan_session') and (not sessions or sessions[0]['id']!=meta['scan_session']['id']):
                         cache.execute('DELETE FROM staged')
                         cache.execute('DELETE FROM publication'); cache.execute('DELETE FROM prepared_entries')
+                        cache.execute('DELETE FROM prepared_occurrences')
                         meta.pop('scan_session',None); meta.pop('scan_after',None)
                     columns={r[1] for r in source.execute('PRAGMA table_info(messages)')}
                     units=0; lineage_nodes={}
@@ -328,7 +387,8 @@ class DeliverablesIndex:
                         if meta.get('scan_session')!=session:
                             cache.execute('DELETE FROM staged')
                             cache.execute('DELETE FROM publication'); cache.execute('DELETE FROM prepared_entries')
-                            meta.update(scan_session=session,scan_after=-1)
+                            cache.execute('DELETE FROM prepared_occurrences')
+                            meta.update(scan_session=session,scan_after=-1,scan_coverage={})
                         if self._remember_session(cache,session,meta['scan_epoch']):
                             meta['index_revision']=digest([meta.get('index_revision'),sid,time.time_ns()])
                         messages,last=([],meta['scan_after']) if session.get('archived') or session.get('hidden') else self._messages(source,columns,sid,meta['scan_after'])
@@ -337,21 +397,21 @@ class DeliverablesIndex:
                         # this refresh, never publish the session as empty.
                         root=self._lineage_root(source,session_columns,session,lineage_nodes)
                         try:
-                            rows=project(self.profile,{**session,'lineage_root':root},messages,self.workspaces,status=status,reference_limit=None)
-                            from plugins.cloudseed_mobile.links_index import project_links
-                            rows.extend(project_links(self.profile,session,messages,self.workspaces,status))
+                            rows=self._project_segment(session,messages,root,status)
                         except Exception as exc:
                             LOG.warning('deliverables projection skipped one message segment: %s',type(exc).__name__)
                             rows=[]; status['partial']=True
                         self._stage(cache,sid,rows)
                         meta['scan_after']=last
                         meta['incomplete_segments']=meta['incomplete_segments'] or status.get('partial',False)
+                        self._stage_coverage(meta,status)
                         meta['incomplete_links']=meta.get('incomplete_links',False) or status.get('links_partial',False)
                         meta['links_partial']=meta['incomplete_links']
                         more=bool(messages) and source.execute('SELECT 1 FROM messages WHERE session_id=? AND id>? LIMIT 1',(sid,last)).fetchone()
                         if more: break
                         published=self._publish(cache,sid,meta['generation'],deadline,cancel)
                         if published is None: break
+                        published=self._publish_coverage(cache,session,meta) or published
                         meta.update(scan_before=session['scan_rowid'],indexed_sessions=meta['indexed_sessions']+1)
                         meta.pop('scan_session',None); meta.pop('scan_after',None)
                         if published: meta['index_revision']=digest([meta.get('index_revision'),sid,time.time_ns()])
@@ -401,7 +461,7 @@ class DeliverablesIndex:
         source_available=(self.home/'state.db').is_file() and not (self.home/'state.db').is_symlink()
         grants_current=meta.get('grant_signature')==digest(self.workspaces)
         source_current=meta.get('source_signature')==source_signature(self.home)
-        scan_current=not legacy and meta.get('scan_version')==SCAN_VERSION
+        scan_current=not legacy and meta.get('scan_version')==self.scan_version
         if not grants_current or not source_available:
             meta.update(partial=True,refresh_status='refresh_pending',generation=None)
         elif not source_current or not scan_current:

@@ -4,6 +4,7 @@ import contextvars
 import json
 import sqlite3
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -107,6 +108,13 @@ def test_rollback_query_cannot_see_links_or_attachments(indexed):
     assert [row['display_name'] for row in rows] == ['report.md']
 
 
+def test_new_attachment_ids_still_open_through_existing_byte_route(indexed):
+    from plugins.cloudseed_mobile.dashboard.plugin_api import workspace_read
+    attachment = next(row for row in result(session_id='root')['items'] if row['display_name'] == 'hero.png')
+    response = workspace_read('default', id=attachment['id'])
+    assert response['path'] == 'outputs/hero.png' and response['text'] == 'image'
+
+
 def test_legacy_colon_filename_is_a_file(indexed):
     home, root, index, _wid = indexed
     (root / 'notes:v2.md').write_text('notes')
@@ -187,8 +195,10 @@ def test_live_sized_evidence_completes_under_query_budget(indexed):
                        kind='file', action='delivered', provenance='assistant_reference')
             row['occurrences'] = [{**template['occurrences'][0], 'id': str(ordinal) + '-' + str(n),
                                    'message_id': str(ordinal), 'action': 'delivered'} for n in range(2)]
-            rows.append(('root', row['id'], generation, -ordinal, wid, 'file', 0, 1, row['display_name'], json.dumps(row), None))
-        db.executemany('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?)', rows)
+            rows.append(row)
+        index._stage(db, 'root', rows)
+        while index._publish(db, 'root', generation, time.monotonic() + 30, None) is None:
+            pass
     contexts = [contextvars.copy_context() for _ in range(2)]
     with ThreadPoolExecutor(max_workers=2) as executor:
         pages = list(executor.map(lambda ctx: ctx.run(result, limit=1), contexts))

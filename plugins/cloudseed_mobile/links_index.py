@@ -72,7 +72,9 @@ def link_candidates(content, status):
             if public_url(match[2]):
                 yield match[2], match[1][:512] or None
         for match in re.finditer(r'https?://[^\s<>\"\[\]`]+', explicit.sub(' ', text)):
-            url = match[0].rstrip('.,)')
+            url = match[0].rstrip('.,')
+            while url.endswith(')') and url.count(')') > url.count('('):
+                url = url[:-1]
             if public_url(url):
                 yield url, None
 
@@ -129,16 +131,18 @@ def attachment_paths(message):
             yield value
 
 
-def project_attachments(messages, add, status):
+def project_attachments(messages, add, status, *, enabled=True):
+    if not enabled:
+        return
     for message in messages:
         if message.get('active', 1) == 0 or message.get('display_kind') in {'reasoning', 'thinking', 'scratchpad'}:
             continue
         metadata = decode(message.get('display_metadata'))
         attachments = metadata.get('attachments') if isinstance(metadata, dict) else None
         if isinstance(attachments, list) and len(attachments) > 512:
-            status['links_partial'] = True
+            status['attachments_partial'] = True
         if isinstance(metadata, str) and len(metadata) > MAX_STRING:
-            status['links_partial'] = True
+            status['attachments_partial'] = True
         for value in attachment_paths(message):
             add(value, 'referenced', message, 'user_attachment')
 
@@ -194,8 +198,11 @@ def _admission(db, index, params):
         clauses.append('instr(e.search,?)>0')
         values.append(params['q'].casefold())
     if params['author'] != 'all':
-        clauses.append("json_extract(o.value,'$.author_kind')=?")
+        clauses.append('o.author_kind=?')
         values.append('agent' if params['author'] == 'agents' else 'me')
+    clauses.append("o.action NOT IN ('write_failed','pending')")
+    if sid is None:
+        clauses.append("(e.kind='link' OR o.action IN ('delivered','created','edited') OR o.provenance='user_attachment')")
     return clauses, values
 
 
@@ -242,18 +249,17 @@ def workspace_children(index, params):
     return children, digest(children)
 
 
-def _query_sql(clauses):
-    return '''WITH evidence AS (
-        SELECT e.id,e.kind,e.data,o.value AS occurrence,
-               json_extract(o.value,'$.observed_at') IS NULL AS sort_null,
-               -coalesce(json_extract(o.value,'$.observed_at'),0) AS sort_time,
-               CASE WHEN e.kind='link' THEN 'links'
-                    WHEN is_media(json_extract(e.data,'$.display_name'),json_extract(e.data,'$.display_type')) THEN 'media'
-                    ELSE 'files' END AS category
-        FROM entries e JOIN source.sessions s ON s.id=e.sid JOIN json_each(e.data,'$.occurrences') o
-        WHERE ''' + ' AND '.join(clauses) + '''), ranked AS (
-        SELECT *,row_number() OVER (PARTITION BY id ORDER BY sort_null,sort_time,json_extract(occurrence,'$.id')) AS rank
-        FROM evidence), matched AS (SELECT * FROM ranked WHERE rank=1) '''
+def _materialize(db, clauses, args):
+    db.execute('''CREATE TEMP TABLE evidence AS
+        SELECT e.sid,e.workspace_id,e.id,e.kind,e.rowid AS entry_rowid,o.value AS occurrence,
+               o.sort_null,o.sort_time,o.category,o.oid,o.message_id,o.truncated
+        FROM entries e JOIN source.sessions s ON s.id=e.sid JOIN index_occurrences o ON o.sid=e.sid AND o.id=e.id
+        WHERE ''' + ' AND '.join(clauses), args)
+    db.execute('CREATE INDEX evidence_id ON evidence(id)')
+    db.execute('''CREATE TEMP TABLE matched AS WITH ranked AS (
+        SELECT *,row_number() OVER (PARTITION BY id ORDER BY sort_null,sort_time,oid) AS rank
+        FROM evidence) SELECT * FROM ranked WHERE rank=1''')
+    db.execute('CREATE INDEX matched_page ON matched(category,sort_null,sort_time,id)')
 
 
 def file_mention(index, row):
@@ -294,61 +300,76 @@ def workspace_counts(index):
     with index.connection(uri=True) as db:
         db.execute('BEGIN')
         meta = index.snapshot(db)
-        if meta.get('partial', True) or meta.get('links_partial') or meta['refresh_pending']:
+        if not meta.get('generation') or not meta.get('index_revision'):
             return counts
         params = dict(session_id=None, workspace_id=None, q='', author='all')
         clauses, values = _admission(db, index, params)
         deadline = time.monotonic() + 0.75
         db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
-        sql = '''SELECT e.workspace_id,count(DISTINCT e.id),
-                 max(coalesce(json_extract(e.data,'$.occurrences_partial'),0))
-                 FROM entries e JOIN source.sessions s ON s.id=e.sid
-                 WHERE ''' + ' AND '.join(clauses) + ' GROUP BY e.workspace_id'
-        rows = list(db.execute(sql, [meta.get('generation'), *values]))
+        _materialize(db, clauses, [meta['generation'], *values])
+        rows = list(db.execute('SELECT workspace_id,count(DISTINCT id) FROM evidence GROUP BY workspace_id'))
         counts = {w['id']: 0 for w in index.workspaces}
-        for wid, count, partial in rows:
+        for wid, count in rows:
             if wid in counts:
-                counts[wid] = None if partial else count
+                counts[wid] = count
     return counts
 
 
 def _snapshot(index, principal, meta):
-    from plugins.cloudseed_mobile.deliverables_index import source_signature
+    from plugins.cloudseed_mobile.deliverables_index import FILES_SCAN_VERSION
     revision = meta.get('index_revision') or digest(['cold', index.profile])
     token = digest([principal, str(index.home), index.profile, revision, meta.get('generation'),
-                    meta.get('refresh_progress'), meta['refresh_pending'], meta.get('partial'), meta.get('links_partial'),
-                    digest(index.workspaces), source_signature(index.home)])
+                    digest(index.workspaces), FILES_SCAN_VERSION])
     return revision, token
 
 
-def _totals(db, sql, args, meta):
-    counts = dict(db.execute(sql + 'SELECT category,count(*) FROM matched GROUP BY category', args))
-    messages = db.execute(sql + "SELECT count(*) FROM (SELECT DISTINCT json_extract(occurrence,'$.stored_session_id'),json_extract(occurrence,'$.message_id') FROM evidence)", args).fetchone()[0]
-    truncated = db.execute(sql + "SELECT 1 FROM evidence WHERE json_extract(data,'$.occurrences_partial')=1 LIMIT 1", args).fetchone()
-    complete = not meta.get('partial', True) and not meta.get('links_partial') and not meta['refresh_pending'] and not truncated
-    totals = {key: counts.get(key, 0) if complete else None for key in ('media', 'files', 'links')}
+def _coverage_flags(db, index, params):
+    columns = {r[1] for r in db.execute('PRAGMA source.table_info(sessions)')}
+    clauses = ['1=1', *('coalesce(s.' + column + ',0)=0' for column in ('archived', 'hidden') if column in columns)]
+    values = []
+    if params['session_id'] is not None:
+        lineage = sorted(index._lineage(db, params['session_id']))
+        clauses.append('c.sid IN (' + ','.join('?' for _ in lineage) + ')')
+        values.extend(lineage)
+    if params['workspace_id'] is not None:
+        clauses.append('c.workspace_id=?')
+        values.append(params['workspace_id'])
+    if params['q'] or params['author'] != 'all':
+        clauses.append('c.sid IN (SELECT sid FROM evidence)')
+    return db.execute('SELECT coalesce(max(c.files_partial),0),coalesce(max(c.links_partial),0) FROM index_coverage c JOIN source.sessions s ON s.id=c.sid WHERE ' + ' AND '.join(clauses), values).fetchone()
+
+
+def _totals(db, index, params, meta):
+    counts = dict(db.execute('SELECT category,count(*) FROM matched GROUP BY category'))
+    messages = db.execute('SELECT count(*) FROM (SELECT DISTINCT sid,message_id FROM evidence)').fetchone()[0]
+    truncated = db.execute('SELECT 1 FROM evidence WHERE truncated=1 LIMIT 1').fetchone()
+    files_partial, links_partial = _coverage_flags(db, index, params)
+    known = bool(meta.get('generation') and meta.get('index_revision'))
+    totals = {key: counts.get(key, 0) if known and not files_partial else None for key in ('media', 'files')}
+    totals['links'] = counts.get('links', 0) if known and not links_partial else None
+    complete = known and not files_partial and not links_partial and not truncated
     totals['messages'] = messages if complete else None
     return totals, complete
 
 
-def _page_candidates(db, index, sql, values, params, links, after):
+def _page_candidates(db, index, params, links, after):
     item_filter = "category='links'" if links else "category!='links'"
-    args = list(values)
+    args = []
     if not links and params.get('category', 'all') != 'all':
         item_filter += ' AND category=?'
         args.append(params['category'])
     if after:
         item_filter += ' AND (sort_null,sort_time,id)>(?,?,?)'
         args.extend(after)
-    fetched = list(db.execute(sql + 'SELECT id,sort_null,sort_time,data,occurrence FROM matched WHERE ' + item_filter + ' ORDER BY sort_null,sort_time,id LIMIT ?', [*args, params['limit'] + 1]))
+    fetched = list(db.execute('SELECT id,sort_null,sort_time,(SELECT data FROM entries WHERE rowid=matched.entry_rowid),occurrence FROM matched WHERE ' + item_filter + ' ORDER BY sort_null,sort_time,id LIMIT ?', [*args, params['limit'] + 1]))
     return [(null, timestamp, rid, _item(index, data, occurrence, links)) for rid, null, timestamp, data, occurrence in fetched]
 
 
-def _append_children(db, sql, args, candidates, children, params, after):
+def _append_children(db, candidates, children, params, after):
     if not children or params['author'] != 'all':
         return
     keys = [row['id'] for row in children]
-    present = {r[0] for r in db.execute(sql + 'SELECT id FROM matched WHERE id IN (' + ','.join('?' for _ in keys) + ')', [*args, *keys])}
+    present = {r[0] for r in db.execute('SELECT id FROM matched WHERE id IN (' + ','.join('?' for _ in keys) + ')', keys)}
     for row in children:
         category = params.get('category', 'all')
         if category != 'all' and (row['is_directory'] or media(row['display_name'], row.get('display_type')) != (category == 'media')):
@@ -357,20 +378,20 @@ def _append_children(db, sql, args, candidates, children, params, after):
             candidates.append((1, 0, row['id'], row))
 
 
-def _file_metadata(db, index, sql, args, items):
+def _file_metadata(db, index, items, generation):
     if not items:
         return
     ids = [r['id'] for r in items if r['message_id'] is not None]
     if ids:
-        history_sql = sql + "SELECT id,occurrence FROM (SELECT id,occurrence,row_number() OVER (PARTITION BY id ORDER BY sort_null,sort_time) AS ordinal FROM evidence WHERE id IN (" + ','.join('?' for _ in ids) + ')) WHERE ordinal<=101'
+        history_sql = "SELECT id,occurrence FROM (SELECT id,occurrence,row_number() OVER (PARTITION BY id ORDER BY sort_null,sort_time) AS ordinal FROM evidence WHERE id IN (" + ','.join('?' for _ in ids) + ')) WHERE ordinal<=101'
         histories = {}
-        for rid, occurrence in db.execute(history_sql, [*args, *ids]):
+        for rid, occurrence in db.execute(history_sql, ids):
             histories.setdefault(rid, []).append(json.loads(occurrence))
         for row in items:
             if row['id'] in histories:
                 row['occurrences'] = histories[row['id']][:100]
                 row['occurrences_partial'] = bool(row.get('occurrences_partial')) or len(histories[row['id']]) > 100
-    artifacts = index._artifacts(db, args[0], [r.get('artifact_key') for r in items])
+    artifacts = index._artifacts(db, generation, [r.get('artifact_key') for r in items])
     for row in items:
         versions = artifacts.get(row.get('artifact_key'))
         if versions:
@@ -391,23 +412,21 @@ def query_index(index, principal, params, *, links=False):
                         params['author'], params.get('category'), params.get('include_workspace'),
                         params.get('directory_path'), directory_revision])
         after = _decode_cursor(params['cursor'], scope)
-        db.create_function('is_media', 2, media, deterministic=True)
         deadline = time.monotonic() + 0.75
         db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
-        sql = _query_sql(clauses)
         args = [meta.get('generation'), *values]
-        totals, complete = _totals(db, sql, args, meta)
-        candidates = _page_candidates(db, index, sql, args, params, links, after)
+        _materialize(db, clauses, args)
+        totals, complete = _totals(db, index, params, meta)
+        candidates = _page_candidates(db, index, params, links, after)
         if not links:
-            _append_children(db, sql, args, candidates, children, params, after)
+            _append_children(db, candidates, children, params, after)
         candidates.sort(key=lambda r: r[:3])
         page = candidates[:params['limit']]
         items = [r[3] for r in page]
         if not links:
-            _file_metadata(db, index, sql, args, items)
+            _file_metadata(db, index, items, meta.get('generation'))
         cursor = base64.urlsafe_b64encode(json.dumps({'scope': scope, 'after': page[-1][:3]}).encode()).decode() if len(candidates) > len(page) and page else None
-        if _snapshot(index, principal, meta)[1] != snapshot:
-            raise HTTPException(409, 'Source changed during index query')
+
         return {'schema_version': 1, 'profile': index.profile, 'snapshot_id': snapshot, 'index_revision': revision,
                 'items': items, 'next_cursor': cursor, 'totals': totals,
                 'coverage': {'complete': complete, 'refresh_pending': meta['refresh_pending'], 'updated_at': meta.get('updated_at')}}

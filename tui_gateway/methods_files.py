@@ -25,6 +25,11 @@ def _principal(server):
     return hashlib.sha256(json.dumps(['cloudseed-mobile-owner-v1', identity['provider'], identity['user_id']], separators=(',', ':')).encode()).hexdigest()
 
 
+def _refresh(server, home, index):
+    with server._session_profile_runtime_scope({'profile_home': str(home)}, hydrate_secrets=False):
+        index.refresh()
+
+
 def _rpc(server, links, rid, body):
     try:
         principal = _principal(server)
@@ -34,10 +39,10 @@ def _rpc(server, links, rid, body):
             raise ValueError('Concrete profile required')
         home = server._profile_home(profile) or server._hermes_home
         with server._session_profile_runtime_scope({'profile_home': str(home)}, hydrate_secrets=False):
-            index = deliverable_store(profile)
+            index = deliverable_store(profile, files_index=True)
             result = query_index(index, principal, params, links=links)
             if result['coverage']['refresh_pending']:
-                index.refresh()
+                server._pool.submit(_refresh, server, home, index)
         return server._ok(rid, result)
     except PermissionError:
         return server._err(rid, 4403, 'Files owner scope denied')
@@ -51,5 +56,6 @@ def _rpc(server, links, rid, body):
 
 
 def register(server, register_fn):
+    server._LONG_HANDLERS = server._LONG_HANDLERS | {'files.index', 'links.index'}
     for name, links in [('files.index', False), ('links.index', True)]:
         register_fn(name, lambda rid, params, links=links: _rpc(server, links, rid, params))

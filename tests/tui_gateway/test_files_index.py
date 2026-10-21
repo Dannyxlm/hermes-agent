@@ -44,7 +44,7 @@ def indexed(mobile_home, peer):
         db.append_message('other', 'assistant', '[Other](https://example.com/other)')
     with sqlite3.connect(home / 'state.db') as db:
         db.execute("UPDATE messages SET timestamp='unknown' WHERE role='user'")
-    index = deliverable_store('default')
+    index = deliverable_store('default', files_index=True)
     for _ in range(10):
         index.refresh(max_sessions=100)
         if not index.snapshot()['refresh_pending']:
@@ -136,8 +136,8 @@ def test_empty_and_partial_counts(indexed):
     with SessionDB(db_path=home / 'state.db') as db:
         db.append_message('root', 'assistant', 'not indexed yet')
     page = result(q='no such synthetic item')
-    assert not page['coverage']['complete'] and page['coverage']['refresh_pending']
-    assert all(v is None for v in page['totals'].values())
+    assert page['coverage']['complete'] and page['coverage']['refresh_pending']
+    assert page['totals'] == dict(media=0, files=0, links=0, messages=0)
 
 
 def test_display_metadata_attachments_and_canonical_quoted_mentions(indexed):
@@ -169,7 +169,8 @@ def test_bounded_attachment_evidence_reports_unknown_totals(indexed):
     index.refresh(max_sessions=100)
     page = result(session_id='root')
     assert not page['coverage']['complete']
-    assert all(value is None for value in page['totals'].values())
+    assert page['totals']['media'] is None and page['totals']['files'] is None
+    assert page['totals']['messages'] is None and page['totals']['links'] == 2
 
 
 def test_live_session_revocation_and_read_does_not_need_state_write_lock(indexed):
@@ -181,7 +182,7 @@ def test_live_session_revocation_and_read_does_not_need_state_write_lock(indexed
         writer.execute("UPDATE sessions SET archived=1 WHERE id IN ('root','tip')")
     assert rpc('files.index', profile='default', session_id='root')['error']['code'] == 4400
     stale = result()
-    assert stale['items'] == [] and stale['totals']['files'] is None
+    assert stale['items'] == [] and stale['totals']['files'] == 0
     assert result()['totals']['files'] == 0
 
 
@@ -191,9 +192,10 @@ def test_invalid_queries_are_errors_not_empty_pages(indexed, params):
     assert rpc('files.index', profile='default', **params)['error']['code'] == 4400
 
 
-def test_cursor_invalidation_on_source_change_before_refresh(indexed):
+def test_cursor_survives_source_change_before_refresh(indexed, monkeypatch):
     home, _root, _index, _wid = indexed
+    monkeypatch.setattr(type(_index), 'refresh', lambda *args, **kwargs: None)
     page = result(limit=1)
     with SessionDB(db_path=home / 'state.db') as db:
         db.append_message('root', 'assistant', 'Source changed')
-    assert rpc('links.index', profile='default', snapshot_id=page['snapshot_id'])['error']['code'] == 4091
+    assert result('links.index', snapshot_id=page['snapshot_id'])['snapshot_id'] == page['snapshot_id']
