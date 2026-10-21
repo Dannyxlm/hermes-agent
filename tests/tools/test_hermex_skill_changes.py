@@ -270,3 +270,24 @@ def test_undo_records_one_audit_row_and_usage(change_home, created):
         assert "proof" not in usage
     else:
         assert usage["proof"]["patch_count"] == before + 1
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_review_import_failure_preserves_mutation_before_capture(change_home, monkeypatch, batch):
+    import hashlib
+    import sys
+    from tools import skill_ledger
+    from tools.skill_manager_tool import skill_manage
+    assert mutate(action="create", content="---\nname: proof\ndescription: Proof.\n---\nBefore.\n")["success"]
+    original = (change_home / "skills/proof/SKILL.md").read_bytes()
+    with monkeypatch.context() as patch:
+        patch.setitem(sys.modules, "hermex_skill_changes", None)
+        if batch:
+            response = json.loads(skill_manage(action="", name="", session_id="chat", operations=[
+                {"name":"proof", "action":"patch", "old_string":"Before.", "new_string":"After."}]))
+        else:
+            response = mutate(action="patch", old_string="Before.", new_string="After.")
+    assert response["success"]
+    row = skill_ledger.list_entries()[0]
+    assert row["before"]
+    assert row["before"][0]["sha256"] == hashlib.sha256(original).hexdigest()

@@ -135,15 +135,15 @@ def test_search_scope_and_cursor_binding(live_home):
     assert [m["message_id"] for g in continued["results"] for m in g["matches"]] == ["2"]
 
 
-@pytest.mark.parametrize("method,params", [
-    ("session.search", {"query": "needle", "limit": 101}),
-    ("session.search", {"query": "needle", "limit": True}),
-    ("session.search", {"query": "needle", "session_id": "missing"}),
-    ("session.search", {"query": "needle", "profile": "missing"}),
-    ("session.messages.window", {"session_id": "chat", "message_id": "not-id", "expected_revision": "x"}),
+@pytest.mark.parametrize("method,params,code", [
+    ("session.search", {"query": "needle", "limit": 101}, 4000),
+    ("session.search", {"query": "needle", "limit": True}, 4000),
+    ("session.search", {"query": "needle", "session_id": "missing"}, 4400),
+    ("session.search", {"query": "needle", "profile": "missing"}, 4064),
+    ("session.messages.window", {"session_id": "chat", "message_id": "not-id", "expected_revision": "x"}, 4000),
 ])
-def test_invalid_scope_and_limits_fail_closed(live_home, method, params):
-    assert "error" in rpc(method, **params)
+def test_invalid_scope_and_limits_fail_closed(live_home, method, params, code):
+    assert rpc(method, **params)["error"]["code"] == code
 
 
 def test_search_id_and_title_only_results(live_home):
@@ -301,3 +301,42 @@ def test_cursor_contains_no_profile_path_or_query(live_home):
     decoded = base64.urlsafe_b64decode(page["next_cursor"])
     assert str(live_home).encode() not in decoded
     assert b"sensitive-query" not in decoded
+
+
+def test_invalid_lineage_has_target_error_code(live_home):
+    with SessionDB(db_path=live_home / "state.db") as db:
+        db._conn.execute("UPDATE sessions SET parent_session_id='other', end_reason='compression' WHERE id='chat'")
+        db._conn.execute("UPDATE sessions SET parent_session_id='chat', end_reason='compression' WHERE id='other'")
+    assert rpc("session.search", query="needle", session_id="chat")["error"]["code"] == 4400
+
+
+def test_global_search_revision_lands_in_each_returned_conversation(live_home):
+    with SessionDB(db_path=live_home / "state.db") as db:
+        for i in range(8):
+            sid = f"global-{i}"
+            db.create_session(sid, "desktop")
+            db.append_message(sid, "assistant", "needle")
+    page = result("session.search", query="needle")
+    assert len(page["results"]) == 8
+    assert len(page["revision"]) <= 256
+    append(live_home, "other", "assistant", "unrelated streaming")
+    for group in page["results"]:
+        anchor = group["matches"][0]["message_id"]
+        window = result("session.messages.window", session_id=group["session_id"], message_id=anchor,
+                        expected_revision=page["revision"])
+        assert str(window["messages"][0]["id"]) == anchor
+
+
+def test_legacy_tool_call_copies_keep_the_canonical_representative(live_home):
+    calls = [{"id":"call-proof", "type":"function", "function":{"name":"terminal","arguments":"before"}}]
+    with SessionDB(db_path=live_home / "state.db") as db:
+        older = db.append_message("chat", "assistant", "needle original", timestamp=100, tool_calls=calls)
+        calls[0]["function"]["arguments"] = "pruned"
+        newer = db.append_message("chat", "assistant", "needle carried copy", timestamp=100, tool_calls=calls)
+        db._conn.execute("UPDATE messages SET display_identity=NULL, display_order=NULL WHERE session_id='chat'")
+        db._conn.execute("UPDATE messages SET active=0, compacted=1 WHERE id=?", (older,))
+    found = result("session.search", query="needle", session_id="chat")
+    assert [m["message_id"] for g in found["results"] for m in g["matches"]] == [str(newer)]
+    window = result("session.messages.window", session_id="chat", message_id=str(newer),
+                    expected_revision=found["revision"])
+    assert [m["id"] for m in window["messages"]] == [newer]
