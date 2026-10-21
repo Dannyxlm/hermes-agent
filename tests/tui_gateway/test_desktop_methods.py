@@ -126,3 +126,89 @@ def test_snapshot_runs_off_dispatch_thread(rpc):
     assert server.dispatch(req, peer) is None
     assert peer.done.wait(10)
     assert peer.frames[-1]['result']['resource_id'] == 'desktop'
+
+
+def test_signin_not_now_and_lost_ack_through_public_rpc(rpc):
+    import time
+    from tools.desktop_spaces import SpaceStore
+    from tui_gateway import methods_desktop
+    call, peer, home = rpc
+    params = {'profile': 'default', 'space': 'studio', 'connection_id': 'connection',
+              'installation_id': 'installation'}
+    token = server.bind_transport(peer)
+    try:
+        _, _, scope = methods_desktop._desktop_scope(server, params)
+    finally:
+        server.reset_transport(token)
+    store = SpaceStore(home / 'desktop-spaces.sqlite')
+    store.publish_signin('studio', scope, request_id='req', revision=1,
+                         origin='https://example.com', reason='Continue', expires_at=time.time()+60)
+    state = call('desktop.snapshot')['result']
+    assert state['signin']['allowed_actions'] == ['not_now']
+    assert state['signin']['login_handle'] is None
+    fields = {'action_id': 'decision', 'action': 'not_now', 'request_id': 'req', 'request_revision': 1,
+              'expected_revision': state['revision'], 'expected_lease_epoch': state['lease']['epoch']}
+    assert call('desktop.action', **{**fields, 'action_id': 'stale', 'request_revision': 2})['result']['status'] == 'conflict'
+    receipt = call('desktop.action', **fields)['result']
+    assert receipt['status'] == 'accepted'
+    assert call('desktop.action_status', action_id='decision')['result'] == receipt
+    assert call('desktop.action', **fields)['result'] == receipt
+    assert call('desktop.action_status', action_id='decision', installation_id='other')['result']['status'] == 'unknown'
+    assert call('desktop.action_status', action_id='decision', profile='secondary')['result']['status'] == 'unknown'
+    assert call('desktop.action_status', action_id='decision', space='desktop')['result']['status'] == 'unknown'
+    assert call('desktop.snapshot')['result']['signin'] is None
+    assert call('desktop.snapshot')['result']['activity'][0]['label'] == 'Sign-in deferred'
+    token = server.bind_transport(Peer({'provider': 'fixture', 'user_id': 'owner'}))
+    try:
+        foreign = server.handle_request({'id': 'foreign', 'method': 'desktop.action_status',
+                                         'params': {**params, 'action_id': 'decision'}})
+        assert foreign['result']['status'] == 'unknown'
+    finally:
+        server.reset_transport(token)
+
+
+@pytest.mark.parametrize('identity', [None, {}, {'provider': 'fixture', 'user_id': ''},
+                                     {'provider': 'internal', 'user_id': 'internal'}])
+def test_unauthenticated_transport_cannot_read(rpc, identity):
+    call, peer, _ = rpc
+    peer.auth_identity = identity
+    assert call('desktop.snapshot')['error']['code'] == 4403
+
+
+def test_owner_policy_comes_from_root_not_selected_profile(rpc, monkeypatch):
+    call, _, home = rpc
+    scopes = []
+    @contextlib.contextmanager
+    def scope(session, *, hydrate_secrets=True):
+        scopes.append((session['profile_home'], hydrate_secrets))
+        yield
+    monkeypatch.setattr(server, '_session_profile_runtime_scope', scope)
+    assert call('desktop.snapshot', profile='secondary')['result']['resource_id'] == 'studio'
+    assert scopes == [(str(home), False), (str(home.parent / 'secondary'), False)]
+
+
+@pytest.mark.parametrize('exception', [PermissionError('private-path'), OSError('private-path')])
+def test_storage_errors_are_not_permission_denials(rpc, monkeypatch, caplog, exception):
+    from tools.desktop_spaces import SpaceStore
+    call, _, _ = rpc
+    def fail(*args, **kwargs):
+        raise exception
+    monkeypatch.setattr(SpaceStore, 'snapshot', fail)
+    reply = call('desktop.snapshot')
+    assert reply['error'] == {'code': 5401, 'message': 'Desktop state unavailable'}
+    assert 'private-path' not in caplog.text
+
+
+def test_corrupt_storage_is_not_false_idle(rpc):
+    call, _, home = rpc
+    (home / 'desktop-spaces.sqlite').write_bytes(b'corrupt')
+    assert call('desktop.snapshot')['error']['code'] == 5401
+
+
+@pytest.mark.parametrize('extra', [{'viewer_id': 'unexpected'}, {'url': 'https://example.com'},
+                                  {'request_revision': True}, {'expected_lease_epoch': True}])
+def test_not_now_rejects_input_fields_and_coercion(rpc, extra):
+    call, _, _ = rpc
+    result = call('desktop.action', **{'action_id': 'act', 'action': 'not_now', 'request_id': 'req',
+        'request_revision': 1, 'expected_revision': 1, 'expected_lease_epoch': 0, **extra})
+    assert result['error']['code'] == 4000
