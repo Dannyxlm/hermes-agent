@@ -78,7 +78,7 @@ async def payload(request: Request):
 
 def warm_indexes():
     try:
-        return [deliverable_store(profile_id())]
+        return [deliverable_store(profile_id()), deliverable_store(profile_id(), files_index=True)]
     except ValueError:  # an unverified custom home has no Files index to warm
         return []
 
@@ -235,11 +235,11 @@ for operation in human_input.OPERATIONS:
     router.add_api_route('/human-input/'+operation, human_input_endpoint(operation), methods=['POST'], name='human_input_'+operation)
 
 
-def deliverable_store(profile):
+def deliverable_store(profile, *, files_index=False):
     from hermes_constants import get_hermes_home
     from plugins.cloudseed_mobile.deliverables_index import DeliverablesIndex
     files.check_profile(profile)
-    return DeliverablesIndex(get_hermes_home(), profile, files.workspaces(profile, include_generation=True)['items'])
+    return DeliverablesIndex(get_hermes_home(), profile, files.workspaces(profile, include_generation=True)['items'], files_index=files_index)
 
 
 @router.get('/deliverables')
@@ -254,17 +254,41 @@ def deliverable_list(background_tasks: BackgroundTasks, profile: str, workspace_
 
 @router.get('/deliverables/content')
 def deliverable_content(profile: str, id: str, reveal: bool = False):
-    return guarded(lambda: deliverable_store(profile).content(id, reveal))
+    return guarded(lambda: indexed_read(profile, 'content', id, reveal))
 
 
 @router.get('/deliverables/versions')
 def deliverable_versions(profile: str, artifact_key: str):
-    return guarded(lambda: deliverable_store(profile).versions(artifact_key))
+    return guarded(lambda: indexed_read(profile, 'versions', artifact_key))
+
+
+def indexed_read(profile, operation, *args):
+    try:
+        result = getattr(deliverable_store(profile), operation)(*args)
+        if operation != 'versions' or result['version_count']:
+            return result
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return getattr(deliverable_store(profile, files_index=True), operation)(*args)
+    modern = deliverable_store(profile, files_index=True).versions(*args)
+    return modern if modern['version_count'] else result
 
 
 @router.get('/workspaces')
 def file_workspaces(profile: str):
-    return guarded(lambda: files.workspaces(profile))
+    def run():
+        from plugins.cloudseed_mobile.links_index import workspace_counts
+        result = files.workspaces(profile)
+        index = deliverable_store(profile, files_index=True)
+        try:
+            counts = workspace_counts(index)
+        except (OSError, sqlite3.Error, HTTPException):
+            counts = {}
+        for workspace in result['items']:
+            workspace['indexed_item_count'] = counts.get(workspace['id'])
+        return result
+    return guarded(run)
 
 
 @router.get('/workspace-files')
@@ -277,7 +301,7 @@ def workspace_target(profile, workspace_id, path, id, reveal):
     if id:
         if workspace_id is not None or path is not None:
             raise HTTPException(400, 'Choose deliverable id or workspace and path')
-        return deliverable_store(profile).file_target(id, reveal)
+        return indexed_read(profile, 'file_target', id, reveal)
     if workspace_id is None or path is None:
         raise HTTPException(400, 'Workspace and relative path required')
     return workspace_id, path

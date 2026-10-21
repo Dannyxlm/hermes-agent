@@ -1561,6 +1561,101 @@ export interface DisplayLeaseReleaseParams {
   viewer_id?: string | null
   force?: boolean | null
 }
+export interface FilesIndexParams {
+  profile: string
+  session_id?: string | null
+  workspace_id?: string | null
+  q?: string
+  cursor?: string | null
+  snapshot_id?: string | null
+  limit?: number
+  author?: 'all' | 'agents' | 'me'
+  category?: 'all' | 'media' | 'files'
+  include_workspace?: boolean
+  directory_path?: string | null
+}
+export interface FilesIndexResult {
+  schema_version: 1
+  profile: string
+  snapshot_id: string
+  index_revision: string
+  next_cursor: string | null
+  totals: IndexTotals
+  coverage: IndexCoverage
+  items: FileIndexItem[]
+}
+export interface IndexTotals {
+  media: number | null
+  files: number | null
+  links: number | null
+  messages: number | null
+}
+export interface IndexCoverage {
+  complete: boolean
+  refresh_pending: boolean
+  updated_at: number | null
+}
+export interface FileIndexItem {
+  id: string
+  profile: string
+  kind: string
+  display_name: string
+  stored_session_id: string | null
+  message_id: string | null
+  source_chat_title: string | null
+  observed_at: number | null
+  workspace_id: string | null
+  relative_path?: string | null
+  url?: string | null
+  author_kind: 'agent' | 'me' | 'unknown'
+  author_profile: string | null
+  is_directory: boolean
+  mention_text: string | null
+  collection: FileCollection | null
+  occurrences?: unknown[]
+  [key: string]: unknown
+}
+export interface FileCollection {
+  id: string
+  title: string
+  member_ids: string[]
+  picked_id: string | null
+}
+export interface IndexParams {
+  profile: string
+  session_id?: string | null
+  workspace_id?: string | null
+  q?: string
+  cursor?: string | null
+  snapshot_id?: string | null
+  limit?: number
+  author?: 'all' | 'agents' | 'me'
+}
+export interface LinksIndexResult {
+  schema_version: 1
+  profile: string
+  snapshot_id: string
+  index_revision: string
+  next_cursor: string | null
+  totals: IndexTotals
+  coverage: IndexCoverage
+  items: LinkIndexItem[]
+}
+export interface LinkIndexItem {
+  id: string
+  profile: string
+  url: string
+  title: string | null
+  stored_session_id: string
+  message_id: string
+  source_chat_title: string | null
+  observed_at: number | null
+  workspace_id: string | null
+  author_kind: 'agent' | 'me' | 'unknown'
+  author_profile: string | null
+  tag: 'preview' | 'internal' | null
+  mention_text: string | null
+}
 export interface GroupsCapabilitiesParams {
   profile?: string | null
 }
@@ -2085,6 +2180,113 @@ export interface HumanInputActionStatusParams {
   request_revision: number
   action_id: string
   question_id?: string | null
+}
+export interface SkillChangesListParams {
+  profile: string
+  session_id: string
+  cursor?: string | null
+  limit?: number
+}
+export interface SkillChangesListResult {
+  version: 1
+  profile: string
+  items: SkillChangeItem[]
+  next_cursor: string | null
+}
+export interface SkillChangeItem {
+  change_id: string
+  skill: string
+  session_id: string
+  anchor_message_id: string | null
+  created_at: string
+  revision: string
+  title: string | null
+  reason: string | null
+  lines: SkillChangeLine[]
+  decision: 'unreviewed' | 'kept' | 'undone'
+  can_undo: boolean
+}
+export interface SkillChangeLine {
+  kind: 'add' | 'remove'
+  text: string
+}
+export interface SkillChangeParams {
+  profile: string
+  change_id: string
+}
+export interface SkillChangeResult {
+  version: 1
+  change_id: string
+  revision: string
+  diff: string | null
+  can_undo: boolean
+  decision: 'unreviewed' | 'kept' | 'undone'
+  receipt_id: string | null
+}
+export interface SkillChangeDecideParams {
+  profile: string
+  change_id: string
+  decision: 'keep' | 'undo'
+  expected_revision: string
+  client_action_id: string
+}
+export interface SkillChangeDecisionResult {
+  change_id: string
+  decision: 'kept' | 'undone'
+  revision: string
+  receipt_id: string
+}
+export interface LiveSearchParams {
+  profile: string
+  query: string
+  session_id?: string | null
+  cursor?: string | null
+  limit?: number
+}
+export interface LiveSearchResult {
+  version: 1
+  profile: string
+  query: string
+  revision: string
+  results: LiveSearchGroup[]
+  next_cursor: string | null
+}
+export interface LiveSearchGroup {
+  session_id: string
+  lineage_root: string
+  matches: LiveSearchMatch[]
+  match_count: number | null
+}
+export interface LiveSearchMatch {
+  message_id: string
+  logical_id: string
+  source_session_id: string
+  role: 'user' | 'assistant'
+  snippet: string
+  ranges: LiveSearchRange[]
+}
+export interface LiveSearchRange {
+  start: number
+  length: number
+}
+export interface LiveWindowParams {
+  profile: string
+  session_id: string
+  message_id: string
+  expected_revision: string
+  limit?: number
+  cursor?: string | null
+}
+export interface LiveWindowResult {
+  version: 1
+  profile: string
+  session_id: string
+  revision: string
+  anchor_message_id: string
+  messages: Record<string, unknown>[]
+  older_cursor: string | null
+  newer_cursor: string | null
+  offset: number | null
 }
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
@@ -4464,6 +4666,67 @@ export interface PetScaleResult {
   ok: boolean
   scale: number
 }
+export interface TeamActivityParams {
+  profiles: string[]
+}
+export interface TeamActivityResult {
+  version: 1
+  now: number
+  complete: boolean
+  working_count: number | null
+  agents: TeamAgentActivity[]
+}
+export interface TeamAgentActivity {
+  profile: string
+  working: boolean | null
+  last_human_chat_at: number | null
+  current: TeamCurrent | null
+}
+export interface TeamCurrent {
+  kind: string
+  title: string | null
+  work_label: string | null
+  started_at: number | null
+  open_chat: TeamChat | null
+}
+export interface TeamChat {
+  profile: string
+  stored_session_id: string
+}
+export interface CronSummaryParams {
+  profiles: string[]
+  timezone: string
+  start: number
+  end: number
+  limit?: number
+  cursor?: string | null
+}
+export interface CronSummaryResult {
+  version: 1
+  timezone: string
+  start: number
+  end: number
+  complete: boolean
+  counts: CronSummaryCounts
+  runs: CronSummaryRun[]
+  next_cursor: string | null
+}
+export interface CronSummaryCounts {
+  expected: number | null
+  succeeded: number | null
+  retried: number | null
+  needs_attention: number | null
+}
+export interface CronSummaryRun {
+  profile: string
+  job_id: string
+  occurrence_id: string
+  started_at: number | null
+  finished_at: number | null
+  outcome: string
+  retry_of: string | null
+  delivery_summary: string | null
+}
 export interface SystemBatteryParams {
   profile?: string | null
 }
@@ -4564,8 +4827,15 @@ export interface CliExecResult {
 export interface CommandsCatalogParams {
   session_id?: string | null
   profile?: string | null
+  since_revision?: string | null
+  include_entries?: boolean
 }
 export interface CommandsCatalogResult {
+  catalog_version?: number | null
+  profile?: string | null
+  revision?: string | null
+  observed_at?: string | null
+  entries?: LiveCatalogEntry[]
   pairs?: string[][]
   sub?: Record<string, string[]>
   canon?: Record<string, string>
@@ -4574,6 +4844,16 @@ export interface CommandsCatalogResult {
   skills?: Record<string, SkillCatalogEntry>
   skill_count?: number
   warning?: string
+}
+export interface LiveCatalogEntry {
+  id: string
+  slash: string
+  kind: 'skill' | 'command'
+  description: string | null
+  icon: string | null
+  is_new: boolean | null
+  updated_at: string | null
+  mobile_action: string | null
 }
 export interface CommandCatalogMeta {
   argument_mode?: ArgumentMode | null
@@ -5342,11 +5622,12 @@ export interface UsageMetrics {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  cost_status: 'est' | 'unknown'
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5362,11 +5643,12 @@ export interface AgentUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  cost_status: 'est' | 'unknown'
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5383,11 +5665,12 @@ export interface ModelUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  cost_status: 'est' | 'unknown'
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5405,11 +5688,12 @@ export interface ProviderUsageTotals {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  cost_status: 'est' | 'unknown'
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5426,11 +5710,12 @@ export interface DailyUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  cost_status: 'est' | 'unknown'
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5448,11 +5733,12 @@ export interface ChatUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  cost_status: 'est' | 'unknown'
+  cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: number
   event_count: number
   unattributed_turn_events: number
@@ -5491,11 +5777,11 @@ export interface AllTimeMetrics {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  minimum_estimated_cost_usd: number
   cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
@@ -5512,11 +5798,11 @@ export interface AllTimeAgentUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  minimum_estimated_cost_usd: number
   cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
@@ -5534,11 +5820,11 @@ export interface AllTimeModelUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  minimum_estimated_cost_usd: number
   cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
@@ -5557,11 +5843,11 @@ export interface AllTimeProviderUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  minimum_estimated_cost_usd: number
   cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
@@ -5579,11 +5865,11 @@ export interface AllTimeChatUsage {
   cache_hit_percent: number | null
   estimated_cost_usd: number | null
   known_estimated_cost_usd: number
+  minimum_estimated_cost_usd: number
   unknown_price_events: number
   cost_reason: string | null
   pricing_dates: string[]
   price_sources: string[]
-  minimum_estimated_cost_usd: number
   cost_status: 'est' | 'minimum' | 'unknown'
   turn_count: null
   event_count: null
@@ -6542,6 +6828,8 @@ export interface RpcMethods {
   'connectors.tools': { params: ConnectorToolsParams; result: ConnectorToolsResult }
   /** List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store. */
   'cron.manage': { params: CronManageParams; result: CronManageResult }
+  /** Read-only bounded execution receipts with nullable aggregate coverage and scope-bound paging. */
+  'cron.summary': { params: CronSummaryParams; result: CronSummaryResult }
   /** Block/unblock NEW spawns globally (active children keep running); returns the new state. */
   'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult }
   /** Running subagent tree plus the spawn pause flag and limits. */
@@ -6572,6 +6860,7 @@ export interface RpcMethods {
   'display.thumbnail': { params: ProfileParams; result: DisplayThumbnailResult }
   /** Stage a non-image file into the session workspace and hand back its @file: ref. */
   'file.attach': { params: FileAttachParams; result: FileAttachResult }
+  'files.index': { params: FilesIndexParams; result: FilesIndexResult }
   /** Mark the one-time availability notice as shown on the free-tier identity. */
   'free_tier.ack_notice': { params: ProfileParams; result: FreeTierAckNoticeResult }
   /** Report a browser window outcome for the matching pending attempt; mint remains authoritative. */
@@ -6653,6 +6942,7 @@ export interface RpcMethods {
   'learning.edit': { params: LearningEditParams; result: LearningMutationResult }
   /** Pre-render the /journey timeline (frames + legend/summary) so the TUI walks it locally. */
   'learning.frames': { params: LearningFramesParams; result: LearningFramesResult }
+  'links.index': { params: IndexParams; result: LinksIndexResult }
   /** Stateless one-shot LLM completion (titles, ideas) on the session's or the task backend. */
   'llm.oneshot': { params: LlmOneshotParams; result: LlmOneshotResult }
   /** Facts about the machine running this backend and its OS account, for the desktop first run. */
@@ -6894,6 +7184,8 @@ export interface RpcMethods {
   'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult }
   /** Human-facing stored sessions, most recent first (sub-agent / kanban sources denied). */
   'session.list': { params: SessionListParams; result: SessionListResult }
+  /** Bounded display window at an exact message, including compression ancestors. */
+  'session.messages.window': { params: LiveWindowParams; result: LiveWindowResult }
   /** Most recent human-facing session; errors fold into a null session_id. */
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult }
   /** Redirect the active turn (queued for the next turn while the agent is still building). */
@@ -6906,6 +7198,8 @@ export interface RpcMethods {
   'session.resume': { params: SessionResumeParams; result: SessionResumeWireResult }
   /** Export the transcript to ~/.hermes/sessions/saved (classic /save). */
   'session.save': { params: SessionSaveParams; result: SessionSaveResult }
+  /** Paged message IDs and UTF-16 snippet ranges in owned history. */
+  'session.search': { params: LiveSearchParams; result: LiveSearchResult }
   /** Set/clear hidden (out of the default list, still resumable by its owner) on a session + lineage. */
   'session.set_hidden': { params: SessionSetHiddenParams; result: SessionSetHiddenResult }
   /** Rendered /status text for the session. */
@@ -6948,6 +7242,12 @@ export interface RpcMethods {
   'shared_metrics.update_run': { params: SharedMetricsUpdateRunParams; result: SharedMetricsUpdateRunResult }
   /** Run a safe (non-dangerous) shell command captured for ``!cmd`` / inline substitution. */
   'shell.exec': { params: ShellExecParams; result: ShellExecResult }
+  /** Acknowledge or conflict-safely undo a recorded skill edit. */
+  'skills.changes.decide': { params: SkillChangeDecideParams; result: SkillChangeDecisionResult }
+  /** Recorded skill diff and durable decision readback. */
+  'skills.changes.get': { params: SkillChangeParams; result: SkillChangeResult }
+  /** Committed skill changes in an exact owned conversation lineage. */
+  'skills.changes.list': { params: SkillChangesListParams; result: SkillChangesListResult }
   /** Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub. */
   'skills.manage': { params: SkillsManageParams; result: SkillsManageResult }
   /** Re-scan skill dirs; the pre-rendered ``output`` is what /reload-skills prints. */
@@ -6980,6 +7280,8 @@ export interface RpcMethods {
   'subscription.upgrade': { params: SubscriptionUpgradeParams; result: SubscriptionUpgradeResult }
   /** Host battery for the status bar; always resolves, ``available: false`` when unreadable. */
   'system.battery': { params: SystemBatteryParams; result: SystemBatteryResult }
+  /** Owner-scoped verified positive runtime activity; unknown coverage never means free. */
+  'team.activity': { params: TeamActivityParams; result: TeamActivityResult }
   /** Record the client's column width for server-side rendering. */
   'terminal.resize': { params: TerminalResizeParams; result: TerminalResizeResult }
   /** Persist a toolset / MCP enable-disable change and rebuild the session agent so it takes effect now. */
@@ -7084,6 +7386,7 @@ export const RPC_METHODS = [
   'connectors.policy.set',
   'connectors.tools',
   'cron.manage',
+  'cron.summary',
   'delegation.pause',
   'delegation.status',
   'desktop.action',
@@ -7101,6 +7404,7 @@ export const RPC_METHODS = [
   'display.switchSandboxImage',
   'display.thumbnail',
   'file.attach',
+  'files.index',
   'free_tier.ack_notice',
   'free_tier.challenge_result',
   'free_tier.claim_nudge',
@@ -7143,6 +7447,7 @@ export const RPC_METHODS = [
   'learning.detail',
   'learning.edit',
   'learning.frames',
+  'links.index',
   'llm.oneshot',
   'machine.facts',
   'mcp.catalog',
@@ -7275,12 +7580,14 @@ export const RPC_METHODS = [
   'session.info',
   'session.interrupt',
   'session.list',
+  'session.messages.window',
   'session.most_recent',
   'session.redirect',
   'session.response.read',
   'session.response.release',
   'session.resume',
   'session.save',
+  'session.search',
   'session.set_hidden',
   'session.status',
   'session.steer',
@@ -7302,6 +7609,9 @@ export const RPC_METHODS = [
   'shared_metrics.status',
   'shared_metrics.update_run',
   'shell.exec',
+  'skills.changes.decide',
+  'skills.changes.get',
+  'skills.changes.list',
   'skills.manage',
   'skills.reload',
   'slash.exec',
@@ -7318,6 +7628,7 @@ export const RPC_METHODS = [
   'subscription.state',
   'subscription.upgrade',
   'system.battery',
+  'team.activity',
   'terminal.resize',
   'tools.configure',
   'tools.list',

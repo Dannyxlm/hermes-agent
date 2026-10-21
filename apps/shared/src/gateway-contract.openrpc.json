@@ -853,6 +853,24 @@
       }
     },
     {
+      "name": "cron.summary",
+      "summary": "Read-only bounded execution receipts with nullable aggregate coverage and scope-bound paging.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CronSummaryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CronSummaryResult"
+        }
+      }
+    },
+    {
       "name": "delegation.pause",
       "summary": "Block/unblock NEW spawns globally (active children keep running); returns the new state.",
       "params": [
@@ -1155,6 +1173,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/FileAttachResult"
+        }
+      }
+    },
+    {
+      "name": "files.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FilesIndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FilesIndexResult"
         }
       }
     },
@@ -1911,6 +1947,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/LearningFramesResult"
+        }
+      }
+    },
+    {
+      "name": "links.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/IndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LinksIndexResult"
         }
       }
     },
@@ -4291,6 +4345,24 @@
       }
     },
     {
+      "name": "session.messages.window",
+      "summary": "Bounded display window at an exact message, including compression ancestors.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LiveWindowParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LiveWindowResult"
+        }
+      }
+    },
+    {
       "name": "session.most_recent",
       "summary": "Most recent human-facing session; errors fold into a null session_id.",
       "params": [
@@ -4395,6 +4467,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionSaveResult"
+        }
+      }
+    },
+    {
+      "name": "session.search",
+      "summary": "Paged message IDs and UTF-16 snippet ranges in owned history.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LiveSearchParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LiveSearchResult"
         }
       }
     },
@@ -4777,6 +4867,60 @@
       }
     },
     {
+      "name": "skills.changes.decide",
+      "summary": "Acknowledge or conflict-safely undo a recorded skill edit.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillChangeDecideParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillChangeDecisionResult"
+        }
+      }
+    },
+    {
+      "name": "skills.changes.get",
+      "summary": "Recorded skill diff and durable decision readback.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillChangeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillChangeResult"
+        }
+      }
+    },
+    {
+      "name": "skills.changes.list",
+      "summary": "Committed skill changes in an exact owned conversation lineage.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillChangesListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillChangesListResult"
+        }
+      }
+    },
+    {
       "name": "skills.manage",
       "summary": "Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub.",
       "params": [
@@ -5061,6 +5205,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SystemBatteryResult"
+        }
+      }
+    },
+    {
+      "name": "team.activity",
+      "summary": "Owner-scoped verified positive runtime activity; unknown coverage never means free.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TeamActivityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TeamActivityResult"
         }
       }
     },
@@ -5958,6 +6120,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -5990,6 +6156,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -6023,6 +6190,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -6126,6 +6294,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6154,10 +6326,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6196,11 +6364,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6267,6 +6435,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6295,10 +6467,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6348,11 +6516,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6420,6 +6588,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6448,10 +6620,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6486,11 +6654,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6556,6 +6724,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6584,10 +6756,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6630,11 +6798,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6702,6 +6870,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6730,10 +6902,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6772,11 +6940,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -10142,6 +10310,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -10174,6 +10346,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -10218,6 +10391,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -10935,6 +11109,23 @@
             ],
             "default": null,
             "title": "Profile"
+          },
+          "since_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since Revision"
+          },
+          "include_entries": {
+            "default": false,
+            "title": "Include Entries",
+            "type": "boolean"
           }
         },
         "title": "CommandsCatalogParams",
@@ -10943,6 +11134,61 @@
       "CommandsCatalogResult": {
         "additionalProperties": false,
         "properties": {
+          "catalog_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Catalog Version"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Observed At"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LiveCatalogEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
           "pairs": {
             "items": {
               "items": {
@@ -14931,6 +15177,255 @@
         "title": "CronRemovedJob",
         "type": "object"
       },
+      "CronSummaryCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "succeeded": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Succeeded"
+          },
+          "retried": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retried"
+          },
+          "needs_attention": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Needs Attention"
+          }
+        },
+        "required": [
+          "expected",
+          "succeeded",
+          "retried",
+          "needs_attention"
+        ],
+        "title": "CronSummaryCounts",
+        "type": "object"
+      },
+      "CronSummaryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          },
+          "timezone": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "required": [
+          "profiles",
+          "timezone",
+          "start",
+          "end"
+        ],
+        "title": "CronSummaryParams",
+        "type": "object"
+      },
+      "CronSummaryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CronSummaryCounts"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/CronSummaryRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "timezone",
+          "start",
+          "end",
+          "complete",
+          "counts",
+          "runs",
+          "next_cursor"
+        ],
+        "title": "CronSummaryResult",
+        "type": "object"
+      },
+      "CronSummaryRun": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "delivery_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Summary"
+          }
+        },
+        "required": [
+          "profile",
+          "job_id",
+          "occurrence_id",
+          "started_at",
+          "finished_at",
+          "outcome",
+          "retry_of",
+          "delivery_summary"
+        ],
+        "title": "CronSummaryRun",
+        "type": "object"
+      },
       "CurrentSubscription": {
         "additionalProperties": false,
         "properties": {
@@ -15122,6 +15617,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -15154,6 +15653,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -15191,6 +15691,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -18015,6 +18516,392 @@
           "uploaded"
         ],
         "title": "FileAttachResult",
+        "type": "object"
+      },
+      "FileCollection": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "picked_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picked Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "member_ids",
+          "picked_id"
+        ],
+        "title": "FileCollection",
+        "type": "object"
+      },
+      "FileIndexItem": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Session Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Relative Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "is_directory": {
+            "title": "Is Directory",
+            "type": "boolean"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileCollection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurrences": {
+            "items": {},
+            "title": "Occurrences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "kind",
+          "display_name",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "is_directory",
+          "mention_text",
+          "collection"
+        ],
+        "title": "FileIndexItem",
+        "type": "object"
+      },
+      "FilesIndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          },
+          "category": {
+            "default": "all",
+            "enum": [
+              "all",
+              "media",
+              "files"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "include_workspace": {
+            "default": false,
+            "title": "Include Workspace",
+            "type": "boolean"
+          },
+          "directory_path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Directory Path"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "FilesIndexParams",
+        "type": "object"
+      },
+      "FilesIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FileIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "FilesIndexResult",
         "type": "object"
       },
       "ForeignSessionRow": {
@@ -21285,6 +22172,187 @@
         "title": "InboxSummaryScope",
         "type": "object"
       },
+      "IndexCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "refresh_pending": {
+            "title": "Refresh Pending",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "complete",
+          "refresh_pending",
+          "updated_at"
+        ],
+        "title": "IndexCoverage",
+        "type": "object"
+      },
+      "IndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "IndexParams",
+        "type": "object"
+      },
+      "IndexTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files"
+          },
+          "links": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Links"
+          },
+          "messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages"
+          }
+        },
+        "required": [
+          "media",
+          "files",
+          "links",
+          "messages"
+        ],
+        "title": "IndexTotals",
+        "type": "object"
+      },
       "InflightTurn": {
         "additionalProperties": false,
         "description": "``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting\nclient rebuilds its bubbles from.",
@@ -22177,6 +23245,495 @@
         "title": "LegacyPluginRow",
         "type": "object"
       },
+      "LinkIndexItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preview",
+                  "internal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "url",
+          "title",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "tag",
+          "mention_text"
+        ],
+        "title": "LinkIndexItem",
+        "type": "object"
+      },
+      "LinksIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LinkIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "LinksIndexResult",
+        "type": "object"
+      },
+      "LiveCatalogEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "slash": {
+            "title": "Slash",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "skill",
+              "command"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "is_new": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is New"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "mobile_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Action"
+          }
+        },
+        "required": [
+          "id",
+          "slash",
+          "kind",
+          "description",
+          "icon",
+          "is_new",
+          "updated_at",
+          "mobile_action"
+        ],
+        "title": "LiveCatalogEntry",
+        "type": "object"
+      },
+      "LiveSearchGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "lineage_root": {
+            "title": "Lineage Root",
+            "type": "string"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchMatch"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "match_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match Count"
+          }
+        },
+        "required": [
+          "session_id",
+          "lineage_root",
+          "matches",
+          "match_count"
+        ],
+        "title": "LiveSearchGroup",
+        "type": "object"
+      },
+      "LiveSearchMatch": {
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "logical_id": {
+            "title": "Logical Id",
+            "type": "string"
+          },
+          "source_session_id": {
+            "title": "Source Session Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "message_id",
+          "logical_id",
+          "source_session_id",
+          "role",
+          "snippet",
+          "ranges"
+        ],
+        "title": "LiveSearchMatch",
+        "type": "object"
+      },
+      "LiveSearchParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "query"
+        ],
+        "title": "LiveSearchParams",
+        "type": "object"
+      },
+      "LiveSearchRange": {
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "length": {
+            "title": "Length",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "length"
+        ],
+        "title": "LiveSearchRange",
+        "type": "object"
+      },
+      "LiveSearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchGroup"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "profile",
+          "query",
+          "revision",
+          "results",
+          "next_cursor"
+        ],
+        "title": "LiveSearchResult",
+        "type": "object"
+      },
       "LiveSessionStatus": {
         "enum": [
           "idle",
@@ -22188,6 +23745,142 @@
         ],
         "title": "LiveSessionStatus",
         "type": "string"
+      },
+      "LiveWindowParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "message_id": {
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 120,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "required": [
+          "profile",
+          "session_id",
+          "message_id",
+          "expected_revision"
+        ],
+        "title": "LiveWindowParams",
+        "type": "object"
+      },
+      "LiveWindowResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "anchor_message_id": {
+            "title": "Anchor Message Id",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "older_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Cursor"
+          },
+          "newer_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newer Cursor"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          }
+        },
+        "required": [
+          "version",
+          "profile",
+          "session_id",
+          "revision",
+          "anchor_message_id",
+          "messages",
+          "older_cursor",
+          "newer_cursor",
+          "offset"
+        ],
+        "title": "LiveWindowResult",
+        "type": "object"
       },
       "LlmOneshotParams": {
         "additionalProperties": false,
@@ -27478,6 +29171,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -27510,6 +29207,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -27547,6 +29245,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -35528,6 +37227,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -35560,6 +37263,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -35593,6 +37297,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -43758,6 +45463,371 @@
         "title": "SkillCatalogEntry",
         "type": "object"
       },
+      "SkillChangeDecideParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "change_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Change Id",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "keep",
+              "undo"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "expected_revision": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "client_action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Action Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "change_id",
+          "decision",
+          "expected_revision",
+          "client_action_id"
+        ],
+        "title": "SkillChangeDecideParams",
+        "type": "object"
+      },
+      "SkillChangeDecisionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "title": "Change Id",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "kept",
+              "undone"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "change_id",
+          "decision",
+          "revision",
+          "receipt_id"
+        ],
+        "title": "SkillChangeDecisionResult",
+        "type": "object"
+      },
+      "SkillChangeItem": {
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "title": "Change Id",
+            "type": "string"
+          },
+          "skill": {
+            "title": "Skill",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "anchor_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Message Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/SkillChangeLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "decision": {
+            "enum": [
+              "unreviewed",
+              "kept",
+              "undone"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "can_undo": {
+            "title": "Can Undo",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "change_id",
+          "skill",
+          "session_id",
+          "anchor_message_id",
+          "created_at",
+          "revision",
+          "title",
+          "reason",
+          "lines",
+          "decision",
+          "can_undo"
+        ],
+        "title": "SkillChangeItem",
+        "type": "object"
+      },
+      "SkillChangeLine": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "add",
+              "remove"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "title": "SkillChangeLine",
+        "type": "object"
+      },
+      "SkillChangeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "change_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Change Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "change_id"
+        ],
+        "title": "SkillChangeParams",
+        "type": "object"
+      },
+      "SkillChangeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "change_id": {
+            "title": "Change Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff"
+          },
+          "can_undo": {
+            "title": "Can Undo",
+            "type": "boolean"
+          },
+          "decision": {
+            "enum": [
+              "unreviewed",
+              "kept",
+              "undone"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          }
+        },
+        "required": [
+          "version",
+          "change_id",
+          "revision",
+          "diff",
+          "can_undo",
+          "decision",
+          "receipt_id"
+        ],
+        "title": "SkillChangeResult",
+        "type": "object"
+      },
+      "SkillChangesListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "session_id"
+        ],
+        "title": "SkillChangesListParams",
+        "type": "object"
+      },
+      "SkillChangesListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SkillChangeItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "profile",
+          "items",
+          "next_cursor"
+        ],
+        "title": "SkillChangesListResult",
+        "type": "object"
+      },
       "SkillCommandRef": {
         "additionalProperties": false,
         "properties": {
@@ -46539,6 +48609,199 @@
         "title": "TaskIdResult",
         "type": "object"
       },
+      "TeamActivityParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "TeamActivityParams",
+        "type": "object"
+      },
+      "TeamActivityResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "now": {
+            "title": "Now",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "working_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working Count"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/TeamAgentActivity"
+            },
+            "title": "Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "now",
+          "complete",
+          "working_count",
+          "agents"
+        ],
+        "title": "TeamActivityResult",
+        "type": "object"
+      },
+      "TeamAgentActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "working": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working"
+          },
+          "last_human_chat_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Human Chat At"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamCurrent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "working",
+          "last_human_chat_at",
+          "current"
+        ],
+        "title": "TeamAgentActivity",
+        "type": "object"
+      },
+      "TeamChat": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id"
+        ],
+        "title": "TeamChat",
+        "type": "object"
+      },
+      "TeamCurrent": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "work_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Label"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "open_chat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamChat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "work_label",
+          "started_at",
+          "open_chat"
+        ],
+        "title": "TeamCurrent",
+        "type": "object"
+      },
       "TerminalClosePayload": {
         "additionalProperties": false,
         "properties": {
@@ -48473,6 +50736,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -48505,6 +50772,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -48534,6 +50802,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",

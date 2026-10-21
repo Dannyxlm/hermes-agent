@@ -436,6 +436,7 @@ class _Catalog:
         self.canon: dict[str, str] = {}
         self.commands: dict[str, dict[str, str | None]] = {}
         self.cat_map: dict[str, list[list[str]]] = {}  # insertion order = category order
+        self.skill_sources: dict[str, dict] = {}
 
     def add(self, key: str, desc: str, cat: str) -> None:
         self.canon[key.lower()] = key
@@ -488,13 +489,17 @@ def _catalog_plugin_commands(cat: _Catalog) -> None:
         cat.commands[key] = {"argument_mode": mode, "desktop": None}
 
 
-def _catalog_skills(cat: _Catalog, skills: dict[str, dict]) -> str:
+def _catalog_skills(cat: _Catalog, skills: dict[str, dict], *, freshness=False) -> str:
     """Append skill pairs and fill ``skills`` = ``{key: {usage, origin}}`` (every consumer ranks by them).
     Returns the one-line notice for skills whose name is a built-in command (no ``/<name>`` entry;
     ``agent.skill_commands`` guard), ``""`` when none."""
     usage, origin_of = _skill_usage_lookup()
     sc = _tools_mod("agent.skill_commands")
-    for k, info in sorted(sc.get_interactive_skill_commands().items()):
+    if freshness:
+        from hermex_live_reads import refresh_skill_commands
+        refresh_skill_commands(sc)
+    cat.skill_sources = sc.get_interactive_skill_commands()
+    for k, info in sorted(cat.skill_sources.items()):
         cat.pairs.append([k, str(info.get("description", "Skill"))])
         name = str(info.get("name") or k.lstrip("/"))
         skills[k] = {"usage": usage(name), "origin": origin_of(name)}
@@ -515,23 +520,47 @@ def _(rid, params: dict) -> dict:
     cat = _Catalog()
     _catalog_registry(cat)
     warning = ""
+    successful = True
     skills: dict[str, dict] = {}
-    with _session_home_scope(_sessions.get(params.get("session_id", "")), cwd=_completion_cwd(params),
+    session = _sessions.get(params.get("session_id", ""))
+    home = Path(session.get("profile_home") or _hermes_home).resolve() if session else Path(
+        _profile_home(params.get("profile")) or (_hermes_home if params.get("profile") else _tools_mod("hermes_constants").get_hermes_home())).resolve()
+    profile = (profile_name_for_home(str(home)) or _current_profile_name()) if session else _response_profile_name(params.get("profile"))
+    freshness = params.get("include_entries") is True or "since_revision" in params
+    freshness = freshness and (not session or not params.get("profile") or params["profile"] == profile)
+    live = {}
+    cwd = _completion_cwd({**params, "profile": profile})
+    with _session_profile_runtime_scope({"profile_home": str(home)}), _session_home_scope(session, cwd=cwd,
                              profile=params.get("profile")):
         try:
             _catalog_quick_commands(cat)
         except Exception as e:
+            successful = False
             warning = f"quick_commands discovery unavailable: {e}"
         try:
             _catalog_plugin_commands(cat)
         except Exception as e:
+            successful = False
             warning = warning or f"plugin command discovery unavailable: {e}"
         try:
-            collision_note = _catalog_skills(cat, skills)  # always runs: skills must list even when a loader failed
+            collision_note = _catalog_skills(cat, skills, freshness=freshness)
             warning = warning or collision_note
         except Exception as e:
+            successful = False
             warning = f"skill discovery unavailable: {e}"
+        if freshness:
+            from hermex_live_reads import catalog_metadata, digest
+            try:
+                live = catalog_metadata(cat, skills, profile=profile,
+                    scope=digest([_hermex_principal(), str(home), cwd, params.get("session_id"),
+                                  _load_cfg().get("terminal", {}) if successful else None]),
+                    since_revision=params.get("since_revision"), successful=successful)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("skill freshness unavailable")
+                live = {}
     return _ok(rid, {
+        **live,
         "pairs": cat.pairs, "sub": {k: v[:] for k, v in _tools_mod("hermes_cli.commands").SUBCOMMANDS.items()},
         "canon": cat.canon,
         "commands": cat.commands,

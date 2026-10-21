@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 from fastapi import (
-    APIRouter, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status as http_status)
+    APIRouter, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect, status as http_status)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -291,14 +291,29 @@ def _link_tasks(conn: sqlite3.Connection, links: dict[str, list[str]]) -> list[d
 
 # --- GET /board -------------------------------------------------------------
 
+def _admit_board_presentation(version, identity):
+    if version is None:
+        return
+    if identity is None:
+        raise HTTPException(401, "Owner login required")
+    from tui_gateway.team_schedule_projection import OwnerDenied, owner_principal
+    try:
+        owner_principal(identity)
+    except OwnerDenied:
+        raise HTTPException(403, "Configured owner required") from None
+
+
 def get_board(
     tenant: Optional[str] = Query(None, description="Filter to a single tenant"),
     include_archived: bool = Query(False),
     board: Optional[str] = _BOARD_Q,
     workflow_template_id: Optional[str] = Query(None, description="Restrict to tasks using this workflow template id"),
-    current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key")):
+    current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key"),
+    presentation_version: Optional[int] = None,
+    presentation_identity: Optional[dict] = None):
     """Full board grouped by status column; omitting ``board`` uses the active board
     (``HERMES_KANBAN_BOARD`` env → on-disk ``current`` pointer → ``default``)."""
+    _admit_board_presentation(presentation_version, presentation_identity)
     with _board_conn(board) as (board, conn):
         tasks = kanban_db.list_tasks(
             conn, tenant=tenant, include_archived=include_archived,
@@ -327,6 +342,8 @@ def get_board(
         # One query for the active run's start per card (avoids N+1); the run
         # clock ticks from this, not the task's first-ever start.
         run_start_map = kanban_db.current_run_started_ats(conn, [t.id for t in tasks])
+        from tui_gateway.team_schedule_projection import board_attention
+        attention = board_attention(conn, tasks) if presentation_version == 1 else {}
         for t in tasks:
             full = summary_map.get(t.id)
             d = _task_dict(t, latest_summary=(full[:_CARD_SUMMARY_PREVIEW_CHARS] if full else None),
@@ -335,7 +352,9 @@ def get_board(
             d["comment_count"] = comment_counts.get(t.id, 0)
             d["progress"] = progress.get(t.id)  # None when the task has no children
             _attach_diagnostics(d, diagnostics_per_task.get(t.id))
-            columns[t.status if t.status in columns else "todo"].append(d)
+            d.update(attention.get(t.id, {}))
+            column = t.status if presentation_version == 1 or t.status in columns else "todo"
+            columns.setdefault(column, []).append(d)
 
         # Queue lanes keep the list_tasks dispatch order; the done column is
         # history, so order it newest-completed-first. Two stable sorts compose
@@ -352,9 +371,11 @@ def get_board(
         # lane immediately, matching the assignee picker at /assignees
         # which already uses this helper.
         assignees = [entry["name"] for entry in kanban_db.known_assignees(conn)]
+        presentation = {"presentation_version": 1, "attention_complete": all(
+            row["owner_attention"] is not None for row in attention.values())} if presentation_version == 1 else {}
         return {
             "columns": [{"name": name, "tasks": columns[name]} for name in columns], "tenants": tenants,
-            "assignees": assignees, "latest_event_id": int(latest_event_id), "now": int(time.time())}
+            "assignees": assignees, "latest_event_id": int(latest_event_id), "now": int(time.time()), **presentation}
 
 
 _read_board = coalesced_read(get_board)
@@ -362,12 +383,16 @@ _read_board = coalesced_read(get_board)
 
 @router.get("/board")
 async def get_board_endpoint(
+    request: Request,
     tenant: Optional[str] = Query(None, description="Filter to a single tenant"),
     include_archived: bool = Query(False),
     board: Optional[str] = _BOARD_Q,
     workflow_template_id: Optional[str] = Query(None, description="Restrict to tasks using this workflow template id"),
     current_step_key: Optional[str] = Query(None, description="Restrict to tasks at this workflow step key"),
+    presentation_version: Optional[int] = Query(None, ge=1, le=1),
 ):
+    session = getattr(request.state, "session", None)
+    identity = {"user_id": session.user_id, "provider": session.provider} if session else None
     # Resolve selection before keying so a board switch cannot join an older read.
     return await _read_board(
         tenant=tenant,
@@ -375,6 +400,8 @@ async def get_board_endpoint(
         board=board or kanban_db.get_current_board(),
         workflow_template_id=workflow_template_id,
         current_step_key=current_step_key,
+        presentation_version=presentation_version,
+        presentation_identity=identity if presentation_version == 1 else None,
     )
 
 
