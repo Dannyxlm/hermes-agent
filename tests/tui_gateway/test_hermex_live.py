@@ -53,7 +53,7 @@ def test_catalog_first_sync_and_nested_edit(live_home):
     reference = skill / "references" / "notes.md"
     reference.parent.mkdir()
     reference.write_text("before")
-    first = result("commands.catalog")
+    first = result("commands.catalog", include_entries=True)
     assert first["catalog_version"] == 1
     entry = next(e for e in first["entries"] if e["slash"] == "/live-proof")
     assert entry["is_new"] is None
@@ -66,7 +66,7 @@ def test_catalog_first_sync_and_nested_edit(live_home):
 
 
 def test_catalog_snapshot_scope_does_not_cross_workspace(live_home):
-    first = result("commands.catalog")
+    first = result("commands.catalog", include_entries=True)
     server._sessions["runtime"] = {"profile_home": str(live_home), "cwd": str(live_home / "project")}
     second = result("commands.catalog", session_id="runtime", since_revision=first["revision"])
     assert all(e["is_new"] is None for e in second["entries"])
@@ -130,8 +130,9 @@ def test_search_scope_and_cursor_binding(live_home):
                            expected_revision=page["revision"])
     global_page = result("session.search", query="needle")
     assert "hidden" not in {r["session_id"] for r in global_page["results"]}
-    append(live_home, "chat", "user", "new commit")
-    assert "error" in rpc("session.search", query="needle", session_id="chat", cursor=page["next_cursor"])
+    append(live_home, "chat", "user", "needle new commit")
+    continued = result("session.search", query="needle", session_id="chat", cursor=page["next_cursor"])
+    assert [m["message_id"] for g in continued["results"] for m in g["matches"]] == ["2"]
 
 
 @pytest.mark.parametrize("method,params", [
@@ -167,7 +168,7 @@ def test_window_adjacent_pages(live_home):
 
 
 def test_catalog_new_file_and_unknown_snapshot(live_home):
-    initial = result("commands.catalog")
+    initial = result("commands.catalog", include_entries=True)
     path = live_home / "skills" / "fresh-proof" / "SKILL.md"
     path.parent.mkdir(parents=True)
     path.write_text("---\nname: fresh-proof\ndescription: Use when new.\n---\nNew skill.\n")
@@ -235,3 +236,68 @@ def test_dispatch_reads_leave_the_reader_thread(live_home):
             assert observed.wait(10)
     assert frames[0][0] != owner
     assert "result" in frames[0][1]
+
+
+def test_unrelated_writer_does_not_invalidate_search_or_window(live_home):
+    ids = [append(live_home, "chat", "assistant", f"needle {i}") for i in range(3)]
+    page = result("session.search", query="needle", session_id="chat", limit=1)
+    append(live_home, "other", "assistant", "a concurrent unrelated write")
+    window = result("session.messages.window", session_id="chat", message_id=str(ids[0]),
+                    expected_revision=page["revision"], limit=1)
+    assert [m["id"] for m in window["messages"]] == ids[:1]
+    continued = result("session.search", query="needle", session_id="chat", limit=1,
+                       cursor=page["next_cursor"])
+    assert continued["results"][0]["matches"][0]["message_id"] == str(ids[1])
+
+
+def test_per_chat_search_first_page_ignores_global_distractors(live_home):
+    with SessionDB(db_path=live_home / "state.db") as db:
+        for i in range(1100):
+            db.append_message("other", "assistant", f"needle elsewhere {i}")
+        target = db.append_message("chat", "assistant", "needle target")
+    page = result("session.search", query="needle", session_id="chat", limit=1)
+    assert [m["message_id"] for g in page["results"] for m in g["matches"]] == [str(target)]
+
+
+def test_older_window_partial_page_never_overlaps(live_home):
+    ids = [append(live_home, "chat", "assistant", f"needle {i}") for i in range(6)]
+    page = result("session.search", query="needle", session_id="chat")
+    params = {"session_id": "chat", "message_id": str(ids[1]), "expected_revision": page["revision"], "limit": 3}
+    first = result("session.messages.window", **params)
+    older = result("session.messages.window", **params, cursor=first["older_cursor"])
+    assert [m["id"] for m in first["messages"]] == ids[1:4]
+    assert [m["id"] for m in older["messages"]] == ids[:1]
+    assert not ({m["id"] for m in first["messages"]} & {m["id"] for m in older["messages"]})
+    returned = result("session.messages.window", **params, cursor=older["newer_cursor"])
+    assert [m["id"] for m in returned["messages"]] == ids[1:4]
+
+
+def test_legacy_catalog_is_opt_in_and_keeps_the_skill_memo(live_home, monkeypatch):
+    from agent import skill_commands
+    first = result("commands.catalog")
+    assert set(first) == {"pairs", "sub", "canon", "commands", "categories", "skills", "skill_count", "warning"}
+    def unexpected_scan():
+        raise AssertionError("warm legacy catalog rescanned skill commands")
+    monkeypatch.setattr(skill_commands, "scan_skill_commands", unexpected_scan)
+    assert result("commands.catalog") == first
+
+
+@pytest.mark.parametrize("profile", ["ops", "does-not-exist"])
+def test_catalog_live_session_retains_legacy_profile_precedence(live_home, profile):
+    (live_home / "profiles" / "ops").mkdir(parents=True)
+    server._sessions["runtime"] = {"profile_home": str(live_home), "cwd": str(live_home)}
+    base = result("commands.catalog", session_id="runtime")
+    mismatched = result("commands.catalog", session_id="runtime", profile=profile)
+    assert mismatched == base
+    opted = result("commands.catalog", session_id="runtime", profile=profile, since_revision="unknown")
+    assert opted == base
+
+
+def test_cursor_contains_no_profile_path_or_query(live_home):
+    import base64
+    append(live_home, "chat", "assistant", "sensitive-query one")
+    append(live_home, "chat", "assistant", "sensitive-query two")
+    page = result("session.search", query="sensitive-query", session_id="chat", limit=1)
+    decoded = base64.urlsafe_b64decode(page["next_cursor"])
+    assert str(live_home).encode() not in decoded
+    assert b"sensitive-query" not in decoded

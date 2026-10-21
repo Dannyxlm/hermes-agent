@@ -244,3 +244,29 @@ def test_alias_writers_share_the_skill_lock(change_home):
     item = result("skills.changes.list", session_id="chat")["items"][0]
     decide(item)
     assert "Before." in (change_home / "skills/proof/SKILL.md").read_text()
+
+
+@pytest.mark.parametrize("created", [False, True])
+def test_undo_records_one_audit_row_and_usage(change_home, created):
+    from tools import skill_ledger, skill_usage
+    if created:
+        assert mutate(action="create", content="---\nname: proof\ndescription: Proof.\n---\nBefore.\n")["success"]
+        item = result("skills.changes.list", session_id="chat")["items"][0]
+    else:
+        item = make_change()
+    before = skill_usage.load_usage().get("proof", {}).get("patch_count", 0)
+    receipt = decide(item)
+    assert decide(item) == receipt
+    result("skills.changes.get", change_id=item["change_id"])
+    rows = [e for e in skill_ledger.list_entries() if e["action"] == "undo"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["evidence"]["undo_of"] == item["change_id"]
+    assert row["evidence"]["session_id"] == "chat"
+    assert row["evidence"]["review_committed"] is False
+    assert row["before"]
+    usage = skill_usage.load_usage()
+    if created:
+        assert "proof" not in usage
+    else:
+        assert usage["proof"]["patch_count"] == before + 1
