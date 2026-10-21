@@ -182,3 +182,155 @@ def test_background_review_aggregate_requires_original_call_boundaries(tmp_path,
             assert result["event_count"] == 1
         # The auxiliary checkpoint must still leave the parent's main-loop counters alone.
         assert db.get_session("parent")["input_tokens"] == 0
+
+
+@pytest.mark.parametrize("model,provider,input_tokens,output_tokens,expected", [
+    ("claude-opus-5-5", "anthropic", 100000, 10000, 0.6),
+    ("claude-opus-5-5", "anthropic", 1000000, 100000, 6.0),
+    ("gpt-6.1-sol", "openai-codex", 100000, 10000, 0.3),
+    ("gpt-6.1-sol", "openai-codex", 272000, 10000, 0.644),
+    ("gpt-6.1-sol", "openai-codex", 272001, 10000, None),
+])
+def test_auxiliary_aggregate_writer_only_nulls_rate_sensitive_usage(
+        tmp_path, monkeypatch, model, provider, input_tokens, output_tokens, expected):
+    from agent.background_review import _record_review_usage_to_parent
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        monkeypatch.setattr(server, "_hermes_home", tmp_path)
+        db.create_session("parent", "desktop")
+        parent = SimpleNamespace(_session_db=db, session_id="parent")
+        _record_review_usage_to_parent(parent, {"model": model, "provider": provider,
+            "input_tokens": input_tokens, "output_tokens": output_tokens, "api_calls": 2})
+        stored = db._conn.execute("SELECT estimated_cost_usd, price_reason FROM usage_events").fetchone()
+        totals = rpc()["result"]["totals"]
+        if expected is None:
+            assert stored[0] is None
+            assert "call boundaries" in stored[1]
+            assert totals["estimated_cost_usd"] is None
+            assert totals["cost_status"] == "minimum"
+            assert totals["minimum_estimated_cost_usd"] == pytest.approx(0.644002)
+        else:
+            assert stored[0] == pytest.approx(expected)
+            assert stored[1] is None
+            assert totals["estimated_cost_usd"] == pytest.approx(expected)
+            assert totals["cost_status"] == "est"
+        assert totals["api_call_count"] == 2
+        assert totals["event_count"] == 1
+        assert db.get_session("parent")["input_tokens"] == 0
+
+
+@pytest.mark.parametrize("profile", ["default", "secondary"])
+@pytest.mark.parametrize("window", ["today", "7d", "30d"])
+@pytest.mark.parametrize("include_unknown", [False, True])
+def test_historical_nulls_reprice_before_every_group_without_writes(
+        tmp_path, monkeypatch, profile, window, include_unknown):
+    from decimal import Decimal
+    from hermes_cli import profiles
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    monkeypatch.setattr(server, "_current_profile_name", lambda: "default")
+    secondary = tmp_path / "secondary"
+    secondary.mkdir()
+    monkeypatch.setattr(profiles, "get_profile_dir", lambda name: secondary if name == "secondary" else tmp_path)
+    home = tmp_path if profile == "default" else secondary
+    with SessionDB(db_path=home / "state.db") as db:
+        db.create_session("mixed", "desktop")
+        db.record_auxiliary_usage("mixed", "background_review", model="claude-opus-5-5",
+                                  billing_provider="anthropic", input_tokens=100000,
+                                  output_tokens=10000, api_call_count=2)
+        db.record_auxiliary_usage("mixed", "background_review", model="gpt-6.1-sol",
+                                  billing_provider="openai-codex", input_tokens=400001,
+                                  output_tokens=1001, cache_read_tokens=71, cache_write_tokens=3,
+                                  api_call_count=4)
+        if include_unknown:
+            db.record_auxiliary_usage("mixed", "vision", model="unpriced", input_tokens=100)
+            db.record_auxiliary_usage("mixed", "title_generation", model="claude-opus-5-5",
+                                      billing_provider="anthropic", api_call_count=1)
+        db._conn.execute("UPDATE usage_events SET estimated_cost_usd=NULL, "
+                         "price_reason='aggregate usage: original call boundaries unavailable'")
+        db.update_token_counts("mixed", model="claude-opus-5-5", billing_provider="anthropic",
+                               input_tokens=100, api_call_count=1, turn_id="exact")
+        # Stored exact prices remain authoritative when the table changes.
+        db._conn.execute("UPDATE usage_events SET estimated_cost_usd=0.123456789 WHERE turn_id='exact'")
+        db._conn.commit()
+        before = list(db._conn.execute("SELECT * FROM usage_events ORDER BY id"))
+        connect = sqlite3.connect
+        denied = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE,
+                  sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_CREATE_INDEX}
+        def readonly_connect(*args, **kwargs):
+            assert "mode=ro" in args[0]
+            conn = connect(*args, **kwargs)
+            def authorize(action, name, *rest):
+                if action in denied or action == sqlite3.SQLITE_READ and name == "messages":
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+            conn.set_authorizer(authorize)
+            return conn
+        monkeypatch.setattr(sqlite3, "connect", readonly_connect)
+        response = rpc(profile=profile, window=window, session_id="mixed")
+        assert "result" in response, response
+        value = response["result"]
+        totals = value["totals"]
+        expected_status = "unknown" if include_unknown else "minimum"
+        assert totals["known_estimated_cost_usd"] == pytest.approx(0.723456789)
+        assert totals["cost_status"] == expected_status
+        assert totals["unknown_price_events"] == (3 if include_unknown else 1)
+        assert totals["event_count"] == (5 if include_unknown else 3)
+        expected_bound = Decimal("1.533483389")
+        observed = Decimal(str(totals["minimum_estimated_cost_usd"]))
+        assert expected_bound - Decimal("0.000000000000001") <= observed <= expected_bound
+        for row in [totals, *value["agents"], *value["models"], *value["providers"],
+                    *value["days"], *value["top_chats"]]:
+            assert row["minimum_estimated_cost_usd"] >= 0
+            assert bool(row["cost_reason"]) == (row["cost_status"] != "est")
+            if row["cost_status"] != "est":
+                assert row["estimated_cost_usd"] is None
+        for key in ("agents", "models", "providers", "days", "top_chats"):
+            assert sum(row["minimum_estimated_cost_usd"] for row in value[key]) == pytest.approx(float(expected_bound))
+            assert sum(row["known_estimated_cost_usd"] for row in value[key]) == pytest.approx(0.723456789)
+        assert value["agents"][0]["profile"] == profile
+        assert list(db._conn.execute("SELECT * FROM usage_events ORDER BY id")) == before
+
+
+def test_timestamped_decimal_minimum_never_overshoots(tmp_path, monkeypatch):
+    from decimal import Decimal
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("many", "desktop")
+        for _ in range(31):
+            db.record_auxiliary_usage("many", "background_review", model="gpt-6.1-sol",
+                                      billing_provider="openai-codex", input_tokens=400001,
+                                      output_tokens=1001, cache_read_tokens=71, cache_write_tokens=3,
+                                      api_call_count=2)
+        totals = rpc()["result"]["totals"]
+        expected = Decimal("0.8100266") * 31
+        observed = Decimal(str(totals["minimum_estimated_cost_usd"]))
+        assert expected - Decimal("0.00000000000001") <= observed <= expected
+
+
+def test_large_window_prices_each_null_event_once_per_request(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    import hermes_state_rollup as rollup
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("many", "desktop")
+        db.update_token_counts("many", model="claude-opus-5-5", billing_provider="anthropic",
+                               input_tokens=100, api_call_count=1, turn_id="stored")
+        db._conn.execute("""WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<8200
+        ) INSERT INTO usage_events (
+            session_id, chat_id, occurred_at, model, provider, task,
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+            reasoning_tokens, api_call_count, estimated_cost_usd, pricing_date)
+        SELECT 'many', 'many', ?, 'claude-opus-5-5', 'anthropic', 'background_review',
+            i, 0, 0, 0, 0, 2, NULL, '2026-10-19' FROM n""", (time.time() - 1,))
+        db._conn.commit()
+        price = Mock(wraps=rollup.estimate_aggregate_api_value_decimal)
+        monkeypatch.setattr(rollup, "estimate_aggregate_api_value_decimal", price)
+        for _ in range(2):
+            price.reset_mock()
+            value = rpc(window="30d")["result"]
+            assert value["totals"]["event_count"] == 8201
+            assert value["totals"]["cost_status"] == "est"
+            assert value["totals"]["estimated_cost_usd"] == pytest.approx(134.4968)
+            assert price.call_count == 8200
+            for key in ("agents", "models", "providers", "days", "top_chats"):
+                assert sum(row["event_count"] for row in value[key]) == 8201

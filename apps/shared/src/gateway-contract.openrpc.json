@@ -5886,6 +5886,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -5918,6 +5922,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -5951,6 +5956,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -6054,6 +6060,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6082,10 +6092,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6124,11 +6130,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6195,6 +6201,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6223,10 +6233,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6276,11 +6282,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6348,6 +6354,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6376,10 +6386,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6414,11 +6420,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6484,6 +6490,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6512,10 +6522,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6558,11 +6564,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -6630,6 +6636,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -6658,10 +6668,6 @@
             },
             "title": "Price Sources",
             "type": "array"
-          },
-          "minimum_estimated_cost_usd": {
-            "title": "Minimum Estimated Cost Usd",
-            "type": "number"
           },
           "cost_status": {
             "enum": [
@@ -6700,11 +6706,11 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
           "price_sources",
-          "minimum_estimated_cost_usd",
           "cost_status",
           "turn_count",
           "event_count",
@@ -10070,6 +10076,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -10102,6 +10112,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -10146,6 +10157,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -15050,6 +15062,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -15082,6 +15098,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -15119,6 +15136,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -26619,6 +26637,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -26651,6 +26673,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -26688,6 +26711,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -34669,6 +34693,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -34701,6 +34729,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -34734,6 +34763,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
@@ -47614,6 +47644,10 @@
             "title": "Known Estimated Cost Usd",
             "type": "number"
           },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
           "unknown_price_events": {
             "title": "Unknown Price Events",
             "type": "integer"
@@ -47646,6 +47680,7 @@
           "cost_status": {
             "enum": [
               "est",
+              "minimum",
               "unknown"
             ],
             "title": "Cost Status",
@@ -47675,6 +47710,7 @@
           "cache_hit_percent",
           "estimated_cost_usd",
           "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
           "unknown_price_events",
           "cost_reason",
           "pricing_dates",
