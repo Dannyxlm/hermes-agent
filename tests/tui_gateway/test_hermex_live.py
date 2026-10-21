@@ -65,6 +65,31 @@ def test_catalog_first_sync_and_nested_edit(live_home):
     assert dict(changed["pairs"])["/live-proof"] == "Use when testing."
 
 
+def test_catalog_honours_patched_scanner_after_live_methods(live_home, monkeypatch):
+    from agent import skill_commands
+    from hermes_constants import get_hermes_home, set_hermes_home_override, reset_hermes_home_override
+
+    result("commands.catalog", include_entries=True)
+    result("session.search", query="needle", session_id="chat")
+    result("skills.changes.list", session_id="chat")
+    caller_home = live_home / "caller"
+    caller_home.mkdir()
+    seen = []
+
+    def scan():
+        seen.append(get_hermes_home())
+        return {"/scanner-proof": {"name": "scanner-proof", "description": "Current caller"}}
+
+    monkeypatch.setattr(skill_commands, "scan_skill_commands", scan)
+    token = set_hermes_home_override(caller_home)
+    try:
+        response = server.handle_request({"id": "caller", "method": "commands.catalog", "params": {}})
+    finally:
+        reset_hermes_home_override(token)
+    assert seen == [caller_home]
+    assert "/scanner-proof" in response["result"]["skills"]
+
+
 def test_catalog_snapshot_scope_does_not_cross_workspace(live_home):
     first = result("commands.catalog", include_entries=True)
     server._sessions["runtime"] = {"profile_home": str(live_home), "cwd": str(live_home / "project")}
@@ -340,6 +365,45 @@ def test_legacy_tool_call_copies_keep_the_canonical_representative(live_home):
     window = result("session.messages.window", session_id="chat", message_id=str(newer),
                     expected_revision=found["revision"])
     assert [m["id"] for m in window["messages"]] == [newer]
+
+
+@pytest.mark.parametrize("stage", ["owned_lineage", "_metadata_search"])
+def test_search_budget_interruption_outside_batch_requires_page_retry(live_home, monkeypatch, stage):
+    import hermex_live_reads as reads
+
+    operation = getattr(reads, stage)
+
+    def interrupt(*args, **kwargs):
+        conn = kwargs["conn"] if stage == "owned_lineage" else args[1]
+        conn.set_progress_handler(lambda: 1, 1)
+        return operation(*args, **kwargs)
+
+    monkeypatch.setattr(reads, stage, interrupt)
+    params = {"session_id": "chat"} if stage == "owned_lineage" else {}
+    response = rpc("session.search", query="needle", **params)
+    assert response["error"] == {
+        "code": 4091,
+        "message": "search superseded or budget exceeded; retry the page",
+    }
+
+
+def test_search_budget_interruption_inside_batch_keeps_a_cursor(live_home, monkeypatch):
+    import hermex_search_pages as pages
+
+    operation = pages.candidates
+
+    def interrupt(db, conn, *args, **kwargs):
+        conn.set_progress_handler(lambda: 1, 1)
+        return operation(db, conn, *args, **kwargs)
+
+    monkeypatch.setattr(pages, "candidates", interrupt)
+    page = result("session.search", query="needle", session_id="chat")
+    assert page["results"] == []
+    assert page["next_cursor"] is not None
+    monkeypatch.setattr(pages, "candidates", operation)
+    resumed = result("session.search", query="needle", session_id="chat", cursor=page["next_cursor"])
+    assert resumed["revision"] == page["revision"]
+    assert resumed["next_cursor"] is None
 
 
 def test_new_search_cancels_stale_search_for_the_same_principal(live_home, monkeypatch):
