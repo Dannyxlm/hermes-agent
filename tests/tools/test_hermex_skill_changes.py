@@ -144,3 +144,103 @@ def test_foreign_profile_and_hidden_session_denied(change_home):
     with SessionDB(db_path=change_home / "state.db") as db:
         db._conn.execute("UPDATE sessions SET profile_name='foreign' WHERE id='chat'")
     assert "error" in rpc("skills.changes.get", change_id=item["change_id"])
+
+
+def test_staged_write_never_becomes_learned_card(change_home, monkeypatch):
+    from tools import skill_manager_tool as manager
+    monkeypatch.setattr(manager, "_run_write_gate", lambda *a, **k: json.dumps({"success": True, "staged": True}))
+    assert mutate(action="create", content="---\nname: proof\ndescription: Proof.\n---\nBefore.\n")["staged"]
+    assert result("skills.changes.list", session_id="chat")["items"] == []
+    assert not (change_home / "skills/proof/SKILL.md").exists()
+
+
+def test_create_undo_preserves_unrelated_later_file(change_home):
+    assert mutate(action="create", content="---\nname: proof\ndescription: Proof.\n---\nBefore.\n")["success"]
+    item = result("skills.changes.list", session_id="chat")["items"][0]
+    unrelated = change_home / "skills/proof/references/later.md"
+    unrelated.parent.mkdir()
+    unrelated.write_text("Unrelated later content.")
+    decide(item)
+    assert not (change_home / "skills/proof/SKILL.md").exists()
+    assert unrelated.read_text() == "Unrelated later content."
+
+
+def test_symlink_target_and_stale_revision_refused(change_home):
+    item = make_change()
+    path = change_home / "skills/proof/SKILL.md"
+    outside = change_home.parent / "outside.md"
+    outside.write_text("After.")
+    path.unlink()
+    path.symlink_to(outside)
+    assert "error" in rpc("skills.changes.decide", change_id=item["change_id"], decision="undo",
+                           expected_revision=item["revision"], client_action_id="symlink")
+    assert outside.read_text() == "After."
+    assert "error" in rpc("skills.changes.decide", change_id=item["change_id"], decision="keep",
+                           expected_revision="stale", client_action_id="stale")
+
+
+def test_uncertain_undo_recovers_on_get_without_replaying(change_home, monkeypatch):
+    import hermex_skill_changes as changes
+    item = make_change()
+    original = changes._durable_bytes
+    def disk_error(path, data):
+        if path.name == "SKILL.md":
+            raise OSError("fixture write interruption")
+        return original(path, data)
+    monkeypatch.setattr(changes, "_durable_bytes", disk_error)
+    failed = rpc("skills.changes.decide", change_id=item["change_id"], decision="undo",
+                 expected_revision=item["revision"], client_action_id="uncertain")
+    assert failed["error"]["code"] == 4401
+    assert "After." in (change_home / "skills/proof/SKILL.md").read_text()
+    monkeypatch.setattr(changes, "_durable_bytes", original)
+    readback = result("skills.changes.get", change_id=item["change_id"])
+    assert readback["decision"] == "undone" and readback["receipt_id"]
+    assert "Before." in (change_home / "skills/proof/SKILL.md").read_text()
+
+
+def test_partial_undo_readback_does_not_overwrite_newer_edit(change_home, monkeypatch):
+    import hermex_skill_changes as changes
+    from tools.skill_manager_tool import skill_manage
+    assert mutate(action="create", content="---\nname: proof\ndescription: Proof.\n---\nBefore.\n")["success"]
+    done = json.loads(skill_manage(action="", name="", session_id="chat", operations=[
+        {"action": "patch", "name": "proof", "old_string": "Before.", "new_string": "After."},
+        {"action": "write_file", "name": "proof", "file_path": "references/new.md", "file_content": "Created."},
+    ]))
+    assert done["success"]
+    item = result("skills.changes.list", session_id="chat")["items"][0]
+    original = changes._save_journal
+    def lose_receipt(journal):
+        if any(a["status"] == "complete" for a in journal["actions"].values()):
+            raise OSError("fixture lost final receipt write")
+        original(journal)
+    monkeypatch.setattr(changes, "_save_journal", lose_receipt)
+    assert "error" in rpc("skills.changes.decide", change_id=item["change_id"], decision="undo",
+                           expected_revision=item["revision"], client_action_id="partial")
+    assert "Before." in (change_home / "skills/proof/SKILL.md").read_text()
+    assert mutate(action="patch", old_string="Before.", new_string="Newer.")["success"]
+    monkeypatch.setattr(changes, "_save_journal", original)
+    assert rpc("skills.changes.get", change_id=item["change_id"])["error"]["code"] == 4091
+    assert "Newer." in (change_home / "skills/proof/SKILL.md").read_text()
+
+
+def test_incomplete_before_capture_cannot_delete_an_existing_file(change_home, monkeypatch):
+    from tools import skill_ledger
+    assert mutate(action="create", content="---\nname: proof\ndescription: Proof.\n---\nBefore.\n")["success"]
+    monkeypatch.setattr(skill_ledger, "capture_before", lambda *a, **k: [])
+    assert mutate(action="patch", old_string="Before.", new_string="After.")["success"]
+    item = result("skills.changes.list", session_id="chat")["items"][0]
+    assert item["can_undo"] is False
+    assert "error" in rpc("skills.changes.decide", change_id=item["change_id"], decision="undo",
+                           expected_revision=item["revision"], client_action_id="incomplete")
+    assert "After." in (change_home / "skills/proof/SKILL.md").read_text()
+
+
+def test_alias_writers_share_the_skill_lock(change_home):
+    from tools.skill_manager_tool import _skill_lock_path, skill_manage
+    assert mutate(action="create", content="---\nname: alternate-name\ndescription: Proof.\n---\nBefore.\n")["success"]
+    assert _skill_lock_path("alternate-name") == _skill_lock_path("proof")
+    assert json.loads(skill_manage(action="patch", name="alternate-name", session_id="chat",
+                                  old_string="Before.", new_string="After."))["success"]
+    item = result("skills.changes.list", session_id="chat")["items"][0]
+    decide(item)
+    assert "Before." in (change_home / "skills/proof/SKILL.md").read_text()

@@ -436,6 +436,7 @@ class _Catalog:
         self.canon: dict[str, str] = {}
         self.commands: dict[str, dict[str, str | None]] = {}
         self.cat_map: dict[str, list[list[str]]] = {}  # insertion order = category order
+        self.skill_sources: dict[str, dict] = {}
 
     def add(self, key: str, desc: str, cat: str) -> None:
         self.canon[key.lower()] = key
@@ -494,7 +495,9 @@ def _catalog_skills(cat: _Catalog, skills: dict[str, dict]) -> str:
     ``agent.skill_commands`` guard), ``""`` when none."""
     usage, origin_of = _skill_usage_lookup()
     sc = _tools_mod("agent.skill_commands")
-    for k, info in sorted(sc.get_interactive_skill_commands().items()):
+    sc.scan_skill_commands()
+    cat.skill_sources = sc.get_interactive_skill_commands()
+    for k, info in sorted(cat.skill_sources.items()):
         cat.pairs.append([k, str(info.get("description", "Skill"))])
         name = str(info.get("name") or k.lstrip("/"))
         skills[k] = {"usage": usage(name), "origin": origin_of(name)}
@@ -515,23 +518,44 @@ def _(rid, params: dict) -> dict:
     cat = _Catalog()
     _catalog_registry(cat)
     warning = ""
+    successful = True
     skills: dict[str, dict] = {}
-    with _session_home_scope(_sessions.get(params.get("session_id", "")), cwd=_completion_cwd(params),
+    session = _sessions.get(params.get("session_id", ""))
+    requested_home = Path(_profile_home(params.get("profile")) or _hermes_home).resolve()
+    home = Path(session.get("profile_home") or _hermes_home).resolve() if session else requested_home
+    if session and params.get("profile") and requested_home != home:
+        return _err(rid, 4064, "catalog profile mismatch")
+    profile = (profile_name_for_home(str(home)) or _current_profile_name()) if session else _response_profile_name(params.get("profile"))
+    cwd = _completion_cwd({**params, "profile": profile})
+    with _session_profile_runtime_scope({"profile_home": str(home)}), _session_home_scope(session, cwd=cwd,
                              profile=params.get("profile")):
         try:
             _catalog_quick_commands(cat)
         except Exception as e:
+            successful = False
             warning = f"quick_commands discovery unavailable: {e}"
         try:
             _catalog_plugin_commands(cat)
         except Exception as e:
+            successful = False
             warning = warning or f"plugin command discovery unavailable: {e}"
         try:
             collision_note = _catalog_skills(cat, skills)  # always runs: skills must list even when a loader failed
             warning = warning or collision_note
         except Exception as e:
+            successful = False
             warning = f"skill discovery unavailable: {e}"
+        from hermex_live_reads import catalog_metadata, digest
+        try:
+            live = catalog_metadata(cat, skills, profile=profile,
+                scope=digest([_hermex_principal(), str(home), cwd, params.get("session_id"),
+                              _load_cfg().get("terminal", {}) if successful else None]),
+                since_revision=params.get("since_revision"), successful=successful)
+        except OSError:
+            live = {"catalog_version": 1, "profile": profile, "revision": "", "entries": []}
+            warning = warning or "skill freshness unavailable"
     return _ok(rid, {
+        **live,
         "pairs": cat.pairs, "sub": {k: v[:] for k, v in _tools_mod("hermes_cli.commands").SUBCOMMANDS.items()},
         "canon": cat.canon,
         "commands": cat.commands,

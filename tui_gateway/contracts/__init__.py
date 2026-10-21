@@ -11,6 +11,7 @@ from . import (
     events,
     groups_bot_relay,
     human_input,
+    hermex_live,
     i18n,
     liveness,
     machine,

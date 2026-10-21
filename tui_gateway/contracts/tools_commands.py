@@ -8,6 +8,8 @@ known to emit plus ``extra="allow"`` so a new upstream key never trips the stric
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
@@ -190,6 +192,7 @@ method("cli.exec", params=CliExecParams, result=CliExecResult,
 class CommandsCatalogParams(Params):
     session_id: str | None = None
     profile: str | None = None
+    since_revision: str | None = None
 
 
 class ArgumentMode(WireEnum):
@@ -214,7 +217,23 @@ class SkillCatalogEntry(Result):
     origin: str = "local"
 
 
+class LiveCatalogEntry(Result):
+    id: str
+    slash: str
+    kind: Literal["skill", "command"]
+    description: str | None
+    icon: str | None
+    is_new: bool | None
+    updated_at: str | None
+    mobile_action: str | None
+
+
 class CommandsCatalogResult(Result):
+    catalog_version: int | None = None
+    profile: str | None = None
+    revision: str | None = None
+    observed_at: str | None = None
+    entries: list[LiveCatalogEntry] = Field(default_factory=list)
     pairs: list[list[str]] = Field(default_factory=list)
     sub: dict[str, list[str]] = Field(default_factory=dict)
     canon: dict[str, str] = Field(default_factory=dict)
