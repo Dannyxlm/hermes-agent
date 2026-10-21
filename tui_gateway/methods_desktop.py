@@ -14,6 +14,10 @@ _TRANSPORT_IDS = weakref.WeakKeyDictionary()
 _TRANSPORT_LOCK = threading.Lock()
 
 
+class DesktopDenied(PermissionError):
+    pass
+
+
 def _desktop_transport_id(transport) -> str:
     with _TRANSPORT_LOCK:
         identity = _TRANSPORT_IDS.get(transport)
@@ -31,13 +35,13 @@ def _desktop_scope(server, params):
     transport = server.current_transport()
     identity = getattr(transport, 'auth_identity', None)
     if not _is_authenticated_identity(identity):
-        raise PermissionError('Desktop owner required')
+        raise DesktopDenied('Desktop owner required')
     root = _get_default_hermes_home()
     # A shared Space has one owner policy, not whichever profile is being viewed.
     with server._session_profile_runtime_scope({'profile_home': str(root)}, hydrate_secrets=False):
         policy = load_config().get('cloudseed_mobile', {})
     if (identity['provider'], identity['user_id']) != (policy.get('owner_provider'), policy.get('owner_user_id')):
-        raise PermissionError('Desktop owner required')
+        raise DesktopDenied('Desktop owner required')
     validate_profile_name(params['profile'])
     home = server._profile_home(params['profile']) or server._hermes_home
     binding = [identity['provider'], identity['user_id'], str(home.resolve()),
@@ -70,7 +74,7 @@ def _desktop_rpc(server, operation, rid, params):
         return server._ok(rid, result)
     except server.ProfileUnavailableError:
         return server._err(rid, 4064, 'Desktop profile unavailable')
-    except PermissionError:
+    except DesktopDenied:
         return server._err(rid, 4403, 'Desktop scope denied')
     except (ValueError, TypeError):
         return server._err(rid, 4000, 'Invalid desktop request')
