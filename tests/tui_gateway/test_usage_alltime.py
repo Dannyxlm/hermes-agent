@@ -132,10 +132,12 @@ def test_alltime_empty_and_zero_counter_chats(store):
     assert empty["chat_count"] == 0
     store.create_session("zero", "desktop")
     zero = result()
-    assert zero["chat_count"] == 1
-    assert zero["top_chats"][0]["title"] is None
-    assert zero["totals"]["estimated_cost_usd"] is None
-    assert zero["totals"]["unknown_price_events"] == 1
+    assert zero["chat_count"] == 0
+    assert zero["top_chats"] == []
+    assert zero["models"] == zero["providers"] == zero["coverage"] == []
+    assert zero["start"] is None
+    assert zero["totals"]["estimated_cost_usd"] == 0
+    assert zero["totals"]["unknown_price_events"] == 0
 
 
 def test_alltime_profiles_and_admission(store, tmp_path, monkeypatch):
@@ -159,7 +161,7 @@ def test_alltime_profiles_and_admission(store, tmp_path, monkeypatch):
     assert rpc(unknown="key")["error"]["code"] == 4000
 
 
-def test_alltime_no_ledger_messages_model_usage_or_writes(store, monkeypatch):
+def test_alltime_no_ledger_messages_or_writes(store, monkeypatch):
     seed(store, "legacy")
     store._conn.execute("DROP TABLE usage_events")
     store._conn.execute("DROP TABLE state_meta")
@@ -172,7 +174,7 @@ def test_alltime_no_ledger_messages_model_usage_or_writes(store, monkeypatch):
         conn = connect(*args, **kwargs)
         def authorize(action, name, *rest):
             if action in denied or action == sqlite3.SQLITE_READ and name in {
-                    "messages", "usage_events", "session_model_usage", "state_meta"}:
+                    "messages", "usage_events", "state_meta"}:
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
         conn.set_authorizer(authorize)
@@ -267,3 +269,90 @@ def test_alltime_completed_call_without_tokens_is_unknown(store):
     assert totals["estimated_cost_usd"] is None
     assert totals["unknown_price_events"] == 1
     assert "token usage unavailable" in totals["cost_reason"]
+
+
+def test_alltime_auxiliary_once_without_voice_double_count(store):
+    store.create_session("root", "desktop")
+    store.end_session("root", "compression")
+    store.create_session("child", "desktop", parent_session_id="root")
+    store.update_token_counts("child", model="claude-opus-5-5", billing_provider="anthropic",
+                              input_tokens=100, output_tokens=20, api_call_count=1,
+                              task="voice_chat", turn_id="voice")
+    store.record_auxiliary_usage("child", "background_review", model="gpt-6.1-sol",
+                                 billing_provider="openai-codex", input_tokens=400000,
+                                 output_tokens=1000, api_call_count=4)
+    value = result(session_id="child")
+    assert value["totals"]["total_tokens"] == 401120
+    assert value["totals"]["api_call_count"] == 5
+    assert value["chat_count"] == 1
+    assert value["top_chats"][0]["session_id"] == "root"
+    assert value["totals"]["cost_status"] == "minimum"
+    assert value["totals"]["minimum_estimated_cost_usd"] == pytest.approx(0.8108)
+    assert value["models"][0]["model"] == "gpt-6.1-sol"
+    assert value["models"][0]["total_tokens"] == 401000
+    assert all(row["session_count"] == 1 for row in value["coverage"])
+    assert result(session_id="root")["totals"] == value["totals"]
+    recent = result(window="30d", session_id="child")
+    assert value["totals"]["total_tokens"] >= recent["totals"]["total_tokens"]
+    assert value["totals"]["total_tokens"] == recent["totals"]["total_tokens"]
+
+
+@pytest.mark.parametrize("task", ["compression", "vision", "title_generation", "web_extract", "session_search"])
+def test_alltime_auxiliary_only_chat_counts(store, task):
+    store.create_session("aux-only", "desktop")
+    store.record_auxiliary_usage("aux-only", task, model="claude-opus-5-5",
+                                 billing_provider="anthropic", input_tokens=50, output_tokens=10)
+    value = result()
+    assert value["totals"]["total_tokens"] == 60
+    assert value["chat_count"] == 1
+    assert value["coverage"][0]["session_count"] == 1
+    assert value["totals"]["estimated_cost_usd"] == pytest.approx(0.0004)
+
+
+@pytest.mark.parametrize("include_unknown", [False, True])
+def test_alltime_minimum_on_every_envelope_and_status_precedence(store, include_unknown):
+    seed(store, "mixed", input_tokens=100, output_tokens=20, cache_read_tokens=0, cache_write_tokens=0, calls=1)
+    store.record_auxiliary_usage("mixed", "background_review", model="gpt-6.1-sol",
+                                 billing_provider="openai-codex", input_tokens=400001,
+                                 output_tokens=1001, cache_read_tokens=71, cache_write_tokens=3,
+                                 api_call_count=4)
+    if include_unknown:
+        store.record_auxiliary_usage("mixed", "vision", model="gpt-5.5", billing_provider="openai",
+                                     input_tokens=400000, cache_write_tokens=1, api_call_count=2)
+    value = result()
+    expected_status = "unknown" if include_unknown else "minimum"
+    assert value["totals"]["cost_status"] == expected_status
+    assert value["top_chats"][0]["cost_status"] == expected_status
+    for row in [value["totals"], *value["agents"], *value["models"], *value["providers"], *value["top_chats"]]:
+        assert "minimum_estimated_cost_usd" in row
+        assert row["minimum_estimated_cost_usd"] >= 0
+        if row["cost_status"] != "est":
+            assert row["estimated_cost_usd"] is None
+        if row.get("provider") == "openai":
+            assert row["minimum_estimated_cost_usd"] == 0
+    from decimal import Decimal
+    minimum = Decimal(str(value["totals"]["minimum_estimated_cost_usd"]))
+    exact_bound = Decimal("0.8108266")
+    assert exact_bound - Decimal("0.000000000000001") <= minimum <= exact_bound
+    assert value["totals"]["known_estimated_cost_usd"] == pytest.approx(0.0008)
+
+
+def test_alltime_single_request_minimum_keeps_exact_tier(store):
+    seed(store, "one-call", model="gpt-6.1-sol", provider="openai-codex", input_tokens=400000,
+         output_tokens=0, cache_read_tokens=0, cache_write_tokens=0, calls=1)
+    totals = result()["totals"]
+    assert totals["cost_status"] == "est"
+    assert "minimum_estimated_cost_usd" in totals
+    assert totals["minimum_estimated_cost_usd"] == pytest.approx(1.6)
+
+
+def test_alltime_decimal_minimum_does_not_overshoot(store):
+    from decimal import Decimal
+    for index in range(31):
+        seed(store, f"tier-{index}", model="gpt-6.1-sol", provider="openai-codex",
+             input_tokens=400001, output_tokens=1001, cache_read_tokens=71, cache_write_tokens=3, calls=2)
+    totals = result()["totals"]
+    assert totals["cost_status"] == "minimum"
+    expected = Decimal("0.8100266") * 31
+    observed = Decimal(str(totals["minimum_estimated_cost_usd"]))
+    assert expected - Decimal("0.00000000000001") <= observed <= expected
