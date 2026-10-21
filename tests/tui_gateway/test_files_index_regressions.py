@@ -205,6 +205,24 @@ def test_live_sized_evidence_completes_under_query_budget(indexed):
     assert all(page['totals']['files'] >= 10000 and page['items'] for page in pages)
 
 
+@pytest.mark.parametrize('role,storage', [('user', 'content'), ('assistant', 'display_metadata')])
+def test_attachment_coverage_tracks_only_admitted_attachment_blocks(indexed, role, storage):
+    home, root, index, _wid = indexed
+    blocks = [{'type': 'file', 'path': str(root / 'outputs/report.md')}] * 513
+    with SessionDB(db_path=home / 'state.db') as db:
+        mid = db.append_message('other', role, json.dumps(blocks) if storage == 'content' else 'No user attachment')
+        if storage == 'display_metadata':
+            db._conn.execute('UPDATE messages SET display_metadata=? WHERE id=?', (json.dumps({'attachments': blocks}), mid))
+            db._conn.commit()
+    refresh(index)
+    page = result()
+    if role == 'user':
+        assert page['totals']['files'] is None and page['totals']['media'] is None
+    else:
+        assert page['totals']['files'] == 1 and page['totals']['media'] == 1
+        assert page['coverage']['complete']
+
+
 def test_unchanged_rebuild_retains_published_revision(indexed):
     _home, _root, index, _wid = indexed
     before = result()
