@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from contextlib import closing
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_dispatch as kbd
 
 
 @pytest.fixture
@@ -86,13 +87,40 @@ def test_versioned_projection_requires_configured_owner(board_client, user, stat
 def test_activity_is_persisted_card_activity_not_worker_heartbeat(board_client):
     with closing(kbc.connect()) as conn:
         card = kb.create_task(conn, title="Card")
-        conn.execute("UPDATE tasks SET created_at=10,started_at=20,last_heartbeat_at=9999999999 WHERE id=?", (card,))
+        conn.execute("UPDATE tasks SET status='running',created_at=10,started_at=20 WHERE id=?", (card,))
         conn.execute("UPDATE task_events SET created_at=30 WHERE task_id=?", (card,))
         conn.execute("INSERT INTO task_comments(task_id,author,body,created_at) VALUES (?, 'owner','private',40)", (card,))
         conn.commit()
+        assert kbd.heartbeat_worker(conn, card)
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE task_id=? AND kind='heartbeat'",
+                            (card,)).fetchone()[0] == 1
     response = board_client.get("/api/plugins/kanban/board?presentation_version=1")
     assert response.status_code == 200, response.text
     assert tasks(response.json())[card].get("activity_at") == 40
+
+
+def test_breaker_block_with_stale_dependency_kind_keeps_attention_unknown(board_client):
+    with closing(kbc.connect()) as conn:
+        parent = kb.create_task(conn, title="Parent")
+        child = kb.create_task(conn, title="Child")
+        kb.link_tasks(conn, parent, child)
+        conn.execute("UPDATE tasks SET status='ready' WHERE id=?", (child,))
+        conn.commit()
+        assert kb.block_task(conn, child, kind="dependency")
+        waiting = kb.get_task(conn, child)
+        assert waiting is not None and waiting.status == "todo"
+        assert kb.complete_task(conn, parent, result="Parent prerequisite finished and verified.")
+        kb.recompute_ready(conn)
+        ready = kb.get_task(conn, child)
+        assert ready is not None and ready.status == "ready"
+        assert kbd._record_task_failure(conn, child, "worker crashed", outcome="crashed", force_trip=True)
+        stored = kb.get_task(conn, child)
+        assert stored is not None and stored.status == "blocked" and stored.block_kind == "dependency"
+    response = board_client.get("/api/plugins/kanban/board?presentation_version=1")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert tasks(result)[child]["owner_attention"] is None
+    assert result["attention_complete"] is False
 
 
 def test_running_card_cannot_claim_no_owner_ask_without_coverage(board_client):
