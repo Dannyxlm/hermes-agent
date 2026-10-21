@@ -56,6 +56,25 @@ def estimate_api_value(model: str, usage: CanonicalUsage, *, provider: str) -> d
     return result
 
 
+def estimate_aggregate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: str,
+                                         api_call_count: int) -> dict:
+    """Retained counters are exact only when missing boundaries cannot change rates."""
+    value = estimate_api_value_decimal(model, usage, provider=provider)
+    minimum = value["estimated_cost_usd"]
+    if minimum is not None:
+        if not usage.total_tokens and api_call_count:
+            value.update(estimated_cost_usd=None, status="unknown", reason="token usage unavailable for completed call")
+            minimum = None
+        elif api_call_count != 1:
+            standard = estimate_api_value_decimal(model, usage, provider=provider, standard_tier=True)
+            if minimum != standard["estimated_cost_usd"]:
+                value.update(estimated_cost_usd=None, status="minimum",
+                             reason="aggregate usage: original call boundaries unavailable for context-tier pricing")
+                minimum = standard["estimated_cost_usd"]
+    value["minimum_estimated_cost_usd"] = minimum
+    return value
+
+
 def estimate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: str,
                                standard_tier: bool = False) -> dict:
     """Standard processing API equivalent. Discounts, speed tiers, tools and tax excluded.

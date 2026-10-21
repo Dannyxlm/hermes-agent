@@ -1,15 +1,12 @@
 """SQL rollups of retained accounting counters, without request-history inference."""
 import json
-from decimal import Decimal
 from functools import lru_cache
-from math import nextafter
 
-from agent.api_value_pricing import estimate_api_value_decimal
+from agent.api_value_pricing import estimate_aggregate_api_value_decimal
 from agent.usage_pricing import CanonicalUsage
-from hermes_state_rollup import _COUNTERS, _SUMS, _metrics, follows_usage_parent
+from hermes_state_rollup import _COUNTERS, _SUMS, _DecimalSum, _metrics, follows_usage_parent
 from hermes_state_usage import AUXILIARY_USAGE_TASKS
 
-_TIER_REASON = "per-chat totals: original call boundaries unavailable for context-tier pricing"
 _LINEAGE = """WITH RECURSIVE routes AS MATERIALIZED (
     SELECT s.id, CASE WHEN p.id IS NOT NULL
         AND usage_follows_parent(s.source, s.model_config, p.end_reason)
@@ -53,52 +50,15 @@ _AGGREGATES = (_SUMS + ", NULL AS turn_count, NULL AS event_count, NULL AS unatt
 _TOTAL_TOKENS = "+".join(f"e.{key}" for key in _COUNTERS[:4])
 
 
-class _DecimalSum:
-    def __init__(self):
-        self.total = Decimal(0)
-
-    def step(self, value):
-        if value is not None:
-            self.total += Decimal(value)
-
-    def finalize(self):
-        return str(self.total)
-
-
 def _session_value(model, provider, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, api_call_count):
     usage = CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens,
                            cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
-    value = estimate_api_value_decimal(model, usage, provider=provider)
-    minimum = value["estimated_cost_usd"]
-    if minimum is not None:
-        if not usage.total_tokens and api_call_count:
-            value.update(estimated_cost_usd=None, reason="token usage unavailable for completed call")
-            minimum = None
-        elif api_call_count != 1:
-            standard = estimate_api_value_decimal(model, usage, provider=provider, standard_tier=True)
-            if minimum != standard["estimated_cost_usd"]:
-                value.update(estimated_cost_usd=None, reason=_TIER_REASON)
-                minimum = standard["estimated_cost_usd"]
-    value["minimum_estimated_cost_usd"] = minimum
+    value = estimate_aggregate_api_value_decimal(model, usage, provider=provider, api_call_count=api_call_count)
     return json.dumps(value, default=str)
 
 
-def _minimum_float(value):
-    amount = float(value)
-    # JSON numbers must not round an exact Decimal lower bound upward.
-    if Decimal(str(amount)) > value:
-        amount = nextafter(amount, 0.0)
-    return amount
-
-
 def _session_metrics(row):
-    values = dict(row)
-    minimum_events = int(values.pop("minimum_price_events") or 0)
-    values["known_estimated_cost_usd"] = float(values["known_estimated_cost_usd"] or 0)
-    values["minimum_estimated_cost_usd"] = _minimum_float(Decimal(values["minimum_estimated_cost_usd"] or 0))
-    result = _metrics(values)
-    result["cost_status"] = ("unknown" if result["unknown_price_events"] > minimum_events
-                             else "minimum" if minimum_events else "est")
+    result = _metrics(row)
     result.update(turn_count=None, event_count=None, unattributed_turn_events=None)
     return result
 
