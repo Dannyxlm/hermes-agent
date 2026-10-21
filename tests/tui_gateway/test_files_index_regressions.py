@@ -203,3 +203,38 @@ def test_live_sized_evidence_completes_under_query_budget(indexed):
     with ThreadPoolExecutor(max_workers=2) as executor:
         pages = list(executor.map(lambda ctx: ctx.run(result, limit=1), contexts))
     assert all(page['totals']['files'] >= 10000 and page['items'] for page in pages)
+
+
+def test_unknown_profile_is_profile_denial(indexed):
+    assert rpc('files.index', profile='missing')['error']['code'] == 4403
+
+
+def test_workspace_suggestion_cap_reports_incomplete_coverage(indexed):
+    _home, root, _index, wid = indexed
+    for ordinal in range(201):
+        (root / ('child-' + str(ordinal) + '.txt')).write_text('child')
+    page = result(workspace_id=wid, include_workspace=True, limit=200)
+    assert not page['coverage']['complete']
+    assert page['totals'] == dict(media=1, files=1, links=3, messages=4)
+
+
+def test_generation_only_roots_are_not_directory_browse_grants(indexed):
+    from plugins.cloudseed_mobile import workspace_files
+    home, _root, _index, _wid = indexed
+    generated = home.parent / 'generation-only'
+    generated.mkdir()
+    (generated / 'result.txt').write_text('generated')
+    config = home / 'config.yaml'
+    config.write_text(config.read_text() + '  generation_roots:\n    - ' + str(generated) + '\n')
+    wid = next(w['id'] for w in workspace_files.workspaces('default', include_generation=True)['items'] if w['root_path'] == str(generated))
+    assert rpc('files.index', profile='default', workspace_id=wid, include_workspace=True)['error']['code'] == 4403
+
+
+def test_delegate_truncation_does_not_poison_public_counts(indexed):
+    home, _root, index, _wid = indexed
+    before = result()['totals']
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.append_message('delegate', 'assistant', 'x' * (1024 * 1024 + 1))
+    refresh(index)
+    page = result()
+    assert page['totals'] == before and page['coverage']['complete']
