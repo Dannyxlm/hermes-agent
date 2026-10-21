@@ -26,7 +26,9 @@ class OwnerPeer:
 
 @pytest.fixture
 def homes(tmp_path, monkeypatch):
-    from hermes_cli import profiles
+    from hermes_cli import config, config_backups, profiles
+    monkeypatch.setattr(config, "ensure_hermes_home", lambda: None)
+    monkeypatch.setattr(config_backups, "backup_config", lambda *args, **kwargs: None)
     root = tmp_path / "installation"
     named = root / "profiles" / "ops"
     named.mkdir(parents=True)
@@ -103,7 +105,9 @@ def test_team_positive_runtime_is_exact_profile_and_idle_is_unknown(homes):
 @pytest.mark.parametrize("source,title,archived", [("kanban", "Worker", 0),
                                                    ("cron", "Job", 0),
                                                    ("desktop", "Bot Chat", 0),
-                                                   ("desktop", "Old", 1)])
+                                                   ("desktop", "Old", 1),
+                                                   ("subagent", "Child", 0),
+                                                   ("telegram", "Messaging", 0)])
 def test_team_never_offers_worker_canonical_or_archived_chat(homes, source, title, archived):
     _, named, _ = homes
     with SessionDB(db_path=named / "state.db") as db:
@@ -185,6 +189,56 @@ def test_cursor_binds_scope_and_rejects_changed_snapshot(homes):
 def test_summary_rejects_invalid_window_timezone_and_limit(homes, extra):
     response = summary(**extra)
     assert response.get("error", {}).get("code") == 4002, response
+
+
+def test_known_turn_start_is_not_chat_creation_time(homes):
+    _, named, _ = homes
+    server._sessions["runtime"] = {"profile_home": str(named), "session_key": "same-id", "running": True,
+                                   "inflight_turn": {"started_at": 123, "user": "not a task title"}}
+    response = rpc("team.activity", profiles=["ops"])
+    assert "result" in response, response
+    current = response["result"]["agents"][0]["current"]
+    assert current["started_at"] == 123
+    assert "not a task title" not in str(response)
+
+
+def test_epoch_zero_occurrence_stays_in_its_scheduled_window(homes):
+    with ledger(homes[0]) as conn:
+        attempt(conn, "zero", scheduled="1970-01-01T00:00:00+00:00",
+                claimed="1970-01-01T01:00:00+00:00")
+    response = summary(end=10)
+    assert "result" in response, response
+    assert [r["occurrence_id"] for r in response["result"]["runs"]] == ["execution:zero"]
+
+
+def test_live_cron_ownership_is_positive_without_an_ordinary_chat(homes):
+    from gateway.status import get_process_start_time
+    with ledger(homes[1]) as conn:
+        attempt(conn, "live", status="running")
+        conn.execute("UPDATE executions SET process_started_at=?", (get_process_start_time(os.getpid()),))
+        conn.commit()
+    response = rpc("team.activity", profiles=["ops"])
+    assert "result" in response, response
+    current = response["result"]["agents"][0]
+    assert current["working"] is True
+    assert current["current"]["kind"] == "cron" and current["current"]["open_chat"] is None
+    with ledger(homes[1]) as conn:
+        conn.execute("UPDATE executions SET process_started_at=1")
+        conn.commit()
+    assert rpc("team.activity", profiles=["ops"])["result"]["agents"][0]["working"] is None
+
+
+def test_desktop_delegate_and_canonical_continuation_never_open_as_ordinary(homes):
+    _, named, _ = homes
+    with SessionDB(db_path=named / "state.db") as db:
+        db.create_session("child", "desktop", model_config={"_delegate_from": "same-id"})
+        db._conn.execute("UPDATE sessions SET title='Bot Chat',end_reason='compression',ended_at=1 WHERE id='same-id'")
+        db.create_session("tip", "desktop", parent_session_id="same-id")
+    for key in ("child", "tip"):
+        server._sessions["runtime"] = {"profile_home": str(named), "session_key": key, "running": True}
+        response = rpc("team.activity", profiles=["ops"])
+        assert "result" in response, response
+        assert response["result"]["agents"][0]["current"]["open_chat"] is None
 
 
 def test_storage_reads_do_not_wait_on_state_writer_or_mutate_state(homes):

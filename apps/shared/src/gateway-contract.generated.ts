@@ -4357,6 +4357,67 @@ export interface PetScaleResult {
   ok: boolean
   scale: number
 }
+export interface TeamActivityParams {
+  profiles: string[]
+}
+export interface TeamActivityResult {
+  version: 1
+  now: number
+  complete: boolean
+  working_count: number | null
+  agents: TeamAgentActivity[]
+}
+export interface TeamAgentActivity {
+  profile: string
+  working: boolean | null
+  last_human_chat_at: number | null
+  current: TeamCurrent | null
+}
+export interface TeamCurrent {
+  kind: string
+  title: string | null
+  work_label: string | null
+  started_at: number | null
+  open_chat: TeamChat | null
+}
+export interface TeamChat {
+  profile: string
+  stored_session_id: string
+}
+export interface CronSummaryParams {
+  profiles: string[]
+  timezone: string
+  start: number
+  end: number
+  limit?: number
+  cursor?: string | null
+}
+export interface CronSummaryResult {
+  version: 1
+  timezone: string
+  start: number
+  end: number
+  complete: boolean
+  counts: CronSummaryCounts
+  runs: CronSummaryRun[]
+  next_cursor: string | null
+}
+export interface CronSummaryCounts {
+  expected: number | null
+  succeeded: number | null
+  retried: number | null
+  needs_attention: number | null
+}
+export interface CronSummaryRun {
+  profile: string
+  job_id: string
+  occurrence_id: string
+  started_at: number | null
+  finished_at: number | null
+  outcome: string
+  retry_of: string | null
+  delivery_summary: string | null
+}
 export interface SystemBatteryParams {
   profile?: string | null
 }
@@ -6435,6 +6496,8 @@ export interface RpcMethods {
   'connectors.tools': { params: ConnectorToolsParams; result: ConnectorToolsResult }
   /** List/add/remove/pause/resume cron jobs in the (optionally profile-scoped) cron store. */
   'cron.manage': { params: CronManageParams; result: CronManageResult }
+  /** Read-only bounded execution receipts with nullable aggregate coverage and scope-bound paging. */
+  'cron.summary': { params: CronSummaryParams; result: CronSummaryResult }
   /** Block/unblock NEW spawns globally (active children keep running); returns the new state. */
   'delegation.pause': { params: DelegationPauseParams; result: DelegationPauseResult }
   /** Running subagent tree plus the spawn pause flag and limits. */
@@ -6869,6 +6932,8 @@ export interface RpcMethods {
   'subscription.upgrade': { params: SubscriptionUpgradeParams; result: SubscriptionUpgradeResult }
   /** Host battery for the status bar; always resolves, ``available: false`` when unreadable. */
   'system.battery': { params: SystemBatteryParams; result: SystemBatteryResult }
+  /** Owner-scoped verified positive runtime activity; unknown coverage never means free. */
+  'team.activity': { params: TeamActivityParams; result: TeamActivityResult }
   /** Record the client's column width for server-side rendering. */
   'terminal.resize': { params: TerminalResizeParams; result: TerminalResizeResult }
   /** Persist a toolset / MCP enable-disable change and rebuild the session agent so it takes effect now. */
@@ -6973,6 +7038,7 @@ export const RPC_METHODS = [
   'connectors.policy.set',
   'connectors.tools',
   'cron.manage',
+  'cron.summary',
   'delegation.pause',
   'delegation.status',
   'diagnostics.share_nous',
@@ -7203,6 +7269,7 @@ export const RPC_METHODS = [
   'subscription.state',
   'subscription.upgrade',
   'system.battery',
+  'team.activity',
   'terminal.resize',
   'tools.configure',
   'tools.list',
