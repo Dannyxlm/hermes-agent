@@ -261,10 +261,20 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
         if snap_err is not None:
             shutil.rmtree(snap_root, ignore_errors=True)
             return tool_error(snap_err, success=False)
-        # Single-op path with the gate bypassed (the batch already cleared/staged it).
+        # Single-op telemetry remains, but learned cards commit once for the whole batch.
+        from tools import skill_ledger
+        ledger_before, ledger_complete = {}, {}
+        with suppress(Exception):
+            ledger_before = {nm: skill_ledger.capture_before(pre_dir)
+                             for nm, (pre_dir, _snap, _existed) in snapshots.items()}
+        with suppress(Exception):
+            from hermex_skill_changes import capture_is_complete
+            ledger_complete = {nm: capture_is_complete(pre_dir, ledger_before.get(nm))
+                               for nm, (pre_dir, _snap, _existed) in snapshots.items()}
         results = []
         rollback_failed = False
         token = _smt._skill_gate_bypass.set(True)
+        review_token = _smt._skill_review_batch.set(True)
         try:
             for i, op in enumerate(operations):
                 raw = _smt._skill_manage_from({**op, "name": names[i], "operations": None},
@@ -293,12 +303,21 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
                 entry.update({k: parsed[k] for k in _ADVISORY_KEYS if parsed.get(k) is not None})
                 results.append(entry)
         finally:
+            _smt._skill_review_batch.reset(review_token)
             _smt._skill_gate_bypass.reset(token)
             if rollback_failed:
                 # Keep the snapshots so the operator can still recover by hand.
                 logger.warning("skill_manage batch rollback failed, snapshots kept at %s", snap_root)
             else:
                 shutil.rmtree(snap_root, ignore_errors=True)
+        for nm in dict.fromkeys(names):
+            with suppress(Exception):
+                post = _smt._find_skill(nm)
+                skill_ledger.record_mutation(
+                    "batch", nm, before=ledger_before.get(nm) or [],
+                    after_root=post["path"] if post else None,
+                    evidence={"session_id": session_id, "anchor_message_id": None,
+                              "review_committed": True, "capture_complete": ledger_complete.get(nm, False)})
     # utf-8-sig + errors="replace": SKILL.md files are user-authored and sometimes carry a Notepad BOM or
     # stray non-UTF-8 bytes. Pinning UTF-8 with replacement keeps skill_view deterministic across platforms
     # — falling back to the machine locale (cp1252/GBK) would make the same skill render differently per

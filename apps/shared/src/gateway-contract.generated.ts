@@ -2074,6 +2074,113 @@ export interface HumanInputActionStatusParams {
   action_id: string
   question_id?: string | null
 }
+export interface SkillChangesListParams {
+  profile: string
+  session_id: string
+  cursor?: string | null
+  limit?: number
+}
+export interface SkillChangesListResult {
+  version: 1
+  profile: string
+  items: SkillChangeItem[]
+  next_cursor: string | null
+}
+export interface SkillChangeItem {
+  change_id: string
+  skill: string
+  session_id: string
+  anchor_message_id: string | null
+  created_at: string
+  revision: string
+  title: string | null
+  reason: string | null
+  lines: SkillChangeLine[]
+  decision: 'unreviewed' | 'kept' | 'undone'
+  can_undo: boolean
+}
+export interface SkillChangeLine {
+  kind: 'add' | 'remove'
+  text: string
+}
+export interface SkillChangeParams {
+  profile: string
+  change_id: string
+}
+export interface SkillChangeResult {
+  version: 1
+  change_id: string
+  revision: string
+  diff: string | null
+  can_undo: boolean
+  decision: 'unreviewed' | 'kept' | 'undone'
+  receipt_id: string | null
+}
+export interface SkillChangeDecideParams {
+  profile: string
+  change_id: string
+  decision: 'keep' | 'undo'
+  expected_revision: string
+  client_action_id: string
+}
+export interface SkillChangeDecisionResult {
+  change_id: string
+  decision: 'kept' | 'undone'
+  revision: string
+  receipt_id: string
+}
+export interface LiveSearchParams {
+  profile: string
+  query: string
+  session_id?: string | null
+  cursor?: string | null
+  limit?: number
+}
+export interface LiveSearchResult {
+  version: 1
+  profile: string
+  query: string
+  revision: string
+  results: LiveSearchGroup[]
+  next_cursor: string | null
+}
+export interface LiveSearchGroup {
+  session_id: string
+  lineage_root: string
+  matches: LiveSearchMatch[]
+  match_count: number | null
+}
+export interface LiveSearchMatch {
+  message_id: string
+  logical_id: string
+  source_session_id: string
+  role: 'user' | 'assistant'
+  snippet: string
+  ranges: LiveSearchRange[]
+}
+export interface LiveSearchRange {
+  start: number
+  length: number
+}
+export interface LiveWindowParams {
+  profile: string
+  session_id: string
+  message_id: string
+  expected_revision: string
+  limit?: number
+  cursor?: string | null
+}
+export interface LiveWindowResult {
+  version: 1
+  profile: string
+  session_id: string
+  revision: string
+  anchor_message_id: string
+  messages: Record<string, unknown>[]
+  older_cursor: string | null
+  newer_cursor: string | null
+  offset: number | null
+}
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
 }
@@ -4613,8 +4720,15 @@ export interface CliExecResult {
 export interface CommandsCatalogParams {
   session_id?: string | null
   profile?: string | null
+  since_revision?: string | null
+  include_entries?: boolean
 }
 export interface CommandsCatalogResult {
+  catalog_version?: number | null
+  profile?: string | null
+  revision?: string | null
+  observed_at?: string | null
+  entries?: LiveCatalogEntry[]
   pairs?: string[][]
   sub?: Record<string, string[]>
   canon?: Record<string, string>
@@ -4623,6 +4737,16 @@ export interface CommandsCatalogResult {
   skills?: Record<string, SkillCatalogEntry>
   skill_count?: number
   warning?: string
+}
+export interface LiveCatalogEntry {
+  id: string
+  slash: string
+  kind: 'skill' | 'command'
+  description: string | null
+  icon: string | null
+  is_new: boolean | null
+  updated_at: string | null
+  mobile_action: string | null
 }
 export interface CommandCatalogMeta {
   argument_mode?: ArgumentMode | null
@@ -6949,6 +7073,8 @@ export interface RpcMethods {
   'session.interrupt': { params: SessionInterruptParams; result: SessionInterruptResult }
   /** Human-facing stored sessions, most recent first (sub-agent / kanban sources denied). */
   'session.list': { params: SessionListParams; result: SessionListResult }
+  /** Bounded display window at an exact message, including compression ancestors. */
+  'session.messages.window': { params: LiveWindowParams; result: LiveWindowResult }
   /** Most recent human-facing session; errors fold into a null session_id. */
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult }
   /** Redirect the active turn (queued for the next turn while the agent is still building). */
@@ -6961,6 +7087,8 @@ export interface RpcMethods {
   'session.resume': { params: SessionResumeParams; result: SessionResumeWireResult }
   /** Export the transcript to ~/.hermes/sessions/saved (classic /save). */
   'session.save': { params: SessionSaveParams; result: SessionSaveResult }
+  /** Paged message IDs and UTF-16 snippet ranges in owned history. */
+  'session.search': { params: LiveSearchParams; result: LiveSearchResult }
   /** Set/clear hidden (out of the default list, still resumable by its owner) on a session + lineage. */
   'session.set_hidden': { params: SessionSetHiddenParams; result: SessionSetHiddenResult }
   /** Rendered /status text for the session. */
@@ -7003,6 +7131,12 @@ export interface RpcMethods {
   'shared_metrics.update_run': { params: SharedMetricsUpdateRunParams; result: SharedMetricsUpdateRunResult }
   /** Run a safe (non-dangerous) shell command captured for ``!cmd`` / inline substitution. */
   'shell.exec': { params: ShellExecParams; result: ShellExecResult }
+  /** Acknowledge or conflict-safely undo a recorded skill edit. */
+  'skills.changes.decide': { params: SkillChangeDecideParams; result: SkillChangeDecisionResult }
+  /** Recorded skill diff and durable decision readback. */
+  'skills.changes.get': { params: SkillChangeParams; result: SkillChangeResult }
+  /** Committed skill changes in an exact owned conversation lineage. */
+  'skills.changes.list': { params: SkillChangesListParams; result: SkillChangesListResult }
   /** Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub. */
   'skills.manage': { params: SkillsManageParams; result: SkillsManageResult }
   /** Re-scan skill dirs; the pre-rendered ``output`` is what /reload-skills prints. */
@@ -7331,12 +7465,14 @@ export const RPC_METHODS = [
   'session.info',
   'session.interrupt',
   'session.list',
+  'session.messages.window',
   'session.most_recent',
   'session.redirect',
   'session.response.read',
   'session.response.release',
   'session.resume',
   'session.save',
+  'session.search',
   'session.set_hidden',
   'session.status',
   'session.steer',
@@ -7358,6 +7494,9 @@ export const RPC_METHODS = [
   'shared_metrics.status',
   'shared_metrics.update_run',
   'shell.exec',
+  'skills.changes.decide',
+  'skills.changes.get',
+  'skills.changes.list',
   'skills.manage',
   'skills.reload',
   'slash.exec',

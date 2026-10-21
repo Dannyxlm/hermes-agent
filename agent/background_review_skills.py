@@ -9,7 +9,7 @@ created do not exist yet. The block rides on the review's user message, after th
 from typing import Any, Dict, Iterable, List, Optional
 
 _MAX_SKILLS = 12
-_WRITE_ACTIONS = frozenset({"create", "edit", "patch", "write_file", "remove_file", "delete", "archive"})
+_WRITE_ACTIONS = frozenset({"create", "edit", "patch", "write_file", "remove_file", "delete", "archive", "undo"})
 _ACTOR_LABELS = {"curator": "a background review", "agent": "the conversation", "user": "the user"}
 
 
