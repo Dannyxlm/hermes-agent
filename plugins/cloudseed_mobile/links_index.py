@@ -18,6 +18,9 @@ from hermes_state_holders import read_only_db_uri
 from plugins.cloudseed_mobile.deliverables import MAX_REFERENCES, MAX_STRING, decode, delegate_child, is_image, strings, visible
 from plugins.cloudseed_mobile.workspace_files import digest, open_beneath, parts
 
+# SQLite callbacks acquire Python's GIL, including while a projection owns it.
+QUERY_PROGRESS_STEPS = 250_000
+
 
 def mention(kind, target):
     from agent.context_references import format_reference_value, parse_context_references
@@ -317,7 +320,7 @@ def workspace_counts(index):
         params = dict(session_id=None, workspace_id=None, q='', author='all')
         clauses, values = _admission(db, index, params)
         deadline = time.monotonic() + 0.75
-        db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+        db.set_progress_handler(lambda: int(time.monotonic() > deadline), QUERY_PROGRESS_STEPS)
         _materialize(db, clauses, [meta['generation'], *values])
         rows = list(db.execute('SELECT workspace_id,count(DISTINCT id) FROM evidence GROUP BY workspace_id'))
         counts = {w['id']: 0 for w in index.workspaces}
@@ -425,7 +428,7 @@ def query_index(index, principal, params, *, links=False):
                         params.get('directory_path'), directory_revision])
         after = _decode_cursor(params['cursor'], scope)
         deadline = time.monotonic() + 0.75
-        db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+        db.set_progress_handler(lambda: int(time.monotonic() > deadline), QUERY_PROGRESS_STEPS)
         args = [meta.get('generation'), *values]
         _materialize(db, clauses, args)
         totals, complete = _totals(db, index, params, meta)

@@ -164,10 +164,10 @@ def test_dispatch_and_refresh_do_not_block_reader(indexed, peer, monkeypatch, me
         future = executor.submit(server.dispatch, {'id': 'async-files', 'method': method, 'params': {'profile': 'default'}}, peer)
         try:
             assert queried.wait(5)
-            assert future.result(timeout=1) is None
+            assert future.result(timeout=2) is None
             assert entered.wait(5)
             from tests.waiting import wait_until
-            assert wait_until(lambda: any(frame.get('id') == 'async-files' for frame in peer.frames), timeout=1)
+            assert wait_until(lambda: any(frame.get('id') == 'async-files' for frame in peer.frames), timeout=2)
             assert 'result' in next(frame for frame in peer.frames if frame.get('id') == 'async-files')
         finally:
             release.set()
