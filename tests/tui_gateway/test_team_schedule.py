@@ -253,6 +253,63 @@ def test_storage_reads_do_not_wait_on_state_writer_or_mutate_state(homes):
 
 
 @pytest.mark.parametrize("method", ["team.activity", "cron.summary"])
+def test_named_launch_owner_admission_does_not_hydrate_root_secrets(homes, method, monkeypatch):
+    from hermes_cli import env_loader, web_server_profiles
+    from tui_gateway import launch_profile_policy
+    root, named, _ = homes
+    monkeypatch.setenv("HERMES_HOME", str(named))
+    monkeypatch.setattr(server, "_hermes_home", named)
+    monkeypatch.setattr(web_server_profiles, "get_process_hermes_home", lambda: named)
+    effects = []
+    monkeypatch.setattr(env_loader, "hydrate_profile_secret_sources", lambda home: effects.append(str(home)))
+    monkeypatch.setattr(launch_profile_policy, "activate_multi_profile_hosting", lambda: effects.append("multiplex"))
+    before = dict(os.environ)
+    response = rpc(method, **({"profiles": ["ops"]} if method == "team.activity" else {
+        "profiles": ["ops"], "timezone": "UTC", "start": 0, "end": 1000}))
+    assert "result" in response, response
+    assert effects == []
+    assert dict(os.environ) == before
+    from hermes_constants import get_hermes_home
+    assert get_hermes_home() == named
+    assert root != named
+
+
+@pytest.mark.parametrize("source,hidden,expected_last,opens", [
+    ("desktop", 1, None, False), (None, 0, 100, True)])
+def test_team_ordinary_chat_matches_hidden_and_null_source_listing(homes, source, hidden, expected_last, opens):
+    _, named, _ = homes
+    with sqlite3.connect(named / "state.db") as conn:
+        if source is None:
+            conn.execute("ALTER TABLE sessions RENAME COLUMN source TO original_source")
+            conn.execute("ALTER TABLE sessions ADD COLUMN source TEXT")
+            conn.execute("UPDATE sessions SET source=original_source")
+        conn.execute("UPDATE sessions SET source=?,hidden=? WHERE id='same-id'", (source, hidden))
+    server._sessions["runtime"] = {"profile_home": str(named), "session_key": "same-id", "running": True}
+    response = rpc("team.activity", profiles=["ops"])
+    assert "result" in response, response
+    agent = response["result"]["agents"][0]
+    assert agent["last_human_chat_at"] == expected_last
+    assert (agent["current"]["open_chat"] is not None) is opens
+
+
+@pytest.mark.parametrize("method", ["team.activity", "cron.summary"])
+@pytest.mark.parametrize("error", [PermissionError, FileNotFoundError])
+def test_profile_store_io_errors_are_not_owner_denial_or_unknown_profile(homes, method, error, monkeypatch):
+    from tui_gateway import team_schedule_projection
+    with ledger(homes[1]) as conn:
+        attempt(conn, "stored")
+
+    def unavailable(path):
+        raise error("fixture storage failure")
+
+    monkeypatch.setattr(team_schedule_projection, "_read_store", unavailable)
+    response = rpc(method, **({"profiles": ["ops"]} if method == "team.activity" else {
+        "profiles": ["ops"], "timezone": "UTC", "start": 0, "end": 1000}))
+    assert response.get("error", {}).get("code") == 5037, response
+    assert "fixture storage failure" not in str(response)
+
+
+@pytest.mark.parametrize("method", ["team.activity", "cron.summary"])
 def test_public_dispatch_moves_read_to_worker_pool(homes, method, monkeypatch):
     peer = homes[2]
     entered = threading.Event()
