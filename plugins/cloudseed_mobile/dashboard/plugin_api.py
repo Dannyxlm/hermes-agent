@@ -263,7 +263,6 @@ def deliverable_versions(profile: str, artifact_key: str):
 
 
 def indexed_read(profile, operation, *args):
-    result = None
     try:
         result = getattr(deliverable_store(profile), operation)(*args)
         if operation != 'versions' or result['version_count']:
@@ -271,8 +270,9 @@ def indexed_read(profile, operation, *args):
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
-    modern = getattr(deliverable_store(profile, files_index=True), operation)(*args)
-    return result if operation == 'versions' and not modern['version_count'] else modern
+        return getattr(deliverable_store(profile, files_index=True), operation)(*args)
+    modern = deliverable_store(profile, files_index=True).versions(*args)
+    return modern if modern['version_count'] else result
 
 
 @router.get('/workspaces')

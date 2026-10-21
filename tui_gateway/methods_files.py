@@ -44,7 +44,7 @@ def _rpc(server, links, rid, body):
             if result['coverage']['refresh_pending']:
                 server._pool.submit(_refresh, server, home, index)
         return server._ok(rid, result)
-    except PermissionError:
+    except (PermissionError, server.ProfileUnavailableError):
         return server._err(rid, 4403, 'Files owner scope denied')
     except HTTPException as exc:
         code = {400: 4400, 403: 4403, 404: 4400, 409: 4091}.get(exc.status_code, 4401)

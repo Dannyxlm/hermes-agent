@@ -32,7 +32,7 @@ REFRESH_SECONDS=0.75
 RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
 SCAN_VERSION=7
-FILES_SCAN_VERSION=9
+FILES_SCAN_VERSION=10
 # Desktop keeps at most this many versions of one artifact; the versions route matches.
 MAX_ARTIFACT_VERSIONS=20
 MAX_LINEAGE_HOPS=64
@@ -314,7 +314,7 @@ class DeliverablesIndex:
         cwd=Path(session.get('cwd') or '/')
         workspace=next((w['id'] for w in sorted(self.workspaces,key=lambda w:len(w['root_path']),reverse=True)
                         if cwd.is_relative_to(Path(w['root_path']))),None)
-        coverage=meta.get('scan_coverage',{})
+        coverage={} if delegate_child(session) else meta.get('scan_coverage',{})
         values=(workspace,int(coverage.get('files_partial',False)),int(coverage.get('links_partial',False)))
         old=cache.execute('SELECT workspace_id,files_partial,links_partial FROM index_coverage WHERE sid=?',(session['id'],)).fetchone()
         cache.execute('INSERT OR REPLACE INTO index_coverage VALUES(?,?,?,?)',(session['id'],*values))

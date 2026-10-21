@@ -210,19 +210,26 @@ def workspace_children(index, params):
     if not params.get('include_workspace'):
         if params.get('directory_path') is not None:
             raise HTTPException(400, 'Directory requires workspace inclusion')
-        return [], None
+        return [], None, False
     wid = params['workspace_id']
     workspace = next((w for w in index.workspaces if w['id'] == wid), None)
     if workspace is None:
         raise HTTPException(403, 'Workspace required')
+    from plugins.cloudseed_mobile.workspace_files import workspace as browse_workspace
+    try:
+        root = browse_workspace(index.profile, wid)
+    except HTTPException as exc:
+        raise HTTPException(403, 'Workspace browsing denied') from exc
     path = params.get('directory_path') or ''
     parts(path)
-    fd = open_beneath(workspace['root_path'], path, directory=True)
+    fd = open_beneath(root, path, directory=True)
     children = []
+    partial = False
     try:
         with os.scandir(fd) as entries:
             for ordinal, entry in enumerate(entries):
                 if ordinal >= 200:
+                    partial = True
                     break
                 relative = str(PurePosixPath(path) / entry.name)
                 try:
@@ -242,11 +249,11 @@ def workspace_children(index, params):
                                  'message_id': None, 'source_chat_title': None, 'observed_at': None,
                                  'byte_size': None if directory else info.st_size, 'display_type': mime,
                                  'author_kind': 'unknown', 'author_profile': None, 'is_directory': directory,
-                                 'collection': None, 'mention_text': mention('folder' if directory else 'file', str(Path(workspace['root_path']) / relative))})
+                                 'collection': None, 'mention_text': mention('folder' if directory else 'file', str(root / relative))})
     finally:
         os.close(fd)
     children.sort(key=lambda r: r['id'])
-    return children, digest(children)
+    return children, digest(children), partial
 
 
 def _materialize(db, clauses, args):
@@ -400,7 +407,7 @@ def _file_metadata(db, index, items, generation):
 
 
 def query_index(index, principal, params, *, links=False):
-    children, directory_revision = workspace_children(index, params)
+    children, directory_revision, directory_partial = workspace_children(index, params)
     with index.connection(uri=True) as db:
         db.execute('BEGIN')
         meta = index.snapshot(db)
@@ -429,4 +436,4 @@ def query_index(index, principal, params, *, links=False):
 
         return {'schema_version': 1, 'profile': index.profile, 'snapshot_id': snapshot, 'index_revision': revision,
                 'items': items, 'next_cursor': cursor, 'totals': totals,
-                'coverage': {'complete': complete, 'refresh_pending': meta['refresh_pending'], 'updated_at': meta.get('updated_at')}}
+                'coverage': {'complete': complete and not directory_partial, 'refresh_pending': meta['refresh_pending'], 'updated_at': meta.get('updated_at')}}
