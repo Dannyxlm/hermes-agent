@@ -78,7 +78,7 @@ async def payload(request: Request):
 
 def warm_indexes():
     try:
-        return [deliverable_store(profile_id())]
+        return [deliverable_store(profile_id()), deliverable_store(profile_id(), files_index=True)]
     except ValueError:  # an unverified custom home has no Files index to warm
         return []
 

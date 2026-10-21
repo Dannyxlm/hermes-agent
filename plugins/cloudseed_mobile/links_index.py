@@ -315,7 +315,7 @@ def workspace_counts(index):
     with index.connection(uri=True) as db:
         db.execute('BEGIN')
         meta = index.snapshot(db)
-        if not meta.get('generation') or not meta.get('index_revision'):
+        if not (meta.get('generation') and meta.get('source_signature') and meta.get('scan_version') == index.scan_version):
             return counts
         params = dict(session_id=None, workspace_id=None, q='', author='all')
         clauses, values = _admission(db, index, params)
@@ -347,10 +347,8 @@ def _coverage_flags(db, index, params):
         clauses.append('c.sid IN (' + ','.join('?' for _ in lineage) + ')')
         values.extend(lineage)
     if params['workspace_id'] is not None:
-        clauses.append('c.workspace_id=?')
-        values.append(params['workspace_id'])
-    if params['q'] or params['author'] != 'all':
-        clauses.append('c.sid IN (SELECT sid FROM evidence)')
+        clauses.append('(c.workspace_id=? OR EXISTS (SELECT 1 FROM entries e WHERE e.sid=c.sid AND e.workspace_id=?))')
+        values.extend([params['workspace_id'], params['workspace_id']])
     return db.execute('SELECT coalesce(max(c.files_partial),0),coalesce(max(c.links_partial),0) FROM index_coverage c JOIN source.sessions s ON s.id=c.sid WHERE ' + ' AND '.join(clauses), values).fetchone()
 
 
@@ -359,7 +357,7 @@ def _totals(db, index, params, meta):
     messages = db.execute('SELECT count(*) FROM (SELECT DISTINCT sid,message_id FROM evidence)').fetchone()[0]
     truncated = db.execute('SELECT 1 FROM evidence WHERE truncated=1 LIMIT 1').fetchone()
     files_partial, links_partial = _coverage_flags(db, index, params)
-    known = bool(meta.get('generation') and meta.get('index_revision'))
+    known = bool(meta.get('generation') and meta.get('source_signature') and meta.get('scan_version') == index.scan_version)
     totals = {key: counts.get(key, 0) if known and not files_partial else None for key in ('media', 'files')}
     totals['links'] = counts.get('links', 0) if known and not links_partial else None
     complete = known and not files_partial and not links_partial and not truncated
