@@ -31,8 +31,8 @@ REFRESH_SECONDS=0.75
 # many candidates per requested row before handing back a cursor.
 RECENT_SCAN_FACTOR=4
 MAX_PUBLICATION_ROWS=2000
-# v7 adds producer image output and the narrow Generated collection.
-SCAN_VERSION=7
+# v8 adds admitted user attachments, author evidence and links in the same revision.
+SCAN_VERSION=8
 # Desktop keeps at most this many versions of one artifact; the versions route matches.
 MAX_ARTIFACT_VERSIONS=20
 MAX_LINEAGE_HOPS=64
@@ -45,7 +45,8 @@ def source_signature(home):
     for name in ('state.db','state.db-wal'):
         path=home/name
         try:
-            st=path.stat(); values.append((name,st.st_ino,st.st_size,st.st_mtime_ns))
+            st=path.stat()
+            values.append((name,None) if name.endswith('-wal') and st.st_size<=32 else (name,st.st_ino,st.st_size,st.st_mtime_ns))
         except FileNotFoundError: values.append((name,None))
     return digest(values)
 
@@ -81,9 +82,9 @@ class DeliverablesIndex:
             self.lock=_LOCKS.setdefault(str(self.path),threading.Lock())
 
     @contextlib.contextmanager
-    def connection(self):
+    def connection(self, *, uri=False):
         self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-        db=sqlite3.connect(self.path,timeout=1)
+        db=sqlite3.connect(self.path,timeout=1,uri=uri)
         try:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
@@ -123,7 +124,7 @@ class DeliverablesIndex:
                        [(k,json.dumps(v)) for k,v in meta.items() if k not in previous or previous[k]!=v])
 
     def _remember_session(self,cache,session,epoch):
-        sid=session['id']; parent=session.get('parent_session_id'); compression=session.get('end_reason')=='compression'
+        sid=session['id']; parent=None if delegate_child(session) else session.get('parent_session_id'); compression=session.get('end_reason')=='compression'
         old=cache.execute('SELECT parent_id,compression FROM session_nodes WHERE sid=?',(sid,)).fetchone()
         cache.execute('''INSERT INTO session_nodes(sid,parent_id,compression,scan_epoch) VALUES(?,?,?,?)
                          ON CONFLICT(sid) DO UPDATE SET parent_id=excluded.parent_id,
@@ -212,7 +213,7 @@ class DeliverablesIndex:
             recent=(not row.get('subagent',False) and row.get('availability')!='deleted'
                     and row['action'] in {'delivered','created','edited'}
                     and (row['action']=='delivered' or row['kind']!='file' or generated_image or output_path))
-            search=' '.join(str(row.get(k) or '') for k in ('display_name','relative_path','source_chat_title')).casefold()
+            search=' '.join(str(row.get(k) or '') for k in ('display_name','relative_path','source_chat_title','url','title')).casefold()
             search+=' '+next((w['name'] for w in self.workspaces if w['id']==row.get('workspace_id')),'').casefold()
             cache.execute('INSERT OR REPLACE INTO prepared_entries VALUES(?,?,?,?,?,?,?,?,?,?,?)',(sid,rid,generation,-(row.get('observed_at') or 0),row.get('workspace_id'),row['kind'],int(row.get('private',False)),int(recent),search,data,inline))
             fingerprint=hashlib.sha256(revision.encode())
@@ -236,7 +237,7 @@ class DeliverablesIndex:
 
     def _messages(self,source,columns,sid,after):
         available=[c for c in ('id','session_id','role','tool_call_id','tool_name','timestamp','active','message_uid','display_kind') if c in columns]
-        available += [f'substr({c},1,{MAX_STRING+1}) AS {c}' for c in ('content','tool_calls') if c in columns]
+        available += [f'substr({c},1,{MAX_STRING+1}) AS {c}' for c in ('content','tool_calls','display_metadata') if c in columns]
         selection=','.join(available)
         messages=[]; size=0
         # One oversized message still advances the keyset. It cannot hide all later messages.
@@ -308,7 +309,7 @@ class DeliverablesIndex:
                     if 'scan_signature' not in meta:
                         total=source.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
                         meta.update(scan_signature=signature,scan_before=None,indexed_sessions=0,incomplete_segments=False,
-                                    total_sessions=total,scan_epoch=meta['scan_epoch']+1,scan_cleanup=0)
+                                    total_sessions=total,scan_epoch=meta['scan_epoch']+1,scan_cleanup=0,incomplete_links=False)
                     budget=max(0,min(max_sessions,100))
                     before=meta.get('scan_before')
                     where='' if before is None else ' WHERE rowid<?'
@@ -337,12 +338,16 @@ class DeliverablesIndex:
                         root=self._lineage_root(source,session_columns,session,lineage_nodes)
                         try:
                             rows=project(self.profile,{**session,'lineage_root':root},messages,self.workspaces,status=status,reference_limit=None)
+                            from plugins.cloudseed_mobile.links_index import project_links
+                            rows.extend(project_links(self.profile,session,messages,self.workspaces,status))
                         except Exception as exc:
                             LOG.warning('deliverables projection skipped one message segment: %s',type(exc).__name__)
                             rows=[]; status['partial']=True
                         self._stage(cache,sid,rows)
                         meta['scan_after']=last
                         meta['incomplete_segments']=meta['incomplete_segments'] or status.get('partial',False)
+                        meta['incomplete_links']=meta.get('incomplete_links',False) or status.get('links_partial',False)
+                        meta['links_partial']=meta['incomplete_links']
                         more=bool(messages) and source.execute('SELECT 1 FROM messages WHERE session_id=? AND id>? LIMIT 1',(sid,last)).fetchone()
                         if more: break
                         published=self._publish(cache,sid,meta['generation'],deadline,cancel)
@@ -388,8 +393,8 @@ class DeliverablesIndex:
             if source: source.close()
             self.lock.release()
 
-    def snapshot(self):
-        with self.connection() as db:
+    def snapshot(self, connection=None):
+        with (self.connection() if connection is None else contextlib.nullcontext(connection)) as db:
             meta=self._meta(db)
             legacy=db.execute("SELECT 1 FROM meta WHERE key='lineage'").fetchone() is not None
             publication=db.execute('SELECT sid,after_id FROM publication ORDER BY sid LIMIT 1').fetchone()
@@ -483,7 +488,7 @@ class DeliverablesIndex:
             with self.connection() as db:
                 db.set_progress_handler(lambda:int(time.monotonic()>deadline),1000)
                 lineage=self._lineage(db,session_id) if session_id else None
-                clauses=['generation=?']; params=[meta.get('generation')]
+                clauses=["generation=?", "kind IN ('file','remote_media','inline_content')"]; params=[meta.get('generation')]
                 if not reveal: clauses.append('private=0')
                 for column,value in [('workspace_id',workspace_id),('kind',kind)]:
                     if value is not None: clauses.append(column+'=?'); params.append(value)

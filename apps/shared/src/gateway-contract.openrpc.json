@@ -1087,6 +1087,24 @@
       }
     },
     {
+      "name": "files.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FilesIndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FilesIndexResult"
+        }
+      }
+    },
+    {
       "name": "free_tier.ack_notice",
       "summary": "Mark the one-time availability notice as shown on the free-tier identity.",
       "params": [
@@ -1839,6 +1857,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/LearningFramesResult"
+        }
+      }
+    },
+    {
+      "name": "links.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/IndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LinksIndexResult"
         }
       }
     },
@@ -17158,6 +17194,392 @@
         "title": "FileAttachResult",
         "type": "object"
       },
+      "FileCollection": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "picked_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picked Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "member_ids",
+          "picked_id"
+        ],
+        "title": "FileCollection",
+        "type": "object"
+      },
+      "FileIndexItem": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Session Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Relative Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "is_directory": {
+            "title": "Is Directory",
+            "type": "boolean"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileCollection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurrences": {
+            "items": {},
+            "title": "Occurrences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "kind",
+          "display_name",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "is_directory",
+          "mention_text",
+          "collection"
+        ],
+        "title": "FileIndexItem",
+        "type": "object"
+      },
+      "FilesIndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          },
+          "category": {
+            "default": "all",
+            "enum": [
+              "all",
+              "media",
+              "files"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "include_workspace": {
+            "default": false,
+            "title": "Include Workspace",
+            "type": "boolean"
+          },
+          "directory_path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Directory Path"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "FilesIndexParams",
+        "type": "object"
+      },
+      "FilesIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FileIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "FilesIndexResult",
+        "type": "object"
+      },
       "ForeignSessionRow": {
         "additionalProperties": false,
         "description": "``hermes_cli/foreign_sessions_browser.py::list_foreign_sessions`` \u2014 ``id`` is an opaque\nhandle, never a path.",
@@ -20426,6 +20848,187 @@
         "title": "InboxSummaryScope",
         "type": "object"
       },
+      "IndexCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "refresh_pending": {
+            "title": "Refresh Pending",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "complete",
+          "refresh_pending",
+          "updated_at"
+        ],
+        "title": "IndexCoverage",
+        "type": "object"
+      },
+      "IndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "IndexParams",
+        "type": "object"
+      },
+      "IndexTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files"
+          },
+          "links": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Links"
+          },
+          "messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages"
+          }
+        },
+        "required": [
+          "media",
+          "files",
+          "links",
+          "messages"
+        ],
+        "title": "IndexTotals",
+        "type": "object"
+      },
       "InflightTurn": {
         "additionalProperties": false,
         "description": "``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting\nclient rebuilds its bubbles from.",
@@ -21316,6 +21919,196 @@
           "enabled"
         ],
         "title": "LegacyPluginRow",
+        "type": "object"
+      },
+      "LinkIndexItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preview",
+                  "internal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "url",
+          "title",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "tag",
+          "mention_text"
+        ],
+        "title": "LinkIndexItem",
+        "type": "object"
+      },
+      "LinksIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LinkIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "LinksIndexResult",
         "type": "object"
       },
       "LiveSessionStatus": {

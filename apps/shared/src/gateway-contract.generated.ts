@@ -1454,6 +1454,101 @@ export interface DisplayLeaseReleaseParams {
   viewer_id?: string | null
   force?: boolean | null
 }
+export interface FilesIndexParams {
+  profile: string
+  session_id?: string | null
+  workspace_id?: string | null
+  q?: string
+  cursor?: string | null
+  snapshot_id?: string | null
+  limit?: number
+  author?: 'all' | 'agents' | 'me'
+  category?: 'all' | 'media' | 'files'
+  include_workspace?: boolean
+  directory_path?: string | null
+}
+export interface FilesIndexResult {
+  schema_version: 1
+  profile: string
+  snapshot_id: string
+  index_revision: string
+  next_cursor: string | null
+  totals: IndexTotals
+  coverage: IndexCoverage
+  items: FileIndexItem[]
+}
+export interface IndexTotals {
+  media: number | null
+  files: number | null
+  links: number | null
+  messages: number | null
+}
+export interface IndexCoverage {
+  complete: boolean
+  refresh_pending: boolean
+  updated_at: number | null
+}
+export interface FileIndexItem {
+  id: string
+  profile: string
+  kind: string
+  display_name: string
+  stored_session_id: string | null
+  message_id: string | null
+  source_chat_title: string | null
+  observed_at: number | null
+  workspace_id: string | null
+  relative_path?: string | null
+  url?: string | null
+  author_kind: 'agent' | 'me' | 'unknown'
+  author_profile: string | null
+  is_directory: boolean
+  mention_text: string | null
+  collection: FileCollection | null
+  occurrences?: unknown[]
+  [key: string]: unknown
+}
+export interface FileCollection {
+  id: string
+  title: string
+  member_ids: string[]
+  picked_id: string | null
+}
+export interface IndexParams {
+  profile: string
+  session_id?: string | null
+  workspace_id?: string | null
+  q?: string
+  cursor?: string | null
+  snapshot_id?: string | null
+  limit?: number
+  author?: 'all' | 'agents' | 'me'
+}
+export interface LinksIndexResult {
+  schema_version: 1
+  profile: string
+  snapshot_id: string
+  index_revision: string
+  next_cursor: string | null
+  totals: IndexTotals
+  coverage: IndexCoverage
+  items: LinkIndexItem[]
+}
+export interface LinkIndexItem {
+  id: string
+  profile: string
+  url: string
+  title: string | null
+  stored_session_id: string
+  message_id: string
+  source_chat_title: string | null
+  observed_at: number | null
+  workspace_id: string | null
+  author_kind: 'agent' | 'me' | 'unknown'
+  author_profile: string | null
+  tag: 'preview' | 'internal' | null
+  mention_text: string | null
+}
 export interface GroupsCapabilitiesParams {
   profile?: string | null
 }
@@ -6461,6 +6556,7 @@ export interface RpcMethods {
   'display.thumbnail': { params: ProfileParams; result: DisplayThumbnailResult }
   /** Stage a non-image file into the session workspace and hand back its @file: ref. */
   'file.attach': { params: FileAttachParams; result: FileAttachResult }
+  'files.index': { params: FilesIndexParams; result: FilesIndexResult }
   /** Mark the one-time availability notice as shown on the free-tier identity. */
   'free_tier.ack_notice': { params: ProfileParams; result: FreeTierAckNoticeResult }
   /** Report a browser window outcome for the matching pending attempt; mint remains authoritative. */
@@ -6542,6 +6638,7 @@ export interface RpcMethods {
   'learning.edit': { params: LearningEditParams; result: LearningMutationResult }
   /** Pre-render the /journey timeline (frames + legend/summary) so the TUI walks it locally. */
   'learning.frames': { params: LearningFramesParams; result: LearningFramesResult }
+  'links.index': { params: IndexParams; result: LinksIndexResult }
   /** Stateless one-shot LLM completion (titles, ideas) on the session's or the task backend. */
   'llm.oneshot': { params: LlmOneshotParams; result: LlmOneshotResult }
   /** Facts about the machine running this backend and its OS account, for the desktop first run. */
@@ -6986,6 +7083,7 @@ export const RPC_METHODS = [
   'display.switchSandboxImage',
   'display.thumbnail',
   'file.attach',
+  'files.index',
   'free_tier.ack_notice',
   'free_tier.challenge_result',
   'free_tier.claim_nudge',
@@ -7028,6 +7126,7 @@ export const RPC_METHODS = [
   'learning.detail',
   'learning.edit',
   'learning.frames',
+  'links.index',
   'llm.oneshot',
   'machine.facts',
   'mcp.catalog',

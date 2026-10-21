@@ -6,7 +6,11 @@ import pytest
 
 from hermes_state import SessionDB
 from plugins.cloudseed_mobile.dashboard.plugin_api import deliverable_store
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
+from tests.tui_gateway import test_methods_mobile as mobile
+
+mobile_home = mobile.mobile_home
+peer = mobile.peer
+rpc = mobile.rpc
 
 
 @pytest.fixture
@@ -55,7 +59,7 @@ def result(method='files.index', **params):
 
 
 def test_user_attachment_attribution_and_complete_full_query_counts(indexed):
-    home, root, index, wid = indexed
+    home, root, _index, _wid = indexed
     original = (home / 'state.db').read_bytes()
     page = result(session_id='root', limit=1)
     assert len(page['items']) == 1 and page['next_cursor']
@@ -94,7 +98,7 @@ def test_installation_owner_not_profile_override_and_concrete_profiles(indexed, 
 
 
 def test_cursor_scope_and_common_snapshot(indexed):
-    home, root, index, wid = indexed
+    home, _root, index, wid = indexed
     page = result(session_id='root', limit=1)
     common = result('links.index', session_id='root', snapshot_id=page['snapshot_id'])
     assert common['snapshot_id'] == page['snapshot_id']
@@ -111,7 +115,7 @@ def test_cursor_scope_and_common_snapshot(indexed):
 
 
 def test_workspace_suggestions_safe_children_not_delivery_totals(indexed):
-    home, root, index, wid = indexed
+    _home, root, _index, wid = indexed
     page = result(workspace_id=wid, include_workspace=True)
     folder = next(r for r in page['items'] if r['kind'] == 'workspace_directory')
     assert folder['mention_text'] == '@folder:' + str(root / 'outputs')
@@ -125,7 +129,7 @@ def test_workspace_suggestions_safe_children_not_delivery_totals(indexed):
 
 
 def test_empty_and_partial_counts(indexed):
-    home, root, index, wid = indexed
+    home, _root, _index, _wid = indexed
     page = result(q='no such synthetic item')
     assert page['items'] == [] and page['next_cursor'] is None
     assert page['totals'] == dict(media=0, files=0, links=0, messages=0)
@@ -134,3 +138,62 @@ def test_empty_and_partial_counts(indexed):
     page = result(q='no such synthetic item')
     assert not page['coverage']['complete'] and page['coverage']['refresh_pending']
     assert all(v is None for v in page['totals'].values())
+
+
+def test_display_metadata_attachments_and_canonical_quoted_mentions(indexed):
+    home, root, index, _wid = indexed
+    target = root / 'outputs' / 'a report.md'
+    target.write_text('report')
+    with SessionDB(db_path=home / 'state.db') as db:
+        mid = db.append_message('root', 'user', 'See attachment')
+        db._conn.execute('UPDATE messages SET display_metadata=? WHERE id=?',
+                         (json.dumps({'attachments': [{'type': 'file', 'path': str(target)}]}), mid))
+        db._conn.commit()
+    index.refresh(max_sessions=100)
+    page = result(session_id='root', q='a report.md')
+    assert len(page['items']) == 1
+    row = page['items'][0]
+    assert row['author_kind'] == 'me'
+    from agent.context_references import parse_context_references
+    refs = parse_context_references(row['mention_text'])
+    assert refs[0].target == str(target)
+
+
+def test_bounded_attachment_evidence_reports_unknown_totals(indexed):
+    home, root, index, _wid = indexed
+    with SessionDB(db_path=home / 'state.db') as db:
+        mid = db.append_message('root', 'user', 'Attached')
+        metadata = {'attachments': [{'path': str(root / 'outputs/report.md')}] * 513}
+        db._conn.execute('UPDATE messages SET display_metadata=? WHERE id=?', (json.dumps(metadata), mid))
+        db._conn.commit()
+    index.refresh(max_sessions=100)
+    page = result(session_id='root')
+    assert not page['coverage']['complete']
+    assert all(value is None for value in page['totals'].values())
+
+
+def test_live_session_revocation_and_read_does_not_need_state_write_lock(indexed):
+    home, _root, _index, _wid = indexed
+    with sqlite3.connect(home / 'state.db') as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        assert result(session_id='root')['items']
+        writer.rollback()
+        writer.execute("UPDATE sessions SET archived=1 WHERE id IN ('root','tip')")
+    assert rpc('files.index', profile='default', session_id='root')['error']['code'] == 4400
+    stale = result()
+    assert stale['items'] == [] and stale['totals']['files'] is None
+    assert result()['totals']['files'] == 0
+
+
+@pytest.mark.parametrize('params', [{'limit': True}, {'limit': 201}, {'q': 'x' * 257},
+                                  {'author': 'someone'}, {'include_workspace': 'true'}])
+def test_invalid_queries_are_errors_not_empty_pages(indexed, params):
+    assert rpc('files.index', profile='default', **params)['error']['code'] == 4400
+
+
+def test_cursor_invalidation_on_source_change_before_refresh(indexed):
+    home, _root, _index, _wid = indexed
+    page = result(limit=1)
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.append_message('root', 'assistant', 'Source changed')
+    assert rpc('links.index', profile='default', snapshot_id=page['snapshot_id'])['error']['code'] == 4091

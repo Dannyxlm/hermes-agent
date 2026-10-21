@@ -3,7 +3,12 @@ import json
 import sqlite3
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_files_index import indexed, mobile_home, peer, result
+from tests.tui_gateway import test_files_index as file_tests
+
+indexed = file_tests.indexed
+mobile_home = file_tests.mobile_home
+peer = file_tests.peer
+result = file_tests.result
 from tests.tui_gateway.test_methods_mobile import rpc
 
 
@@ -19,7 +24,7 @@ def test_user_agent_links_lineage_and_no_delegate_leak(indexed):
 
 
 def test_links_deduplicate_urls_and_count_distinct_messages(indexed):
-    home, root, index, wid = indexed
+    home, _root, index, _wid = indexed
     with SessionDB(db_path=home / 'state.db') as db:
         db.append_message('root', 'assistant', '[Again](https://example.com/agent) https://example.com/agent')
     index.refresh(max_sessions=100)
@@ -32,7 +37,7 @@ def test_links_deduplicate_urls_and_count_distinct_messages(indexed):
 
 
 def test_no_reasoning_tool_output_malicious_urls_or_private_file_paths(indexed):
-    home, root, index, wid = indexed
+    home, root, index, _wid = indexed
     with SessionDB(db_path=home / 'state.db') as db:
         db.append_message('root', 'tool', 'https://example.com/tool-page', tool_name='web_extract')
         db.append_message('root', 'assistant', '<think>https://example.com/reasoning</think> ' +
@@ -51,7 +56,7 @@ def test_no_reasoning_tool_output_malicious_urls_or_private_file_paths(indexed):
 
 
 def test_link_ids_are_not_byte_grants_and_old_rest_query_is_file_only(indexed):
-    home, root, index, wid = indexed
+    _home, _root, index, _wid = indexed
     page = result('links.index')
     assert page['items']
     assert all(r['kind'] != 'link' for r in index.query()['items'])
@@ -66,3 +71,38 @@ def test_workspaces_counts_from_same_projection(indexed):
     from plugins.cloudseed_mobile.dashboard.plugin_api import file_workspaces
     rows = file_workspaces('default')['items']
     assert rows[0]['indexed_item_count'] == 5
+
+
+def test_symlink_reference_cannot_grant_a_composer_expansion(indexed):
+    home, _root, index, _wid = indexed
+    (home / 'outside.md').write_text('outside the workspace')
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.append_message('root', 'assistant', '[Escape](escape/outside.md)')
+    index.refresh(max_sessions=100)
+    page = result(session_id='root', q='outside.md')
+    assert all(row['mention_text'] is None for row in page['items'])
+
+
+def test_explicit_link_preserves_stored_query_and_fragment_text(indexed):
+    home, _root, index, _wid = indexed
+    url = 'https://example.com/resource?next=%2Ffolder%2F&bang=!#part?'
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.append_message('root', 'user', '[Exact URL](' + url + ')')
+    index.refresh(max_sessions=100)
+    page = result('links.index', session_id='root', q='resource')
+    assert [row['url'] for row in page['items']] == [url]
+    assert page['items'][0]['title'] == 'Exact URL'
+
+
+def test_same_url_author_filters_and_snapshot_principal_binding(indexed, peer):
+    home, _root, index, _wid = indexed
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.append_message('root', 'user', 'https://example.com/agent')
+    index.refresh(max_sessions=100)
+    mine = result('links.index', session_id='root', author='me')
+    assert {r['url'] for r in mine['items']} == {'https://example.com/user', 'https://example.com/agent'}
+    page = result(limit=1)
+    path = home / 'config.yaml'
+    path.write_text(path.read_text().replace('fixture-owner', 'new-owner'))
+    peer.auth_identity = {'provider': 'fixture-auth', 'user_id': 'new-owner'}
+    assert rpc('files.index', profile='default', cursor=page['next_cursor'])['error']['code'] == 4091

@@ -264,7 +264,18 @@ def deliverable_versions(profile: str, artifact_key: str):
 
 @router.get('/workspaces')
 def file_workspaces(profile: str):
-    return guarded(lambda: files.workspaces(profile))
+    def run():
+        from plugins.cloudseed_mobile.links_index import workspace_counts
+        result = files.workspaces(profile)
+        index = deliverable_store(profile)
+        try:
+            counts = workspace_counts(index)
+        except (OSError, sqlite3.Error, HTTPException):
+            counts = {}
+        for workspace in result['items']:
+            workspace['indexed_item_count'] = counts.get(workspace['id'])
+        return result
+    return guarded(run)
 
 
 @router.get('/workspace-files')

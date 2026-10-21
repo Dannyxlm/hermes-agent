@@ -3818,3 +3818,5 @@ for _m in (
 del _m
 from tui_gateway import methods_human_input as _methods_human_input
 _methods_human_input.register(sys.modules[__name__], register_method)
+from tui_gateway import methods_files as _methods_files
+_methods_files.register(sys.modules[__name__], register_method)
