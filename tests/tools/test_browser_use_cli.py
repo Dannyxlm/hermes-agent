@@ -730,6 +730,27 @@ class TestIdleLaneReaping:
     """``browser.exec_idle_minutes``: lanes are stamped per call, idle ones are stopped through the
     harness (closing their dedicated tab) after the tabs they opened are closed through the live daemon."""
 
+    @pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+    def test_ledger_reads_utf8_with_or_without_bom(self, tmp_path, encoding):
+        tabs = tmp_path / "bu-old.hermes-tabs"
+        tabs.write_text("AAA\nBBB\nAAA\nbad id!\n", encoding=encoding)
+        assert bu_cli._ledger_tab_ids(tabs) == ["AAA", "BBB"]
+
+    @pytest.mark.parametrize("error", [OSError("filesystem unavailable"),
+                                      UnicodeError("invalid ledger"),
+                                      subprocess.SubprocessError("cleanup unavailable")])
+    def test_reaper_continues_after_operational_error(self, monkeypatch, caplog, error):
+        waits = iter([None])
+        monkeypatch.setattr(bu_cli.time, "sleep", lambda seconds: next(waits))
+
+        def reap():
+            raise error
+
+        monkeypatch.setattr(bu_cli, "_reap_idle_lanes_once", reap)
+        with caplog.at_level("DEBUG", logger=bu_cli.__name__), pytest.raises(StopIteration):
+            bu_cli._lane_reaper_loop()
+        assert f"idle lane reap failed: {error}" in caplog.text
+
     def test_idle_seconds_floor_and_off(self):
         assert bu_cli._exec_idle_seconds({}) == 0
         assert bu_cli._exec_idle_seconds({"exec_idle_minutes": 0}) == 0
@@ -799,7 +820,7 @@ class TestIdleLaneReaping:
     def test_reaping_off_adds_nothing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")
         monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: None)
-        monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {})
+        monkeypatch.setattr(bu_cli, "_read_browser_cfg", dict)
         runtime = tmp_path / "rt"
         monkeypatch.setattr(bu_cli, "_isolate_served_profile_daemons",
                             lambda env: env.update(BH_RUNTIME_DIR=str(runtime), BH_RUNTIME_DIR_SHARED="1"))
@@ -825,7 +846,7 @@ class TestIdleLaneReaping:
             calls.append(url)
             if url == "reuse":  # the harness reuses the attached blank tab instead of creating one
                 return "USERTAB"
-            targets.append("T%d" % len(calls))
+            targets.append(f"T{len(calls):d}")
             return targets[-1]
         ns = {"new_tab": new_tab, "cdp": cdp}
         exec(bu_cli._TAB_LEDGER_PRELUDE, ns)

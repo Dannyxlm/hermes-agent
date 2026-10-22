@@ -740,7 +740,7 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
 _driven_daemons: set = set()
 _driven_daemons_lock = threading.Lock()
 # Same, for daemons in an idle-lane namespace (see _touch_lane): (lanes dir, BU_NAME) -> its dir env.
-_driven_lane_envs: Dict[tuple, Dict[str, str]] = {}
+_driven_lane_envs: dict[tuple, dict[str, str]] = {}
 _desktop_daemon_epochs: dict[tuple[str, str], int] = {}
 # Route cache key -> whether its last browser_exec ran on the hybrid local sidecar.
 _exec_route_is_sidecar: dict[str, bool] = {}
@@ -809,13 +809,13 @@ def _harness_runtime_dir(env: dict) -> Optional[Path]:
 
 
 class _LaneDir(NamedTuple):
-    env: Dict[str, str]  # the harness-dir env keys a CLI subprocess needs to reach these daemons
+    env: dict[str, str]  # the harness-dir env keys a CLI subprocess needs to reach these daemons
     idle_s: int
 
 
 # Harness runtime dirs this process has driven with reaping on -> how to reach and judge their lanes.
-_lane_dirs: Dict[str, _LaneDir] = {}
-_lane_inflight: Dict[tuple, int] = {}  # (runtime dir, BU_NAME) -> calls running in this process
+_lane_dirs: dict[str, _LaneDir] = {}
+_lane_inflight: dict[tuple, int] = {}  # (runtime dir, BU_NAME) -> calls running in this process
 _lane_state_lock = threading.Lock()
 _lane_reaper_thread: Optional[threading.Thread] = None
 
@@ -912,13 +912,13 @@ def _touch_lane(env: dict, name: str, idle_s: int) -> _LaneTouch:
 
 def _ledger_tab_ids(tabs: Path) -> list[str]:
     try:
-        lines = [line.strip() for line in tabs.read_text(encoding="utf-8").splitlines()]
+        lines = [line.strip() for line in tabs.read_text(encoding="utf-8-sig").splitlines()]
     except OSError:
         return []
     return list(dict.fromkeys(t for t in lines if _TARGET_ID_RE.match(t)))
 
 
-def _stop_lane(dir_env: Dict[str, str], name: str, tab_ids: list[str]) -> None:
+def _stop_lane(dir_env: dict[str, str], name: str, tab_ids: list[str]) -> None:
     """Close the lane's recorded tabs through its live daemon, then stop the daemon (closing its dedicated
     tab). ``BH_REQUIRE_EXISTING_DAEMON`` keeps the close call from spawning a fresh daemon. Each step is
     bounded by ``_STOP_STEP_TIMEOUT_S``, so a reap holds the dir lock well under ``_LOCK_WAIT_S``."""
@@ -929,8 +929,8 @@ def _stop_lane(dir_env: Dict[str, str], name: str, tab_ids: list[str]) -> None:
     for key in ("BU_CDP_URL", "BU_CDP_WS", "BU_AUTOSPAWN", _TABS_FILE_ENV):
         env.pop(key, None)
     if tab_ids:
-        close_code = ("for _tid in %r:\n    try:\n        cdp('Target.closeTarget', targetId=_tid)\n"
-                      "    except Exception:\n        pass\n" % (tab_ids,))
+        close_code = (f"for _tid in {tab_ids!r}:\n    try:\n        cdp('Target.closeTarget', targetId=_tid)\n"
+                      "    except Exception:\n        pass\n")
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             _run_cli_killing_process_group(cmd, close_code, {**env, "BH_REQUIRE_EXISTING_DAEMON": "1"},
                                            _STOP_STEP_TIMEOUT_S)
@@ -984,7 +984,7 @@ def _lane_reaper_loop() -> None:
         time.sleep(_REAP_INTERVAL_S)
         try:
             _reap_idle_lanes_once()
-        except Exception as e:  # never let one bad pass end the loop
+        except (OSError, UnicodeError, subprocess.SubprocessError) as e:
             logger.debug("browser_exec: idle lane reap failed: %s", e)
 
 
@@ -1023,6 +1023,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
     from agent.redact import redact_sensitive_text
+    from tools.browser_use_cli_lanes import prepare_lane_call
     from tools.registry import tool_error, tool_result
     if not code or not code.strip():
         return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
@@ -1057,26 +1058,11 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     _exec_route_is_sidecar[route_key] = local_sidecar
     bot_desktop_browser = bool(env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None))
 
-    # Private per-name browsers (packaged Chromium, provider, Lightpanda) have nothing to share a tab with.
-    private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    shared_browser = bool(env.pop(_SHARED_BROWSER_SENTINEL, None))
-    browser_cfg = _read_browser_cfg()
-    # SHARED browser (cdp_url / real profile): the unnamed "default" daemon attaches to the first real page,
-    # so every chat's unnamed calls would land in ONE tab. Opt-in: run this task's unnamed calls in its own
-    # lane (own daemon, own background tab), exactly like a named session.
-    if (shared_browser and not session and not local_sidecar and not private_browser and task_id
-            and _exec_task_tabs_enabled(browser_cfg)):
-        env["BU_NAME"] = _task_session_name(task_id)
-    lane = env.get("BU_NAME", "default")
-    touch = _touch_lane(env, lane, _exec_idle_seconds(browser_cfg))
-    if touch.busy:
+    lane_call = prepare_lane_call(env, code, session, task_id, local_sidecar)
+    if lane_call.busy:
         return tool_error("This browser session's lane is being cleaned up after sitting idle. Retry the "
                           "same call in a minute; it will start in a fresh tab.")
-    tabs_file = touch.tabs
-    lane_key = (str(tabs_file.parent), lane) if tabs_file is not None else None
-    if tabs_file is not None:
-        env[_TABS_FILE_ENV] = str(tabs_file)
-        code = _TAB_LEDGER_PRELUDE + code
+    code, lane_key, browser_cfg, _ = lane_call
 
     workspace = _workspace_dir(task_id)
     if workspace:
