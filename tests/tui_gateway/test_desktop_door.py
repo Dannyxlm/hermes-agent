@@ -28,12 +28,13 @@ def door(desktop, tmp_path, monkeypatch):
     def observation(mode):
         prefix = 'v' if mode == 'watch' else 'c'
         ticket = 'viewer' if mode == 'watch' else 'c' * 43
-        base = f'/ava-desktop/{prefix}/{ticket}'
+        # Same shape as door_state.viewer(): the fragment base is absolute, as the app requires.
+        base = f'https://ava-cloud.tailbe2d4b.ts.net:3443/ava-desktop/{prefix}/{ticket}'
         fragment = {'ticket': ticket, 'base': base, 'audio': 'off', 'scale': 'fit'}
         if mode == 'watch':
             fragment['view_only'] = '1'
         return {'ticket': ticket, 'viewer_id': 'viewer',
-                'url': 'https://ava-cloud.tailbe2d4b.ts.net:3443' + base + '/viewer/#' + urlencode(fragment),
+                'url': base + '/viewer/#' + urlencode(fragment),
                 'expires_at': time.time() + 120, 'mode': mode, 'lease_epoch': state['epoch']}
 
     class Handler(BaseHTTPRequestHandler):

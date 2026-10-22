@@ -27,7 +27,7 @@ class TestDoorBoundary:
         assert helpers.watch(desktop)['error']['code'] == 4002
         assert not any(route == 'observe' for route, _ in door.calls)
 
-    @pytest.mark.parametrize('change', ['host', 'credentials', 'path', 'input_policy', 'upstream_ticket'])
+    @pytest.mark.parametrize('change', ['host', 'credentials', 'path', 'input_policy', 'upstream_ticket', 'relative_base', 'foreign_base'])
     def test_viewer_url_is_exactly_scoped(self, desktop, door, change):
         from tools.desktop_door_client import DoorObservation
         body = helpers.watch(desktop)['result']
@@ -40,6 +40,10 @@ class TestDoorBoundary:
         }.get(change, parts)
         if change == 'input_policy':
             fragment.pop('view_only')
+        if change == 'relative_base':
+            fragment['base'] = [urlsplit(fragment['base'][0]).path]
+        if change == 'foreign_base':
+            fragment['base'] = ['https://other.example:3443' + urlsplit(fragment['base'][0]).path]
         if change == 'upstream_ticket':
             body['ticket'] = 'fixture-upstream-ticket'
         body['url'] = urlunsplit(parts._replace(fragment=urlencode(fragment, doseq=True)))

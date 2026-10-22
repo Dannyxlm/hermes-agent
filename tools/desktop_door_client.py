@@ -89,13 +89,15 @@ class DoorObservation(Wire):
         parsed = urlsplit(self.url)
         parts = parse_qs(parsed.fragment, strict_parsing=True)
         prefix = 'v' if self.mode == 'watch' else 'c'
-        base = f'/ava-desktop/{prefix}/{self.ticket}'
+        path = f'/ava-desktop/{prefix}/{self.ticket}'
+        # The door and the app both carry the absolute base in the fragment.
+        base = f'https://ava-cloud.tailbe2d4b.ts.net:3443{path}'
         ticket_valid = (self.ticket == self.viewer_id if self.mode == 'watch'
                         else self.ticket != self.viewer_id and len(self.ticket) == 43)
         if (not ticket_valid or parsed.scheme != 'https'
                 or parsed.hostname != 'ava-cloud.tailbe2d4b.ts.net' or parsed.port != 3443
                 or parsed.username is not None or parsed.password is not None or parsed.query
-                or parsed.path != base + '/viewer/'
+                or parsed.path != path + '/viewer/'
                 or parts.get('ticket') != [self.ticket]
                 or parts.get('base') != [base]
                 or parts.get('audio') != ['off'] or parts.get('scale') != ['fit']
