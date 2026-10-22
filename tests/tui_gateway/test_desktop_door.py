@@ -80,6 +80,8 @@ def door(desktop, tmp_path, monkeypatch):
                     state['sessions'] = []
                 result = {'accepted': True, 'holder': state['holder'], 'epoch': state['epoch'],
                           'viewer_id': state['human_viewer_id'], 'expires_at': state['expires_at'], 'gate': state['gate']}
+                if getattr(control, 'bad_ack', False):
+                    result = {'accepted': True, 'unexpected': True}
                 if control.lost_ack:
                     self.close_connection = True
                     return
@@ -158,6 +160,51 @@ class TestDesktopDoorControl:
         reply = action(desktop, 'take_over', viewer_id='viewer')
         assert reply['error']['code'] == 4002
         assert not any(route == 'takeover' for route, _ in door.calls)
+
+
+class TestDesktopDoorRecovery:
+    def test_unknown_ack_is_unavailable_not_lost_transport(self, desktop, door):
+        assert watch(desktop)['result']['mode'] == 'watch'
+        before = desktop.store.leases.read('desktop')
+        door.bad_ack = True
+        reply = action(desktop, 'take_over', viewer_id='viewer')
+        assert reply['error']['code'] == 4002
+        assert desktop.store.leases.read('desktop') == before
+
+    def test_watch_stays_available_when_control_not_ready(self, desktop, door):
+        door.state['ready'] = False
+        door.state['unavailable_reason'] = 'fixture gate disabled'
+        assert watch(desktop)['result']['mode'] == 'watch'
+        assert action(desktop, 'take_over', viewer_id='viewer')['error']['code'] == 4002
+        assert 'control' in desktop.call('desktop.snapshot')['result']['unavailable']
+
+    def test_foreign_profile_cannot_use_viewer(self, desktop, door):
+        assert watch(desktop)['result']['mode'] == 'watch'
+        state = desktop.call('desktop.snapshot', profile='secondary')['result']
+        reply = desktop.call('desktop.action', profile='secondary', action='take_over', action_id='foreign',
+                             viewer_id='viewer', expected_revision=state['revision'], expected_lease_epoch=0)
+        assert reply['error']['code'] == 4000
+        assert not any(route == 'takeover' for route, _ in door.calls)
+
+    def test_lost_handback_ack_advances_once(self, desktop, door):
+        assert watch(desktop)['result']['mode'] == 'watch'
+        assert action(desktop, 'take_over', viewer_id='viewer')['result']['status'] == 'accepted'
+        door.lost_ack = True
+        receipt = action(desktop, 'hand_back', action_id='back', viewer_id='viewer')['result']
+        assert receipt['status'] == 'accepted' and receipt['lease_epoch'] == 2
+        assert desktop.call('desktop.action_status', action_id='back')['result'] == receipt
+        assert sum(route == 'handback' for route, _ in door.calls) == 1
+
+    def test_confirmed_door_restart_invalidates_old_viewer(self, desktop, door):
+        assert watch(desktop)['result']['mode'] == 'watch'
+        assert action(desktop, 'take_over', viewer_id='viewer')['result']['status'] == 'accepted'
+        door.state.update(holder='agent', epoch=100, state='WATCHING', human_viewer_id=None,
+                          expires_at=None, sessions=[])
+        door.state['gate']['state'] = 'open'
+        state = desktop.call('desktop.snapshot')['result']
+        assert state['lease']['epoch'] == 100 and state['lease']['holder'] == 'agent'
+        assert desktop.call('desktop.observe', mode='control', viewer_id='viewer', expected_lease_epoch=1)['error']['code'] == 4000
+        assert desktop.store.leases.agent_permitted('desktop', 100)
 
 
 class TestDesktopSavedLogin:

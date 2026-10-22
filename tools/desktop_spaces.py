@@ -1,7 +1,6 @@
-"""Partial Desktop projection and request decisions without browser input.
+"""Owner/profile Desktop projections and durable sign-in requests.
 
-Only a trusted backend may publish a sign-in request. There is deliberately no
-production publisher or control adapter until Cua's ticket and input gates exist.
+The credentialed door, not these records, owns the physical input fence.
 """
 from __future__ import annotations
 
@@ -95,6 +94,8 @@ class SpaceStore:
                               'origin': row['origin'], 'reason': row['reason'], 'allowed_actions': ['not_now'],
                               'login_handle': None, 'masked_identifier': None}
                     binding = self.signin_binding(db, resource, scope)
+                    if binding and binding['task_id'] and binding['target_id']:
+                        signin['allowed_actions'] = ['take_over', 'not_now']
                     if binding and binding['request_id'] == row['request_id'] and binding['login_handle']:
                         signin.update(allowed_actions=['saved_login', 'take_over', 'not_now'],
                                       login_handle=binding['login_handle'], masked_identifier=binding['masked_identifier'])
@@ -195,6 +196,10 @@ class SpaceStore:
             SELECT rowid FROM activity WHERE resource=? AND scope_hash=?
             ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)""",
             (resource, digest(scope), SCOPE_CAP))
+        db.execute('''DELETE FROM desktop_operations WHERE NOT EXISTS (
+            SELECT 1 FROM receipts WHERE receipts.resource=desktop_operations.resource
+            AND receipts.scope_hash=desktop_operations.scope_hash
+            AND receipts.action_id=desktop_operations.action_id)''')
 
     @staticmethod
     def _decide_not_now(db, resource, scope, body, revision, epoch, now):

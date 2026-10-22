@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 import uuid
 
-from tools.desktop_door_client import DoorClient, DoorConflict, DoorUnavailable
+from tools.desktop_door_client import DoorClient, DoorConflict, DoorTransportError, DoorUnavailable
 from tools.desktop_space_lease import SpaceLease, digest
 from tools.desktop_spaces import _receipt, _revision
 
@@ -179,15 +179,22 @@ class DesktopController:
                     or (takeover and (ack.viewer_id != viewer.viewer_id or not ack.gate.drained()))
                     or (not takeover and (ack.viewer_id is not None or ack.expires_at is not None or ack.gate.state != 'open'))):
                 raise DoorUnavailable('Desktop transition unconfirmed')
-        except (DoorUnavailable, DoorConflict):
+        except DoorTransportError:
             pass
+        except (DoorUnavailable, DoorConflict):
+            if takeover:
+                self._restore_pending(previous)
+            raise
         result = self.action_status(body['action_id'])
         if result['status'] == 'outcome_unknown' and takeover:
-            with self.store.leases.connection(write=True) as db:
-                current = self.store.leases.lease_in(db, 'desktop')
-                if current.holder == 'human_pending' and current.epoch == previous.epoch:
-                    self.store.leases._save(db, 'desktop', previous)
+            self._restore_pending(previous)
         return result
+
+    def _restore_pending(self, previous):
+        with self.store.leases.connection(write=True) as db:
+            current = self.store.leases.lease_in(db, 'desktop')
+            if current.holder == 'human_pending' and current.epoch == previous.epoch:
+                self.store.leases._save(db, 'desktop', previous)
 
     def action_status(self, action_id):
         receipt = self.store.action_status('desktop', self.scope, action_id)

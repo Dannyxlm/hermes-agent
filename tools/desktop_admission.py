@@ -17,7 +17,7 @@ def is_desktop_cdp(endpoint: str) -> bool:
         return True
 
 
-def assert_agent_admitted(endpoint: str) -> None:
+def assert_agent_admitted(endpoint: str) -> int | None:
     if not is_desktop_cdp(endpoint):
         return
     from hermes_cli.profiles import _get_default_hermes_home
@@ -32,13 +32,16 @@ def assert_agent_admitted(endpoint: str) -> None:
         try:
             door = DoorClient.configured()
         except DoorNotConfigured:
-            return
+            return lease.epoch
+        except DoorUnavailable:
+            raise DesktopInputDenied('Desktop gate configuration unavailable') from None
         try:
             state = door.state()
         except DoorUnavailable:
             raise DesktopInputDenied('Desktop gate state unavailable') from None
         if not state.agent_open() or state.epoch != lease.epoch:
             raise DesktopInputDenied('Desktop agent gate unconfirmed')
+        return lease.epoch
     except (OSError, sqlite3.Error) as exc:
         raise DesktopInputDenied('Desktop admission unavailable') from exc
 

@@ -5,12 +5,14 @@ calling acquire. These primitives alone cannot establish either condition.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 import hashlib
 import math
+import os
 from pathlib import Path
 import sqlite3
+import tempfile
 import time
 
 
@@ -56,9 +58,24 @@ class LeaseStore:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Private mode applies at creation, before SQLite writes any owner state.
-        self.path.touch(mode=0o600, exist_ok=True)
-        with sqlite3.connect(self.path, timeout=5) as db:
+        if self.path.exists():
+            self._initialize_at(self.path)
+            return
+        with tempfile.NamedTemporaryFile(dir=self.path.parent, prefix='.desktop-', suffix='.sqlite', delete=False) as file:
+            staging = Path(file.name)
+        try:
+            self._initialize_at(staging)
+            try:
+                os.link(staging, self.path)
+            except FileExistsError:
+                pass
+        finally:
+            staging.unlink()
+
+    @staticmethod
+    def _initialize_at(path: Path) -> None:
+        # Publish the first database only after its schema is committed, at mode 0600.
+        with closing(sqlite3.connect(path, timeout=5)) as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS leases (
                     resource TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL,

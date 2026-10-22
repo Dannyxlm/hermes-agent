@@ -1,4 +1,4 @@
-"""Owner-admitted shared Desktop projections. No Cua control adapter is enabled."""
+"""Owner-admitted Desktop projections and fail-closed door orchestration."""
 from __future__ import annotations
 
 import sqlite3

@@ -14,6 +14,14 @@ class DoorUnavailable(RuntimeError):
     pass
 
 
+class DoorTransportError(DoorUnavailable):
+    pass
+
+
+class DoorProtocolError(DoorUnavailable):
+    pass
+
+
 class DoorNotConfigured(DoorUnavailable):
     pass
 
@@ -114,12 +122,21 @@ class DoorClient:
 
         token = set_hermes_home_override(_get_default_hermes_home())
         try:
-            cfg = load_config_readonly().get('cloudseed_mobile', {}).get('desktop_door', {})
+            mobile = load_config_readonly().get('cloudseed_mobile', {})
+            if not isinstance(mobile, dict):
+                raise DoorUnavailable('Desktop door configuration invalid')
+            cfg = mobile.get('desktop_door')
+        except (OSError, ValueError):
+            raise DoorUnavailable('Desktop door configuration unavailable') from None
         finally:
             reset_hermes_home_override(token)
+        if cfg is None:
+            raise DoorNotConfigured('Desktop door is not configured')
+        if not isinstance(cfg, dict):
+            raise DoorUnavailable('Desktop door configuration invalid')
         path = cfg.get('credential_file')
         if not isinstance(path, str) or not Path(path).is_absolute():
-            raise DoorNotConfigured('Desktop door is not configured')
+            raise DoorUnavailable('Desktop door credential path invalid')
         return cls(Path(path))
 
     def _request(self, route: str, body: dict | None, model):
@@ -139,10 +156,12 @@ class DoorClient:
             if response.status != 200 or len(raw) > 262144:
                 raise DoorUnavailable('Desktop door unavailable')
             return model.model_validate(json.loads(raw), strict=True)
-        except (OSError, http.client.HTTPException, ValueError, ValidationError) as exc:
+        except (OSError, http.client.HTTPException):
+            raise DoorTransportError('Desktop door unavailable') from None
+        except (ValueError, ValidationError) as exc:
             if isinstance(exc, DoorConflict):
                 raise
-            raise DoorUnavailable('Desktop door unavailable') from None
+            raise DoorProtocolError('Desktop door response unconfirmed') from None
         finally:
             if conn is not None:
                 conn.close()

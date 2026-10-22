@@ -3,8 +3,6 @@ import json
 import subprocess
 from unittest.mock import Mock
 
-import pytest
-
 from tests.tui_gateway import test_desktop_door as helpers
 
 pytest_plugins = ['tests.tui_gateway.test_desktop_door']
