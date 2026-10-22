@@ -77,7 +77,7 @@ class DoorState(Wire):
 
 
 class DoorObservation(Wire):
-    ticket: str = Field(min_length=1, max_length=256)
+    ticket: str = Field(min_length=1, max_length=256, pattern=r'^[A-Za-z0-9_-]+$')
     viewer_id: str = Field(min_length=1, max_length=256, pattern=r'^[A-Za-z0-9_-]+$')
     url: str
     expires_at: float
@@ -89,12 +89,14 @@ class DoorObservation(Wire):
         parsed = urlsplit(self.url)
         parts = parse_qs(parsed.fragment, strict_parsing=True)
         prefix = 'v' if self.mode == 'watch' else 'c'
-        base = f'/ava-desktop/{prefix}/{self.viewer_id}'
-        if (self.ticket != self.viewer_id or parsed.scheme != 'https'
+        base = f'/ava-desktop/{prefix}/{self.ticket}'
+        ticket_valid = (self.ticket == self.viewer_id if self.mode == 'watch'
+                        else self.ticket != self.viewer_id and len(self.ticket) == 43)
+        if (not ticket_valid or parsed.scheme != 'https'
                 or parsed.hostname != 'ava-cloud.tailbe2d4b.ts.net' or parsed.port != 3443
                 or parsed.username is not None or parsed.password is not None or parsed.query
                 or parsed.path != base + '/viewer/'
-                or parts.get('ticket') != [self.viewer_id]
+                or parts.get('ticket') != [self.ticket]
                 or parts.get('base') != [base]
                 or parts.get('audio') != ['off'] or parts.get('scale') != ['fit']
                 or set(parts) != ({'ticket', 'base', 'audio', 'scale', 'view_only'} if self.mode == 'watch'

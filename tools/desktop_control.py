@@ -173,7 +173,7 @@ class DesktopController:
                 self.store.leases._save(db, 'desktop', SpaceLease('human_pending', previous.epoch))
             self._save_receipt(db, body, 'outcome_unknown')
             db.execute('INSERT INTO desktop_operations VALUES(?,?,?,?,?,?)',
-                       ('desktop', digest(self.scope), body['action_id'], body['action'], viewer.viewer_id, state.epoch))
+                       ('desktop', digest(self.scope), body['action_id'], body['action'], digest(viewer.viewer_id), state.epoch))
         try:
             ack = self.door.transition('takeover' if takeover else 'handback', self.scope, self.profile,
                                        viewer.viewer_id, state.epoch, body['action_id'])
@@ -219,7 +219,7 @@ class DesktopController:
                 return receipt
             if operation['action'] == 'take_over':
                 session = self._human_session(state)
-                if session.viewer_id != operation['viewer_id'] or session.owner_id != self.scope or session.profile_id != self.profile:
+                if digest(session.viewer_id) != operation['viewer_id'] or session.owner_id != self.scope or session.profile_id != self.profile:
                     return receipt
             elif not state.agent_open():
                 return receipt
