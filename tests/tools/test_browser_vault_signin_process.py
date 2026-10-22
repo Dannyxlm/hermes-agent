@@ -10,7 +10,7 @@ pytest_plugins = ['tests.tools.test_browser_vault_signin']
 
 class TestSavedLoginProcess:
     def test_published_target_is_stable_chrome_target(self, desktop, door, signin, signin_cdp):
-        result, done, thread = start_producer(desktop.home)
+        _result, done, thread = start_producer(desktop.home)
         try:
             state = wait_until(lambda: _Producer._pending(desktop, 'default'))
             with desktop.store.leases.connection() as db:
@@ -26,6 +26,7 @@ class TestSavedLoginProcess:
 
     def test_empty_rpc_registry_fills_exact_published_target_once(self, desktop, door, signin, signin_cdp, monkeypatch, caplog):
         from tools import browser_supervisor, browser_tool_session
+        caplog.set_level(10)
         result, done, thread = start_producer(desktop.home)
         state = wait_until(lambda: _Producer._pending(desktop, 'default'))
         # This is the reviewer's cross-process fixture: no producer supervisor in the RPC process.

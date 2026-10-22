@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+import logging
 
 from tools.desktop_admission import assert_agent_admitted
 
@@ -60,7 +61,10 @@ def signin_page(target_id: str, origin: str):
     # This is the shared Desktop gate, never the producer's process-local default browser.
     assert_agent_admitted(DESKTOP_CDP)
     endpoint = _resolve_cdp_override(DESKTOP_CDP)
-    with connect(endpoint, open_timeout=7, max_size=1048576, **loopback_connect_kwargs(endpoint)) as socket:
+    # websockets DEBUG tracing includes payloads; never trace credential-bearing frames.
+    silent = logging.Logger(__name__ + '.secret_socket', level=logging.CRITICAL)
+    with connect(endpoint, open_timeout=7, max_size=1048576, logger=silent,
+                 **loopback_connect_kwargs(endpoint)) as socket:
         page = SigninPage(socket, target_id)
         info = page.call('Target.getTargetInfo', {'targetId': target_id})['targetInfo']
         if info.get('targetId') != target_id or info.get('type') != 'page' or normalize_origin(info.get('url', '')) != origin:
