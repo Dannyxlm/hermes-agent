@@ -137,3 +137,41 @@ def test_stale_entry_id_does_not_bench_request_key_without_alternate(pooled_agen
     recovered, retried = agent._recover_with_credential_pool(status_code=429, has_retried_429=False)
     assert recovered is False and retried is True
     assert pool.entries()[0].last_status != STATUS_EXHAUSTED
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai-codex"])
+@pytest.mark.parametrize("n", [2, 3])
+@pytest.mark.parametrize("kind", ["plain", "usage"])
+def test_all_429_cycle_benches_every_entry(pooled_agent, monkeypatch, provider, n, kind):
+    """A spent free lap still benches its final account before reporting exhaustion."""
+    agent, pool = pooled_agent(provider, n=n)
+    agent._api_max_retries = 3
+    calls, waits = [], []
+    reset_at = int(time.time()) + 3 * 86400
+    message = {
+        "plain": "This request would exceed your account's rate limit",
+        "usage": "The usage limit has been reached",
+    }[kind]
+
+    def api_call(_kwargs):
+        calls.append(agent.api_key)
+        if len(calls) > n + agent._api_max_retries + 1:
+            return _mock_response("escaped at the test's finite call bound")
+        error = _pool_error(headers={"Retry-After": "600"}, body={
+            "error": {"message": message, "resets_at": reset_at},
+        })
+        error.args = (message,)
+        raise error
+
+    monkeypatch.setattr(agent, "_interruptible_api_call", api_call)
+    monkeypatch.setattr(agent, "_try_activate_fallback", lambda **kwargs: False)
+    monkeypatch.setattr(agent, "_try_recover_primary_transport", lambda *args, **kwargs: False)
+    monkeypatch.setattr("agent.turn_api_error.interruptible_backoff_sleep",
+                        lambda _agent, seconds, *_args, **_kwargs: waits.append(seconds))
+    agent.run_conversation("hello")
+    assert pool.has_available(model=agent.model) is False
+    for entry in pool.entries():
+        until = (model_cooldown_until(entry, agent.model) if provider == "anthropic"
+                 else entry.last_error_reset_at)
+        assert until is not None and until >= reset_at
+        assert entry.last_status == STATUS_EXHAUSTED or model_cooldown_until(entry, agent.model) is not None
