@@ -70,7 +70,7 @@ def test_zero_wait_rotation_has_a_minimum_bench(pooled_agent, monkeypatch, provi
     assert calls == ["pool-key-0", "pool-key-1"] and not waits
     first = pool.entries()[0]
     until = model_cooldown_until(first, agent.model) if provider == "anthropic" else first.last_error_reset_at
-    assert until >= now + EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS
+    assert until is not None and until >= now + EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS
 
 
 @pytest.mark.parametrize("reset", [0, -1, 30])
