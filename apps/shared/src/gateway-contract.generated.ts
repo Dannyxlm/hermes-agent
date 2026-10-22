@@ -5607,6 +5607,7 @@ export interface UsageRollupResult {
   top_chats: ChatUsage[]
   chat_count: number
   coverage_since: number | null
+  backfill?: UsageBackfill | null
   partial: boolean
   coverage_reason: string
   basis: 'standard_api_list_price'
@@ -5677,6 +5678,16 @@ export interface ModelUsage {
   unattributed_turn_events: number
   model: string
   provider: string
+  rates?: ModelUsageRates | null
+}
+/** Offline base-context-tier list rates, not the aggregate's effective rates. */
+export interface ModelUsageRates {
+  input_usd_per_million: number | null
+  output_usd_per_million: number | null
+  cache_read_usd_per_million: number | null
+  cache_write_usd_per_million: number | null
+  pricing_date: string | null
+  source_url: string | null
 }
 export interface ProviderUsageTotals {
   input_tokens: number
@@ -5745,6 +5756,12 @@ export interface ChatUsage {
   unattributed_turn_events: number
   session_id: string
   title: string | null
+}
+export interface UsageBackfill {
+  since: number
+  until: number
+  basis: 'session_totals_by_start'
+  session_count: number
 }
 export interface AllTimeUsageRollupResult {
   profile: string
@@ -5832,6 +5849,7 @@ export interface AllTimeModelUsage {
   unattributed_turn_events: null
   model: string
   provider: string
+  rates?: ModelUsageRates | null
 }
 export interface AllTimeProviderUsage {
   input_tokens: number

@@ -6785,6 +6785,17 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelUsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -29244,6 +29255,17 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelUsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -29270,6 +29292,88 @@
           "provider"
         ],
         "title": "ModelUsage",
+        "type": "object"
+      },
+      "ModelUsageRates": {
+        "additionalProperties": false,
+        "description": "Offline base-context-tier list rates, not the aggregate's effective rates.",
+        "properties": {
+          "input_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Usd Per Million"
+          },
+          "output_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Usd Per Million"
+          },
+          "cache_read_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Usd Per Million"
+          },
+          "cache_write_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write Usd Per Million"
+          },
+          "pricing_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Date"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "required": [
+          "input_usd_per_million",
+          "output_usd_per_million",
+          "cache_read_usd_per_million",
+          "cache_write_usd_per_million",
+          "pricing_date",
+          "source_url"
+        ],
+        "title": "ModelUsageRates",
         "type": "object"
       },
       "NoticePayload": {
@@ -50594,6 +50698,37 @@
         "title": "Usage",
         "type": "object"
       },
+      "UsageBackfill": {
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "title": "Since",
+            "type": "number"
+          },
+          "until": {
+            "title": "Until",
+            "type": "number"
+          },
+          "basis": {
+            "const": "session_totals_by_start",
+            "title": "Basis",
+            "type": "string"
+          },
+          "session_count": {
+            "minimum": 0,
+            "title": "Session Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "basis",
+          "session_count"
+        ],
+        "title": "UsageBackfill",
+        "type": "object"
+      },
       "UsageBar": {
         "additionalProperties": false,
         "description": "``_serialize_usage_bar``: one bar, magnitudes pre-formatted; ``pct_used`` only for ``plan``.",
@@ -51097,6 +51232,17 @@
               }
             ],
             "title": "Coverage Since"
+          },
+          "backfill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageBackfill"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "partial": {
             "title": "Partial",

@@ -76,14 +76,7 @@ def estimate_aggregate_api_value_decimal(model: str, usage: CanonicalUsage, *, p
     return value
 
 
-def estimate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: str,
-                               standard_tier: bool = False) -> dict:
-    """Standard processing API equivalent. Discounts, speed tiers, tools and tax excluded.
-
-    This deliberately ignores subscription billing_mode. Above 272K prompt tokens,
-    OpenAI's long-context rates apply to the whole request, not marginal tokens.
-    standard_tier skips that premium to bound cumulative usage with unknown call boundaries.
-    """
+def _api_value_rate_card(model: str, *, provider: str):
     from agent.model_metadata import strip_codex_context_variant_suffix
     if provider == "openai-codex":
         model = strip_codex_context_variant_suffix(model)
@@ -92,10 +85,32 @@ def estimate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: s
                      .get(vendor, ({}, None)))
     if model.startswith(vendor + "/"):
         model = model[len(vendor) + 1:]
+    return model, table.get(model), source
+
+
+def get_api_value_rates(model: str, *, provider: str) -> dict | None:
+    """Offline base-tier USD list rates per million, independent of usage or billing mode."""
+    _, rates, source = _api_value_rate_card(model, provider=provider)
+    if rates is None:
+        return None
+    return {**dict(zip(("input_usd_per_million", "output_usd_per_million",
+                        "cache_read_usd_per_million", "cache_write_usd_per_million"),
+                       (float(rate) if rate is not None else None for rate in rates))),
+            "pricing_date": PRICING_DATE, "source_url": source}
+
+
+def estimate_api_value_decimal(model: str, usage: CanonicalUsage, *, provider: str,
+                               standard_tier: bool = False) -> dict:
+    """Standard processing API equivalent. Discounts, speed tiers, tools and tax excluded.
+
+    This deliberately ignores subscription billing_mode. Above 272K prompt tokens,
+    OpenAI's long-context rates apply to the whole request, not marginal tokens.
+    standard_tier skips that premium to bound cumulative usage with unknown call boundaries.
+    """
+    model, rates, source = _api_value_rate_card(model, provider=provider)
     result = {"estimated_cost_usd": None, "status": "unknown", "reason": None,
               "pricing_date": PRICING_DATE, "source_url": source,
               "basis": "standard_api_list_price", "currency": "USD"}
-    rates = table.get(model)
     if rates is None:
         return {**result, "reason": "model/provider not in the sourced price table"}
     counts = (usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens)

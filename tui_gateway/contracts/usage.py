@@ -68,9 +68,21 @@ class ChatUsage(UsageMetrics):
     title: str | None
 
 
+class ModelUsageRates(Result):
+    """Offline base-context-tier list rates, not the aggregate's effective rates."""
+
+    input_usd_per_million: float | None
+    output_usd_per_million: float | None
+    cache_read_usd_per_million: float | None
+    cache_write_usd_per_million: float | None
+    pricing_date: str | None
+    source_url: str | None
+
+
 class ModelUsage(UsageMetrics):
     model: str
     provider: str
+    rates: ModelUsageRates | None = None
 
 
 class ProviderUsageTotals(UsageMetrics):
@@ -79,6 +91,13 @@ class ProviderUsageTotals(UsageMetrics):
 
 class DailyUsage(ProviderUsageTotals):
     day: str
+
+
+class UsageBackfill(Result):
+    since: float
+    until: float
+    basis: Literal["session_totals_by_start"]
+    session_count: int = Field(ge=0)
 
 
 class UsageRollupResult(Result):
@@ -94,6 +113,7 @@ class UsageRollupResult(Result):
     top_chats: list[ChatUsage]
     chat_count: int
     coverage_since: float | None
+    backfill: UsageBackfill | None = None
     partial: bool
     coverage_reason: str
     basis: Literal["standard_api_list_price"]
@@ -119,6 +139,7 @@ class AllTimeChatUsage(AllTimeMetrics):
 class AllTimeModelUsage(AllTimeMetrics):
     model: str
     provider: str
+    rates: ModelUsageRates | None = None
 
 
 class AllTimeProviderUsage(AllTimeMetrics):
