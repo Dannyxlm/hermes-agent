@@ -27,11 +27,12 @@ def door(desktop, tmp_path, monkeypatch):
 
     def observation(mode):
         prefix = 'v' if mode == 'watch' else 'c'
-        base = f'/ava-desktop/{prefix}/viewer'
-        fragment = {'ticket': 'viewer', 'base': base, 'audio': 'off', 'scale': 'fit'}
+        ticket = 'viewer' if mode == 'watch' else 'c' * 43
+        base = f'/ava-desktop/{prefix}/{ticket}'
+        fragment = {'ticket': ticket, 'base': base, 'audio': 'off', 'scale': 'fit'}
         if mode == 'watch':
             fragment['view_only'] = '1'
-        return {'ticket': 'viewer', 'viewer_id': 'viewer',
+        return {'ticket': ticket, 'viewer_id': 'viewer',
                 'url': 'https://ava-cloud.tailbe2d4b.ts.net:3443' + base + '/viewer/#' + urlencode(fragment),
                 'expires_at': time.time() + 120, 'mode': mode, 'lease_epoch': state['epoch']}
 
@@ -130,7 +131,7 @@ class TestDesktopDoorControl:
         epoch = taken['lease_epoch']
         assert not d.store.leases.agent_permitted('desktop', epoch)
         control = d.call('desktop.observe', mode='control', viewer_id='viewer', expected_lease_epoch=epoch)['result']
-        assert control['mode'] == 'control' and '/c/viewer/' in control['url']
+        assert control['mode'] == 'control' and '/c/' + control['ticket'] + '/' in control['url']
         assert d.call('desktop.observe', mode='control', viewer_id='other', expected_lease_epoch=epoch)['error']['code'] == 4000
         back = action(d, 'hand_back', action_id='back', viewer_id='viewer')['result']
         assert back['status'] == 'accepted' and back['lease_epoch'] == epoch + 1
@@ -146,6 +147,32 @@ class TestDesktopDoorControl:
         reply = action(d, 'take_over', viewer_id='viewer')
         assert reply['error']['code'] == 4002
         assert d.store.leases.read('desktop') == before
+
+    def test_control_capability_is_transient_not_the_persisted_viewer(self, desktop, door, caplog):
+        assert watch(desktop)['result']['viewer_id'] == 'viewer'
+        receipt = action(desktop, 'take_over', viewer_id='viewer')['result']
+        assert receipt['status'] == 'accepted'
+        observed = desktop.call('desktop.observe', mode='control', viewer_id='viewer',
+                                expected_lease_epoch=receipt['lease_epoch'])
+        assert 'result' in observed
+        control = observed['result']
+        assert control['viewer_id'] == 'viewer'
+        assert control['ticket'] != control['viewer_id']
+        assert '/c/' + control['ticket'] + '/' in control['url']
+        assert control['ticket'] not in json.dumps(receipt) + caplog.text
+        assert control['ticket'].encode() not in (desktop.home / 'desktop-spaces.sqlite').read_bytes()
+        with desktop.store.leases.connection() as db:
+            row = db.execute('SELECT viewer_id FROM desktop_operations WHERE action_id=?', ('decision',)).fetchone()
+            from tools.desktop_space_lease import digest
+            assert row['viewer_id'] == digest('viewer')
+
+    def test_takeover_operation_retains_only_viewer_digest(self, desktop, door):
+        from tools.desktop_space_lease import digest
+        assert watch(desktop)['result']['viewer_id'] == 'viewer'
+        assert action(desktop, 'take_over', viewer_id='viewer')['result']['status'] == 'accepted'
+        with desktop.store.leases.connection() as db:
+            row = db.execute('SELECT viewer_id FROM desktop_operations').fetchone()
+            assert row['viewer_id'] == digest('viewer')
 
     @pytest.mark.parametrize('status,code', [(503, 4002), (409, 4000)])
     def test_definitively_refused_takeover_is_denied(self, desktop, door, status, code):
