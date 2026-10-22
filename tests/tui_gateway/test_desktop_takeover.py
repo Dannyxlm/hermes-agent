@@ -115,12 +115,15 @@ class TestDesktopAdmission:
         assert desktop.store.leases.agent_permitted('desktop', 0)
         assert not desktop.store.leases.agent_permitted('desktop', 1)
 
-    def test_human_lease_refuses_browser_before_supervisor_or_cli(self, desktop, monkeypatch):
+    @pytest.mark.parametrize('endpoint', ['http://127.0.0.1:9225', '127.0.0.1:9225',
+                                          'localhost:9225', 'ws://[::1]:9225/devtools/browser/test',
+                                          'localhost:not-a-port'])
+    def test_human_lease_refuses_browser_before_supervisor_or_cli(self, desktop, monkeypatch, endpoint):
         from tools import browser_use_cli as browser
         d = desktop
         d.store.leases.acquire('desktop', d.scope, 'viewer', expected_epoch=0, ttl=60)
         monkeypatch.setattr(browser, '_find_cli', lambda: ['fixture-harness'])
-        monkeypatch.setattr(browser, '_base_subprocess_env', lambda: {'BU_CDP_URL': 'http://127.0.0.1:9225'})
+        monkeypatch.setattr(browser, '_base_subprocess_env', lambda: {'BU_CDP_URL': endpoint})
         monkeypatch.setattr(browser, '_route_backend', lambda *a, **kw: None)
         attach, launch = Mock(), Mock(side_effect=AssertionError('must not launch'))
         monkeypatch.setattr(browser, '_attach_vault_supervisor', attach)
@@ -140,6 +143,17 @@ class TestDesktopAdmission:
         assert result['success'] is False
         assert result['error_type'] == 'human_has_control'
         supervisor.evaluate_runtime.assert_not_called()
+
+    def test_secret_write_admits_before_connect(self, desktop, monkeypatch):
+        from tools import browser_vault_tool as vault
+        from tools import desktop_admission
+        desktop.store.leases.acquire('desktop', desktop.scope, 'viewer', expected_epoch=0, ttl=60)
+        monkeypatch.setattr(desktop_admission, 'task_endpoint', lambda task: 'localhost:9225')
+        connect = Mock(return_value=SimpleNamespace(cdp_url='http://localhost:9225'))
+        monkeypatch.setattr(vault, '_ensure_supervisor', connect)
+        result = vault._eval_js_secret('task', 'fixture expression')
+        assert result['error_type'] == 'human_has_control'
+        connect.assert_not_called()
 
     def test_snapshot_has_explicit_null_expiry(self, desktop):
         state = desktop.call('desktop.snapshot')['result']
