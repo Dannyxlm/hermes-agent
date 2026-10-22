@@ -171,14 +171,14 @@ _SUBSCRIPTION_LIMIT = "This request would exceed your account's rate limit"
 @pytest.fixture
 def pooled_agent(monkeypatch):
     """Real pool, recovery and credential swap; only the transport is replaced."""
-    def build(provider, *, other="healthy"):
+    def build(provider, *, other="healthy", n=2):
         base_url = "https://pool.example/v1"
         model = "pool-model"
         entries = [PooledCredential(
             provider=provider, id=f"entry-{i}", label=f"account-{i}", priority=i,
             auth_type="api_key", source="manual", access_token=f"pool-key-{i}",
             base_url=base_url,
-        ) for i in range(1 if other == "absent" else 2)]
+        ) for i in range(1 if other == "absent" else n)]
         overrides = {
             "duplicate": {"access_token": entries[0].access_token},
             "exhausted": {"last_status": STATUS_EXHAUSTED, "last_status_at": time.time(),
