@@ -211,14 +211,20 @@ The pool handles different errors differently:
 | **400 Codex model entitlement** (`The '<model>' model is not supported when using Codex with a ChatGPT account.`) | Bench this key for the rejected model only and rotate to the next key; other models keep using the key. Other 400s never rotate | Until `hermes auth reset` (per model; an entitlement is a plan property, not a window) |
 | **All keys exhausted** | Fall through to `fallback_model` if configured | — |
 
-Provider-supplied reset hints (`reset_at`, Retry-After, or rate-limit reset headers) override
-these default cooldowns. When several hints are present, the latest reset wins: the 600-second
-retry-wait cap never shortens the rotated-away key's cooldown.
+Provider-supplied reset hints (`reset_at`, Retry-After, or rate-limit reset headers) size the
+rotation bench. Its separate `bench_until` uses the latest valid hint and a minimum 60-second
+bench for zero-wait rotation; no hint keeps the existing default TTL. The 600-second retry-wait
+cap never shortens that bench. User-visible `reset_at`, fallback cooldowns and sole-credential
+waits retain their original precedence (body reset, then Retry-After, then other headers).
+Expired reset timestamps are ignored instead of immediately re-enabling the failed credential.
 
 Availability is model-aware and excludes the failed key and duplicate rows carrying it. A sole
 credential, or a pool whose alternatives are exhausted or cooling down for this model, keeps the
 same-key retry. The free tier's sole-credential rules are unchanged. The `has_retried_429` flag
-resets on every successful API call.
+resets on every successful API call. Zero-wait rotations are limited to one lap of credential
+ids per attempt cycle; previously visited ids do not count as new alternatives. Once that lap
+is spent, normal counted, waited retries run up to the configured retry limit. Success clears
+the lap along with `has_retried_429`.
 
 **Quota benches are temporary for the live session too.** When a 429/402 rotates a session off a
 credential, that session checks at the start of each turn whether the benched credential is back in

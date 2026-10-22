@@ -3,7 +3,7 @@ Dependency-free so it imports without a cycle."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -42,6 +42,7 @@ class TurnRetryState:
     # Transport / rate-limit recovery
     primary_recovery_attempted: bool = False
     has_retried_429: bool = False
+    rotated_429_ids: set[str] = field(default_factory=set)
     # Credit-limited 402 ("can only afford N tokens") already retried with a lowered output cap.
     affordable_402_clamp_attempted: bool = False
     # Persistent 401/403 already escalated to the fallback chain once this attempt.

@@ -203,6 +203,7 @@ def check_api_response(
         _last_preflight_pressure = None
 
     _retry.has_retried_429 = False
+    _retry.rotated_429_ids.clear()
     # Clearing Nous rate-limit state proves the limit reset so other sessions may resume.
     if agent.provider == "nous":
         try:
@@ -276,6 +277,7 @@ def retry_invalid_response(
         _recovered, _retry.has_retried_429 = agent._recover_with_credential_pool(
             status_code=None, has_retried_429=_retry.has_retried_429, classified_reason=_soft.reason,
             error_context=_soft_ctx, billing_unverified=_soft.billing_unverified,
+            rotated_429_ids=_retry.rotated_429_ids,
         )
         if _recovered:
             agent._buffer_diagnostic_status(f"🔄 Codex soft failure ({_soft.reason.value}) — switched to the next pool credential, retrying...")

@@ -106,7 +106,7 @@ class CredentialPoolModelCooldownMixin:
         if failure_reason == "model_entitlement":
             until = time.time() + MODEL_ENTITLEMENT_BENCH_SECONDS
         else:
-            until = _normalize_error_context(error_context).get("reset_at") or (
+            until = _normalize_error_context(error_context, use_bench=not self._is_sole_credential()).get("reset_at") or (
                 time.time() + _exhausted_ttl(429, sole_credential=self._is_sole_credential())
             )
         failed_key = entry.runtime_api_key

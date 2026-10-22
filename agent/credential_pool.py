@@ -442,7 +442,7 @@ def _singleton_predates_entry(state: Any, entry: PooledCredential) -> bool:
     return state_ts < entry_ts
 
 
-def _normalize_error_context(error_context: Optional[dict[str, Any]]) -> dict[str, Any]:
+def _normalize_error_context(error_context: Optional[dict[str, Any]], *, use_bench: bool = True) -> dict[str, Any]:
     if not isinstance(error_context, dict):
         return {}
     normalized: dict[str, Any] = {}
@@ -456,12 +456,17 @@ def _normalize_error_context(error_context: Optional[dict[str, Any]]) -> dict[st
         or error_context.get("retry_until")
     )
     parsed_reset_at = _parse_absolute_timestamp(reset_at)
+    if parsed_reset_at is not None and parsed_reset_at <= time.time():
+        parsed_reset_at = None
+    bench = _parse_absolute_timestamp(error_context.get("bench_until")) if use_bench else None
+    if bench is not None and bench > time.time():
+        parsed_reset_at = max(bench, parsed_reset_at or 0)
     message = error_context.get("message")
     if parsed_reset_at is None and isinstance(message, str):
         retry_delay_seconds = reset_delay_from_message(message)
         if retry_delay_seconds is not None:
             parsed_reset_at = time.time() + retry_delay_seconds
-    if parsed_reset_at is not None:
+    if parsed_reset_at is not None and parsed_reset_at > time.time():
         normalized["reset_at"] = parsed_reset_at
     return normalized
 
@@ -1270,7 +1275,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         persist: bool = True,
         failure_reason: Optional[str] = None,
     ) -> PooledCredential:
-        normalized_error = _normalize_error_context(error_context)
+        normalized_error = _normalize_error_context(error_context, use_bench=status_code == 429 and not self._is_sole_credential())
         # Permanent OAuth failures become STATUS_DEAD, not STATUS_EXHAUSTED:
         # otherwise a revoked credential re-enters rotation every hour and
         # fails immediately until the user removes it (#32849); a row whose
@@ -2372,6 +2377,9 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 logger.info("credential pool: %s unavailable for model %s; other models stay available", _label, model)
                 self._current_id = None
                 next_entry, _pending = self._select_unlocked(refresh=False, model=model)
+                if next_entry is not None and next_entry.id == entry.id:
+                    self._current_id = None  # #97315 applies to model-scoped benches too.
+                    return None
                 return next_entry
             self._mark_exhausted(entry, status_code, error_context, failure_reason=failure_reason)
             # A 402/429/401 is a key-level failure, and the same key can back

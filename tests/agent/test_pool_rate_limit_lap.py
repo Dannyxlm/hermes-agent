@@ -11,9 +11,10 @@ from agent.credential_pool import (
     STATUS_EXHAUSTED, _normalize_error_context,
 )
 from agent.credential_pool_model_cooldowns import model_cooldown_until
-from tests.agent.test_fallback_429_after_timeout import (
-    _mock_response, _pool_error, _run_pool_retry, pooled_agent,
-)
+from tests.agent import test_fallback_429_after_timeout as pool_tests
+from tests.agent.test_fallback_429_after_timeout import _mock_response, _pool_error, _run_pool_retry
+
+pooled_agent = pool_tests.pooled_agent
 
 
 def _all_429_cycle(agent, monkeypatch, *, n, headers, round_trip):

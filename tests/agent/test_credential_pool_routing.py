@@ -13,7 +13,7 @@ Covers:
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,8 @@ class TestPoolRotationCycle:
         )
         assert recovered is True
         assert has_retried is False  # reset after rotation
-        pool.mark_exhausted_and_rotate.assert_called_once_with(status_code=429, error_context=None, api_key_hint="test-api-key", failure_reason="rate_limit")
+        pool.mark_exhausted_and_rotate.assert_called_once_with(status_code=429, error_context={"bench_until": ANY}, api_key_hint="test-api-key", failure_reason="rate_limit")
+        assert pool.mark_exhausted_and_rotate.call_args.kwargs["error_context"]["bench_until"] > time.time()
         agent._swap_credential.assert_called_once_with(entries[1])
 
     def test_pool_exhaustion_returns_false(self):

@@ -976,6 +976,7 @@ def recover_with_credential_pool(
     agent, *, status_code: Optional[int], has_retried_429: bool,
     classified_reason: Optional[FailoverReason] = None,
     error_context: Optional[dict[str, Any]] = None, billing_unverified: bool = False,
+    rotated_429_ids: Optional[set[str]] = None,
 ) -> tuple[bool, bool]:
     """Attempt credential recovery via pool rotation; returns (recovered, has_retried_429).
     Rate limits: rotate immediately if an alternate is available, else retry once. Billing:
@@ -1010,7 +1011,7 @@ def recover_with_credential_pool(
     if effective_reason is None:
         effective_reason = _STATUS_TO_FAILOVER_REASON.get(status_code)
 
-    def _rotate_and_swap(default_status: int, label: str) -> bool:
+    def _rotate_and_swap(default_status: int, label: str, *, bench_until=None) -> bool:
         """Rotate away from the failed credential; True when a new entry was swapped in."""
         rotate_status = status_code if status_code is not None else default_status
         kwargs = {
@@ -1018,6 +1019,8 @@ def recover_with_credential_pool(
             "error_context": error_context,
             "api_key_hint": api_key_hint,
         }
+        if bench_until is not None:
+            kwargs["error_context"] = {**(error_context or {}), "bench_until": bench_until}
         if credential_id:
             kwargs["credential_id"] = credential_id
         # Pass classified semantics, not just the status: a billing 403 and an edge-throttle 403
@@ -1095,10 +1098,11 @@ def recover_with_credential_pool(
         # match the key that failed, not a different account.
         return (True, False) if _rotate_and_swap(402, "billing") else (False, has_retried_429)
     if effective_reason == FailoverReason.rate_limit:
-        from agent.agent_runtime_rate_limit import _recover_rate_limit
-        return _recover_rate_limit(
+        from agent.agent_runtime_rate_limit import recover_rate_limit
+        return recover_rate_limit(
             agent, pool, has_retried_429=has_retried_429, error_context=error_context,
             api_key_hint=api_key_hint, credential_id=credential_id, rotate_and_swap=_rotate_and_swap,
+            rotated_429_ids=rotated_429_ids,
         )
     if effective_reason == FailoverReason.model_entitlement:
         # The pool benches (credential, model) only and hands back the next entry that is not
@@ -3644,11 +3648,18 @@ def _iter_pool_sockets(client: Any):
                     yield sock
 
 
+def _record_bench_hint(context: dict[str, Any], reset_at: Any) -> None:
+    parsed = _parse_absolute_timestamp(reset_at)
+    if parsed is not None and parsed > time.time():
+        context["bench_until"] = max(parsed, context.get("bench_until", 0))
+
+
 def _set_reset_from_retry_after(context: dict[str, Any], retry_after: Any) -> None:
     seconds = parse_retry_after_seconds(retry_after)
     if seconds is not None:
         reset_at = time.time() + seconds
-        if reset_at > (_parse_absolute_timestamp(context.get("reset_at")) or 0):
+        _record_bench_hint(context, reset_at)
+        if "reset_at" not in context:
             context["reset_at"] = reset_at
 
 
@@ -3690,7 +3701,8 @@ def _set_reset_from_vendor_headers(context: dict[str, Any], headers: Any) -> Non
             seconds = None if absolute is None else absolute - time.time()
         if seconds is not None and seconds > 0:
             reset_at = time.time() + seconds
-            if reset_at > (_parse_absolute_timestamp(context.get("reset_at")) or 0):
+            _record_bench_hint(context, reset_at)
+            if "reset_at" not in context:
                 context["reset_at"] = reset_at
 
 
@@ -3720,7 +3732,8 @@ def extract_api_error_context(error: Exception) -> dict[str, Any]:
     if headers:
         _set_reset_from_retry_after(context, headers)
         ratelimit_reset = headers.get("x-ratelimit-reset")
-        if (_parse_absolute_timestamp(ratelimit_reset) or 0) > (_parse_absolute_timestamp(context.get("reset_at")) or 0):
+        _record_bench_hint(context, ratelimit_reset)
+        if ratelimit_reset and "reset_at" not in context:
             context["reset_at"] = ratelimit_reset
         _set_reset_from_vendor_headers(context, headers)
     if "message" not in context and str(error).strip():
@@ -3729,6 +3742,7 @@ def extract_api_error_context(error: Exception) -> dict[str, Any]:
         delay = reset_delay_from_message(context.get("message") or "")
         if delay is not None:
             context["reset_at"] = time.time() + delay
+    _record_bench_hint(context, context.get("reset_at"))
     return context
 
 
