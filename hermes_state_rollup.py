@@ -6,7 +6,7 @@ import time
 from decimal import Decimal
 from math import nextafter
 
-from agent.api_value_pricing import estimate_aggregate_api_value_decimal
+from agent.api_value_pricing import estimate_aggregate_api_value_decimal, get_api_value_rates
 from agent.usage_pricing import CanonicalUsage
 
 _COUNTERS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "api_call_count")
@@ -179,6 +179,8 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
         kind = metric.pop("kind")
         dimensions = json.loads(metric.pop("dimensions"))
         grouped[kind].append({**dimensions, **_metrics(metric)})
+    for model in grouped["models"]:
+        model["rates"] = get_api_value_rates(model["model"], provider=model["provider"])
     totals = grouped["totals"][0]
     session_count = totals.pop("backfill_session_count")
     backfill = ({"since": start, "until": coverage_since, "basis": "session_totals_by_start",

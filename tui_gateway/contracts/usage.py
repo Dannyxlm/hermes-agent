@@ -68,9 +68,21 @@ class ChatUsage(UsageMetrics):
     title: str | None
 
 
+class ModelUsageRates(Result):
+    """Offline base-context-tier list rates, not the aggregate's effective rates."""
+
+    input_usd_per_million: float | None
+    output_usd_per_million: float | None
+    cache_read_usd_per_million: float | None
+    cache_write_usd_per_million: float | None
+    pricing_date: str | None
+    source_url: str | None
+
+
 class ModelUsage(UsageMetrics):
     model: str
     provider: str
+    rates: ModelUsageRates | None = None
 
 
 class ProviderUsageTotals(UsageMetrics):
@@ -127,6 +139,7 @@ class AllTimeChatUsage(AllTimeMetrics):
 class AllTimeModelUsage(AllTimeMetrics):
     model: str
     provider: str
+    rates: ModelUsageRates | None = None
 
 
 class AllTimeProviderUsage(AllTimeMetrics):

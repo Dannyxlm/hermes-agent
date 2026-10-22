@@ -2,7 +2,7 @@
 import json
 from functools import lru_cache
 
-from agent.api_value_pricing import estimate_aggregate_api_value_decimal
+from agent.api_value_pricing import estimate_aggregate_api_value_decimal, get_api_value_rates
 from agent.usage_pricing import CanonicalUsage
 from hermes_state_rollup import _COUNTERS, _SUMS, _DecimalSum, _metrics, follows_usage_parent
 from hermes_state_usage import AUXILIARY_USAGE_TASKS
@@ -100,6 +100,8 @@ def read_alltime_usage(conn, *, end, profile, session_id=None, limit=20, timezon
             columns=f"{columns}, SUM({_TOTAL_TOKENS}) AS total_tokens, ",
             suffix=f"GROUP BY {group} ORDER BY {order}"), {**args, **(extra_args or {})})]
     models = groups("e.model, e.provider", "e.model, e.provider", "total_tokens DESC, e.model, e.provider")
+    for model in models:
+        model["rates"] = get_api_value_rates(model["model"], provider=model["provider"])
     providers = groups("e.provider", "e.provider", "total_tokens DESC, e.provider")
     chats = groups("e.chat_id AS session_id, (SELECT title FROM sessions WHERE id=e.chat_id) AS title",
                    "e.chat_id", "total_tokens DESC, e.chat_id LIMIT :limit", {"limit": limit})

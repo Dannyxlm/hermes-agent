@@ -6785,6 +6785,17 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelUsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -29244,6 +29255,17 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelUsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -29270,6 +29292,88 @@
           "provider"
         ],
         "title": "ModelUsage",
+        "type": "object"
+      },
+      "ModelUsageRates": {
+        "additionalProperties": false,
+        "description": "Offline base-context-tier list rates, not the aggregate's effective rates.",
+        "properties": {
+          "input_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Usd Per Million"
+          },
+          "output_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Usd Per Million"
+          },
+          "cache_read_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Usd Per Million"
+          },
+          "cache_write_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write Usd Per Million"
+          },
+          "pricing_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Date"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "required": [
+          "input_usd_per_million",
+          "output_usd_per_million",
+          "cache_read_usd_per_million",
+          "cache_write_usd_per_million",
+          "pricing_date",
+          "source_url"
+        ],
+        "title": "ModelUsageRates",
         "type": "object"
       },
       "NoticePayload": {
