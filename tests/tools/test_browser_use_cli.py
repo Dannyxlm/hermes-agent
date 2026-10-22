@@ -772,22 +772,76 @@ class TestIdleLaneReaping:
         assert "ledger:unset" in result["output"]
         assert not (runtime / "bu-r7k2.hermes-lane").exists()
 
-    def test_ledger_prelude_records_new_tabs_once(self, tmp_path, monkeypatch):
+    def test_ledger_prelude_records_only_newly_created_tabs(self, tmp_path, monkeypatch):
         ledger = tmp_path / "bu-x.hermes-tabs"
         monkeypatch.setenv("HERMES_BH_TABS_FILE", str(ledger))
+        targets = ["USERTAB"]
         calls = []
+
+        def cdp(method, **kw):
+            assert method == "Target.getTargets"
+            return {"targetInfos": [{"targetId": t} for t in targets]}
 
         def new_tab(url="about:blank"):
             calls.append(url)
-            return "T%d" % len(calls)
-        ns = {"new_tab": new_tab}
+            if url == "reuse":  # the harness reuses the attached blank tab instead of creating one
+                return "USERTAB"
+            targets.append("T%d" % len(calls))
+            return targets[-1]
+        ns = {"new_tab": new_tab, "cdp": cdp}
         exec(bu_cli._TAB_LEDGER_PRELUDE, ns)
         exec(bu_cli._TAB_LEDGER_PRELUDE, ns)  # a second prelude must not double-wrap
         assert ns["new_tab"]("https://example.com") == "T1"
-        assert ns["new_tab"]() == "T2"
-        assert ledger.read_text().split() == ["T1", "T2"]
-        assert calls == ["https://example.com", "about:blank"]
+        assert ns["new_tab"]("reuse") == "USERTAB"
+        assert ns["new_tab"]() == "T3"
+        assert ledger.read_text().split() == ["T1", "T3"]  # the reused (user) tab is never recorded
+        assert calls == ["https://example.com", "reuse", "about:blank"]
         assert "_hermes_track_new_tabs" not in ns
+
+    def test_ledger_prelude_records_nothing_when_targets_unknown(self, tmp_path, monkeypatch):
+        ledger = tmp_path / "bu-x.hermes-tabs"
+        monkeypatch.setenv("HERMES_BH_TABS_FILE", str(ledger))
+
+        def cdp(method, **kw):
+            raise RuntimeError("CDP hiccup")
+        ns = {"new_tab": lambda url="about:blank": "T1", "cdp": cdp}
+        exec(bu_cli._TAB_LEDGER_PRELUDE, ns)
+        assert ns["new_tab"]("https://example.com") == "T1"
+        assert not ledger.exists()
+
+    def test_touch_lane_refuses_while_a_reap_holds_the_lock(self, tmp_path, monkeypatch):
+        """A call must never start while a reap of its dir may be stopping its daemon."""
+        runtime = tmp_path / "rt"
+        runtime.mkdir()
+        monkeypatch.setattr(bu_cli, "_ensure_lane_reaper", lambda: None)
+        monkeypatch.setattr(bu_cli, "_lane_dirs", {})
+        monkeypatch.setattr(bu_cli, "_LOCK_WAIT_S", 0.2)
+        env = {"BH_RUNTIME_DIR": str(runtime), "BH_RUNTIME_DIR_SHARED": "1"}
+        with bu_cli._lane_dir_lock(runtime) as lock:  # the "reaper"
+            assert lock == bu_cli._LOCK_HELD
+            touch = bu_cli._touch_lane(env, "r7k2", 3600)
+        assert touch.busy is True and touch.tabs is None
+        assert not (runtime / "bu-r7k2.hermes-lane").exists()
+        touch = bu_cli._touch_lane(env, "r7k2", 3600)  # lock free again
+        assert touch.busy is False and touch.tabs == runtime / "bu-r7k2.hermes-tabs"
+        assert (runtime / "bu-r7k2.hermes-lane").exists()
+
+    def test_busy_lane_returns_retryable_error_without_running(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: None)
+        monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {"exec_idle_minutes": 60})
+        monkeypatch.setattr(bu_cli, "_touch_lane", lambda env, name, idle_s: bu_cli._LaneTouch(None, busy=True))
+        ran = tmp_path / "ran"
+        cli = _fake_cli(tmp_path, f"touch {ran}\ncat\n")
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        result = json.loads(bu_cli.browser_exec("print('payload')", session="r7k2"))
+        assert "cleaned up" in result["error"]
+        assert not ran.exists()
+
+    def test_default_lane_is_never_tracked(self, tmp_path):
+        env = {"BH_RUNTIME_DIR": str(tmp_path), "BH_RUNTIME_DIR_SHARED": "1"}
+        assert bu_cli._touch_lane(env, "default", 3600) == bu_cli._LaneTouch(None)
+        assert not (tmp_path / "bu-default.hermes-lane").exists()
 
     def _lanes(self, tmp_path, monkeypatch, idle_s=3600):
         runtime = tmp_path / "rt"
@@ -799,23 +853,31 @@ class TestIdleLaneReaping:
         monkeypatch.setattr(bu_cli, "_stop_lane", lambda env, name, tabs: stopped.append((name, tabs, env)))
         return runtime, stopped
 
-    def test_reap_stops_only_idle_lanes(self, tmp_path, monkeypatch):
+    def test_reap_stops_only_idle_stamped_lanes(self, tmp_path, monkeypatch):
         runtime, stopped = self._lanes(tmp_path, monkeypatch)
         now = time.time()
-        for name in ("old", "fresh", "unstamped"):
+
+        def stamp(name, age):
+            (runtime / f"bu-{name}.hermes-lane").touch()
+            os.utime(runtime / f"bu-{name}.hermes-lane", (now - age, now - age))
+        for name in ("old", "fresh", "unstamped", "default"):
             (runtime / f"bu-{name}.pid").write_text("1")
-        (runtime / "bu-old.hermes-lane").touch()
-        os.utime(runtime / "bu-old.hermes-lane", (now - 4000, now - 4000))
+        stamp("old", 4000)
         (runtime / "bu-old.hermes-tabs").write_text("AAA\nBBB\nAAA\nbad id!\n")
-        (runtime / "bu-fresh.hermes-lane").touch()
+        stamp("fresh", 0)
+        stamp("default", 9000)  # the shared default lane is never reaped
+        stamp("gone", 9000)  # daemon already exited: drop its files, nothing to stop
+        (runtime / "bu-gone.hermes-tabs").write_text("CCC\n")
         assert bu_cli._reap_idle_lanes_once(now=now) == ["old"]
         assert [(n, t) for n, t, _ in stopped] == [("old", ["AAA", "BBB"])]
         assert stopped[0][2]["BH_RUNTIME_DIR"] == str(runtime)
         assert not (runtime / "bu-old.hermes-lane").exists() and not (runtime / "bu-old.hermes-tabs").exists()
+        assert not (runtime / "bu-gone.hermes-lane").exists() and not (runtime / "bu-gone.hermes-tabs").exists()
         assert (runtime / "bu-fresh.hermes-lane").exists()
-        # an unstamped daemon is stamped at first sight and gets a full window from then
-        assert (runtime / "bu-unstamped.hermes-lane").exists()
-        assert bu_cli._reap_idle_lanes_once(now=now) == []
+        assert (runtime / "bu-default.hermes-lane").exists()
+        # an unstamped daemon belongs to a caller that doesn't report activity: never adopted or stopped
+        assert not (runtime / "bu-unstamped.hermes-lane").exists()
+        assert bu_cli._reap_idle_lanes_once(now=now + 10 ** 6) == ["fresh"]
 
     def test_reap_skips_lane_with_call_in_flight(self, tmp_path, monkeypatch):
         runtime, stopped = self._lanes(tmp_path, monkeypatch)

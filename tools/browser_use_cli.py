@@ -56,15 +56,23 @@ def _hermes_track_new_tabs():
     import os as _os
     _path = _os.environ.get("HERMES_BH_TABS_FILE")
     _orig = globals().get("new_tab")
-    if not _path or _orig is None or getattr(_orig, "_hermes_tracked", False):
+    _cdp = globals().get("cdp")
+    if not _path or _orig is None or _cdp is None or getattr(_orig, "_hermes_tracked", False):
         return
     def new_tab(url="about:blank"):
-        _tid = _orig(url)
+        # new_tab() may REUSE the attached blank tab (possibly the user's): record only targets that did
+        # not exist before the call, and nothing at all when the before-set is unknown.
         try:
-            with open(_path, "a", encoding="utf-8") as _f:
-                _f.write("%s\\n" % _tid)
+            _known = {t.get("targetId") for t in _cdp("Target.getTargets").get("targetInfos", [])}
         except Exception:
-            pass
+            _known = None
+        _tid = _orig(url)
+        if _known is not None and _tid and _tid not in _known:
+            try:
+                with open(_path, "a", encoding="utf-8") as _f:
+                    _f.write("%s\\n" % _tid)
+            except Exception:
+                pass
         return _tid
     new_tab.__doc__ = _orig.__doc__
     new_tab._hermes_tracked = True
@@ -82,7 +90,9 @@ _LANE_STAMP_SUFFIX = ".hermes-lane"
 _LANE_TABS_SUFFIX = ".hermes-tabs"
 _LANE_LOCK_NAME = "hermes-lanes.lock"
 _REAP_INTERVAL_S = 300
-_LOCK_WAIT_S = 30.0
+# A call waits this long for a reap of its runtime dir to finish; > two _STOP_STEP_TIMEOUT_S steps.
+_LOCK_WAIT_S = 75.0
+_STOP_STEP_TIMEOUT_S = 25
 _TARGET_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # Env keys that decide where the harness keeps a daemon's pid/sock files.
 _HARNESS_DIR_ENV_KEYS = ("BH_RUNTIME_DIR", "BH_RUNTIME_DIR_SHARED", "BH_TMP_DIR", "BH_TMP_DIR_SHARED",
@@ -801,23 +811,27 @@ _lane_state_lock = threading.Lock()
 _lane_reaper_thread: Optional[threading.Thread] = None
 
 
+_LOCK_HELD, _LOCK_TIMEOUT, _LOCK_UNAVAILABLE = "held", "timeout", "unavailable"
+
+
 @contextlib.contextmanager
-def _lane_dir_lock(runtime_dir: Path, wait_s: float = _LOCK_WAIT_S):
-    """Cross-process lock on one runtime dir, so a stamp never races a reap. Yields whether it is held:
-    on timeout (or no ``fcntl``) the caller proceeds unlocked — a slow reap must never wedge a call."""
+def _lane_dir_lock(runtime_dir: Path, wait_s: Optional[float] = None):
+    """Cross-process lock on one runtime dir, serializing call stamps against reaps. Yields
+    ``_LOCK_HELD``, ``_LOCK_TIMEOUT`` (another holder kept it past ``wait_s``) or ``_LOCK_UNAVAILABLE``
+    (no ``fcntl`` / lock file unopenable — then no reaper can hold it either)."""
     try:
         import fcntl
     except ImportError:  # Windows: no reaping (see _touch_lane), nothing to serialize
-        yield False
+        yield _LOCK_UNAVAILABLE
         return
     try:
         fd = os.open(str(runtime_dir / _LANE_LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
-        yield False
+        yield _LOCK_UNAVAILABLE
         return
     held = False
     try:
-        deadline = time.monotonic() + wait_s
+        deadline = time.monotonic() + (_LOCK_WAIT_S if wait_s is None else wait_s)
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -827,7 +841,7 @@ def _lane_dir_lock(runtime_dir: Path, wait_s: float = _LOCK_WAIT_S):
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(0.05)
-        yield held
+        yield _LOCK_HELD if held else _LOCK_TIMEOUT
     finally:
         if held:
             with contextlib.suppress(OSError):
@@ -839,28 +853,38 @@ def _lane_files(runtime_dir: Path, name: str) -> tuple[Path, Path]:
     return runtime_dir / f"bu-{name}{_LANE_STAMP_SUFFIX}", runtime_dir / f"bu-{name}{_LANE_TABS_SUFFIX}"
 
 
-def _touch_lane(env: dict, name: str, idle_s: int) -> Optional[Path]:
-    """Stamp lane ``name`` as used now and register its runtime dir for reaping; returns the lane's tab
-    ledger path (exported to the CLI as ``HERMES_BH_TABS_FILE``), or None when the lane can't be tracked."""
-    if os.name == "nt" or idle_s <= 0:
-        return None
+class _LaneTouch(NamedTuple):
+    tabs: Optional[Path]  # tab ledger to export as HERMES_BH_TABS_FILE; None = lane not tracked
+    busy: bool = False  # a reap of this runtime dir held the lock past the wait: do not dispatch
+
+
+def _touch_lane(env: dict, name: str, idle_s: int) -> _LaneTouch:
+    """Stamp lane ``name`` as used now (under the dir lock, so no reap can be mid-flight) and register its
+    runtime dir for reaping. A stamp is only ever written while the lock is held: if a reap keeps the lock
+    past the wait, the call must not start, because that reap may be about to stop this very daemon."""
+    if os.name == "nt" or idle_s <= 0 or name == "default":
+        return _LaneTouch(None)
     runtime_dir = _harness_runtime_dir(env)
     if runtime_dir is None:
-        return None
+        return _LaneTouch(None)
     try:
         runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError:
-        return None
+        return _LaneTouch(None)
     stamp, tabs = _lane_files(runtime_dir, name)
-    with _lane_dir_lock(runtime_dir):
+    with _lane_dir_lock(runtime_dir) as lock:
+        if lock == _LOCK_TIMEOUT:
+            return _LaneTouch(None, busy=True)
+        if lock != _LOCK_HELD:
+            return _LaneTouch(None)  # nobody can lock, so nobody can reap: run untracked
         try:
             stamp.touch()
         except OSError:
-            return None
+            return _LaneTouch(None)
     with _lane_state_lock:
         _lane_dirs[str(runtime_dir)] = _LaneDir({k: env[k] for k in _HARNESS_DIR_ENV_KEYS if k in env}, idle_s)
     _ensure_lane_reaper()
-    return tabs
+    return _LaneTouch(tabs)
 
 
 def _ledger_tab_ids(tabs: Path) -> list[str]:
@@ -873,7 +897,8 @@ def _ledger_tab_ids(tabs: Path) -> list[str]:
 
 def _stop_lane(dir_env: Dict[str, str], name: str, tab_ids: list[str]) -> None:
     """Close the lane's recorded tabs through its live daemon, then stop the daemon (closing its dedicated
-    tab). ``BH_REQUIRE_EXISTING_DAEMON`` keeps the close call from spawning a fresh daemon."""
+    tab). ``BH_REQUIRE_EXISTING_DAEMON`` keeps the close call from spawning a fresh daemon. Each step is
+    bounded by ``_STOP_STEP_TIMEOUT_S``, so a reap holds the dir lock well under ``_LOCK_WAIT_S``."""
     cmd = _find_cli()
     if not cmd:
         return
@@ -884,51 +909,50 @@ def _stop_lane(dir_env: Dict[str, str], name: str, tab_ids: list[str]) -> None:
         close_code = ("for _tid in %r:\n    try:\n        cdp('Target.closeTarget', targetId=_tid)\n"
                       "    except Exception:\n        pass\n" % (tab_ids,))
         with contextlib.suppress(OSError, subprocess.SubprocessError):
-            _run_cli_killing_process_group(cmd, close_code, {**env, "BH_REQUIRE_EXISTING_DAEMON": "1"}, 30)
+            _run_cli_killing_process_group(cmd, close_code, {**env, "BH_REQUIRE_EXISTING_DAEMON": "1"},
+                                           _STOP_STEP_TIMEOUT_S)
     with contextlib.suppress(OSError, subprocess.SubprocessError):
-        _run_cli_killing_process_group([*cmd, "--reload"], "", env, 30)
+        _run_cli_killing_process_group([*cmd, "--reload"], "", env, _STOP_STEP_TIMEOUT_S)
 
 
 def _reap_idle_lanes_once(now: Optional[float] = None) -> list[str]:
-    """One pass over every registered runtime dir: stop lanes idle past their window. A daemon without a
-    stamp (spawned before reaping was on, or by a non-Hermes caller) is stamped at first sight, so it gets
-    a full window from then. Returns the reaped lane names."""
+    """One pass over every registered runtime dir: stop lanes idle past their window. Only lanes Hermes
+    stamped are candidates; a daemon with no stamp (an older Hermes, or another caller that never stamps)
+    is never touched, since its activity is invisible here. The shared ``default`` lane is never reaped.
+    Returns the reaped lane names."""
     with _lane_state_lock:
         dirs = dict(_lane_dirs)
     reaped: list[str] = []
     for dir_key, lane_dir in dirs.items():
         runtime_dir = Path(dir_key)
         try:
-            names = sorted(p.name[3:-4] for p in runtime_dir.glob("bu-*.pid"))
+            names = sorted(p.name[3:-len(_LANE_STAMP_SUFFIX)] for p in runtime_dir.glob(f"bu-*{_LANE_STAMP_SUFFIX}"))
         except OSError:
             continue
         for name in names:
-            if not _SESSION_RE.match(name) and not name.startswith("_local_"):
+            if name == "default" or (not _SESSION_RE.match(name) and not name.startswith("_local_")):
                 continue
             with _lane_state_lock:
                 if _lane_inflight.get((dir_key, name)):
                     continue
             stamp, tabs = _lane_files(runtime_dir, name)
-            with _lane_dir_lock(runtime_dir) as held:
-                if not held:
+            with _lane_dir_lock(runtime_dir, wait_s=1.0) as lock:
+                if lock != _LOCK_HELD:
                     continue
                 current = time.time() if now is None else now
                 try:
                     age = current - stamp.stat().st_mtime
-                except FileNotFoundError:
-                    with contextlib.suppress(OSError):
-                        stamp.touch()
-                    continue
                 except OSError:
                     continue
                 if age < lane_dir.idle_s:
                     continue
-                _stop_lane(lane_dir.env, name, _ledger_tab_ids(tabs))
+                if (runtime_dir / f"bu-{name}.pid").exists():
+                    _stop_lane(lane_dir.env, name, _ledger_tab_ids(tabs))
+                    reaped.append(name)
+                    logger.info("browser_exec: stopped idle browser lane %s (idle %d min)", name, int(age // 60))
                 for path in (stamp, tabs):
                     with contextlib.suppress(OSError):
                         path.unlink()
-            reaped.append(name)
-            logger.info("browser_exec: stopped idle browser lane %s (idle %d min)", name, int(age // 60))
     return reaped
 
 
@@ -999,7 +1023,11 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             and _exec_task_tabs_enabled(browser_cfg)):
         env["BU_NAME"] = _task_session_name(task_id)
     lane = env.get("BU_NAME", "default")
-    tabs_file = _touch_lane(env, lane, _exec_idle_seconds(browser_cfg))
+    touch = _touch_lane(env, lane, _exec_idle_seconds(browser_cfg))
+    if touch.busy:
+        return tool_error("This browser session's lane is being cleaned up after sitting idle. Retry the "
+                          "same call in a minute; it will start in a fresh tab.")
+    tabs_file = touch.tabs
     lane_key = (str(tabs_file.parent), lane) if tabs_file is not None else None
     if tabs_file is not None:
         env[_TABS_FILE_ENV] = str(tabs_file)
