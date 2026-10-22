@@ -6,7 +6,7 @@ from pathlib import Path
 import time
 import uuid
 
-from tools.desktop_door_client import DoorClient, DoorConflict, DoorTransportError, DoorUnavailable
+from tools.desktop_door_client import DoorClient, DoorConflict, DoorRefused, DoorTransportError, DoorUnavailable
 from tools.desktop_space_lease import SpaceLease, digest
 from tools.desktop_spaces import _receipt, _revision
 
@@ -183,7 +183,12 @@ class DesktopController:
                 raise DoorUnavailable('Desktop transition unconfirmed')
         except DoorTransportError:
             pass
-        except (DoorUnavailable, DoorConflict):
+        except (DoorRefused, DoorConflict):
+            self._finish(body, 'denied')
+            if takeover:
+                self._restore_pending(previous)
+            raise
+        except DoorUnavailable:
             if takeover:
                 self._restore_pending(previous)
             raise

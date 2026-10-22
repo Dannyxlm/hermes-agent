@@ -14,6 +14,10 @@ class DoorUnavailable(RuntimeError):
     pass
 
 
+class DoorRefused(DoorUnavailable):
+    """An authenticated HTTP response definitively refused the operation."""
+
+
 class DoorTransportError(DoorUnavailable):
     pass
 
@@ -153,8 +157,10 @@ class DoorClient:
             raw = response.read(262145)
             if response.status in (409, 410):
                 raise DoorConflict('Desktop viewer changed')
-            if response.status != 200 or len(raw) > 262144:
-                raise DoorUnavailable('Desktop door unavailable')
+            if response.status != 200:
+                raise DoorRefused('Desktop door unavailable')
+            if len(raw) > 262144:
+                raise DoorProtocolError('Desktop door response unconfirmed')
             return model.model_validate(json.loads(raw), strict=True)
         except (OSError, http.client.HTTPException):
             raise DoorTransportError('Desktop door unavailable') from None
