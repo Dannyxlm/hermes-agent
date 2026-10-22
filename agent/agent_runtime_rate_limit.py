@@ -29,9 +29,6 @@ def recover_rate_limit(
     current = failed_rate_limit_entry(pool, credential_id, api_key_hint)
     rotated = rotated_429_ids if rotated_429_ids is not None else set()
     current_id = getattr(current, "id", None)
-    if current_id in rotated:
-        return False, True
-
     def exclude(entry):
         return (
             entry.id == current_id or entry.id in rotated
@@ -40,17 +37,16 @@ def recover_rate_limit(
         )
 
     available = pool.has_available(model=getattr(agent, "model", None), exclude=exclude)
-    if rotated and not available:
-        return False, True
+    free = available and current_id not in rotated
     context = error_context or {}
     usage_limit = any(t in str(context.get("reason") or "").lower() for t in _USAGE_LIMIT_REASON_TOKENS) or any(
         t in str(context.get("message") or "").lower() for t in _USAGE_LIMIT_MESSAGE_TOKENS
     )
     pre_exhausted = getattr(current, "last_status", None) == STATUS_EXHAUSTED
-    if not available and not (has_retried_429 or usage_limit or pre_exhausted):
+    if not free and not (has_retried_429 or usage_limit or pre_exhausted):
         return False, True
     kwargs = {}
-    if available:
+    if free:
         # Short hints must not let a just-failed account immediately rejoin a free lap.
         now = time.time()
         hint = max(_parse_absolute_timestamp(context.get("bench_until")) or 0,

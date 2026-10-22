@@ -17,7 +17,7 @@ from tests.agent.test_fallback_429_after_timeout import _mock_response, _pool_er
 pooled_agent = pool_tests.pooled_agent
 
 
-def _all_429_cycle(agent, monkeypatch, *, n, headers, round_trip):
+def _all_429_cycle(agent, monkeypatch, *, n, headers, round_trip, count_paid_rotations=False):
     """Advance a fake clock instead of sleeping; return success at a hard escape bound."""
     agent._api_max_retries = 3
     calls, waits = [], []
@@ -26,7 +26,8 @@ def _all_429_cycle(agent, monkeypatch, *, n, headers, round_trip):
 
     def api_call(_kwargs):
         calls.append(agent.api_key)
-        if len(calls) > n + agent._api_max_retries + 1:
+        escape_bound = n + agent._api_max_retries * (2 if count_paid_rotations else 1) + 1
+        if len(calls) > escape_bound:
             return _mock_response("escaped at the test's finite call bound")
         clock[0] += round_trip
         raise _pool_error(headers=headers)
@@ -39,9 +40,12 @@ def _all_429_cycle(agent, monkeypatch, *, n, headers, round_trip):
     monkeypatch.setattr(agent, "_try_activate_fallback", lambda **kwargs: False)
     monkeypatch.setattr(agent, "_try_recover_primary_transport", lambda *args, **kwargs: False)
     monkeypatch.setattr("agent.turn_api_error.interruptible_backoff_sleep", wait)
-    agent.run_conversation("hello")
-    assert len(calls) <= n + agent._api_max_retries, (calls, waits)
-    assert waits, (calls, waits)
+    result = agent.run_conversation("hello")
+    assert result["completed"] is False, (calls, waits)
+    # A reopened account can pay one bench-and-swap call after each counted retry.
+    paid = len(waits) if count_paid_rotations else 0
+    assert len(calls) <= n + agent._api_max_retries + paid, (calls, waits)
+    assert 0 < len(waits) < agent._api_max_retries, (calls, waits)
     return calls
 
 
@@ -52,7 +56,7 @@ def test_all_429_short_hints_use_one_free_lap(pooled_agent, monkeypatch, provide
     agent, _pool = pooled_agent(provider, n=n)
     _all_429_cycle(agent, monkeypatch, n=n, round_trip=round_trip, headers={
         "x-ratelimit-reset-requests": "20ms", "x-ratelimit-reset-tokens": "30ms",
-    })
+    }, count_paid_rotations=round_trip > EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS)
 
 
 @pytest.mark.parametrize("n", [2, 3])
