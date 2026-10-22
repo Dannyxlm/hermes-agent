@@ -11,7 +11,7 @@ class DesktopInputDenied(PermissionError):
 
 def is_desktop_cdp(endpoint: str) -> bool:
     try:
-        parsed = urlsplit(endpoint)
+        parsed = urlsplit(endpoint if '://' in endpoint else '//' + endpoint)
         return parsed.port == 9225
     except ValueError:
         return True

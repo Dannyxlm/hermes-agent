@@ -129,6 +129,12 @@ def _eval_js_secret(task_id: str, expression: str) -> dict[str, Any]:
     When no supervisor session is available the caller gets a typed refusal
     (``error_type='supervisor_required'``) and nothing is written.
     """
+    from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted, task_endpoint
+    try:
+        assert_agent_admitted(task_endpoint(task_id))
+    except DesktopInputDenied:
+        return {"success": False, "error_type": "human_has_control", "error": "Desktop agent input is unavailable"}
+
     try:
         supervisor = _ensure_supervisor(task_id)
     except Exception as exc:
