@@ -642,12 +642,13 @@ class TestBackendCdpResolution:
         assert env["BU_CDP_WS"] == "wss://gateway.example/cdp/legacy"
 
 
-class TestOwnTabPreamble:
-    """Named sessions on SHARED browsers (a /browser connect CDP override) get the own-tab preamble
-    prepended; private per-name browsers (packaged Chromium, provider) and unnamed sessions do not."""
+class TestSharedBrowserLanes:
+    """Shared browsers (a /browser connect CDP override): named sessions rely on browser-harness's own
+    dedicated BACKGROUND tab (no Hermes preamble opening a foreground one); unnamed calls get a per-task
+    lane when ``browser.exec_task_tabs`` is on; private per-name browsers are left alone."""
 
-    def _run(self, tmp_path, monkeypatch, *, session="", private=False, provider=False, shared_cdp=""):
-
+    def _run(self, tmp_path, monkeypatch, *, session="", provider=False, shared_cdp="", cfg=None,
+             task_id=None, body="cat\n"):
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: shared_cdp)
         if provider:
             monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
@@ -657,34 +658,49 @@ class TestOwnTabPreamble:
             )
         else:
             monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: None)
-        # fake CLI echoes stdin back so we can inspect what code was sent
-        cli = _fake_cli(tmp_path, "cat\n")
-        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
-        return json.loads(bu_cli.browser_exec("print('payload')", session=session))
+        monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: dict(cfg or {}))
+        monkeypatch.setattr(bu_cli, "_ensure_lane_reaper", lambda: None)
+        runtime = tmp_path / "rt"
 
-    def test_named_shared_browser_gets_preamble(self, tmp_path, monkeypatch):
+        def _isolate(env):
+            env["BH_RUNTIME_DIR"] = str(runtime)
+            env["BH_RUNTIME_DIR_SHARED"] = "1"
+        monkeypatch.setattr(bu_cli, "_isolate_served_profile_daemons", _isolate)
+        cli = _fake_cli(tmp_path, body)
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        return json.loads(bu_cli.browser_exec("print('payload')", session=session, task_id=task_id))
+
+    def test_named_shared_browser_opens_no_foreground_tab(self, tmp_path, monkeypatch):
         result = self._run(tmp_path, monkeypatch, session="r7k2", shared_cdp="http://127.0.0.1:9222")
         assert result["success"] is True
-        assert "_hermes_ensure_own_tab" in result["output"]
-        # model code still present, after the preamble
-        assert result["output"].index("_hermes_ensure_own_tab") < result["output"].index("print('payload')")
-
-    def test_named_packaged_chromium_skips_preamble(self, tmp_path, monkeypatch):
-        """Each named session launches its own packaged Chromium — nothing to share a tab with."""
-        result = self._run(tmp_path, monkeypatch, session="r7k2")
-        assert result["success"] is True
+        assert "print('payload')" in result["output"]
+        assert "Target.createTarget" not in result["output"]
         assert "_hermes_ensure_own_tab" not in result["output"]
 
-    def test_unnamed_session_gets_no_preamble(self, tmp_path, monkeypatch):
-        result = self._run(tmp_path, monkeypatch, session="")
-        assert result["success"] is True
-        assert "_hermes_ensure_own_tab" not in result["output"]
+    def test_unnamed_shared_call_gets_task_lane_when_enabled(self, tmp_path, monkeypatch):
+        result = self._run(tmp_path, monkeypatch, shared_cdp="http://127.0.0.1:9222", task_id="chat-1",
+                           cfg={"exec_task_tabs": True},
+                           body='cat > /dev/null\necho "name:${BU_NAME:-unset}"\n')
+        assert f"name:{bu_cli._task_session_name('chat-1')}" in result["output"]
 
-    def test_named_provider_browser_skips_preamble(self, tmp_path, monkeypatch):
-        """Per-name provider browsers are private — preamble would leak a tab."""
-        result = self._run(tmp_path, monkeypatch, session="r7k2", provider=True)
-        assert result["success"] is True
-        assert "_hermes_ensure_own_tab" not in result["output"]
+    def test_unnamed_shared_call_stays_default_when_disabled(self, tmp_path, monkeypatch):
+        result = self._run(tmp_path, monkeypatch, shared_cdp="http://127.0.0.1:9222", task_id="chat-1",
+                           body='cat > /dev/null\necho "name:${BU_NAME:-unset}"\n')
+        assert "name:unset" in result["output"]
+
+    def test_named_session_wins_over_task_lane(self, tmp_path, monkeypatch):
+        result = self._run(tmp_path, monkeypatch, session="r7k2", shared_cdp="http://127.0.0.1:9222",
+                           task_id="chat-1", cfg={"exec_task_tabs": True},
+                           body='cat > /dev/null\necho "name:${BU_NAME:-unset}"\n')
+        assert "name:r7k2" in result["output"]
+
+    def test_private_browsers_get_no_task_lane(self, tmp_path, monkeypatch):
+        """Packaged Chromium and provider browsers are already per-key: nothing to share a tab with."""
+        for provider in (False, True):
+            result = self._run(tmp_path, monkeypatch, provider=provider, task_id="chat-1",
+                               cfg={"exec_task_tabs": True},
+                               body='cat > /dev/null\necho "name:${BU_NAME:-unset}"\n')
+            assert "name:unset" in result["output"], provider
 
     def test_sentinel_never_reaches_subprocess_env(self, tmp_path, monkeypatch):
 
@@ -699,12 +715,163 @@ class TestOwnTabPreamble:
         result = json.loads(bu_cli.browser_exec("print(1)", session="r7k2"))
         assert "sentinel:unset" in result["output"]
 
-    def test_preamble_is_valid_python(self):
-        import ast
+    def test_task_session_names_are_valid_and_distinct(self):
+        ids = ["20260101_120000_abc123", "cron_0123456789ab_20260101_120000", "sub:agent/3 ünïcode",
+               "x" * 300, "---", "a"]
+        names = [bu_cli._task_session_name(t) for t in ids]
+        for name in names:
+            assert bu_cli._SESSION_RE.match(name), name
+        assert len(set(names)) == len(names)
+        assert bu_cli._task_session_name(ids[0]) == names[0]  # stable across calls
+        assert bu_cli._task_session_name("") == "" and bu_cli._task_session_name(None) == ""
 
-        ast.parse(bu_cli._OWN_TAB_PREAMBLE)
-        # and composes with model code
-        ast.parse(bu_cli._OWN_TAB_PREAMBLE + "print('x')")
+
+class TestIdleLaneReaping:
+    """``browser.exec_idle_minutes``: lanes are stamped per call, idle ones are stopped through the
+    harness (closing their dedicated tab) after the tabs they opened are closed through the live daemon."""
+
+    def test_idle_seconds_floor_and_off(self):
+        assert bu_cli._exec_idle_seconds({}) == 0
+        assert bu_cli._exec_idle_seconds({"exec_idle_minutes": 0}) == 0
+        assert bu_cli._exec_idle_seconds({"exec_idle_minutes": "nope"}) == 0
+        assert bu_cli._exec_idle_seconds({"exec_idle_minutes": 1}) == bu_cli._IDLE_FLOOR_S
+        assert bu_cli._exec_idle_seconds({"exec_idle_minutes": 90}) == 5400
+        assert bu_cli._IDLE_FLOOR_S > bu_cli._MAX_TIMEOUT_S  # a running call is never cut
+
+    def test_call_stamps_lane_and_tracks_new_tabs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: None)
+        monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {"exec_idle_minutes": 60})
+        started = []
+        monkeypatch.setattr(bu_cli, "_ensure_lane_reaper", lambda: started.append(True))
+        runtime = tmp_path / "rt"
+        monkeypatch.setattr(bu_cli, "_isolate_served_profile_daemons",
+                            lambda env: env.update(BH_RUNTIME_DIR=str(runtime), BH_RUNTIME_DIR_SHARED="1"))
+        monkeypatch.setattr(bu_cli, "_lane_dirs", {})
+        cli = _fake_cli(tmp_path, 'cat\necho "ledger:${HERMES_BH_TABS_FILE:-unset}"\n')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        result = json.loads(bu_cli.browser_exec("print('payload')", session="r7k2"))
+        assert "_hermes_track_new_tabs" in result["output"]
+        assert result["output"].index("_hermes_track_new_tabs") < result["output"].index("print('payload')")
+        assert f"ledger:{runtime / 'bu-r7k2.hermes-tabs'}" in result["output"]
+        assert (runtime / "bu-r7k2.hermes-lane").exists()
+        assert started and str(runtime) in bu_cli._lane_dirs
+        assert bu_cli._lane_inflight == {}  # released after the call
+
+    def test_reaping_off_adds_nothing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")
+        monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: None)
+        monkeypatch.setattr(bu_cli, "_read_browser_cfg", lambda: {})
+        runtime = tmp_path / "rt"
+        monkeypatch.setattr(bu_cli, "_isolate_served_profile_daemons",
+                            lambda env: env.update(BH_RUNTIME_DIR=str(runtime), BH_RUNTIME_DIR_SHARED="1"))
+        cli = _fake_cli(tmp_path, 'cat\necho "ledger:${HERMES_BH_TABS_FILE:-unset}"\n')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        result = json.loads(bu_cli.browser_exec("print('payload')", session="r7k2"))
+        assert "_hermes_track_new_tabs" not in result["output"]
+        assert "ledger:unset" in result["output"]
+        assert not (runtime / "bu-r7k2.hermes-lane").exists()
+
+    def test_ledger_prelude_records_new_tabs_once(self, tmp_path, monkeypatch):
+        ledger = tmp_path / "bu-x.hermes-tabs"
+        monkeypatch.setenv("HERMES_BH_TABS_FILE", str(ledger))
+        calls = []
+
+        def new_tab(url="about:blank"):
+            calls.append(url)
+            return "T%d" % len(calls)
+        ns = {"new_tab": new_tab}
+        exec(bu_cli._TAB_LEDGER_PRELUDE, ns)
+        exec(bu_cli._TAB_LEDGER_PRELUDE, ns)  # a second prelude must not double-wrap
+        assert ns["new_tab"]("https://example.com") == "T1"
+        assert ns["new_tab"]() == "T2"
+        assert ledger.read_text().split() == ["T1", "T2"]
+        assert calls == ["https://example.com", "about:blank"]
+        assert "_hermes_track_new_tabs" not in ns
+
+    def _lanes(self, tmp_path, monkeypatch, idle_s=3600):
+        runtime = tmp_path / "rt"
+        runtime.mkdir()
+        monkeypatch.setattr(bu_cli, "_lane_dirs", {str(runtime): bu_cli._LaneDir(
+            {"BH_RUNTIME_DIR": str(runtime), "BH_RUNTIME_DIR_SHARED": "1"}, idle_s)})
+        monkeypatch.setattr(bu_cli, "_lane_inflight", {})
+        stopped = []
+        monkeypatch.setattr(bu_cli, "_stop_lane", lambda env, name, tabs: stopped.append((name, tabs, env)))
+        return runtime, stopped
+
+    def test_reap_stops_only_idle_lanes(self, tmp_path, monkeypatch):
+        runtime, stopped = self._lanes(tmp_path, monkeypatch)
+        now = time.time()
+        for name in ("old", "fresh", "unstamped"):
+            (runtime / f"bu-{name}.pid").write_text("1")
+        (runtime / "bu-old.hermes-lane").touch()
+        os.utime(runtime / "bu-old.hermes-lane", (now - 4000, now - 4000))
+        (runtime / "bu-old.hermes-tabs").write_text("AAA\nBBB\nAAA\nbad id!\n")
+        (runtime / "bu-fresh.hermes-lane").touch()
+        assert bu_cli._reap_idle_lanes_once(now=now) == ["old"]
+        assert [(n, t) for n, t, _ in stopped] == [("old", ["AAA", "BBB"])]
+        assert stopped[0][2]["BH_RUNTIME_DIR"] == str(runtime)
+        assert not (runtime / "bu-old.hermes-lane").exists() and not (runtime / "bu-old.hermes-tabs").exists()
+        assert (runtime / "bu-fresh.hermes-lane").exists()
+        # an unstamped daemon is stamped at first sight and gets a full window from then
+        assert (runtime / "bu-unstamped.hermes-lane").exists()
+        assert bu_cli._reap_idle_lanes_once(now=now) == []
+
+    def test_reap_skips_lane_with_call_in_flight(self, tmp_path, monkeypatch):
+        runtime, stopped = self._lanes(tmp_path, monkeypatch)
+        now = time.time()
+        (runtime / "bu-busy.pid").write_text("1")
+        (runtime / "bu-busy.hermes-lane").touch()
+        os.utime(runtime / "bu-busy.hermes-lane", (now - 9000, now - 9000))
+        bu_cli._lane_inflight[(str(runtime), "busy")] = 1
+        assert bu_cli._reap_idle_lanes_once(now=now) == []
+        assert stopped == []
+
+    def test_stop_lane_closes_tabs_without_spawning_then_reloads(self, tmp_path, monkeypatch):
+        log = tmp_path / "cli.log"
+        cli = _fake_cli(tmp_path, (
+            'echo "argv:$* require:${BH_REQUIRE_EXISTING_DAEMON:-0} name:$BU_NAME '
+            'cdp:${BU_CDP_URL:-none}" >> ' + str(log) + '\n'
+            'cat >> ' + str(log) + '\n'))
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        monkeypatch.setenv("BU_CDP_URL", "http://127.0.0.1:9222")
+        bu_cli._stop_lane({"BH_RUNTIME_DIR": str(tmp_path)}, "old", ["AAA"])
+        text = log.read_text()
+        first, _, rest = text.partition("argv:--reload")
+        assert "require:1 name:old cdp:none" in first
+        assert "Target.closeTarget" in first and "'AAA'" in first
+        assert rest.startswith(" require:0 name:old cdp:none")
+
+    def test_stop_lane_without_tabs_only_reloads(self, tmp_path, monkeypatch):
+        log = tmp_path / "cli.log"
+        cli = _fake_cli(tmp_path, 'echo "argv:$*" >> ' + str(log) + '\ncat > /dev/null\n')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        bu_cli._stop_lane({}, "old", [])
+        assert log.read_text().split("\n")[0] == "argv:--reload"
+
+    @pytest.mark.parametrize("extra", [
+        {"BH_RUNTIME_DIR": "{tmp}/rt", "BH_RUNTIME_DIR_SHARED": "1"},
+        {"BH_TMP_DIR": "{tmp}/tmpdir", "BH_RUNTIME_DIR_SHARED": "1", "BH_TMP_DIR_SHARED": "1"},
+        {"BH_HOME": "{tmp}/bhhome"},
+        {"XDG_CONFIG_HOME": "{tmp}/xdg"},
+        {},
+    ])
+    def test_runtime_dir_matches_the_harness(self, tmp_path, extra):
+        """Contract with browser_harness._ipc: the reaper looks where the daemon writes its pid."""
+        pytest.importorskip("browser_harness")
+        env = {k: v for k, v in os.environ.items()
+               if k not in bu_cli._HARNESS_DIR_ENV_KEYS or k == "HOME"}
+        env["HOME"] = str(tmp_path / "home")
+        env.update({k: v.format(tmp=tmp_path) for k, v in extra.items()})
+        out = subprocess.run(
+            [sys.executable, "-c", "from browser_harness import _ipc; print(_ipc.pid_path('lane1'))"],
+            env=env, capture_output=True, text=True, check=True).stdout.strip()
+        ours = bu_cli._harness_runtime_dir(env)
+        assert ours is not None
+        assert os.path.realpath(ours / "bu-lane1.pid") == os.path.realpath(out)
+
+    def test_runtime_dir_none_for_isolated_single_daemon_dir(self, tmp_path):
+        assert bu_cli._harness_runtime_dir({"BH_RUNTIME_DIR": str(tmp_path)}) is None
 
 
 class TestProviderPickerIntegration:
