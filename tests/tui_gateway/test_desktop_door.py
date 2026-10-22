@@ -51,6 +51,9 @@ def door(desktop, tmp_path, monkeypatch):
             if self.headers.get('Authorization') != 'Bearer fixture-only-credential':
                 self.send_error(403)
                 return
+            if route == 'takeover' and getattr(control, 'refused', 0):
+                self.send_error(control.refused)
+                return
             if control.fail:
                 self.send_error(503)
                 return
@@ -143,6 +146,20 @@ class TestDesktopDoorControl:
         reply = action(d, 'take_over', viewer_id='viewer')
         assert reply['error']['code'] == 4002
         assert d.store.leases.read('desktop') == before
+
+    @pytest.mark.parametrize('status,code', [(503, 4002), (409, 4000)])
+    def test_definitively_refused_takeover_is_denied(self, desktop, door, status, code):
+        assert watch(desktop)['result']['viewer_id'] == 'viewer'
+        before = desktop.store.leases.read('desktop')
+        door.refused = status
+        reply = action(desktop, 'take_over', viewer_id='viewer')
+        assert reply['error']['code'] == code
+        assert desktop.store.leases.read('desktop') == before
+        receipt = desktop.call('desktop.action_status', action_id='decision')['result']
+        assert receipt['status'] == 'denied'
+        door.refused = 0
+        assert action(desktop, 'take_over', action_id='next', viewer_id='viewer')['result']['status'] == 'accepted'
+        assert desktop.call('desktop.action_status', action_id='decision')['result'] == receipt
 
     def test_lost_ack_reconciles_without_second_transition(self, desktop, door):
         assert watch(desktop)['result']['viewer_id'] == 'viewer'
