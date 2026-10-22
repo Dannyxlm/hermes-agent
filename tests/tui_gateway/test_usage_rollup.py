@@ -334,3 +334,218 @@ def test_large_window_prices_each_null_event_once_per_request(tmp_path, monkeypa
             assert price.call_count == 8200
             for key in ("agents", "models", "providers", "days", "top_chats"):
                 assert sum(row["event_count"] for row in value[key]) == 8201
+
+
+def legacy_session(db, sid, started, *, tokens=100, model="claude-opus-5-5",
+                   provider="anthropic", parent=None, source="desktop", config=None):
+    db.create_session(sid, source, model=model, parent_session_id=parent, model_config=config)
+    db._conn.execute("UPDATE sessions SET started_at=?, billing_provider=?, input_tokens=?, "
+                     "output_tokens=10, cache_read_tokens=20, cache_write_tokens=5, "
+                     "reasoning_tokens=3, api_call_count=2, title=? WHERE id=?",
+                     (started, provider, tokens, "Fictional " + sid, sid))
+    db._conn.commit()
+
+
+def set_coverage(db, since):
+    db._conn.execute("UPDATE state_meta SET value=? WHERE key='usage_events_since'", (str(since),))
+    db._conn.commit()
+
+
+def readonly_rollup(path, *, start, end, **params):
+    from hermes_state_rollup import read_usage_rollup
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
+        def authorize(action, name, *rest):
+            if action in {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE,
+                          sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_CREATE_INDEX}:
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_READ and name == "messages":
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        conn.set_authorizer(authorize)
+        return read_usage_rollup(conn, start=start, end=end, profile="default", **params)
+
+
+def test_backfill_gap_merges_every_projection_and_preserves_event_counts(tmp_path):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "old", 150)
+        legacy_session(db, "outside", 99, tokens=999)
+        legacy_session(db, "boundary", 200, tokens=999)
+        legacy_session(db, "new", 250, tokens=0)
+        set_coverage(db, 200)
+        db.update_token_counts("new", model="claude-opus-5-5", billing_provider="anthropic",
+                               input_tokens=50, api_call_count=1, usage_timestamp=260, turn_id="t")
+    value = readonly_rollup(path, start=100, end=300)
+    totals = value["totals"]
+    assert totals["input_tokens"] == 150
+    assert totals["total_tokens"] == 185
+    assert totals["event_count"] == totals["turn_count"] == 1
+    assert totals["unattributed_turn_events"] == 0
+    assert totals["api_call_count"] == 3
+    assert totals["estimated_cost_usd"] == pytest.approx(0.000829)
+    assert value["chat_count"] == 2
+    assert value["top_chats"][0]["title"] == "Fictional old"
+    for key in ("agents", "models", "providers", "days", "top_chats"):
+        for counter in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+                        "reasoning_tokens", "api_call_count", "total_tokens", "event_count"):
+            assert sum(row[counter] for row in value[key]) == totals[counter]
+        assert sum(row["estimated_cost_usd"] for row in value[key]) == pytest.approx(totals["estimated_cost_usd"])
+    assert value["backfill"] == {"since": 100, "until": 200, "basis": "session_totals_by_start", "session_count": 1}
+    assert value["partial"] is False
+    assert value["coverage_reason"] == "backfilled_from_session_totals"
+
+
+def test_backfill_reconciles_main_switches_and_disjoint_auxiliaries_per_counter(tmp_path):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "mixed", 150)
+        db.update_token_counts("mixed", model="gpt-6.1-sol", billing_provider="openai-codex",
+                               input_tokens=40, output_tokens=30, api_call_count=1, usage_timestamp=250)
+        db.record_auxiliary_usage("mixed", "vision", model="claude-opus-5-5", billing_provider="anthropic",
+                                  input_tokens=70, usage_events=[{"input_tokens": 30, "api_call_count": 1,
+                                                               "usage_timestamp": 250}])
+        db.record_auxiliary_usage("mixed", "title_generation", model="claude-opus-5-5",
+                                  billing_provider="anthropic", input_tokens=11,
+                                  usage_events=[{"input_tokens": 4, "api_call_count": 1, "usage_timestamp": 250}])
+        # The main route table overlaps stored session counters and is not another source of totals.
+        db._conn.execute("UPDATE sessions SET model='claude-opus-5-5', billing_provider='anthropic' WHERE id='mixed'")
+        set_coverage(db, 200)
+    value = readonly_rollup(path, start=100, end=300)
+    assert value["totals"]["input_tokens"] == 221
+    assert value["totals"]["output_tokens"] == 40
+    models = {row["model"]: row for row in value["models"]}
+    assert models["gpt-6.1-sol"]["input_tokens"] == 40
+    assert models["claude-opus-5-5"]["input_tokens"] == 181
+    assert value["totals"]["event_count"] == 3
+    assert value["backfill"]["session_count"] == 1
+
+
+def test_backfill_floors_each_counter_and_ignores_events_outside_window(tmp_path):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "mixed", 150)
+        db.update_token_counts("mixed", model="claude-opus-5-5", billing_provider="anthropic",
+                               input_tokens=20, output_tokens=40, api_call_count=1, usage_timestamp=250)
+        db.update_token_counts("mixed", input_tokens=7, api_call_count=1, usage_timestamp=90)
+        db._conn.execute("UPDATE sessions SET input_tokens=100, output_tokens=10 WHERE id='mixed'")
+        set_coverage(db, 200)
+    value = readonly_rollup(path, start=100, end=300)
+    assert value["totals"]["input_tokens"] == 100
+    assert value["totals"]["output_tokens"] == 40
+    assert value["totals"]["cache_read_tokens"] == 20
+    assert value["totals"]["event_count"] == 1
+
+
+def test_backfill_lineage_cohorts_branches_filters_limits_and_cycles(tmp_path):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "root", 99, tokens=999)
+        db.end_session("root", "compression")
+        legacy_session(db, "tip", 120, parent="root")
+        legacy_session(db, "child", 130, parent="tip", source="subagent")
+        legacy_session(db, "metadata", 140, parent="tip", config={"_delegate_from": "tip"})
+        legacy_session(db, "branch", 150, parent="root", config={"_branched_from": "root"})
+        legacy_session(db, "cycle-a", 160, source="subagent")
+        legacy_session(db, "cycle-b", 170, parent="cycle-a", source="subagent")
+        db._conn.execute("UPDATE sessions SET parent_session_id='cycle-b' WHERE id='cycle-a'")
+        set_coverage(db, 200)
+    value = readonly_rollup(path, start=100, end=300, limit=1)
+    assert value["chat_count"] == 3
+    assert value["backfill"]["session_count"] == 6
+    assert value["totals"]["input_tokens"] == 600
+    assert value["top_chats"][0]["session_id"] == "root"
+    assert value["top_chats"][0]["input_tokens"] == 300
+    assert value["top_chats"][0]["title"] == "Fictional root"
+    assert readonly_rollup(path, start=100, end=300, session_id="child")["totals"]["input_tokens"] == 300
+    assert readonly_rollup(path, start=100, end=300, session_id="branch")["totals"]["input_tokens"] == 100
+    assert readonly_rollup(path, start=100, end=300, session_id="cycle-b")["totals"]["input_tokens"] == 200
+
+
+@pytest.mark.parametrize("since", [50, 100])
+def test_backfill_not_needed_when_window_is_inside_collector_coverage(tmp_path, since):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "not-backfilled", 150)
+        set_coverage(db, since)
+    value = readonly_rollup(path, start=100, end=300)
+    assert value["totals"]["total_tokens"] == 0
+    assert value.get("backfill") is None
+    assert value["partial"] is False
+    assert value["coverage_reason"] != "backfilled_from_session_totals"
+
+
+@pytest.mark.parametrize("since", [None, 400])
+def test_backfill_missing_or_future_coverage_keeps_partial_semantics(tmp_path, since):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "old", 150)
+        if since is None:
+            db._conn.execute("DELETE FROM state_meta WHERE key='usage_events_since'")
+            db._conn.commit()
+        else:
+            set_coverage(db, since)
+    value = readonly_rollup(path, start=100, end=300)
+    assert value["partial"] is True
+    assert value.get("backfill") is None or value["backfill"]["until"] <= 300
+
+
+def test_backfill_unknown_model_is_not_priced_as_zero(tmp_path):
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "unknown", 150, model="not-a-priced-model", provider="unknown")
+        set_coverage(db, 200)
+    value = readonly_rollup(path, start=100, end=300)
+    assert value["totals"]["total_tokens"] == 135
+    assert value["totals"]["estimated_cost_usd"] is None
+    assert value["models"][0]["estimated_cost_usd"] is None
+    assert value["totals"]["cost_status"] == "unknown"
+
+
+@pytest.mark.parametrize("stamp,day", [
+    ("2026-11-01T03:59:59+00:00", "2026-10-31"),
+    ("2026-11-01T04:00:00+00:00", "2026-11-01"),
+    ("2026-11-01T06:30:00+00:00", "2026-11-01"),
+    ("2026-03-08T04:59:59+00:00", "2026-03-07"),
+    ("2026-03-08T05:00:00+00:00", "2026-03-08"),
+])
+def test_backfill_day_uses_session_start_at_timezone_and_dst_midnight(tmp_path, stamp, day):
+    from datetime import datetime
+    path = tmp_path / "state.db"
+    started = datetime.fromisoformat(stamp).timestamp()
+    with SessionDB(db_path=path) as db:
+        legacy_session(db, "old", started)
+        set_coverage(db, started + 60)
+    value = readonly_rollup(path, start=started - 1, end=started + 120, timezone_name="America/Toronto")
+    assert [(row["day"], row["input_tokens"]) for row in value["days"]] == [(day, 100)]
+
+
+def test_backfill_rpc_windows_and_profile_scope(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from hermes_cli import profiles
+    midnight = datetime.now(ZoneInfo("America/Toronto")).replace(hour=0, minute=0, second=0, microsecond=0)
+    secondary = tmp_path / "secondary"
+    secondary.mkdir()
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    monkeypatch.setattr(server, "_current_profile_name", lambda: "default")
+    monkeypatch.setattr(profiles, "get_profile_dir", lambda name: secondary if name == "secondary" else tmp_path)
+    for home, tokens in [(tmp_path, 100), (secondary, 800)]:
+        with SessionDB(db_path=home / "state.db") as db:
+            legacy_session(db, "same-id", (midnight - timedelta(days=4)).timestamp(), tokens=tokens)
+            legacy_session(db, "month-only", (midnight - timedelta(days=20)).timestamp(), tokens=50)
+            set_coverage(db, (midnight - timedelta(days=2)).timestamp())
+    week = rpc(window="7d", timezone="America/Toronto")["result"]
+    month = rpc(window="30d", timezone="America/Toronto")["result"]
+    assert week["totals"]["input_tokens"] == 100
+    assert month["totals"]["input_tokens"] == 150
+    other = rpc(window="7d", timezone="America/Toronto", profile="secondary")["result"]
+    assert other["totals"]["input_tokens"] == 800
+    assert other["agents"][0]["profile"] == "secondary"
+    today = rpc(window="today", timezone="America/Toronto")["result"]
+    assert today["totals"]["input_tokens"] == 0
+    assert today.get("backfill") is None
+    assert today["partial"] is False
+    assert "backfill" not in rpc(window="all")["result"]
