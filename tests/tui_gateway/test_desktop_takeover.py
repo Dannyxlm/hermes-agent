@@ -59,6 +59,36 @@ def desktop(tmp_path, monkeypatch):
     return SimpleNamespace(call=call, store=store, scope=scope, home=home, secondary=secondary)
 
 
+class TestDesktopInitialization:
+    def test_reader_never_observes_half_created_database(self, desktop, monkeypatch):
+        import sqlite3
+        import threading
+
+        connect = sqlite3.connect
+        reached, release = threading.Event(), threading.Event()
+        first = True
+
+        def paused_connect(*args, **kwargs):
+            nonlocal first
+            if first:
+                first = False
+                reached.set()
+                assert release.wait(10)
+            return connect(*args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, 'connect', paused_connect)
+        thread = threading.Thread(target=desktop.store.leases.initialize)
+        thread.start()
+        try:
+            assert reached.wait(10)
+            response = desktop.call('desktop.snapshot')
+            assert response['result']['state'] == 'watch'
+        finally:
+            release.set()
+            thread.join(10)
+        assert not thread.is_alive()
+
+
 class TestDesktopOwnerScope:
     def test_request_visible_across_installations_not_profiles(self, desktop):
         d = desktop
