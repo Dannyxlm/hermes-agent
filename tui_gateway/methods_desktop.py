@@ -1,8 +1,6 @@
 """Owner-admitted shared Desktop projections. No Cua control adapter is enabled."""
 from __future__ import annotations
 
-import hashlib
-import json
 import sqlite3
 
 
@@ -30,9 +28,8 @@ def _desktop_scope(server, params):
         raise DesktopDenied('Desktop owner required')
     validate_profile_name(params['profile'])
     home = server._profile_home(params['profile']) or server._hermes_home
-    binding = [identity['provider'], identity['user_id'], str(home.resolve()),
-               params['space'], params['installation_id']]
-    scope = hashlib.sha256(json.dumps(binding, separators=(',', ':')).encode()).hexdigest()
+    from tools.desktop_spaces import owner_scope
+    scope = owner_scope(identity['provider'], identity['user_id'], home, params['space'])
     return root, home, scope
 
 

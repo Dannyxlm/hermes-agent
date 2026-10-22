@@ -159,6 +159,15 @@ def _eval_js_secret(task_id: str, expression: str) -> dict[str, Any]:
         except _bd_lease.HumanHasControl as exc:
             return {"success": False, "error_type": "human_has_control", "error": str(exc)}
 
+    from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted
+    try:
+        assert_agent_admitted(str(getattr(supervisor, "cdp_url", "")))
+    except DesktopInputDenied:
+        return {"success": False, "error_type": "human_has_control", "error": "Desktop agent input is unavailable"}
+
+    from tools.browser_vault_signin import bound_target_matches
+    if not bound_target_matches(supervisor, task_id):
+        return {"success": False, "error_type": "target_changed", "error": "Sign-in page changed"}
     sup = supervisor.evaluate_runtime(expression)
     if sup.get("ok"):
         return {"success": True, "result": sup.get("result")}
@@ -215,6 +224,10 @@ def _focus_bound_origin(task_id: str, origin: str, kind: str) -> Optional[str]:
         return None
     from tools.browser_supervisor import SUPERVISOR_REGISTRY
 
+    from tools.browser_vault_signin import fill_target, bound_target_matches
+    binding = fill_target.get()
+    if binding is not None:
+        return origin if bound_target_matches(supervisor, task_id) and origin == binding.origin else None
     focused = supervisor.focus_page(origin, accept=_TAB_PROBES.get(kind), prefer_url=SUPERVISOR_REGISTRY.page_hint(task_id))
     if not focused.get("ok"):
         logger.debug("vault fill: focus on %s failed: %s", origin or "any site", focused.get("error"))
@@ -844,7 +857,7 @@ BROWSER_VAULT_SCHEMA = {
     "description": (
         "Use saved logins, passwords, credentials, cards and addresses on the CURRENT browser page without secrets "
         "entering the conversation. "
-        "Actions: list (call first: saved logins/cards/addresses as handles; logins carry the identifier you type "
+        "Actions: request_signin (Ava Desktop only: publish an owner-choice sign-in card and wait; reason required; never submits); list (call first: saved logins/cards/addresses as handles; logins carry the identifier you type "
         "yourself with the browser's input tool; locked password managers appear under `locked`); fill (handle: "
         "the password for a login, card fields after the user confirms, address fields; refused unless the page "
         "origin matches the item; unbound cards require approval for that HTTPS site); save_login (nothing saved for this site: the user enters it in a masked prompt, "
@@ -857,10 +870,11 @@ BROWSER_VAULT_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["list", "fill", "save_login", "enter_code", "unlock"]},
+            "action": {"type": "string", "enum": ["list", "fill", "save_login", "enter_code", "unlock", "request_signin"]},
             "handle": {"type": "string", "description": "fill / enter_code: a handle from list."},
             "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
             "label": {"type": "string", "description": "save_login only: short site name (default: the host)."},
+            "reason": {"type": "string", "description": "request_signin only: why the owner needs to sign in (no credentials)."},
         },
         "required": ["action"],
     },
@@ -880,6 +894,12 @@ def _fenced_page_op(task_id: Optional[str], fn) -> str:
     from tools.browser_tool import _active_sessions, _last_session_key
     from tools.browser_tool_session import run_fenced
 
+    from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted, task_endpoint
+    try:
+        assert_agent_admitted(task_endpoint(task_id or "default"))
+    except DesktopInputDenied:
+        return json.dumps({"success": False, "error_type": "human_has_control",
+                           "error": "Desktop agent input is unavailable"})
     session = _active_sessions.get(_last_session_key(task_id or "default")) or {}
     res = run_fenced(session, lambda: {"raw": fn()})
     return res["raw"] if "raw" in res else json.dumps(res)
@@ -893,7 +913,9 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
         return browser_vault_list()
     if action == "unlock":
         return browser_vault_unlock(str(args.get("backend") or ""))
+    from tools.browser_vault_signin import request_signin
     page_ops = {
+        "request_signin": lambda: request_signin(str(args.get("reason") or ""), tid or "default"),
         "fill": lambda: browser_vault_fill(handle=handle, task_id=tid),
         "save_login": lambda: browser_vault_save_login(label=label, task_id=tid),
         "enter_code": lambda: browser_vault_enter_code(handle=handle, task_id=tid),

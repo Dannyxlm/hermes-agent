@@ -788,6 +788,12 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     started = time.time()
 
     def dispatch() -> dict[str, Any]:
+        from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted
+        try:
+            assert_agent_admitted(env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or "")
+        except DesktopInputDenied:
+            return {"error_result": tool_result({"success": False, "error_type": "human_has_control",
+                                                "error": "Desktop agent input is unavailable"})}
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             _driven_daemons.add(env.get("BU_NAME", "default"))

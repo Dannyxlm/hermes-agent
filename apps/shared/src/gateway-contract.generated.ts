@@ -1344,6 +1344,7 @@ export interface DesktopLease {
   holder: 'agent' | 'human' | 'none'
   epoch: number
   mine: boolean
+  expires_at: number | null
 }
 export interface DesktopActive {
   id: string

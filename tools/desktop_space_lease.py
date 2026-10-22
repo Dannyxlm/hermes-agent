@@ -46,7 +46,8 @@ class SpaceLease:
     def public(self, scope: str, now: float) -> dict:
         expired = self.holder == 'human' and now >= self.expires_at
         return {'holder': 'none' if expired else self.holder, 'epoch': self.epoch,
-                'mine': self.holder == 'human' and not expired and self.scope_hash == digest(scope)}
+                'mine': self.holder == 'human' and not expired and self.scope_hash == digest(scope),
+                'expires_at': self.expires_at if self.holder == 'human' else None}
 
 
 class LeaseStore:
@@ -68,6 +69,11 @@ class LeaseStore:
                     resource TEXT NOT NULL, scope_hash TEXT NOT NULL, request_id TEXT NOT NULL,
                     revision INTEGER NOT NULL, origin TEXT NOT NULL, reason TEXT NOT NULL,
                     expires_at REAL NOT NULL, resolved INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (resource, scope_hash));
+                CREATE TABLE IF NOT EXISTS signin_bindings (
+                    resource TEXT NOT NULL, scope_hash TEXT NOT NULL, request_id TEXT NOT NULL,
+                    login_handle TEXT, masked_identifier TEXT, task_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL, outcome TEXT NOT NULL DEFAULT 'pending',
                     PRIMARY KEY (resource, scope_hash));
                 CREATE TABLE IF NOT EXISTS receipts (
                     resource TEXT NOT NULL, scope_hash TEXT NOT NULL, action_id TEXT NOT NULL,
@@ -146,4 +152,4 @@ class LeaseStore:
 
     def agent_permitted(self, resource: str, epoch: int) -> bool:
         lease = self.read(resource)
-        return lease.holder == 'agent' and lease.epoch == epoch
+        return lease.holder in ('none', 'agent') and lease.epoch == epoch

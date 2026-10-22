@@ -15968,7 +15968,7 @@
             "type": "string"
           },
           "installation_id": {
-            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "description": "Client installation selector, not durable identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -16112,7 +16112,7 @@
             "type": "string"
           },
           "installation_id": {
-            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "description": "Client installation selector, not durable identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -16242,12 +16242,24 @@
           "mine": {
             "title": "Mine",
             "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           }
         },
         "required": [
           "holder",
           "epoch",
-          "mine"
+          "mine",
+          "expires_at"
         ],
         "title": "DesktopLease",
         "type": "object"
@@ -16321,7 +16333,7 @@
             "type": "string"
           },
           "installation_id": {
-            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "description": "Client installation selector, not durable identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
@@ -16701,7 +16713,7 @@
             "type": "string"
           },
           "installation_id": {
-            "description": "Durable scope selector alongside admitted owner, profile home and resource.",
+            "description": "Client installation selector, not durable identity or authority.",
             "maxLength": 256,
             "minLength": 1,
             "title": "Installation Id",
