@@ -1047,17 +1047,6 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         with self._lock:
             return bool(self._entries)
 
-    def has_available(self, *, model: Optional[str] = None) -> bool:
-        """True if at least one entry is not currently in exhaustion cooldown.
-
-        ``_available_entries`` is not read-only (it prunes aged-out DEAD
-        manual entries and persists), so it must run under ``self._lock``
-        like every other caller or a probe can race a concurrent rotation.
-        """
-        with self._lock:
-            available, _pending = self._available_entries(model=model)
-            return bool(available)
-
     def lift_reopened_cooldowns(self, *, model: Optional[str] = None) -> bool:
         """Clear cooldowns that have elapsed or (Codex) reopened early, then report availability.
 
@@ -2413,7 +2402,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             else:
                 logger.info("credential pool: marking %s exhausted (status=%s), rotating", _label, status_code)
             self._current_id = None
-            next_entry, _pending = self._select_unlocked(refresh=False)
+            next_entry, _pending = self._select_unlocked(refresh=False, model=model)
             if next_entry is not None and next_entry.id == entry.id:
                 # No-recovery guard (#97315): selection handed back the very entry that was
                 # just marked (the auth-store sync adopted fresher tokens, or a quota probe

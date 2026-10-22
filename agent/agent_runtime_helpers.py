@@ -873,8 +873,6 @@ _STATUS_TO_FAILOVER_REASON = {
     402: FailoverReason.billing, 429: FailoverReason.rate_limit, 401: FailoverReason.auth,
     403: FailoverReason.auth,
 }
-_USAGE_LIMIT_REASON_TOKENS = ("usage_limit_reached", "gousagelimit")
-_USAGE_LIMIT_MESSAGE_TOKENS = ("usage limit reached", "usage limit has been reached")
 
 
 def _failed_credential_identity(agent, pool) -> tuple[Optional[str], Optional[str]]:
@@ -973,36 +971,6 @@ def _recover_auth_failure(agent, pool, *, status_code, has_retried_429, error_co
     return True, has_retried_429
 
 
-def _recover_rate_limit(pool, *, has_retried_429, error_context, api_key_hint, credential_id, rotate_and_swap):
-    # Already-exhausted credential: rotate immediately. Avoids the "cancel-between-429s" trap where
-    # the local has_retried_429 resets per prompt and retries forever.
-    current_entry = None
-    if credential_id:
-        current_entry = next((e for e in pool.entries() if e.id == credential_id), None)
-    if api_key_hint:
-        current_entry = current_entry or next(
-            (e for e in pool.entries() if e.runtime_api_key == api_key_hint), None
-        )
-    if current_entry is None:
-        current_entry = pool.current()
-    current_last_status = getattr(current_entry, "last_status", None) if current_entry else None
-    if current_last_status == STATUS_EXHAUSTED:
-        _ra().logger.info(
-            "Credential already exhausted (last_status=%s) — rotating immediately instead of retrying",
-            current_last_status,
-        )
-        return (True, False) if rotate_and_swap(429, "rate limit, pre-exhausted") else (False, True)
-    usage_limit_reached = False
-    if error_context:
-        context_reason = str(error_context.get("reason") or "").lower()
-        context_message = str(error_context.get("message") or "").lower()
-        usage_limit_reached = any(t in context_reason for t in _USAGE_LIMIT_REASON_TOKENS) or any(
-            t in context_message for t in _USAGE_LIMIT_MESSAGE_TOKENS
-        )
-    if not has_retried_429 and not usage_limit_reached:
-        return False, True
-    return (True, False) if rotate_and_swap(429, "rate limit") else (False, True)
-
 
 def recover_with_credential_pool(
     agent, *, status_code: Optional[int], has_retried_429: bool,
@@ -1010,7 +978,8 @@ def recover_with_credential_pool(
     error_context: Optional[dict[str, Any]] = None, billing_unverified: bool = False,
 ) -> tuple[bool, bool]:
     """Attempt credential recovery via pool rotation; returns (recovered, has_retried_429).
-    Rate limits: retry once, then rotate. Billing: rotate immediately. Auth: refresh before
+    Rate limits: rotate immediately if an alternate is available, else retry once. Billing:
+    rotate immediately. Auth: refresh before
     rotating. ``classified_reason`` beats raw HTTP codes (e.g. Anthropic 400 "out of extra
     usage"); ``billing_unverified`` gives the entry a short cooldown, not the one-hour bench."""
     pool = agent._credential_pool
@@ -1126,8 +1095,9 @@ def recover_with_credential_pool(
         # match the key that failed, not a different account.
         return (True, False) if _rotate_and_swap(402, "billing") else (False, has_retried_429)
     if effective_reason == FailoverReason.rate_limit:
+        from agent.agent_runtime_rate_limit import _recover_rate_limit
         return _recover_rate_limit(
-            pool, has_retried_429=has_retried_429, error_context=error_context,
+            agent, pool, has_retried_429=has_retried_429, error_context=error_context,
             api_key_hint=api_key_hint, credential_id=credential_id, rotate_and_swap=_rotate_and_swap,
         )
     if effective_reason == FailoverReason.model_entitlement:
@@ -3675,11 +3645,11 @@ def _iter_pool_sockets(client: Any):
 
 
 def _set_reset_from_retry_after(context: dict[str, Any], retry_after: Any) -> None:
-    if "reset_at" in context:
-        return
     seconds = parse_retry_after_seconds(retry_after)
     if seconds is not None:
-        context["reset_at"] = time.time() + seconds
+        reset_at = time.time() + seconds
+        if reset_at > (_parse_absolute_timestamp(context.get("reset_at")) or 0):
+            context["reset_at"] = reset_at
 
 
 # OpenAI-style relative windows: "6m0s", "1.5s", "20ms", "1h2m3s" (also a bare number of seconds).
@@ -3691,6 +3661,7 @@ _DURATION_UNIT_SECONDS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}
 _VENDOR_RESET_HEADERS = (
     "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
     "anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset",
+    "anthropic-ratelimit-unified-reset",
 )
 
 
@@ -3713,13 +3684,14 @@ def _set_reset_from_vendor_headers(context: dict[str, Any], headers: Any) -> Non
         value = headers.get(name)
         if not isinstance(value, str) or not value.strip():
             continue
-        seconds = _duration_string_seconds(value)
+        seconds = None if name == "anthropic-ratelimit-unified-reset" else _duration_string_seconds(value)
         if seconds is None:
             absolute = _parse_absolute_timestamp(value)
             seconds = None if absolute is None else absolute - time.time()
         if seconds is not None and seconds > 0:
-            context["reset_at"] = time.time() + seconds
-            return
+            reset_at = time.time() + seconds
+            if reset_at > (_parse_absolute_timestamp(context.get("reset_at")) or 0):
+                context["reset_at"] = reset_at
 
 
 def extract_api_error_context(error: Exception) -> dict[str, Any]:
@@ -3748,10 +3720,9 @@ def extract_api_error_context(error: Exception) -> dict[str, Any]:
     if headers:
         _set_reset_from_retry_after(context, headers)
         ratelimit_reset = headers.get("x-ratelimit-reset")
-        if ratelimit_reset and "reset_at" not in context:
+        if (_parse_absolute_timestamp(ratelimit_reset) or 0) > (_parse_absolute_timestamp(context.get("reset_at")) or 0):
             context["reset_at"] = ratelimit_reset
-        if "reset_at" not in context:
-            _set_reset_from_vendor_headers(context, headers)
+        _set_reset_from_vendor_headers(context, headers)
     if "message" not in context and str(error).strip():
         context["message"] = str(error).strip()[:500]
     if "reset_at" not in context and isinstance(context.get("message") or "", str):

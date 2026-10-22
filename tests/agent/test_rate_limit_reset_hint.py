@@ -77,7 +77,7 @@ def test_live_wait_line_names_the_reset_window_too():
     ({"x-ratelimit-reset-tokens": "1.5s"}, 1.5),
     ({"x-ratelimit-reset-requests": "20ms"}, 0.02),
     ({"anthropic-ratelimit-requests-reset": None}, 900),  # filled below with now+900 ISO-8601 'Z'
-    ({"retry-after": "30", "x-ratelimit-reset-requests": "6m0s"}, 30),  # Retry-After still wins
+    ({"retry-after": "30", "x-ratelimit-reset-requests": "6m0s"}, 360),  # never shorten a provider reset
 ])
 def test_vendor_reset_headers_feed_reset_at(headers, expected_seconds):
     from datetime import datetime, timedelta, timezone

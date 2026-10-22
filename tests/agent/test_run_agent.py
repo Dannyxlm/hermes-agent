@@ -5494,44 +5494,30 @@ class TestCredentialPoolRecovery:
         agent._swap_credential.assert_called_once_with(next_entry)
 
 
-    def test_recover_with_pool_retries_first_429_then_rotates(self, agent):
-        next_entry = SimpleNamespace(label="secondary")
+    def test_recover_with_pool_without_alternate_retries_first_429(self, agent):
+        from agent.credential_pool import CredentialPool, PooledCredential, STATUS_EXHAUSTED
 
-        class _Pool:
-            def current(self):
-                return SimpleNamespace(label="primary")
-
-            def entries(self):
-                return []
-
-            def mark_exhausted_and_rotate(
-                self, *, status_code, error_context=None, api_key_hint=None,
-                failure_reason=None,
-            ):
-                assert status_code == 429
-                assert error_context is None
-                assert api_key_hint == agent.api_key
-                assert failure_reason == "rate_limit"
-                return next_entry
-
-        agent._credential_pool = _Pool()
+        pool = CredentialPool(provider="", entries=[PooledCredential(
+            provider="", id="only", label="only", auth_type="api_key", priority=0,
+            source="manual", access_token=agent.api_key,
+        )])
+        pool.select()
+        agent._credential_pool = pool
         agent._swap_credential = MagicMock()
 
         recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=429,
-            has_retried_429=False,
+            status_code=429, has_retried_429=False,
         )
-        assert recovered is False
-        assert retry_same is True
+        assert recovered is False and retry_same is True
+        assert pool.entries()[0].last_status != STATUS_EXHAUSTED
         agent._swap_credential.assert_not_called()
 
         recovered, retry_same = agent._recover_with_credential_pool(
-            status_code=429,
-            has_retried_429=True,
+            status_code=429, has_retried_429=True,
         )
-        assert recovered is True
-        assert retry_same is False
-        agent._swap_credential.assert_called_once_with(next_entry)
+        assert recovered is False and retry_same is True
+        assert pool.entries()[0].last_status == STATUS_EXHAUSTED
+        agent._swap_credential.assert_not_called()
 
 
     def test_extract_api_error_context_uses_reset_timestamp_and_reason(self, agent):

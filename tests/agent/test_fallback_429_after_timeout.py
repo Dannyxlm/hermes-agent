@@ -179,19 +179,16 @@ def pooled_agent(monkeypatch):
             auth_type="api_key", source="manual", access_token=f"pool-key-{i}",
             base_url=base_url,
         ) for i in range(1 if other == "absent" else 2)]
-        if other == "duplicate":
-            entries[1].access_token = entries[0].access_token
-        elif other == "exhausted":
-            entries[1].last_status = STATUS_EXHAUSTED
-            entries[1].last_status_at = time.time()
-            entries[1].last_error_code = 429
-            entries[1].last_error_reset_at = time.time() + 7200
-        elif other == "model-cooldown":
-            entries[1].model_cooldowns = {model: time.time() + 7200}
-        elif other == "sibling-model-cooldown":
-            entries[1].model_cooldowns = {"other-model": time.time() + 7200}
-        elif other == "other-endpoint":
-            entries[1].base_url = "https://elsewhere.example/v1"
+        overrides = {
+            "duplicate": {"access_token": entries[0].access_token},
+            "exhausted": {"last_status": STATUS_EXHAUSTED, "last_status_at": time.time(),
+                          "last_error_code": 429, "last_error_reset_at": time.time() + 7200},
+            "model-cooldown": {"model_cooldowns": {model: time.time() + 7200}},
+            "sibling-model-cooldown": {"model_cooldowns": {"other-model": time.time() + 7200}},
+            "other-endpoint": {"base_url": "https://elsewhere.example/v1"},
+        }
+        for name, value in overrides.get(other, {}).items():
+            setattr(entries[1], name, value)
         pool = CredentialPool(provider=provider, entries=entries)
         first = pool.select(model=model)
         assert first is not None
@@ -234,7 +231,6 @@ def _run_pool_retry(agent, error, monkeypatch):
 
     def backoff(_agent, wait_time, *_args, **_kwargs):
         waits.append(wait_time)
-        return None
 
     monkeypatch.setattr(agent, "_interruptible_api_call", api_call)
     monkeypatch.setattr("agent.turn_api_error.interruptible_backoff_sleep", backoff)
@@ -245,24 +241,27 @@ def _run_pool_retry(agent, error, monkeypatch):
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai-codex", "xai-oauth"])
-@pytest.mark.parametrize("hint", ["retry-after", "over-cap", "body-reset", "vendor-reset", "unified-reset", "missing"])
+@pytest.mark.parametrize("hint", [
+    "retry-after", "over-cap", "body-reset", "vendor-reset", "unified-reset", "missing",
+    "unified-with-retry-after", "body-with-longer-retry-after", "vendor-buckets",
+])
 def test_first_429_rotates_without_wait_and_preserves_reset(pooled_agent, monkeypatch, provider, hint):
     agent, pool = pooled_agent(provider)
     now = time.time()
-    headers, body = {}, {"error": {"message": _SUBSCRIPTION_LIMIT}}
-    seconds = 600
-    if hint == "retry-after":
-        headers = {"Retry-After": "600"}
-    elif hint == "over-cap":
-        headers, seconds = {"Retry-After": "7200"}, 7200
-    elif hint == "body-reset":
-        body["error"]["reset_at"], seconds = now + 7200, 7200
-    elif hint == "vendor-reset":
-        headers, seconds = {"x-ratelimit-reset-tokens": "2h"}, 7200
-    elif hint == "unified-reset":
-        headers, seconds = {"anthropic-ratelimit-unified-reset": str(now + 7200)}, 7200
-    else:
-        seconds = EXHAUSTED_TTL_429_SECONDS
+    headers, reset, seconds = {
+        "retry-after": ({"Retry-After": "600"}, {}, 600),
+        "over-cap": ({"Retry-After": "7200"}, {}, 7200),
+        "body-reset": ({}, {"reset_at": now + 7200}, 7200),
+        "vendor-reset": ({"x-ratelimit-reset-tokens": "2h"}, {}, 7200),
+        "unified-reset": ({"anthropic-ratelimit-unified-reset": str(now + 7200)}, {}, 7200),
+        "missing": ({}, {}, EXHAUSTED_TTL_429_SECONDS),
+        "unified-with-retry-after": (
+            {"Retry-After": "600", "anthropic-ratelimit-unified-reset": str(now + 7200)}, {}, 7200,
+        ),
+        "body-with-longer-retry-after": ({"Retry-After": "7200"}, {"reset_at": now + 600}, 7200),
+        "vendor-buckets": ({"x-ratelimit-reset-requests": "10s", "x-ratelimit-reset-tokens": "2h"}, {}, 7200),
+    }[hint]
+    body = {"error": {"message": _SUBSCRIPTION_LIMIT, **reset}}
     calls, waits = _run_pool_retry(agent, _pool_error(headers=headers, body=body), monkeypatch)
     assert calls == ["pool-key-0", "pool-key-1"]
     assert sum(waits) < 5
