@@ -95,7 +95,8 @@ def test_alltime_limit_filter_and_unknown_price(store):
     assert value["totals"]["cost_status"] == "unknown"
     assert value["totals"]["cost_reason"]
     assert value["totals"]["known_estimated_cost_usd"] > 0
-    assert value["coverage"][0]["provider"] == ""
+    coverage = {row["provider"]: row for row in value["coverage"]}
+    assert coverage["unknown"] == {"provider": "unknown", "since": 500, "chat_count": 1, "session_count": 1}
     filtered = result(session_id="known")
     assert filtered["chat_count"] == 1
     assert filtered["totals"]["input_tokens"] == 100
