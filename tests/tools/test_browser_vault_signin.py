@@ -73,7 +73,11 @@ class TestSavedLoginProducer:
         d = desktop
         home = d.home if profile == 'default' else d.secondary
         result, done, thread = start_producer(home)
-        state = wait_until(lambda: self._pending(d, profile), what='sign-in published')
+        def published():
+            assert not done.is_set(), result
+            return self._pending(d, profile)
+
+        state = wait_until(published, what='sign-in published')
         assert state['signin']['login_handle'] == signin.meta.id
         assert state['signin']['masked_identifier'] == 'd•••@example.com'
         assert 'saved_login' in state['signin']['allowed_actions']

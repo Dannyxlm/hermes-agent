@@ -49,6 +49,30 @@ class TestDesktopBrowserReconnect:
         assert result['success'] is True
         assert desktop.store.leases.read('desktop').epoch == 100
 
+    def test_parallel_snapshot_reconcile_does_not_deny_agent(self, desktop, door, monkeypatch):
+        from tools import browser_use_cli as browser
+        from tools.desktop_space_lease import LeaseStore
+
+        monkeypatch.setattr(browser, '_find_cli', lambda: ['fixture-harness'])
+        monkeypatch.setattr(browser, '_base_subprocess_env', lambda: {'BU_CDP_URL': 'http://127.0.0.1:9225'})
+        monkeypatch.setattr(browser, '_route_backend', lambda *a, **kw: None)
+        monkeypatch.setattr(browser, '_attach_vault_supervisor', Mock())
+        monkeypatch.setattr(browser, '_run_cli_killing_process_group', lambda *a, **kw:
+                            subprocess.CompletedProcess(a[0], 0, stdout='', stderr=''))
+        read = LeaseStore.read
+        reads = 0
+
+        def interleaved_read(store, resource):
+            nonlocal reads
+            result = read(store, resource)
+            reads += 1
+            if reads == 2:
+                assert desktop.call('desktop.snapshot')['result']['lease']['holder'] == 'agent'
+            return result
+
+        monkeypatch.setattr(LeaseStore, 'read', interleaved_read)
+        assert json.loads(browser.browser_exec('print(1)', task_id='parallel'))['success'] is True
+
     def test_configured_but_unreachable_door_refuses_even_fresh_lease(self, desktop, door, monkeypatch):
         from tools import browser_use_cli as browser
         door.fail = True
