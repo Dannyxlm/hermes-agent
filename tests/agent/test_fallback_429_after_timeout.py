@@ -23,9 +23,16 @@ Scenario:
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from agent.credential_pool import (
+    EXHAUSTED_TTL_429_SECONDS, STATUS_EXHAUSTED, CredentialPool, PooledCredential,
+)
+from agent.credential_pool_model_cooldowns import model_cooldown_until
 from run_agent import AIAgent
 
 def _make_tool_defs():
@@ -156,3 +163,142 @@ class TestFallbackChainResetOnTransportRecovery:
         assert agent.model == "glm-4.7"
 
 # Defensive: pure-timeout cycle without 429 still works
+
+
+_SUBSCRIPTION_LIMIT = "This request would exceed your account's rate limit"
+
+
+@pytest.fixture
+def pooled_agent(monkeypatch):
+    """Real pool, recovery and credential swap; only the transport is replaced."""
+    def build(provider, *, other="healthy"):
+        base_url = "https://pool.example/v1"
+        model = "pool-model"
+        entries = [PooledCredential(
+            provider=provider, id=f"entry-{i}", label=f"account-{i}", priority=i,
+            auth_type="api_key", source="manual", access_token=f"pool-key-{i}",
+            base_url=base_url,
+        ) for i in range(1 if other == "absent" else 2)]
+        if other == "duplicate":
+            entries[1].access_token = entries[0].access_token
+        elif other == "exhausted":
+            entries[1].last_status = STATUS_EXHAUSTED
+            entries[1].last_status_at = time.time()
+            entries[1].last_error_code = 429
+            entries[1].last_error_reset_at = time.time() + 7200
+        elif other == "model-cooldown":
+            entries[1].model_cooldowns = {model: time.time() + 7200}
+        elif other == "sibling-model-cooldown":
+            entries[1].model_cooldowns = {"other-model": time.time() + 7200}
+        elif other == "other-endpoint":
+            entries[1].base_url = "https://elsewhere.example/v1"
+        pool = CredentialPool(provider=provider, entries=entries)
+        first = pool.select(model=model)
+        assert first is not None
+        with (
+            patch("model_tools.get_tool_definitions", return_value=_make_tool_defs()),
+            patch("model_tools.check_toolset_requirements", return_value={}),
+            patch("agent.process_bootstrap.OpenAI", return_value=MagicMock()),
+        ):
+            agent = AIAgent(
+                api_key=first.runtime_api_key, base_url=base_url, provider=provider,
+                model=model, credential_pool=pool, api_mode="chat_completions",
+                quiet_mode=True, skip_context_files=True, skip_memory=True,
+                fallback_model=[],
+            )
+        monkeypatch.setattr(agent, "_replace_primary_openai_client", MagicMock())
+        monkeypatch.setattr(agent, "_persist_session", MagicMock())
+        monkeypatch.setattr(agent, "_save_trajectory", MagicMock())
+        monkeypatch.setattr(agent, "_cleanup_task_resources", MagicMock())
+        return agent, pool
+    return build
+
+
+def _pool_error(status=429, *, headers=None, body=None):
+    error = RateLimitError()
+    error.status_code = status
+    error.args = (_SUBSCRIPTION_LIMIT if status == 429 else "origin response timeout",)
+    error.response = SimpleNamespace(headers=headers or {})
+    error.body = {"error": {"message": _SUBSCRIPTION_LIMIT}} if body is None else body
+    return error
+
+
+def _run_pool_retry(agent, error, monkeypatch):
+    calls, waits = [], []
+
+    def api_call(_kwargs):
+        calls.append(agent.api_key)
+        if len(calls) == 1:
+            raise error
+        return _mock_response("pool recovered")
+
+    def backoff(_agent, wait_time, *_args, **_kwargs):
+        waits.append(wait_time)
+        return None
+
+    monkeypatch.setattr(agent, "_interruptible_api_call", api_call)
+    monkeypatch.setattr("agent.turn_api_error.interruptible_backoff_sleep", backoff)
+    result = agent.run_conversation("hello")
+    assert result["completed"] is True
+    assert result["final_response"] == "pool recovered"
+    return calls, waits
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai-codex", "xai-oauth"])
+@pytest.mark.parametrize("hint", ["retry-after", "over-cap", "body-reset", "vendor-reset", "unified-reset", "missing"])
+def test_first_429_rotates_without_wait_and_preserves_reset(pooled_agent, monkeypatch, provider, hint):
+    agent, pool = pooled_agent(provider)
+    now = time.time()
+    headers, body = {}, {"error": {"message": _SUBSCRIPTION_LIMIT}}
+    seconds = 600
+    if hint == "retry-after":
+        headers = {"Retry-After": "600"}
+    elif hint == "over-cap":
+        headers, seconds = {"Retry-After": "7200"}, 7200
+    elif hint == "body-reset":
+        body["error"]["reset_at"], seconds = now + 7200, 7200
+    elif hint == "vendor-reset":
+        headers, seconds = {"x-ratelimit-reset-tokens": "2h"}, 7200
+    elif hint == "unified-reset":
+        headers, seconds = {"anthropic-ratelimit-unified-reset": str(now + 7200)}, 7200
+    else:
+        seconds = EXHAUSTED_TTL_429_SECONDS
+    calls, waits = _run_pool_retry(agent, _pool_error(headers=headers, body=body), monkeypatch)
+    assert calls == ["pool-key-0", "pool-key-1"]
+    assert sum(waits) < 5
+    benched = pool.entries()[0]
+    if provider == "anthropic":
+        # Preserve the existing per-model bench: sibling models remain usable.
+        until = model_cooldown_until(benched, agent.model)
+    else:
+        assert benched.last_status == STATUS_EXHAUSTED
+        until = benched.last_error_reset_at or benched.last_status_at + EXHAUSTED_TTL_429_SECONDS
+    assert until >= now + seconds
+
+
+@pytest.mark.parametrize("other", ["absent", "exhausted", "model-cooldown", "duplicate", "other-endpoint"])
+@pytest.mark.parametrize("retry_after, expected", [(600, 600), (7200, 600)])
+def test_first_429_without_usable_alternate_keeps_capped_wait(pooled_agent, monkeypatch, other, retry_after, expected):
+    agent, pool = pooled_agent("anthropic", other=other)
+    calls, waits = _run_pool_retry(agent, _pool_error(headers={"Retry-After": str(retry_after)}), monkeypatch)
+    assert calls == ["pool-key-0", "pool-key-0"]
+    assert waits == [expected]
+    assert pool.entries()[0].last_status != STATUS_EXHAUSTED
+    assert model_cooldown_until(pool.entries()[0], agent.model) is None
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai-codex", "xai-oauth"])
+def test_429_can_rotate_to_entry_cooled_only_for_another_model(pooled_agent, monkeypatch, provider):
+    agent, _pool = pooled_agent(provider, other="sibling-model-cooldown")
+    calls, waits = _run_pool_retry(agent, _pool_error(headers={"Retry-After": "600"}), monkeypatch)
+    assert calls == ["pool-key-0", "pool-key-1"]
+    assert sum(waits) < 5
+
+
+def test_5xx_with_healthy_pool_still_honors_retry_after(pooled_agent, monkeypatch):
+    agent, pool = pooled_agent("anthropic")
+    error = _pool_error(524, headers={"Retry-After": "7200"}, body={"status": 524})
+    calls, waits = _run_pool_retry(agent, error, monkeypatch)
+    assert calls == ["pool-key-0", "pool-key-0"]
+    assert waits == [600]
+    assert all(entry.last_status != STATUS_EXHAUSTED for entry in pool.entries())
