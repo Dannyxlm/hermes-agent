@@ -214,6 +214,35 @@ def test_alltime_uses_estimate_rates(store, model, provider, counts):
     assert result()["totals"]["estimated_cost_usd"] == estimated["result"]["estimated_cost_usd"]
 
 
+@pytest.mark.parametrize("model,provider,expected", [
+    ("gpt-6.1-sol", "openai", (2, 10, 0.1, 2.5)),
+    ("gpt-6.1-sol", "openai-codex", (2, 10, 0.1, 2.5)),
+    ("gpt-6.1-sol-900k", "openai-codex", (2, 10, 0.1, 2.5)),
+    ("anthropic/claude-opus-5-5", "anthropic", (4, 20, 0.2, 5)),
+    ("gpt-5.3-codex", "openai-codex", (1.75, 14, 0.175, None)),
+    ("not-priced", "openai", None),
+    ("gpt-6.1-sol", "local", None),
+])
+def test_alltime_model_list_rates_preserve_existing_fields(store, model, provider, expected):
+    from tui_gateway.contracts.usage import UsageRollupWireResult
+    seed(store, "priced", model=model, provider=provider, input_tokens=400000, calls=1)
+    value = result()
+    row = value["models"][0]
+    assert "rates" in row
+    if expected is None:
+        assert row["rates"] is None
+    else:
+        assert row["rates"] == dict(zip(("input_usd_per_million", "output_usd_per_million",
+            "cache_read_usd_per_million", "cache_write_usd_per_million", "pricing_date", "source_url"),
+            (*expected, "2026-10-19", "https://platform.claude.com/docs/en/about-claude/pricing"
+             if provider == "anthropic" else "https://developers.openai.com/api/docs/pricing")))
+    assert {key: item for key, item in row.items() if key != "rates"} == {
+        "model": model, "provider": provider, **value["totals"]}
+    assert UsageRollupWireResult.model_validate(value).root.models[0].model == model
+    del row["rates"]
+    assert UsageRollupWireResult.model_validate(value).root.models[0].rates is None
+
+
 def test_alltime_never_prices_cumulative_context_as_one_request(store):
     seed(store, "aggregate", model="gpt-6.1-sol", provider="openai-codex", input_tokens=400000,
          output_tokens=0, cache_read_tokens=0, cache_write_tokens=0, calls=2)

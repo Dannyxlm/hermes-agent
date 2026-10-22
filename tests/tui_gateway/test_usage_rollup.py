@@ -337,6 +337,45 @@ def test_large_window_prices_each_null_event_once_per_request(tmp_path, monkeypa
                 assert sum(row["event_count"] for row in value[key]) == 8201
 
 
+@pytest.mark.parametrize("window", ["today", "7d", "30d"])
+@pytest.mark.parametrize("model,provider,expected", [
+    ("gpt-6.1-sol", "openai", (2, 10, 0.1, 2.5)),
+    ("gpt-6.1-sol", "openai-codex", (2, 10, 0.1, 2.5)),
+    ("gpt-6.1-sol-900k", "openai-codex", (2, 10, 0.1, 2.5)),
+    ("openai/gpt-6.1-sol", "openai", (2, 10, 0.1, 2.5)),
+    ("claude-opus-5-5", "anthropic", (4, 20, 0.2, 5)),
+    ("gpt-5.3-codex", "openai-codex", (1.75, 14, 0.175, None)),
+    ("not-priced", "openai", None),
+    ("gpt-6.1-sol", "local", None),
+])
+def test_model_list_rates_are_additive_and_use_base_tier(
+        tmp_path, monkeypatch, window, model, provider, expected):
+    from tui_gateway.contracts.usage import UsageRollupWireResult
+    monkeypatch.setattr(server, "_hermes_home", tmp_path)
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("priced", "desktop")
+        db.update_token_counts("priced", model=model, billing_provider=provider, input_tokens=400000,
+                               output_tokens=100, cache_read_tokens=50, cache_write_tokens=10,
+                               api_call_count=1, turn_id="one")
+        response = rpc(window=window)
+        assert "result" in response, response
+        value = response["result"]
+        row = value["models"][0]
+        assert "rates" in row
+        if expected is None:
+            assert row["rates"] is None
+        else:
+            assert row["rates"] == dict(zip(("input_usd_per_million", "output_usd_per_million",
+                "cache_read_usd_per_million", "cache_write_usd_per_million", "pricing_date", "source_url"),
+                (*expected, "2026-10-19", "https://platform.claude.com/docs/en/about-claude/pricing"
+                 if provider == "anthropic" else "https://developers.openai.com/api/docs/pricing")))
+        assert {key: item for key, item in row.items() if key != "rates"} == {
+            "model": model, "provider": provider, **value["totals"]}
+        assert UsageRollupWireResult.model_validate(value).root.models[0].model == model
+        del row["rates"]
+        assert UsageRollupWireResult.model_validate(value).root.models[0].rates is None
+
+
 def legacy_session(db, sid, started, *, tokens=100, model="claude-opus-5-5",
                    provider="anthropic", parent=None, source="desktop", config=None):
     db.create_session(sid, source, model=model, parent_session_id=parent, model_config=config)
@@ -387,6 +426,11 @@ def test_backfill_gap_merges_every_projection_and_preserves_event_counts(tmp_pat
     assert totals["unattributed_turn_events"] == 0
     assert totals["api_call_count"] == 3
     assert totals["estimated_cost_usd"] == pytest.approx(0.000829)
+    assert value["models"][0]["rates"] == {
+        "input_usd_per_million": 4, "output_usd_per_million": 20,
+        "cache_read_usd_per_million": 0.2, "cache_write_usd_per_million": 5,
+        "pricing_date": "2026-10-19",
+        "source_url": "https://platform.claude.com/docs/en/about-claude/pricing"}
     assert value["chat_count"] == 2
     assert value["top_chats"][0]["title"] == "Fictional old"
     for key in ("agents", "models", "providers", "days", "top_chats"):
