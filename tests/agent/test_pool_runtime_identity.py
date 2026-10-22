@@ -17,6 +17,7 @@ pooled_agent = pool_tests.pooled_agent
 def _refresh_first_row(pool):
     first = pool.entries()[0]
     pool._replace_entry(first, replace(first, access_token="fixture-peer-first-v2"))
+    pool._persist()
 
 
 @pytest.mark.parametrize("provider", ["openai-codex", "xai-oauth"])
