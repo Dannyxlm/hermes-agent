@@ -2279,33 +2279,27 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
 
     def _identify_failed_entry(
         self, credential_id: Optional[str], api_key_hint: Optional[str],
+        *, allow_stale_key: bool = False,
     ) -> Optional[PooledCredential]:
-        """Resolve the entry that issued a failed request from its supplied identity."""
-        entry = None
-        if credential_id:
-            entry = self._find(lambda e: e.id == credential_id)
-            # #79156: when both identities disagree, trust the key that made
-            # the request. A stale ``_credential_pool_entry_id`` (per-turn env
-            # refresh rewrote ``api_key`` without rebinding the id) would
-            # otherwise quarantine a healthy fallback for days.
-            if entry is not None and api_key_hint and entry.runtime_api_key != api_key_hint:
-                hint_entry = self._find(lambda e: e.runtime_api_key == api_key_hint)
-                if hint_entry is not None:
-                    logger.info(
-                        "credential pool: credential_id %s runtime key "
-                        "does not match api_key_hint; attributing failure "
-                        "to key-matched entry %s instead (#79156)",
-                        (entry.label or entry.id[:8]),
-                        (hint_entry.label or hint_entry.id[:8]),
-                    )
-                # Otherwise the id is stale and the request key is not in the
-                # pool — drop the id so we do not mark the wrong entry.
-                entry = hint_entry
-        if entry is None and api_key_hint:
-            # Prefer the entry whose key actually failed: on a pool freshly
-            # loaded from disk current() is None and _select_unlocked() would
-            # return the NEXT key — the wrong one.
-            entry = self._find(lambda e: e.runtime_api_key == api_key_hint)
+        """Prefer a matched request key; a 429 may retain its id across token refresh."""
+        entry = self._find(lambda e: e.id == credential_id) if credential_id else None
+        if entry is not None and (not api_key_hint or entry.runtime_api_key == api_key_hint):
+            return entry
+        hint_entry = self._find(lambda e: e.runtime_api_key == api_key_hint) if api_key_hint else None
+        if hint_entry is not None:
+            if entry is not None and entry.id != hint_entry.id:
+                # #79156: an env/priority switch can leave the old id behind.
+                logger.info(
+                    "credential pool: credential_id %s disagrees with request key; "
+                    "attributing failure to key-matched entry %s instead (#79156)",
+                    entry.label or entry.id[:8], hint_entry.label or hint_entry.id[:8],
+                )
+            return hint_entry
+        if entry is not None and api_key_hint and entry.runtime_api_key != api_key_hint:
+            if not allow_stale_key:
+                return None
+            # OAuth rotation changes the bearer, not the account's quota window.
+            logger.info("credential pool: request key changed; attributing 429 to pool entry %s", entry.id)
         return entry
 
     def _rotate_unmatched(self) -> Optional[PooledCredential]:
@@ -2359,7 +2353,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
     ) -> Optional[PooledCredential]:
         with self._lock:
             identity_supplied = bool(credential_id or api_key_hint)
-            entry = self._identify_failed_entry(credential_id, api_key_hint)
+            entry = self._identify_failed_entry(credential_id, api_key_hint, allow_stale_key=status_code == 429)
             if entry is None and identity_supplied:
                 return self._rotate_unmatched()
             # A real entry was identified — any prior unmatched streak is stale.
