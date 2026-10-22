@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from agent.api_value_pricing import estimate_aggregate_api_value_decimal, get_api_value_rates
 from agent.usage_pricing import CanonicalUsage
-from hermes_state_rollup import _COUNTERS, _SUMS, _DecimalSum, _metrics, follows_usage_parent
+from hermes_state_rollup import _COUNTERS, _PROVIDER, _SUMS, _DecimalSum, _metrics, follows_usage_parent
 from hermes_state_usage import AUXILIARY_USAGE_TASKS
 
 _SESSION_COUNTERS = """WITH RECURSIVE routes AS MATERIALIZED (
@@ -34,7 +34,8 @@ _SESSION_COUNTERS = """WITH RECURSIVE routes AS MATERIALIZED (
 _PRICED_USAGE = """, priced AS MATERIALIZED (
     SELECT *, session_api_value(model, provider, {arguments}) AS price FROM counters
 ), usage AS (
-    SELECT *, json_extract(price, '$.estimated_cost_usd') AS estimated_cost_usd,
+    SELECT session_id, chat_id, started_at, model, {provider} AS provider, task, {counters},
+        json_extract(price, '$.estimated_cost_usd') AS estimated_cost_usd,
         json_extract(price, '$.minimum_estimated_cost_usd') AS minimum_estimated_cost_usd,
         json_extract(price, '$.reason') AS price_reason,
         json_extract(price, '$.pricing_date') AS pricing_date,
@@ -88,6 +89,7 @@ def read_alltime_usage(conn, *, end, profile, session_id=None, limit=20, timezon
     conn.create_function("usage_follows_parent", 3, follows_usage_parent, deterministic=True)
     conn.create_aggregate("decimal_sum", 1, _DecimalSum)
     cte = session_counter_cte(session_id=session_id) + _PRICED_USAGE.format(
+        provider=_PROVIDER, counters=", ".join(_COUNTERS),
         arguments=", ".join(_COUNTERS[:4]) + ", api_call_count")
     args = {"session_id": session_id}
     base = cte + "SELECT {columns}" + _AGGREGATES + " FROM usage e {suffix}"
@@ -106,8 +108,8 @@ def read_alltime_usage(conn, *, end, profile, session_id=None, limit=20, timezon
     chats = groups("e.chat_id AS session_id, (SELECT title FROM sessions WHERE id=e.chat_id) AS title",
                    "e.chat_id", "total_tokens DESC, e.chat_id LIMIT :limit", {"limit": limit})
     coverage = [dict(row) for row in conn.execute(
-        cte + "SELECT provider, MIN(started_at) AS since, COUNT(DISTINCT chat_id) AS chat_count, "
-        "COUNT(DISTINCT session_id) AS session_count FROM counters GROUP BY provider ORDER BY provider", args)]
+        cte + f"SELECT {_PROVIDER} AS provider, MIN(started_at) AS since, COUNT(DISTINCT chat_id) AS chat_count, "
+        f"COUNT(DISTINCT session_id) AS session_count FROM counters GROUP BY {_PROVIDER} ORDER BY provider", args)]
     return {"profile": profile, "window": "all", "source": "session_totals",
             "start": since, "end": end, "timezone": timezone_name, "totals": totals,
             "agents": [{"profile": profile, **totals}], "models": models, "providers": providers,

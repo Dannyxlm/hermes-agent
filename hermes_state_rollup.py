@@ -10,6 +10,7 @@ from agent.api_value_pricing import estimate_aggregate_api_value_decimal, get_ap
 from agent.usage_pricing import CanonicalUsage
 
 _COUNTERS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "api_call_count")
+_PROVIDER = "COALESCE(NULLIF(provider,''),'unknown')"
 _SUMS = ", ".join(f"COALESCE(SUM(e.{key}),0) AS {key}" for key in _COUNTERS)
 _AGGREGATES = (_SUMS + ", COUNT(DISTINCT e.turn_id) AS turn_count, COALESCE(SUM(e.is_event),0) AS event_count, "
                "SUM(e.is_event AND e.turn_id IS NULL AND e.task='') AS unattributed_turn_events, "
@@ -148,7 +149,7 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
            f"raw_usage AS NOT MATERIALIZED ({raw}), priced AS MATERIALIZED (SELECT *, CASE WHEN estimated_cost_usd IS NULL "
            f"THEN event_api_value(model, provider, {arguments}) END AS price "
            "FROM raw_usage), usage AS MATERIALIZED (SELECT "
-           "session_id, chat_id, occurred_at, turn_id, model, provider, task, is_event, " + counters + ", "
+           f"session_id, chat_id, occurred_at, turn_id, model, {_PROVIDER} AS provider, task, is_event, " + counters + ", "
            "CASE WHEN price IS NULL THEN estimated_cost_usd ELSE "
            "json_extract(price, '$.estimated_cost_usd') END AS estimated_cost_usd, "
            "CASE WHEN price IS NULL THEN estimated_cost_usd ELSE "
