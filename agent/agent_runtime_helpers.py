@@ -1133,6 +1133,7 @@ def _apply_primary_runtime_fields(agent, rt: dict[str, Any]) -> None:
     agent._reasoning_echo_flag = rt.get("reasoning_echo_flag", False)
     agent.request_overrides = dict(rt.get("request_overrides") or {})
     agent._client_kwargs = dict(rt["client_kwargs"])
+    sync_credential_pool_entry_id(agent)
 
 
 def _build_anthropic_client_from_runtime(agent, rt: dict[str, Any]) -> None:
@@ -1185,17 +1186,13 @@ def try_recover_primary_transport(
     ):
         return False
     try:
-        # Never hard-close the shared client here: stale streaming workers may still be unwinding on
-        # the old pool; _retire_shared_openai_client defers FD release to GC.
-        # Retire the existing client to release stale connections. #70773: never hard-close the shared
-        # client here — this runs on the conversation-loop thread while workers from stale-killed streaming
-        # attempts may still be unwinding their SSL BIOs on the old pool. ``_retire_shared_openai_client``
-        # shuts the sockets down (FD-safe from any thread) and defers the FD release to GC, which cannot
-        # complete until every borrowing thread has unwound.
+        # Never hard-close: stale workers may still unwind using the shared pool.
+        # Retire sockets FD-safely; defer final release until all borrowers unwind.
         if getattr(agent, "client", None) is not None:
             with contextlib.suppress(Exception):
                 agent._retire_shared_openai_client(agent.client, reason="primary_recovery")
-        rt = agent._primary_runtime
+        from agent.route_binding import primary_transport_runtime
+        rt = primary_transport_runtime(agent)
         _apply_primary_runtime_fields(agent, rt)
         _rebuild_primary_client(agent, rt, reason="primary_recovery")
         wait_time = min(3 + retry_count, 8)
