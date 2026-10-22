@@ -95,6 +95,23 @@ def bind_route_entry(agent: Any, entry: dict[str, Any], provider: str, model: st
     return old_model, old_provider
 
 
+def primary_transport_runtime(agent: Any) -> dict[str, Any]:
+    """Restore primary configuration without resurrecting a rotated-away pool credential."""
+    rt = agent._primary_runtime
+    from agent.credential_pool import credential_pool_matches_provider
+    pool = getattr(agent, "_credential_pool", None)
+    if not getattr(agent, "_credential_pool_entry_id", None) or pool is None or not credential_pool_matches_provider(
+        pool, agent.provider, base_url=agent.base_url,
+    ):
+        return rt
+    from agent.agent_runtime_helpers import _build_primary_runtime_snapshot
+    active = _build_primary_runtime_snapshot(agent, agent.api_mode)
+    credential_fields = (
+        "api_key", "base_url", "client_kwargs", "anthropic_api_key", "anthropic_base_url", "is_anthropic_oauth",
+    )
+    return {**rt, **{name: active[name] for name in credential_fields if name in active}}
+
+
 def reinstall_runtime_snapshot(agent: Any, rt: dict[str, Any]) -> None:
     """Put ``agent`` on the runtime recorded in ``rt`` (a ``_primary_runtime``-shaped snapshot):
     identity, client, caching flags, compressor, reasoning and prompt identity. Credential pool

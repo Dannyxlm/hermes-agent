@@ -11,24 +11,12 @@ _USAGE_LIMIT_REASON_TOKENS = ("usage_limit_reached", "gousagelimit")
 _USAGE_LIMIT_MESSAGE_TOKENS = ("usage limit reached", "usage limit has been reached")
 
 
-def failed_rate_limit_entry(pool, credential_id, api_key_hint):
-    """A matched request key wins; a peer refresh may leave only the stable id."""
-    entries = pool.entries()
-    if api_key_hint:
-        matched = next((entry for entry in entries if entry.runtime_api_key == api_key_hint), None)
-        if matched is not None:
-            return matched
-    if credential_id:
-        return next((entry for entry in entries if entry.id == credential_id), None)
-    return None if api_key_hint else pool.current()
-
-
 def recover_rate_limit(
     agent, pool, *, has_retried_429, error_context, api_key_hint, credential_id,
     rotate_and_swap, rotated_429_ids=None,
 ):
     """Spend at most one zero-wait lap; retries after that pay the normal retry budget."""
-    current = failed_rate_limit_entry(pool, credential_id, api_key_hint)
+    current = pool.identify_failed_entry(credential_id, api_key_hint, allow_stale_key=True)
     rotated = rotated_429_ids if rotated_429_ids is not None else set()
     current_id = getattr(current, "id", None)
     def exclude(entry):

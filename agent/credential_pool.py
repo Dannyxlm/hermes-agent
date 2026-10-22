@@ -1150,6 +1150,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             if api_key_hint is None:
                 return None
             matches = [e for e in self._entries if e.runtime_api_key == api_key_hint]
+            if not matches:
+                # A native resolver may have read a peer's newer bearer from disk.
+                for entry in list(self._entries):
+                    self._sync_entry_from_pool_store(entry)
+                matches = [e for e in self._entries if e.runtime_api_key == api_key_hint]
             return matches[0].id if len(matches) == 1 else None
 
     # ---- mutation primitives (self-locking) --------------------------------
@@ -2277,30 +2282,30 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
 
     # ---- rotation ----------------------------------------------------------
 
-    def _identify_failed_entry(
+    def identify_failed_entry(
         self, credential_id: Optional[str], api_key_hint: Optional[str],
         *, allow_stale_key: bool = False,
     ) -> Optional[PooledCredential]:
-        """Prefer a matched request key; a 429 may retain its id across token refresh."""
-        entry = self._find(lambda e: e.id == credential_id) if credential_id else None
-        if entry is not None and (not api_key_hint or entry.runtime_api_key == api_key_hint):
-            return entry
-        hint_entry = self._find(lambda e: e.runtime_api_key == api_key_hint) if api_key_hint else None
-        if hint_entry is not None:
-            if entry is not None and entry.id != hint_entry.id:
-                # #79156: an env/priority switch can leave the old id behind.
-                logger.info(
-                    "credential pool: credential_id %s disagrees with request key; "
-                    "attributing failure to key-matched entry %s instead (#79156)",
-                    entry.label or entry.id[:8], hint_entry.label or hint_entry.id[:8],
-                )
-            return hint_entry
-        if entry is not None and api_key_hint and entry.runtime_api_key != api_key_hint:
-            if not allow_stale_key:
+        """Resolve request provenance consistently for benching and the free-lap ledger."""
+        with self._lock:
+            if not (credential_id or api_key_hint):
+                return self._current_unlocked()
+            entry = self._find(lambda e: e.id == credential_id) if credential_id else None
+            if entry is not None and (not api_key_hint or entry.runtime_api_key == api_key_hint):
+                return entry
+            hint_entry = self._find(lambda e: e.runtime_api_key == api_key_hint) if api_key_hint else None
+            if hint_entry is not None:
+                if entry is not None and entry.id != hint_entry.id:
+                    # #79156: an env/priority switch can leave the old id behind.
+                    logger.info(
+                        "credential pool: credential_id %s disagrees with request key; "
+                        "attributing failure to key-matched entry %s instead (#79156)",
+                        entry.label or entry.id[:8], hint_entry.label or hint_entry.id[:8],
+                    )
+                return hint_entry
+            if api_key_hint and not allow_stale_key:
                 return None
-            # OAuth rotation changes the bearer, not the account's quota window.
-            logger.info("credential pool: request key changed; attributing 429 to pool entry %s", entry.id)
-        return entry
+            return entry
 
     def _rotate_unmatched(self) -> Optional[PooledCredential]:
         """Rotate without marking anything when the failed identity matches no entry.
@@ -2353,7 +2358,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
     ) -> Optional[PooledCredential]:
         with self._lock:
             identity_supplied = bool(credential_id or api_key_hint)
-            entry = self._identify_failed_entry(credential_id, api_key_hint, allow_stale_key=status_code == 429)
+            entry = self.identify_failed_entry(credential_id, api_key_hint, allow_stale_key=status_code == 429)
             if entry is None and identity_supplied:
                 return self._rotate_unmatched()
             # A real entry was identified — any prior unmatched streak is stale.
