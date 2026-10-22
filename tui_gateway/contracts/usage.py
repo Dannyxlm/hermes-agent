@@ -81,6 +81,13 @@ class DailyUsage(ProviderUsageTotals):
     day: str
 
 
+class UsageBackfill(Result):
+    since: float
+    until: float
+    basis: Literal["session_totals_by_start"]
+    session_count: int = Field(ge=0)
+
+
 class UsageRollupResult(Result):
     profile: str
     start: float
@@ -94,6 +101,7 @@ class UsageRollupResult(Result):
     top_chats: list[ChatUsage]
     chat_count: int
     coverage_since: float | None
+    backfill: UsageBackfill | None = None
     partial: bool
     coverage_reason: str
     basis: Literal["standard_api_list_price"]

@@ -114,7 +114,8 @@ def test_chat_filter_limit_auxiliary_and_unknown_are_honest(tmp_path, monkeypatc
         assert result["totals"]["cost_reason"]
         assert result["totals"]["turn_count"] == 2
         assert rpc(session_id="a")["result"]["totals"]["input_tokens"] == 30
-        assert result["partial"] is True
+        assert result["partial"] is False
+        assert result["backfill"]["session_count"] == 0
 
 
 def test_calendar_day_uses_requested_timezone(tmp_path):
@@ -396,6 +397,10 @@ def test_backfill_gap_merges_every_projection_and_preserves_event_counts(tmp_pat
     assert value["backfill"] == {"since": 100, "until": 200, "basis": "session_totals_by_start", "session_count": 1}
     assert value["partial"] is False
     assert value["coverage_reason"] == "backfilled_from_session_totals"
+    from tui_gateway.contracts.usage import UsageRollupWireResult
+    assert UsageRollupWireResult.model_validate(value).root.backfill.session_count == 1
+    old_server = {key: item for key, item in value.items() if key != "backfill"}
+    assert UsageRollupWireResult.model_validate(old_server).root.backfill is None
 
 
 def test_backfill_reconciles_main_switches_and_disjoint_auxiliaries_per_counter(tmp_path):

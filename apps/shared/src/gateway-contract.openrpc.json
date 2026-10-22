@@ -50594,6 +50594,37 @@
         "title": "Usage",
         "type": "object"
       },
+      "UsageBackfill": {
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "title": "Since",
+            "type": "number"
+          },
+          "until": {
+            "title": "Until",
+            "type": "number"
+          },
+          "basis": {
+            "const": "session_totals_by_start",
+            "title": "Basis",
+            "type": "string"
+          },
+          "session_count": {
+            "minimum": 0,
+            "title": "Session Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "basis",
+          "session_count"
+        ],
+        "title": "UsageBackfill",
+        "type": "object"
+      },
       "UsageBar": {
         "additionalProperties": false,
         "description": "``_serialize_usage_bar``: one bar, magnitudes pre-formatted; ``pct_used`` only for ``plan``.",
@@ -51097,6 +51128,17 @@
               }
             ],
             "title": "Coverage Since"
+          },
+          "backfill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageBackfill"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "partial": {
             "title": "Partial",

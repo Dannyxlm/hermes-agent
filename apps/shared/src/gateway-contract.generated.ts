@@ -5607,6 +5607,7 @@ export interface UsageRollupResult {
   top_chats: ChatUsage[]
   chat_count: number
   coverage_since: number | null
+  backfill?: UsageBackfill | null
   partial: boolean
   coverage_reason: string
   basis: 'standard_api_list_price'
@@ -5745,6 +5746,12 @@ export interface ChatUsage {
   unattributed_turn_events: number
   session_id: string
   title: string | null
+}
+export interface UsageBackfill {
+  since: number
+  until: number
+  basis: 'session_totals_by_start'
+  session_count: number
 }
 export interface AllTimeUsageRollupResult {
   profile: string

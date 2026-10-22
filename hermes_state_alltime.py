@@ -7,13 +7,13 @@ from agent.usage_pricing import CanonicalUsage
 from hermes_state_rollup import _COUNTERS, _SUMS, _DecimalSum, _metrics, follows_usage_parent
 from hermes_state_usage import AUXILIARY_USAGE_TASKS
 
-_LINEAGE = """WITH RECURSIVE routes AS MATERIALIZED (
+_SESSION_COUNTERS = """WITH RECURSIVE routes AS MATERIALIZED (
     SELECT s.id, CASE WHEN p.id IS NOT NULL
         AND usage_follows_parent(s.source, s.model_config, p.end_reason)
         THEN p.id END AS parent_id
     FROM sessions s LEFT JOIN sessions p ON p.id=s.parent_session_id
 ), lineage(origin, id) AS (
-    SELECT id, id FROM routes
+    SELECT id, id FROM routes {lineage_filter}
     UNION
     SELECT l.origin, r.parent_id FROM lineage l JOIN routes r ON r.id=l.id
     WHERE r.parent_id IS NOT NULL
@@ -22,15 +22,16 @@ _LINEAGE = """WITH RECURSIVE routes AS MATERIALIZED (
     FROM lineage l JOIN routes r ON r.id=l.id GROUP BY l.origin
 ), counters AS (
     SELECT s.id AS session_id, r.chat_id, s.started_at, COALESCE(s.model, '') AS model,
-        COALESCE(s.billing_provider, '') AS provider, {session_counters}
-    FROM sessions s JOIN roots r ON r.origin=s.id
-    WHERE ({session_nonzero}) {chat_filter}
+        COALESCE(s.billing_provider, '') AS provider, '' AS task, {session_counters}
+    FROM sessions s {session_join} roots r ON r.origin=s.id
+    WHERE ({session_nonzero}) {chat_filter} {cohort_filter}
     UNION ALL
     SELECT s.id AS session_id, r.chat_id, s.started_at, COALESCE(a.model, '') AS model,
-        COALESCE(a.billing_provider, '') AS provider, {aux_counters}
+        COALESCE(a.billing_provider, '') AS provider, a.task, {aux_counters}
     FROM session_model_usage a JOIN sessions s ON s.id=a.session_id JOIN roots r ON r.origin=s.id
-    WHERE a.task IN ({aux_tasks}) AND ({aux_nonzero}) {chat_filter}
-), priced AS MATERIALIZED (
+    WHERE a.task IN ({aux_tasks}) AND ({aux_nonzero}) {chat_filter} {cohort_filter}
+) """
+_PRICED_USAGE = """, priced AS MATERIALIZED (
     SELECT *, session_api_value(model, provider, {arguments}) AS price FROM counters
 ), usage AS (
     SELECT *, json_extract(price, '$.estimated_cost_usd') AS estimated_cost_usd,
@@ -64,20 +65,30 @@ def _session_metrics(row):
     return result
 
 
+def session_counter_cte(*, session_id=None, cohort=False):
+    """Recorded main route plus disjoint named auxiliaries, with cycle-safe chat ownership."""
+    return _SESSION_COUNTERS.format(
+        session_counters=", ".join(f"COALESCE(s.{key},0) AS {key}" for key in _COUNTERS),
+        aux_counters=", ".join(f"COALESCE(a.{key},0) AS {key}" for key in _COUNTERS),
+        session_nonzero="+".join(f"COALESCE(s.{key},0)" for key in _COUNTERS) + ">0",
+        aux_nonzero="+".join(f"COALESCE(a.{key},0)" for key in _COUNTERS) + ">0",
+        aux_tasks=", ".join("'" + task + "'" for task in sorted(AUXILIARY_USAGE_TASKS)),
+        # Keep the indexed start cohort outside the lineage join instead of probing every session.
+        session_join="CROSS JOIN" if cohort else "JOIN",
+        lineage_filter=("WHERE id IN (SELECT id FROM sessions WHERE started_at>=:start "
+                        "AND started_at<:coverage_since) OR id=:session_id") if cohort else "",
+        chat_filter="AND r.chat_id=(SELECT chat_id FROM roots WHERE origin=:session_id)" if session_id else "",
+        cohort_filter="AND s.started_at>=:start AND s.started_at<:coverage_since" if cohort else "")
+
+
 def read_alltime_usage(conn, *, end, profile, session_id=None, limit=20, timezone_name="UTC"):
     """Counted session and disjoint auxiliary usage in one read snapshot."""
     cached_value = lru_cache(maxsize=8192)(_session_value)
     conn.create_function("session_api_value", 7, cached_value, deterministic=True)
     conn.create_function("usage_follows_parent", 3, follows_usage_parent, deterministic=True)
     conn.create_aggregate("decimal_sum", 1, _DecimalSum)
-    cte = _LINEAGE.format(
-        session_counters=", ".join(f"COALESCE(s.{key},0) AS {key}" for key in _COUNTERS),
-        aux_counters=", ".join(f"COALESCE(a.{key},0) AS {key}" for key in _COUNTERS),
-        session_nonzero="+".join(f"COALESCE(s.{key},0)" for key in _COUNTERS[:-1]) + ">0 OR COALESCE(s.api_call_count,0)>0",
-        aux_nonzero="+".join(f"COALESCE(a.{key},0)" for key in _COUNTERS[:-1]) + ">0 OR COALESCE(a.api_call_count,0)>0",
-        aux_tasks=", ".join("'" + task + "'" for task in sorted(AUXILIARY_USAGE_TASKS)),
-        arguments=", ".join(_COUNTERS[:4]) + ", api_call_count",
-        chat_filter="AND r.chat_id=(SELECT chat_id FROM roots WHERE origin=:session_id)" if session_id else "")
+    cte = session_counter_cte(session_id=session_id) + _PRICED_USAGE.format(
+        arguments=", ".join(_COUNTERS[:4]) + ", api_call_count")
     args = {"session_id": session_id}
     base = cte + "SELECT {columns}" + _AGGREGATES + " FROM usage e {suffix}"
     totals_row = conn.execute(base.format(

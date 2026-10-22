@@ -11,8 +11,8 @@ from agent.usage_pricing import CanonicalUsage
 
 _COUNTERS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "api_call_count")
 _SUMS = ", ".join(f"COALESCE(SUM(e.{key}),0) AS {key}" for key in _COUNTERS)
-_AGGREGATES = (_SUMS + ", COUNT(DISTINCT e.turn_id) AS turn_count, COUNT(*) AS event_count, "
-               "SUM(e.turn_id IS NULL AND e.task='') AS unattributed_turn_events, "
+_AGGREGATES = (_SUMS + ", COUNT(DISTINCT e.turn_id) AS turn_count, COALESCE(SUM(e.is_event),0) AS event_count, "
+               "SUM(e.is_event AND e.turn_id IS NULL AND e.task='') AS unattributed_turn_events, "
                "decimal_sum(e.estimated_cost_usd) AS known_estimated_cost_usd, "
                "decimal_sum(e.minimum_estimated_cost_usd) AS minimum_estimated_cost_usd, "
                "SUM(e.estimated_cost_usd IS NULL) AS unknown_price_events, "
@@ -115,8 +115,8 @@ def _metrics(row):
 def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, timezone_name="UTC"):
     """One read snapshot; totals are never limited by the top-chat page.
 
-    Missing historical timestamps are NOT invented from session first/last_seen.
-    Coverage starts when the incremental collector was installed.
+    Pre-collector history is a session-start cohort, not reconstructed event timestamps.
+    Sessions starting before the window are excluded from that cohort.
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -125,16 +125,30 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
                          deterministic=True)
     conn.create_function("event_api_value", 7, _event_value, deterministic=True)
     conn.create_aggregate("decimal_sum", 1, _DecimalSum)
-    where = "e.occurred_at>=? AND e.occurred_at<?"
-    args = [start, end]
+    since = conn.execute("SELECT value FROM state_meta WHERE key='usage_events_since'").fetchone()
+    coverage_since = float(since[0]) if since else None
+    backfilled = coverage_since is not None and start < coverage_since <= end
+    where = "e.occurred_at>=:start AND e.occurred_at<:end"
+    args = {"start": start, "end": end, "coverage_since": coverage_since, "session_id": session_id}
     if session_id:
-        where += " AND e.chat_id=?"
-        args.append(_chat_id(conn, session_id))
+        where += " AND e.chat_id=:chat_id"
+        args["chat_id"] = _chat_id(conn, session_id)
+    prefix = "WITH "
+    counters = ", ".join(_COUNTERS)
+    raw = ("SELECT session_id, chat_id, occurred_at, turn_id, model, provider, task, " + counters + ", "
+           "estimated_cost_usd, pricing_date, source_url, 1 AS is_event FROM window_events")
+    if backfilled:
+        from hermes_state_backfill import backfill_usage_cte
+        conn.create_function("usage_follows_parent", 3, follows_usage_parent, deterministic=True)
+        prefix = backfill_usage_cte(session_id=session_id) + ", "
+        raw += (" UNION ALL SELECT session_id, chat_id, started_at, NULL, model, provider, task, "
+                + counters + ", NULL, NULL, NULL, 0 FROM backfill")
     arguments = ", ".join(_COUNTERS[:4]) + ", api_call_count"
-    cte = (f"WITH priced AS MATERIALIZED (SELECT *, CASE WHEN estimated_cost_usd IS NULL "
+    cte = (prefix + f"window_events AS MATERIALIZED (SELECT * FROM usage_events e WHERE {where}), "
+           f"raw_usage AS NOT MATERIALIZED ({raw}), priced AS MATERIALIZED (SELECT *, CASE WHEN estimated_cost_usd IS NULL "
            f"THEN event_api_value(model, provider, {arguments}) END AS price "
-           f"FROM usage_events e WHERE {where}), usage AS MATERIALIZED (SELECT "
-           "chat_id, occurred_at, turn_id, model, provider, task, " + ", ".join(_COUNTERS) + ", "
+           "FROM raw_usage), usage AS MATERIALIZED (SELECT "
+           "session_id, chat_id, occurred_at, turn_id, model, provider, task, is_event, " + counters + ", "
            "CASE WHEN price IS NULL THEN estimated_cost_usd ELSE "
            "json_extract(price, '$.estimated_cost_usd') END AS estimated_cost_usd, "
            "CASE WHEN price IS NULL THEN estimated_cost_usd ELSE "
@@ -145,7 +159,7 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
            "CASE WHEN price IS NULL THEN source_url ELSE "
            "json_extract(price, '$.source_url') END AS source_url FROM priced) ")
     projections = (
-        ("totals", "'{}'", ""),
+        ("totals", "json_object('backfill_session_count', COUNT(DISTINCT CASE WHEN e.is_event=0 THEN e.session_id END))", ""),
         ("top_chats", "json_object('session_id', e.chat_id)",
          "GROUP BY e.chat_id ORDER BY total_tokens DESC, e.chat_id"),
         ("models", "json_object('model', e.model, 'provider', e.provider)",
@@ -166,16 +180,19 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
         dimensions = json.loads(metric.pop("dimensions"))
         grouped[kind].append({**dimensions, **_metrics(metric)})
     totals = grouped["totals"][0]
+    session_count = totals.pop("backfill_session_count")
+    backfill = ({"since": start, "until": coverage_since, "basis": "session_totals_by_start",
+                 "session_count": session_count} if backfilled else None)
     chats = grouped["top_chats"]
     for chat in chats[:limit]:
         row = conn.execute("SELECT title FROM sessions WHERE id=?", (chat["session_id"],)).fetchone()
         chat["title"] = row[0] if row else None
-    since = conn.execute("SELECT value FROM state_meta WHERE key='usage_events_since'").fetchone()
     return {"profile": profile, "start": start, "end": end, "timezone": timezone_name, "totals": totals,
             "agents": [{"profile": profile, **totals}],
             "models": grouped["models"], "providers": grouped["providers"], "days": grouped["days"],
             "top_chats": chats[:limit], "chat_count": len(chats),
-            "coverage_since": float(since[0]) if since else None,
-            "partial": not since or start < float(since[0]),
-            "coverage_reason": "Timestamped usage is collected prospectively; legacy cumulative counters cannot be split into windows.",
+            "coverage_since": coverage_since, "backfill": backfill,
+            "partial": not backfilled and (coverage_since is None or start < coverage_since),
+            "coverage_reason": ("backfilled_from_session_totals" if backfilled else
+                                "Timestamped usage is collected prospectively; legacy cumulative counters cannot be split into windows."),
             "basis": "standard_api_list_price", "currency": "USD"}
