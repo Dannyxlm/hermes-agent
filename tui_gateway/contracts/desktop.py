@@ -13,13 +13,14 @@ class DesktopScope(Params):
     connection_id: str = Field(min_length=1, max_length=256,
                                description='Connection selector, not durable Desktop identity or authority.')
     installation_id: str = Field(min_length=1, max_length=256,
-                                 description='Durable scope selector alongside admitted owner, profile home and resource.')
+                                 description='Client installation selector, not durable identity or authority.')
 
 
 class DesktopLease(Result):
     holder: Literal['agent', 'human', 'none']
     epoch: int = Field(ge=0)
     mine: bool
+    expires_at: float | None
 
 
 class DesktopActive(Result):

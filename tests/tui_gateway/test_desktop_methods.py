@@ -60,7 +60,7 @@ def test_unavailable_producer_is_not_idle(rpc, profile):
     assert result['active'] is None and result['signin'] is None
     assert result['activity'] == [] and result['history'] == []
     assert result['next_cursor'] is None
-    assert result['lease'] == {'holder': 'none', 'epoch': 0, 'mine': False}
+    assert result['lease'] == {'holder': 'none', 'epoch': 0, 'mine': False, 'expires_at': None}
     assert {'producer', 'history', 'control'} <= set(result['unavailable'])
     assert not (home / 'desktop-spaces.sqlite').exists()
 
@@ -153,7 +153,7 @@ def test_signin_not_now_and_lost_ack_through_public_rpc(rpc):
     assert receipt['status'] == 'accepted'
     assert call('desktop.action_status', action_id='decision')['result'] == receipt
     assert call('desktop.action', **fields)['result'] == receipt
-    assert call('desktop.action_status', action_id='decision', installation_id='other')['result']['status'] == 'unknown'
+    assert call('desktop.action_status', action_id='decision', installation_id='other')['result'] == receipt
     assert call('desktop.action_status', action_id='decision', profile='secondary')['result']['status'] == 'unknown'
     assert call('desktop.action_status', action_id='decision', space='desktop')['result']['status'] == 'unknown'
     assert call('desktop.snapshot')['result']['signin'] is None

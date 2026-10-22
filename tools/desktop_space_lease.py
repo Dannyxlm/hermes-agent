@@ -5,12 +5,14 @@ calling acquire. These primitives alone cannot establish either condition.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 import hashlib
 import math
+import os
 from pathlib import Path
 import sqlite3
+import tempfile
 import time
 
 
@@ -45,8 +47,9 @@ class SpaceLease:
 
     def public(self, scope: str, now: float) -> dict:
         expired = self.holder == 'human' and now >= self.expires_at
-        return {'holder': 'none' if expired else self.holder, 'epoch': self.epoch,
-                'mine': self.holder == 'human' and not expired and self.scope_hash == digest(scope)}
+        return {'holder': 'none' if self.holder == 'human_pending' else self.holder, 'epoch': self.epoch,
+                'mine': self.holder == 'human' and not expired and self.scope_hash == digest(scope),
+                'expires_at': self.expires_at if self.holder == 'human' else None}
 
 
 class LeaseStore:
@@ -55,9 +58,24 @@ class LeaseStore:
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Private mode applies at creation, before SQLite writes any owner state.
-        self.path.touch(mode=0o600, exist_ok=True)
-        with sqlite3.connect(self.path, timeout=5) as db:
+        if self.path.exists():
+            self._initialize_at(self.path)
+            return
+        with tempfile.NamedTemporaryFile(dir=self.path.parent, prefix='.desktop-', suffix='.sqlite', delete=False) as file:
+            staging = Path(file.name)
+        try:
+            self._initialize_at(staging)
+            try:
+                os.link(staging, self.path)
+            except FileExistsError:
+                pass
+        finally:
+            staging.unlink()
+
+    @staticmethod
+    def _initialize_at(path: Path) -> None:
+        # Publish the first database only after its schema is committed, at mode 0600.
+        with closing(sqlite3.connect(path, timeout=5)) as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS leases (
                     resource TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL,
@@ -69,9 +87,18 @@ class LeaseStore:
                     revision INTEGER NOT NULL, origin TEXT NOT NULL, reason TEXT NOT NULL,
                     expires_at REAL NOT NULL, resolved INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (resource, scope_hash));
+                CREATE TABLE IF NOT EXISTS signin_bindings (
+                    resource TEXT NOT NULL, scope_hash TEXT NOT NULL, request_id TEXT NOT NULL,
+                    login_handle TEXT, masked_identifier TEXT, task_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL, outcome TEXT NOT NULL DEFAULT 'pending',
+                    PRIMARY KEY (resource, scope_hash));
                 CREATE TABLE IF NOT EXISTS receipts (
                     resource TEXT NOT NULL, scope_hash TEXT NOT NULL, action_id TEXT NOT NULL,
                     fingerprint TEXT NOT NULL, payload TEXT NOT NULL,
+                    PRIMARY KEY (resource, scope_hash, action_id));
+                CREATE TABLE IF NOT EXISTS desktop_operations (
+                    resource TEXT NOT NULL, scope_hash TEXT NOT NULL, action_id TEXT NOT NULL,
+                    action TEXT NOT NULL, viewer_id TEXT NOT NULL, lease_epoch INTEGER NOT NULL,
                     PRIMARY KEY (resource, scope_hash, action_id));
                 CREATE TABLE IF NOT EXISTS activity (
                     id TEXT PRIMARY KEY, resource TEXT NOT NULL, scope_hash TEXT NOT NULL,
@@ -146,4 +173,4 @@ class LeaseStore:
 
     def agent_permitted(self, resource: str, epoch: int) -> bool:
         lease = self.read(resource)
-        return lease.holder == 'agent' and lease.epoch == epoch
+        return lease.holder in ('none', 'agent') and lease.epoch == epoch

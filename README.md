@@ -32,6 +32,12 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), OpenR
 
 ---
 
+## Hermex Desktop control (integration branch)
+
+This branch implements credentialed Desktop watch/takeover/hand-back coordination, not an activated service. Control remains unavailable until the owner deploys the reviewed door and completes the rollout gates and phone acceptance. The door physically fences CDP; Hermes admission is cooperative, not isolation from privileged local agents.
+
+Saved login binds the offered vault login to the exact origin and stable Chrome target, including when the producer and RPC handler run in separate processes. The fill is model-blind and does not submit. Definite door refusals retain a denied receipt; lost or unverified acknowledgements require reconciliation. Watch identifiers never grant control: control renewal returns a separate ephemeral capability that must not be logged or persisted.
+
 ## Quick Install
 
 ### Linux, macOS, WSL2

@@ -712,6 +712,7 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
 # endpoint leaves later browser_exec calls in the old browser until these are stopped.
 _driven_daemons: set = set()
 _driven_daemons_lock = threading.Lock()
+_desktop_daemon_epochs: dict[tuple[str, str], int] = {}
 # Route cache key -> whether its last browser_exec ran on the hybrid local sidecar.
 _exec_route_is_sidecar: dict[str, bool] = {}
 
@@ -729,6 +730,28 @@ def stop_harness_daemons() -> None:
     for name in names:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, "BU_NAME": name}, 15)
+
+
+def _reconnect_desktop_harness(cmd, env, task_id, epoch):
+    if epoch is None:
+        return
+    from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+
+    key = (_served_profile_tag(), env.get("BU_NAME", "default"))
+    with _driven_daemons_lock:
+        previous = _desktop_daemon_epochs.get(key)
+        if previous is not None and previous != epoch:
+            try:
+                stopped = _run_cli_killing_process_group([*cmd, "--reload"], "", env, 15)
+            except (OSError, subprocess.SubprocessError):
+                raise DesktopInputDenied("Desktop reconnect unavailable") from None
+            if stopped.returncode != 0:
+                raise DesktopInputDenied("Desktop reconnect unavailable")
+            SUPERVISOR_REGISTRY.stop(task_id or "default")
+            if assert_agent_admitted(env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or "") != epoch:
+                raise DesktopInputDenied("Desktop lease changed during reconnect")
+        _desktop_daemon_epochs[key] = epoch
 
 
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
@@ -788,6 +811,13 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     started = time.time()
 
     def dispatch() -> dict[str, Any]:
+        from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted
+        try:
+            epoch = assert_agent_admitted(env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or "")
+            _reconnect_desktop_harness(cmd, env, task_id, epoch)
+        except DesktopInputDenied:
+            return {"error_result": tool_result({"success": False, "error_type": "human_has_control",
+                                                "error": "Desktop agent input is unavailable"})}
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             _driven_daemons.add(env.get("BU_NAME", "default"))

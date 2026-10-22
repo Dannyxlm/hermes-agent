@@ -1,7 +1,6 @@
-"""Partial Desktop projection and request decisions without browser input.
+"""Owner/profile Desktop projections and durable sign-in requests.
 
-Only a trusted backend may publish a sign-in request. There is deliberately no
-production publisher or control adapter until Cua's ticket and input gates exist.
+The credentialed door, not these records, owns the physical input fence.
 """
 from __future__ import annotations
 
@@ -45,6 +44,28 @@ def login_origin(origin: str) -> str:
     return f'https://{host}'
 
 
+def owner_scope(provider: str, user_id: str, home: Path, resource: str) -> str:
+    resource_id(resource)
+    return digest(json.dumps([provider, user_id, str(home.resolve()), resource], separators=(',', ':')))
+
+
+def producer_context():
+    from hermes_constants import get_hermes_home, set_hermes_home_override, reset_hermes_home_override
+    from hermes_cli.profiles import _get_default_hermes_home
+    from hermes_cli.config import load_config_readonly
+
+    home, root = get_hermes_home(), _get_default_hermes_home()
+    token = set_hermes_home_override(root)
+    try:
+        policy = load_config_readonly().get('cloudseed_mobile', {})
+    finally:
+        reset_hermes_home_override(token)
+    provider, user_id = policy.get('owner_provider'), policy.get('owner_user_id')
+    if not isinstance(provider, str) or not provider or not isinstance(user_id, str) or not user_id:
+        raise ValueError('Desktop owner policy unavailable')
+    return SpaceStore(root / 'desktop-spaces.sqlite'), owner_scope(provider, user_id, home, 'desktop')
+
+
 def _revision(db, resource):
     row = db.execute('SELECT revision FROM revisions WHERE resource=?', (resource,)).fetchone() if db else None
     return row[0] if row else 1
@@ -62,6 +83,7 @@ class SpaceStore:
     def snapshot(self, resource: str, scope: str, *, limit: int = 20, now: float | None = None) -> dict:
         resource_id(resource)
         now = time.time() if now is None else now
+        unavailable = list(UNAVAILABLE)
         with self.leases.connection() as db:
             lease = self.leases.lease_in(db, resource)
             signin, activity = None, []
@@ -72,16 +94,24 @@ class SpaceStore:
                     signin = {'id': row['request_id'], 'revision': row['revision'], 'expires_at': row['expires_at'],
                               'origin': row['origin'], 'reason': row['reason'], 'allowed_actions': ['not_now'],
                               'login_handle': None, 'masked_identifier': None}
+                    binding = self.signin_binding(db, resource, scope)
+                    if binding and binding['task_id'] and binding['target_id']:
+                        unavailable.remove('producer')
+                        signin['allowed_actions'] = ['take_over', 'not_now']
+                    if binding and binding['request_id'] == row['request_id'] and binding['login_handle']:
+                        signin.update(allowed_actions=['saved_login', 'take_over', 'not_now'],
+                                      login_handle=binding['login_handle'], masked_identifier=binding['masked_identifier'])
                 activity = [dict(row) for row in db.execute(
                     'SELECT id,label,at FROM activity WHERE resource=? AND scope_hash=? AND at>? ORDER BY at DESC,id DESC LIMIT ?',
                     (resource, digest(scope), now - RETENTION_SECONDS, limit))]
             return {'protocol_version': 1, 'resource_id': resource, 'revision': _revision(db, resource),
                     'server_time': now, 'state': 'signin' if signin else 'watch', 'complete': False,
-                    'unavailable': list(UNAVAILABLE), 'lease': lease.public(scope, now), 'active': None,
+                    'unavailable': unavailable, 'lease': lease.public(scope, now), 'active': None,
                     'signin': signin, 'activity': activity, 'history': [], 'next_cursor': None}
 
     def publish_signin(self, resource: str, scope: str, *, request_id: str, revision: int,
-                       origin: str, reason: str, expires_at: float) -> None:
+                       origin: str, reason: str, expires_at: float, login_handle: str | None = None,
+                       masked_identifier: str | None = None, task_id: str = '', target_id: str = '') -> None:
         resource_id(resource)
         origin = login_origin(origin)
         if (not scope or not 0 < len(request_id) <= 128 or not 0 < len(reason) <= 512
@@ -94,7 +124,28 @@ class SpaceStore:
                 raise ValueError('Desktop sign-in revision must advance')
             db.execute('INSERT OR REPLACE INTO signins VALUES(?,?,?,?,?,?,?,0)',
                        (resource, digest(scope), request_id, revision, origin, reason, expires_at))
+            db.execute('INSERT OR REPLACE INTO signin_bindings VALUES(?,?,?,?,?,?,?,?)',
+                       (resource, digest(scope), request_id, login_handle, masked_identifier, task_id, target_id, 'pending'))
             db.execute('INSERT INTO revisions VALUES(?,2) ON CONFLICT(resource) DO UPDATE SET revision=revision+1', (resource,))
+
+    @staticmethod
+    def signin_binding(db, resource, scope):
+        exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='signin_bindings'").fetchone()
+        return db.execute('SELECT * FROM signin_bindings WHERE resource=? AND scope_hash=?',
+                          (resource, digest(scope))).fetchone() if exists else None
+
+    def signin_outcome(self, resource, scope, request_id, *, now=None):
+        now = time.time() if now is None else now
+        with self.leases.connection() as db:
+            row = db.execute('SELECT * FROM signins WHERE resource=? AND scope_hash=?',
+                             (resource, digest(scope))).fetchone() if db else None
+            if not row or row['request_id'] != request_id:
+                return 'expired'
+            binding = self.signin_binding(db, resource, scope)
+            outcome = binding['outcome'] if binding else 'pending'
+            if outcome in ('filled', 'deferred', 'human_done'):
+                return outcome
+            return 'expired' if now >= row['expires_at'] else 'pending'
 
     def action_status(self, resource: str, scope: str, action_id: str, *, now: float | None = None) -> dict:
         resource_id(resource)
@@ -147,6 +198,10 @@ class SpaceStore:
             SELECT rowid FROM activity WHERE resource=? AND scope_hash=?
             ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?)""",
             (resource, digest(scope), SCOPE_CAP))
+        db.execute('''DELETE FROM desktop_operations WHERE NOT EXISTS (
+            SELECT 1 FROM receipts WHERE receipts.resource=desktop_operations.resource
+            AND receipts.scope_hash=desktop_operations.scope_hash
+            AND receipts.action_id=desktop_operations.action_id)''')
 
     @staticmethod
     def _decide_not_now(db, resource, scope, body, revision, epoch, now):
@@ -159,5 +214,9 @@ class SpaceStore:
             return 'conflict'
         if now >= row['expires_at']:
             return 'expired'
+        binding = SpaceStore.signin_binding(db, resource, scope)
+        if binding and binding['outcome'] != 'pending':
+            return 'conflict'
         db.execute('UPDATE signins SET resolved=1 WHERE resource=? AND scope_hash=?', (resource, digest(scope)))
+        db.execute("UPDATE signin_bindings SET outcome='deferred' WHERE resource=? AND scope_hash=?", (resource, digest(scope)))
         return 'accepted'
