@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 import pytest
 
-from tests.tui_gateway.test_desktop_takeover import desktop
+pytest_plugins = ['tests.tui_gateway.test_desktop_takeover']
 
 
 @pytest.fixture

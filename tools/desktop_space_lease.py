@@ -45,7 +45,7 @@ class SpaceLease:
 
     def public(self, scope: str, now: float) -> dict:
         expired = self.holder == 'human' and now >= self.expires_at
-        return {'holder': 'none' if expired else self.holder, 'epoch': self.epoch,
+        return {'holder': 'none' if self.holder == 'human_pending' else self.holder, 'epoch': self.epoch,
                 'mine': self.holder == 'human' and not expired and self.scope_hash == digest(scope),
                 'expires_at': self.expires_at if self.holder == 'human' else None}
 
@@ -78,6 +78,10 @@ class LeaseStore:
                 CREATE TABLE IF NOT EXISTS receipts (
                     resource TEXT NOT NULL, scope_hash TEXT NOT NULL, action_id TEXT NOT NULL,
                     fingerprint TEXT NOT NULL, payload TEXT NOT NULL,
+                    PRIMARY KEY (resource, scope_hash, action_id));
+                CREATE TABLE IF NOT EXISTS desktop_operations (
+                    resource TEXT NOT NULL, scope_hash TEXT NOT NULL, action_id TEXT NOT NULL,
+                    action TEXT NOT NULL, viewer_id TEXT NOT NULL, lease_epoch INTEGER NOT NULL,
                     PRIMARY KEY (resource, scope_hash, action_id));
                 CREATE TABLE IF NOT EXISTS activity (
                     id TEXT PRIMARY KEY, resource TEXT NOT NULL, scope_hash TEXT NOT NULL,

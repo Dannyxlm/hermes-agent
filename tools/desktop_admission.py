@@ -28,6 +28,17 @@ def assert_agent_admitted(endpoint: str) -> None:
         lease = leases.read('desktop')
         if not leases.agent_permitted('desktop', lease.epoch):
             raise DesktopInputDenied('A human holds Desktop control or hand-back is unconfirmed')
+        from tools.desktop_door_client import DoorClient, DoorNotConfigured, DoorUnavailable
+        try:
+            door = DoorClient.configured()
+        except DoorNotConfigured:
+            return
+        try:
+            state = door.state()
+        except DoorUnavailable:
+            raise DesktopInputDenied('Desktop gate state unavailable') from None
+        if not state.agent_open() or state.epoch != lease.epoch:
+            raise DesktopInputDenied('Desktop agent gate unconfirmed')
     except (OSError, sqlite3.Error) as exc:
         raise DesktopInputDenied('Desktop admission unavailable') from exc
 

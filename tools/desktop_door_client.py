@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import math
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -12,6 +11,10 @@ from typing import Literal
 
 
 class DoorUnavailable(RuntimeError):
+    pass
+
+
+class DoorNotConfigured(DoorUnavailable):
     pass
 
 
@@ -116,13 +119,13 @@ class DoorClient:
             reset_hermes_home_override(token)
         path = cfg.get('credential_file')
         if not isinstance(path, str) or not Path(path).is_absolute():
-            raise DoorUnavailable('Desktop door is not configured')
+            raise DoorNotConfigured('Desktop door is not configured')
         return cls(Path(path))
 
     def _request(self, route: str, body: dict | None, model):
         conn = None
         try:
-            credential = self.credential_file.read_text().strip()
+            credential = self.credential_file.read_text(encoding='utf-8-sig').strip()
             if not credential or len(credential) > 4096 or any(ch.isspace() for ch in credential):
                 raise DoorUnavailable('Desktop door credential unavailable')
             conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=7)

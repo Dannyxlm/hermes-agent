@@ -35,6 +35,7 @@ def _desktop_scope(server, params):
 
 def _desktop_rpc(server, operation, rid, params):
     from tools.desktop_spaces import SpaceStore
+    from tools.desktop_door_client import DoorUnavailable, DoorConflict
     from .contracts.desktop import (
         DesktopSnapshotParams, DesktopObserveParams, DesktopActionParams, DesktopActionStatusParams)
     models = {'snapshot': DesktopSnapshotParams, 'observe': DesktopObserveParams,
@@ -45,16 +46,12 @@ def _desktop_rpc(server, operation, rid, params):
         with server._session_profile_runtime_scope({'profile_home': str(home)}, hydrate_secrets=False):
             store = SpaceStore(root / 'desktop-spaces.sqlite')
             resource = params['space']
-            if operation == 'snapshot':
-                result = store.snapshot(resource, scope, limit=params['limit'])
-            elif operation == 'action_status':
-                result = store.action_status(resource, scope, params['action_id'])
-            elif operation == 'action' and params['action'] == 'not_now':
-                result = store.not_now(resource, scope, params)
-            else:
-                # Local lease state cannot revoke old Cua activation tickets or stop agent input.
-                return server._err(rid, 4002, 'Desktop operation is not available yet')
+            result = _run_operation(store, resource, scope, home, operation, params)
         return server._ok(rid, result)
+    except DoorUnavailable:
+        return server._err(rid, 4002, 'Desktop operation is not available yet')
+    except DoorConflict:
+        return server._err(rid, 4000, 'Desktop viewer or epoch changed')
     except server.ProfileUnavailableError:
         return server._err(rid, 4064, 'Desktop profile unavailable')
     except DesktopDenied:
@@ -65,6 +62,33 @@ def _desktop_rpc(server, operation, rid, params):
         return server._err(rid, -32603, 'Desktop operation failed')
     except (OSError, sqlite3.Error):
         return server._err(rid, 5401, 'Desktop state unavailable')
+
+
+def _run_operation(store, resource, scope, home, operation, params):
+    from tools.desktop_control import DesktopController
+    from tools.desktop_door_client import DoorUnavailable, DoorConflict
+
+    if operation == 'action' and params['action'] == 'not_now':
+        return store.not_now(resource, scope, params)
+    controller = None
+    if resource == 'desktop':
+        try:
+            controller = DesktopController(store, scope, home)
+        except DoorUnavailable:
+            pass
+    if operation == 'snapshot':
+        if controller is not None:
+            try:
+                return controller.snapshot(limit=params['limit'])
+            except (DoorUnavailable, DoorConflict):
+                pass
+        return store.snapshot(resource, scope, limit=params['limit'])
+    if operation == 'action_status':
+        return (controller.action_status(params['action_id']) if controller is not None
+                else store.action_status(resource, scope, params['action_id']))
+    if controller is None or (operation == 'action' and params['action'] not in ('take_over', 'hand_back', 'saved_login')):
+        raise DoorUnavailable('Desktop operation unavailable')
+    return controller.observe(params) if operation == 'observe' else controller.action(params)
 
 
 def register(server):
