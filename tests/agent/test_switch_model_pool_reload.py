@@ -187,9 +187,7 @@ class TestSwitchModelReloadsCredentialPool:
 
         # The guard would have returned (False, has_retried_429) early
         # without touching the pool. After the fix, the pool is consulted.
-        assert new_pool.current.called, (
-            "pool.current() was never called — mismatch guard short-circuited"
-        )
+        new_pool.mark_exhausted_and_rotate.assert_called_once()
 
     def test_pool_reload_failure_does_not_block_switch(self):
         """If load_pool raises (e.g. corrupt auth.json), switch_model must

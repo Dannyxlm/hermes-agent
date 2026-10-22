@@ -28,9 +28,11 @@ Your request
   → 429 rate limit?
       → Plan/usage limit reached (e.g. ChatGPT/Codex "usage limit reached")?
           → Rotate to next pool key immediately (no retry — the cap won't clear on retry)
-      → Generic / transient 429?
-          → Retry same key once (transient blip)
-          → Second 429 → rotate to next pool key
+      → Another key can serve this model now?
+          → Rotate immediately, without waiting for Retry-After
+      → No usable alternate?
+          → Retry same key once, honoring Retry-After up to 600 seconds
+          → Second 429 → try rotation
       → All keys exhausted → fallback_model (different provider)
   → 402 billing error?
       → Immediately rotate to next pool key (1h cooldown)
@@ -203,15 +205,26 @@ The pool handles different errors differently:
 
 | Error | Behavior | Cooldown |
 |-------|----------|----------|
-| **429 Rate Limit** | Retry same key once (transient). Second consecutive 429 rotates to next key | 1 hour |
+| **429 Rate Limit** | Rotate on the first 429 if another key can serve this model now; otherwise retry the same key once before trying rotation | Provider reset hint, else 1 hour (brief transient cooldown for a sole credential) |
 | **402 Billing/Quota** | Immediately rotate to next key | 1 hour |
 | **401 Auth Expired** | Try refreshing the OAuth token first. Rotate only if refresh fails | 5 minutes |
 | **400 Codex model entitlement** (`The '<model>' model is not supported when using Codex with a ChatGPT account.`) | Bench this key for the rejected model only and rotate to the next key; other models keep using the key. Other 400s never rotate | Until `hermes auth reset` (per model; an entitlement is a plan property, not a window) |
 | **All keys exhausted** | Fall through to `fallback_model` if configured | — |
 
-Provider-supplied `reset_at` timestamps override these default cooldowns.
+Provider-supplied reset hints (`reset_at`, Retry-After, or rate-limit reset headers) size the
+rotation bench. Its separate `bench_until` uses the latest valid hint and a minimum 60-second
+bench for zero-wait rotation; no hint keeps the existing default TTL. The 600-second retry-wait
+cap never shortens that bench. User-visible `reset_at`, fallback cooldowns and sole-credential
+waits retain their original precedence (body reset, then Retry-After, then other headers).
+Expired reset timestamps are ignored instead of immediately re-enabling the failed credential.
 
-The `has_retried_429` flag resets on every successful API call, so a single transient 429 doesn't trigger rotation.
+Availability is model-aware and excludes the failed key and duplicate rows carrying it. A sole
+credential, or a pool whose alternatives are exhausted or cooling down for this model, keeps the
+same-key retry. The free tier's sole-credential rules are unchanged. The `has_retried_429` flag
+resets on every successful API call. Zero-wait rotations are limited to one lap of credential
+ids per attempt cycle; previously visited ids do not count as new alternatives. Once that lap
+is spent, normal counted, waited retries run up to the configured retry limit. Success clears
+the lap along with `has_retried_429`.
 
 **Quota benches are temporary for the live session too.** When a 429/402 rotates a session off a
 credential, that session checks at the start of each turn whether the benched credential is back in
@@ -327,10 +340,10 @@ For the full data flow diagram, see [`docs/credential-pool-flow.excalidraw`](htt
 
 The credential pool integrates at the provider resolution layer:
 
-1. **`agent/credential_pool.py`** — Pool manager: storage, selection, rotation, cooldowns; **`agent/credential_pool_admin.py`** owns locked target resolution, reset, add, removal, and priority mutations; **`agent/credential_pool_model_cooldowns.py`** owns the per-model Anthropic 429 cooldowns
+1. **`agent/credential_pool.py`** — Pool manager: storage, selection, rotation, cooldowns; **`agent/credential_pool_admin.py`** owns locked target resolution, reset, add, removal, and priority mutations; **`agent/credential_pool_model_cooldowns.py`** owns model-aware availability and the per-model Anthropic 429 cooldowns
 2. **`hermes_cli/auth_commands.py`** — CLI commands and interactive wizard
 3. **`hermes_cli/runtime_provider.py`** — Pool-aware credential resolution
-4. **`agent/turn_api_error.py`** — Error recovery: 429/402/401 → pool rotation → fallback
+4. **`agent/turn_api_error.py`** — Error recovery: 429/402/401 → pool rotation → fallback; **`agent/agent_runtime_rate_limit.py`** owns the first-429 rotation decision
 
 ## Storage
 
