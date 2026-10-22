@@ -448,6 +448,13 @@ DEFAULT_CONFIG = {
         # With a cloud provider, auto-spawn local Chromium for LAN/localhost URLs instead
         "auto_local_for_private_urls": True,
         "cdp_url": "",  # persistent CDP endpoint for attaching to an existing Chromium/Chrome
+        # browser_exec on a SHARED browser (cdp_url / BROWSER_CDP_URL / use_real_profile): run each task's
+        # unnamed calls in its own harness lane (own daemon, own background tab) instead of the one
+        # "default" lane every chat shares, which attaches to the first real page.
+        "exec_task_tabs": False,
+        # Stop browser_exec lanes idle this many minutes and close the tabs they opened with new_tab();
+        # 0 = never. Clamped up to 35 so a running call (max 30 min) is never cut.
+        "exec_idle_minutes": 0,
         # Consent to browse with the user's REAL logins locally: runs on a Hermes-managed SNAPSHOT
         # of the ACTIVE default-Chromium profile (Local State -> profile.last_used; cookies, logins,
         # prefs copied and re-synced per fresh session) driven by Hermes' packaged Chromium. The
