@@ -41,24 +41,28 @@ class DesktopController:
             raise DoorUnavailable('Desktop human state unconfirmed')
         return sessions[0]
 
-    def sync(self, state):
+    @staticmethod
+    def sync(store, state):
         if state.agent_open():
             next_lease = SpaceLease('agent', state.epoch)
         else:
-            session = self._human_session(state)
+            session = DesktopController._human_session(state)
             next_lease = SpaceLease('human', state.epoch, digest(session.owner_id),
                                     digest(session.viewer_id), state.expires_at)
-        previous = self.store.leases.read('desktop')
+        previous = store.leases.read('desktop')
         if state.epoch < previous.epoch:
             raise DoorUnavailable('Desktop epoch regressed')
         if previous == next_lease or (previous.holder == 'human_pending' and previous.epoch == state.epoch):
             return
         if previous.holder == 'human' and next_lease.holder == 'agent' and next_lease.epoch <= previous.epoch:
             raise DoorUnavailable('Desktop hand-back unconfirmed')
-        with self.store.leases.connection(write=True) as db:
-            if self.store.leases.lease_in(db, 'desktop') != previous:
+        with store.leases.connection(write=True) as db:
+            current = store.leases.lease_in(db, 'desktop')
+            if current == next_lease:
+                return
+            if current != previous:
                 raise DoorConflict('Desktop lease changed')
-            self.store.leases._save(db, 'desktop', next_lease)
+            store.leases._save(db, 'desktop', next_lease)
             if previous.holder == 'human' and next_lease.holder == 'agent':
                 db.execute("UPDATE signin_bindings SET outcome='human_done' WHERE resource='desktop' AND scope_hash=? AND outcome='pending'",
                            (previous.scope_hash,))
@@ -67,12 +71,10 @@ class DesktopController:
 
     def snapshot(self, *, limit):
         state = self.door.state()
-        self.sync(state)
+        self.sync(self.store, state)
         result = self.store.snapshot('desktop', self.scope, limit=limit)
         if state.ready and (state.agent_open() or state.state == 'HUMAN'):
             result['unavailable'].remove('control')
-        if result['signin'] and result['signin']['login_handle']:
-            result['unavailable'].remove('producer')
         if state.state == 'HUMAN':
             result['state'] = 'takeover'
         return result
@@ -81,7 +83,7 @@ class DesktopController:
         if body['mode'] == 'replay':
             raise DoorUnavailable('Replay unavailable')
         state = self.door.state()
-        self.sync(state)
+        self.sync(self.store, state)
         if body['expected_lease_epoch'] != state.epoch:
             raise DoorConflict('Desktop epoch changed')
         if body['mode'] == 'watch':
@@ -100,7 +102,7 @@ class DesktopController:
             raise DoorUnavailable('Desktop observation unconfirmed')
         if body['mode'] == 'control':
             renewed = self.door.state()
-            self.sync(renewed)
+            self.sync(self.store, renewed)
             if renewed.epoch != observation.lease_epoch or renewed.expires_at != observation.expires_at:
                 raise DoorUnavailable('Desktop renewal unconfirmed')
         return observation.model_dump()
@@ -136,7 +138,7 @@ class DesktopController:
         if old:
             return self.action_status(body['action_id']) if old['status'] == 'outcome_unknown' else old
         state = self.door.state()
-        self.sync(state)
+        self.sync(self.store, state)
         if not state.ready:
             raise DoorUnavailable('Desktop control unavailable')
         if body['action'] == 'saved_login':
@@ -216,7 +218,7 @@ class DesktopController:
                     return receipt
             elif not state.agent_open():
                 return receipt
-            self.sync(state)
+            self.sync(self.store, state)
         except (DoorUnavailable, DoorConflict):
             return receipt
         body = {'action_id': action_id, 'action': operation['action']}

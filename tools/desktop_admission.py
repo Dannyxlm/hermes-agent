@@ -26,22 +26,31 @@ def assert_agent_admitted(endpoint: str) -> int | None:
     try:
         leases = LeaseStore(_get_default_hermes_home() / 'desktop-spaces.sqlite')
         lease = leases.read('desktop')
-        if not leases.agent_permitted('desktop', lease.epoch):
-            raise DesktopInputDenied('A human holds Desktop control or hand-back is unconfirmed')
         from tools.desktop_door_client import DoorClient, DoorNotConfigured, DoorUnavailable
         try:
             door = DoorClient.configured()
         except DoorNotConfigured:
-            return lease.epoch
+            if leases.agent_permitted('desktop', lease.epoch):
+                return lease.epoch
+            raise DesktopInputDenied('Desktop hand-back unconfirmed') from None
         except DoorUnavailable:
             raise DesktopInputDenied('Desktop gate configuration unavailable') from None
         try:
             state = door.state()
         except DoorUnavailable:
             raise DesktopInputDenied('Desktop gate state unavailable') from None
-        if not state.agent_open() or state.epoch != lease.epoch:
+        if not state.agent_open():
             raise DesktopInputDenied('Desktop agent gate unconfirmed')
-        return lease.epoch
+        from tools.desktop_control import DesktopController
+        from tools.desktop_spaces import SpaceStore
+        from tools.desktop_door_client import DoorConflict
+        try:
+            DesktopController.sync(SpaceStore(leases.path), state)
+        except (DoorUnavailable, DoorConflict):
+            raise DesktopInputDenied('Desktop hand-back unconfirmed') from None
+        if not leases.agent_permitted('desktop', state.epoch):
+            raise DesktopInputDenied('Desktop lease changed')
+        return state.epoch
     except (OSError, sqlite3.Error) as exc:
         raise DesktopInputDenied('Desktop admission unavailable') from exc
 

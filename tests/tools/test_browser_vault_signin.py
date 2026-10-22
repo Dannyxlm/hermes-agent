@@ -42,7 +42,7 @@ def signin(desktop, monkeypatch, tmp_path):
     monkeypatch.setattr(browser_supervisor.SUPERVISOR_REGISTRY, 'get', lambda tid: supervisor)
     real_request = browser_vault_signin.request_signin
     monkeypatch.setattr(browser_vault_signin, 'request_signin',
-                        lambda reason, task_id: real_request(reason, task_id, timeout_s=5))
+                        lambda reason, task_id, timeout_s=5: real_request(reason, task_id, timeout_s=timeout_s))
     return SimpleNamespace(secret=secret, meta=meta, page=page, supervisor=supervisor)
 
 
@@ -68,7 +68,7 @@ def start_producer(home):
 
 class TestSavedLoginProducer:
     @pytest.mark.parametrize('profile', ['default', 'secondary'])
-    @pytest.mark.parametrize('decision', ['saved_login', 'not_now', 'hand_back'])
+    @pytest.mark.parametrize('decision', ['saved_login', 'not_now', 'hand_back', 'heartbeat'])
     def test_producer_publishes_to_both_installations_and_resumes(self, desktop, door, signin, profile, decision, caplog):
         d = desktop
         home = d.home if profile == 'default' else d.secondary
@@ -78,15 +78,23 @@ class TestSavedLoginProducer:
             return self._pending(d, profile)
 
         state = wait_until(published, what='sign-in published')
+        assert 'producer' not in state['unavailable']
         assert state['signin']['login_handle'] == signin.meta.id
         assert state['signin']['masked_identifier'] == 'd•••@example.com'
         assert 'saved_login' in state['signin']['allowed_actions']
         assert d.call('desktop.snapshot', profile='secondary' if profile == 'default' else 'default')['result']['signin'] is None
-        if decision == 'hand_back':
+        if decision in ('hand_back', 'heartbeat'):
             watch = d.call('desktop.observe', profile=profile, mode='watch', expected_lease_epoch=state['lease']['epoch'])['result']
             taken = self._action(d, profile, 'take_over', 'take', viewer_id=watch['viewer_id'])
             assert taken['status'] == 'accepted'
-            assert self._action(d, profile, 'hand_back', 'back', viewer_id=watch['viewer_id'])['status'] == 'accepted'
+            if decision == 'hand_back':
+                assert self._action(d, profile, 'hand_back', 'back', viewer_id=watch['viewer_id'])['status'] == 'accepted'
+            else:
+                from tools import browser_vault_tool
+                door.state.update(holder='agent', state='WATCHING', epoch=taken['lease_epoch'] + 1,
+                                  human_viewer_id=None, expires_at=None, sessions=[])
+                door.state['gate']['state'] = 'open'
+                assert browser_vault_tool._eval_js_secret('another-task', 'fixture-only-no-input')['success']
             expected = 'human_done'
         else:
             signin_fields = {'request_id': state['signin']['id'], 'request_revision': state['signin']['revision']}
@@ -102,6 +110,28 @@ class TestSavedLoginProducer:
         public = json.dumps(d.call('desktop.snapshot', profile=profile)) + str(result) + caplog.text
         assert signin.secret not in public
         assert signin.secret.encode() not in (d.home / 'desktop-spaces.sqlite').read_bytes()
+
+    def test_expiry_resumes_without_input(self, desktop, door, signin):
+        from tools.browser_vault_signin import request_signin
+        result = json.loads(request_signin('Continue', 'producer-task', timeout_s=0.02))
+        assert result['status'] == 'expired'
+        assert signin.page.writes == 0
+        assert desktop.call('desktop.snapshot')['result']['signin'] is None
+
+    def test_no_exact_origin_login_never_offers_saved_login(self, desktop, door, signin, monkeypatch):
+        monkeypatch.setattr('agent.vault_backends.enabled_backends', list)
+        result, done, thread = start_producer(desktop.home)
+        state = wait_until(lambda: self._pending(desktop, 'default'))
+        assert state['signin']['login_handle'] is None
+        assert state['signin']['masked_identifier'] is None
+        assert state['signin']['allowed_actions'] == ['take_over', 'not_now']
+        assert 'producer' not in state['unavailable']
+        assert self._action(desktop, 'default', 'not_now', 'defer', request_id=state['signin']['id'],
+                            request_revision=1)['status'] == 'accepted'
+        assert done.wait(10)
+        thread.join(2)
+        assert json.loads(result[0])['status'] == 'deferred'
+        assert signin.page.writes == 0
 
     @staticmethod
     def _pending(d, profile):

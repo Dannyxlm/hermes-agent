@@ -83,6 +83,7 @@ class SpaceStore:
     def snapshot(self, resource: str, scope: str, *, limit: int = 20, now: float | None = None) -> dict:
         resource_id(resource)
         now = time.time() if now is None else now
+        unavailable = list(UNAVAILABLE)
         with self.leases.connection() as db:
             lease = self.leases.lease_in(db, resource)
             signin, activity = None, []
@@ -95,6 +96,7 @@ class SpaceStore:
                               'login_handle': None, 'masked_identifier': None}
                     binding = self.signin_binding(db, resource, scope)
                     if binding and binding['task_id'] and binding['target_id']:
+                        unavailable.remove('producer')
                         signin['allowed_actions'] = ['take_over', 'not_now']
                     if binding and binding['request_id'] == row['request_id'] and binding['login_handle']:
                         signin.update(allowed_actions=['saved_login', 'take_over', 'not_now'],
@@ -104,7 +106,7 @@ class SpaceStore:
                     (resource, digest(scope), now - RETENTION_SECONDS, limit))]
             return {'protocol_version': 1, 'resource_id': resource, 'revision': _revision(db, resource),
                     'server_time': now, 'state': 'signin' if signin else 'watch', 'complete': False,
-                    'unavailable': list(UNAVAILABLE), 'lease': lease.public(scope, now), 'active': None,
+                    'unavailable': unavailable, 'lease': lease.public(scope, now), 'active': None,
                     'signin': signin, 'activity': activity, 'history': [], 'next_cursor': None}
 
     def publish_signin(self, resource: str, scope: str, *, request_id: str, revision: int,
