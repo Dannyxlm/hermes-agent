@@ -60,6 +60,14 @@ def _eval_js(task_id: str, expression: str) -> dict[str, Any]:
     embed secret values — the fallback places the expression in subprocess
     argv. Use :func:`_eval_js_secret` for secret-bearing expressions.
     """
+    from tools.browser_vault_signin import bound_supervisor
+    bound = bound_supervisor(task_id)
+    if bound is not None:
+        try:
+            result = bound.evaluate_runtime(expression)
+            return {"success": result.get("ok") is True, "result": result.get("result")}
+        except (OSError, RuntimeError, ValueError, TimeoutError):
+            return {"success": False, "error": "Sign-in page unavailable"}
     try:
         from tools.browser_supervisor import SUPERVISOR_REGISTRY
 
@@ -94,8 +102,9 @@ def _ensure_supervisor(task_id: str):
     for the packaged Chromium's endpoint (``get cdp-url``: same daemon, same reaper) and attach.
     Returns None when no endpoint is reachable; the fill then refuses rather than touching argv."""
     from tools.browser_supervisor import SUPERVISOR_REGISTRY
+    from tools.browser_vault_signin import bound_supervisor
 
-    supervisor = SUPERVISOR_REGISTRY.get(task_id)
+    supervisor = bound_supervisor(task_id) or SUPERVISOR_REGISTRY.get(task_id)
     if supervisor is not None:
         return supervisor
     from tools.browser_tool import _active_sessions, _last_session_key

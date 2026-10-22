@@ -59,7 +59,8 @@ def task_endpoint(task_id: str) -> str:
     from tools.browser_supervisor import SUPERVISOR_REGISTRY
     from tools.browser_tool import _active_sessions, _last_session_key
 
-    supervisor = SUPERVISOR_REGISTRY.get(task_id)
+    from tools.browser_vault_signin import bound_supervisor
+    supervisor = bound_supervisor(task_id) or SUPERVISOR_REGISTRY.get(task_id)
     if supervisor is not None:
         return str(getattr(supervisor, 'cdp_url', ''))
     return str((_active_sessions.get(_last_session_key(task_id)) or {}).get('cdp_url') or '')

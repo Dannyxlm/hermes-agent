@@ -4,6 +4,7 @@ import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
+from websockets.sync.server import serve
 
 import pytest
 
@@ -46,6 +47,61 @@ def signin(desktop, monkeypatch, tmp_path):
     return SimpleNamespace(secret=secret, meta=meta, page=page, supervisor=supervisor)
 
 
+@pytest.fixture
+def signin_cdp(signin, monkeypatch):
+    from tools import browser_supervisor, browser_tool_cdp
+
+    page = SimpleNamespace(target='chrome-target', present=True, commands=[], attached=[], writes=0)
+
+    def target_info():
+        return {'targetId': page.target, 'type': 'page', 'url': signin.page.origin + '/login'}
+
+    def capture_call(method, params=None, **kwargs):
+        if method == 'Target.getTargetInfo':
+            return {'result': {'targetInfo': target_info()}}
+        if method == 'Runtime.evaluate':
+            return {'result': {'result': {'type': 'string', 'value': signin.page.origin + '/login'}}}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(browser_supervisor.SUPERVISOR_REGISTRY, 'capture',
+                        lambda task: SimpleNamespace(page_session_id='page-session', call=capture_call))
+
+    def handler(ws):
+        for raw in ws:
+            request = json.loads(raw)
+            method, params = request['method'], request.get('params', {})
+            page.commands.append(method)
+            if method == 'Target.getTargetInfo' and page.present and params.get('targetId') == page.target:
+                result = {'targetInfo': target_info()}
+            elif method == 'Target.attachToTarget' and page.present and params.get('targetId') == page.target:
+                page.attached.append(params['targetId'])
+                result = {'sessionId': 'rpc-new-session'}
+            elif method == 'Runtime.evaluate' and request.get('sessionId') == 'rpc-new-session':
+                expression = params['expression']
+                if signin.secret in expression:
+                    page.writes += 1
+                value = signin.supervisor.evaluate_runtime(expression)['result']
+                result = {'result': {'type': 'object', 'value': value}}
+            elif method == 'Target.detachFromTarget':
+                result = {}
+            else:
+                ws.send(json.dumps({'id': request['id'], 'error': {'message': 'fixture target unavailable'}}))
+                continue
+            ws.send(json.dumps({'id': request['id'], 'result': result}))
+
+    with serve(handler, '127.0.0.1', 0) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.socket.getsockname()[1]
+        monkeypatch.setattr(browser_tool_cdp, '_resolve_cdp_override',
+                            lambda endpoint: f'ws://127.0.0.1:{port}/devtools/browser/fixture')
+        try:
+            yield page
+        finally:
+            server.shutdown()
+            thread.join(5)
+
+
 def start_producer(home):
     from tui_gateway import server
     from tools import browser_vault_tool
@@ -67,6 +123,10 @@ def start_producer(home):
 
 
 class TestSavedLoginProducer:
+    @pytest.fixture(autouse=True)
+    def exact_cdp(self, signin_cdp):
+        pass
+
     @pytest.mark.parametrize('profile', ['default', 'secondary'])
     @pytest.mark.parametrize('decision', ['saved_login', 'not_now', 'hand_back', 'heartbeat'])
     def test_producer_publishes_to_both_installations_and_resumes(self, desktop, door, signin, profile, decision, caplog):
@@ -145,14 +205,14 @@ class TestSavedLoginProducer:
                       expected_revision=state['revision'], expected_lease_epoch=state['lease']['epoch'], **fields)['result']
 
     @pytest.mark.parametrize('change', ['origin', 'target'])
-    def test_changed_origin_or_target_never_calls_vault_fill(self, desktop, door, signin, monkeypatch, change):
+    def test_changed_origin_or_target_never_calls_vault_fill(self, desktop, door, signin, signin_cdp, monkeypatch, change):
         from tools import browser_vault_tool
         result, done, thread = start_producer(desktop.home)
         state = wait_until(lambda: self._pending(desktop, 'default'))
         if change == 'origin':
             signin.page.origin = 'https://other.example.com'
         else:
-            signin.supervisor._page_session_id = 'different-page'
+            signin_cdp.present = False
         fill = Mock(side_effect=AssertionError('must not fill'))
         monkeypatch.setattr(browser_vault_tool, 'browser_vault_fill', fill)
         receipt = self._action(desktop, 'default', 'saved_login', 'choose', request_id=state['signin']['id'],

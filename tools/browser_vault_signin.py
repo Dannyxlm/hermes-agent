@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import uuid
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -14,15 +15,21 @@ class SigninTarget:
     task_id: str
     target_id: str
     origin: str
+    supervisor: Any
 
 
 fill_target: ContextVar[SigninTarget | None] = ContextVar('desktop_signin_target', default=None)
 
 
+def bound_supervisor(task_id: str):
+    binding = fill_target.get()
+    return binding.supervisor if binding is not None and binding.task_id == task_id else None
+
+
 def bound_target_matches(supervisor, task_id: str) -> bool:
     binding = fill_target.get()
-    return binding is None or (binding.task_id == task_id and
-                               binding.target_id == getattr(supervisor, '_page_session_id', None))
+    return binding is None or (binding.task_id == task_id and binding.supervisor is supervisor and
+                               binding.target_id == getattr(supervisor, 'target_id', None))
 
 
 def _offered_login(origin: str):
@@ -58,9 +65,10 @@ def request_signin(reason: str, task_id: str = 'default', *, timeout_s: float = 
         return refuse('origin_denied')
     if not reason or len(reason) > 512 or not 0 < timeout_s <= 300:
         return refuse('invalid_request')
-    supervisor = vault._ensure_supervisor(task_id)
-    target_id = getattr(supervisor, '_page_session_id', None)
-    if not isinstance(target_id, str) or not target_id:
+    from tools.browser_vault_signin_cdp import published_target
+    try:
+        target_id = published_target(task_id, origin)
+    except (RuntimeError, ValueError, KeyError):
         return refuse('supervisor_required')
     handle, masked = _offered_login(origin)
     store, scope = producer_context()
@@ -82,11 +90,6 @@ def fill_requested_login(binding: dict, origin: str) -> bool:
     from agent.vault_backends import backend_for_handle
 
     task_id = binding['task_id']
-    supervisor = vault._ensure_supervisor(task_id)
-    if getattr(supervisor, '_page_session_id', None) != binding['target_id']:
-        return False
-    if vault._current_page_origin(task_id) != origin:
-        return False
     backend = backend_for_handle(binding['login_handle'])
     meta = backend.get_meta(binding['login_handle']) if backend is not None else None
     if meta is None or meta.kind != 'login' or meta.any_origin:
@@ -94,9 +97,16 @@ def fill_requested_login(binding: dict, origin: str) -> bool:
     allowed = list(meta.allowed_origins) or ([meta.origin] if meta.origin else [])
     if origin not in allowed:
         return False
-    token = fill_target.set(SigninTarget(task_id, binding['target_id'], origin))
+    from tools.browser_vault_signin_cdp import signin_page
     try:
-        result = json.loads(vault.browser_vault_fill(binding['login_handle'], task_id=task_id))
-        return result.get('success') is True
-    finally:
-        fill_target.reset(token)
+        with signin_page(binding['target_id'], origin) as supervisor:
+            token = fill_target.set(SigninTarget(task_id, binding['target_id'], origin, supervisor))
+            try:
+                if vault._current_page_origin(task_id) != origin:
+                    return False
+                result = json.loads(vault.browser_vault_fill(binding['login_handle'], task_id=task_id))
+                return result.get('success') is True
+            finally:
+                fill_target.reset(token)
+    except (OSError, RuntimeError, ValueError, TimeoutError):
+        return False
