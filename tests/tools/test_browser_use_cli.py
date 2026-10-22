@@ -748,15 +748,53 @@ class TestIdleLaneReaping:
         monkeypatch.setattr(bu_cli, "_isolate_served_profile_daemons",
                             lambda env: env.update(BH_RUNTIME_DIR=str(runtime), BH_RUNTIME_DIR_SHARED="1"))
         monkeypatch.setattr(bu_cli, "_lane_dirs", {})
-        cli = _fake_cli(tmp_path, 'cat\necho "ledger:${HERMES_BH_TABS_FILE:-unset}"\n')
+        monkeypatch.setattr(bu_cli, "_driven_lane_envs", {})
+        cli = _fake_cli(tmp_path, 'cat\necho "ledger:${HERMES_BH_TABS_FILE:-unset} rt:$BH_RUNTIME_DIR tmp:$BH_TMP_DIR"\n')
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
         result = json.loads(bu_cli.browser_exec("print('payload')", session="r7k2"))
+        lanes = tmp_path / "rt-l"
         assert "_hermes_track_new_tabs" in result["output"]
         assert result["output"].index("_hermes_track_new_tabs") < result["output"].index("print('payload')")
-        assert f"ledger:{runtime / 'bu-r7k2.hermes-tabs'}" in result["output"]
-        assert (runtime / "bu-r7k2.hermes-lane").exists()
-        assert started and str(runtime) in bu_cli._lane_dirs
+        assert f"ledger:{lanes / 'bu-r7k2.hermes-tabs'} rt:{lanes} tmp:{lanes}" in result["output"]
+        assert (lanes / "bu-r7k2.hermes-lane").exists()
+        assert not (runtime / "bu-r7k2.hermes-lane").exists()
+        assert started and list(bu_cli._lane_dirs) == [str(lanes)]
+        assert bu_cli._driven_lane_envs[(str(lanes), "r7k2")]["BH_RUNTIME_DIR"] == str(lanes)
         assert bu_cli._lane_inflight == {}  # released after the call
+
+    def test_old_and_new_callers_never_share_a_reapable_daemon(self, tmp_path, monkeypatch):
+        """Mixed versions: an older Hermes (or reaping off) drives r7k2 in the original dir and never
+        stamps; the stamping caller's r7k2 lives in the lanes namespace, the only dir the reaper scans."""
+        runtime = tmp_path / "rt"
+        runtime.mkdir()
+        (runtime / "bu-r7k2.pid").write_text("1")  # the legacy caller's live daemon
+        monkeypatch.setattr(bu_cli, "_ensure_lane_reaper", lambda: None)
+        monkeypatch.setattr(bu_cli, "_lane_dirs", {})
+        monkeypatch.setattr(bu_cli, "_lane_inflight", {})
+        stopped = []
+        monkeypatch.setattr(bu_cli, "_stop_lane", lambda env, name, tabs: stopped.append((env["BH_RUNTIME_DIR"], name)))
+        legacy_env = {"BH_RUNTIME_DIR": str(runtime), "BH_RUNTIME_DIR_SHARED": "1"}
+        off_env = dict(legacy_env)
+        assert bu_cli._touch_lane(off_env, "r7k2", 0) == bu_cli._LaneTouch(None)  # reaping off
+        assert off_env == legacy_env  # stays in the original namespace
+        new_env = dict(legacy_env)
+        bu_cli._touch_lane(new_env, "r7k2", 3600)
+        lanes = tmp_path / "rt-l"
+        assert new_env["BH_RUNTIME_DIR"] == str(lanes)
+        (lanes / "bu-r7k2.pid").write_text("2")
+        assert bu_cli._reap_idle_lanes_once(now=time.time() + 10 ** 6) == ["r7k2"]
+        assert stopped == [(str(lanes), "r7k2")]
+        assert (runtime / "bu-r7k2.pid").exists() and not (runtime / "bu-r7k2.hermes-lane").exists()
+
+    def test_backend_swap_stops_lane_daemons_in_their_namespace(self, tmp_path, monkeypatch):
+        log = tmp_path / "cli.log"
+        cli = _fake_cli(tmp_path, 'echo "argv:$* name:$BU_NAME rt:${BH_RUNTIME_DIR:-none}" >> ' + str(log) + '\n')
+        monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
+        monkeypatch.setattr(bu_cli, "_driven_daemons", set())
+        monkeypatch.setattr(bu_cli, "_driven_lane_envs", {("/x/rt-l", "r7k2"): {"BH_RUNTIME_DIR": "/x/rt-l"}})
+        bu_cli.stop_harness_daemons()
+        assert "argv:--reload name:r7k2 rt:/x/rt-l" in log.read_text()
+        assert bu_cli._driven_lane_envs == {}
 
     def test_reaping_off_adds_nothing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")
@@ -771,6 +809,7 @@ class TestIdleLaneReaping:
         assert "_hermes_track_new_tabs" not in result["output"]
         assert "ledger:unset" in result["output"]
         assert not (runtime / "bu-r7k2.hermes-lane").exists()
+        assert not (tmp_path / "rt-l").exists()
 
     def test_ledger_prelude_records_only_newly_created_tabs(self, tmp_path, monkeypatch):
         ledger = tmp_path / "bu-x.hermes-tabs"
@@ -817,14 +856,17 @@ class TestIdleLaneReaping:
         monkeypatch.setattr(bu_cli, "_lane_dirs", {})
         monkeypatch.setattr(bu_cli, "_LOCK_WAIT_S", 0.2)
         env = {"BH_RUNTIME_DIR": str(runtime), "BH_RUNTIME_DIR_SHARED": "1"}
-        with bu_cli._lane_dir_lock(runtime) as lock:  # the "reaper"
+        lanes = tmp_path / "rt-l"
+        lanes.mkdir()
+        with bu_cli._lane_dir_lock(lanes) as lock:  # the "reaper"
             assert lock == bu_cli._LOCK_HELD
             touch = bu_cli._touch_lane(env, "r7k2", 3600)
         assert touch.busy is True and touch.tabs is None
-        assert not (runtime / "bu-r7k2.hermes-lane").exists()
+        assert not (lanes / "bu-r7k2.hermes-lane").exists()
+        assert env["BH_RUNTIME_DIR"] == str(runtime)  # not moved into the namespace
         touch = bu_cli._touch_lane(env, "r7k2", 3600)  # lock free again
-        assert touch.busy is False and touch.tabs == runtime / "bu-r7k2.hermes-tabs"
-        assert (runtime / "bu-r7k2.hermes-lane").exists()
+        assert touch.busy is False and touch.tabs == lanes / "bu-r7k2.hermes-tabs"
+        assert (lanes / "bu-r7k2.hermes-lane").exists()
 
     def test_busy_lane_returns_retryable_error_without_running(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")

@@ -81,8 +81,9 @@ _hermes_track_new_tabs()
 del _hermes_track_new_tabs
 """
 
-# Idle-lane reaping (``browser.exec_idle_minutes``). A lane is one harness daemon (one BU_NAME) in one
-# harness runtime dir. Hermes stamps ``bu-<name>.hermes-lane`` there at every call start; a lane whose
+# Idle-lane reaping (``browser.exec_idle_minutes``). A lane is one harness daemon (one BU_NAME) in the
+# lanes namespace beside the harness runtime dir (``<dir>-l``, see ``_lanes_runtime_dir``), which only
+# stamping callers use. Hermes stamps ``bu-<name>.hermes-lane`` there at every call start; a lane whose
 # stamp is older than the idle window is stopped through the harness's own ``--reload`` (its dedicated tab
 # closes with it) after the tabs in ``bu-<name>.hermes-tabs`` are closed through the still-live daemon.
 # The floor keeps the window above the longest possible call, so a running call is never cut.
@@ -738,6 +739,8 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
 # endpoint leaves later browser_exec calls in the old browser until these are stopped.
 _driven_daemons: set = set()
 _driven_daemons_lock = threading.Lock()
+# Same, for daemons in an idle-lane namespace (see _touch_lane): (lanes dir, BU_NAME) -> its dir env.
+_driven_lane_envs: Dict[tuple, Dict[str, str]] = {}
 # Route cache key -> whether its last browser_exec ran on the hybrid local sidecar.
 _exec_route_is_sidecar: dict[str, bool] = {}
 
@@ -748,13 +751,18 @@ def stop_harness_daemons() -> None:
     with _driven_daemons_lock:
         names = sorted(_driven_daemons)
         _driven_daemons.clear()
-    cmd = _find_cli() if names else None
+        lanes = sorted(_driven_lane_envs.items())
+        _driven_lane_envs.clear()
+    cmd = _find_cli() if names or lanes else None
     if not cmd:
         return
     env = _base_subprocess_env()
     for name in names:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, "BU_NAME": name}, 15)
+    for (_dir, name), dir_env in lanes:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, **dir_env, "BU_NAME": name}, 15)
 
 
 def _exec_task_tabs_enabled(browser_cfg: dict) -> bool:
@@ -777,7 +785,7 @@ def _task_session_name(task_id: Optional[str]) -> str:
     if not raw:
         return ""
     import hashlib
-    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-_")[:48]
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-_")[:26]  # <= 40 chars: socket path budget
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
     return f"task-{safe}-{digest}" if safe else f"task-{digest}"
 
@@ -858,15 +866,26 @@ class _LaneTouch(NamedTuple):
     busy: bool = False  # a reap of this runtime dir held the lock past the wait: do not dispatch
 
 
+def _lanes_runtime_dir(runtime_dir: Path) -> Path:
+    """The idle-lane namespace beside a harness runtime dir. Only callers that stamp every call under the
+    dir lock ever start daemons here, so an older Hermes (or a caller with reaping off) that drives the
+    same BU_NAME gets its own daemon in the original dir and can never be reaped. Kept short: the
+    daemon's AF_UNIX socket path lives in it."""
+    return runtime_dir.with_name(runtime_dir.name + "-l")
+
+
 def _touch_lane(env: dict, name: str, idle_s: int) -> _LaneTouch:
-    """Stamp lane ``name`` as used now (under the dir lock, so no reap can be mid-flight) and register its
-    runtime dir for reaping. A stamp is only ever written while the lock is held: if a reap keeps the lock
-    past the wait, the call must not start, because that reap may be about to stop this very daemon."""
+    """Join the idle-lane protocol for this call: stamp lane ``name`` as used now (under the dir lock, so
+    no reap can be mid-flight), point ``env`` at the lanes namespace, and register it for reaping. A stamp
+    is only written while the lock is held; if a reap keeps it past the wait the call must not start,
+    because that reap may be about to stop this very daemon. On any other failure ``env`` is left on the
+    original namespace and the call runs untracked."""
     if os.name == "nt" or idle_s <= 0 or name == "default":
         return _LaneTouch(None)
-    runtime_dir = _harness_runtime_dir(env)
-    if runtime_dir is None:
+    base_dir = _harness_runtime_dir(env)
+    if base_dir is None:
         return _LaneTouch(None)
+    runtime_dir = _lanes_runtime_dir(base_dir)
     try:
         runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError:
@@ -881,6 +900,9 @@ def _touch_lane(env: dict, name: str, idle_s: int) -> _LaneTouch:
             stamp.touch()
         except OSError:
             return _LaneTouch(None)
+    lanes_env = {"BH_RUNTIME_DIR": str(runtime_dir), "BH_RUNTIME_DIR_SHARED": "1",
+                 "BH_TMP_DIR": str(runtime_dir), "BH_TMP_DIR_SHARED": "1"}
+    env.update(lanes_env)
     with _lane_state_lock:
         _lane_dirs[str(runtime_dir)] = _LaneDir({k: env[k] for k in _HARNESS_DIR_ENV_KEYS if k in env}, idle_s)
     _ensure_lane_reaper()
@@ -1049,6 +1071,8 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             _driven_daemons.add(env.get("BU_NAME", "default"))
+            if lane_key is not None:
+                _driven_lane_envs[lane_key] = {k: env[k] for k in _HARNESS_DIR_ENV_KEYS if k in env}
         if lane_key is not None:
             with _lane_state_lock:
                 _lane_inflight[lane_key] = _lane_inflight.get(lane_key, 0) + 1
