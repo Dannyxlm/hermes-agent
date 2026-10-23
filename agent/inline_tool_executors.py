@@ -328,7 +328,7 @@ def resolve_invoke_tool_executor(agent, function_name: str) -> Optional[InlineTo
         return INLINE_TOOL_EXECUTORS[function_name]
     from agent.memory_manager import memory_provider_owns_tool
     if memory_provider_owns_tool(agent, function_name):
-        return lambda agent, args, ctx: agent._memory_manager.handle_tool_call(function_name, args)
+        return lambda agent, args, ctx: agent._memory_manager.handle_tool_call(function_name, args, tool_call_id=ctx.tool_call_id)
     if function_name == "message_agent":
         return None
     return INLINE_TOOL_EXECUTORS.get(function_name)

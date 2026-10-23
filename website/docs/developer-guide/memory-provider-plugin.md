@@ -360,6 +360,26 @@ def register(ctx) -> None:
     ctx.register_memory_provider(MyMemoryProvider())
 ```
 
+A provider may use `ctx.call_mcp`, `ctx.get_config`, and `ctx.state` in the
+registration callback, including when it runs in an isolated plugin host.
+`call_mcp` uses the existing profile-scoped native client and requires an
+operator grant in `plugins.entries.<provider-name>.mcp_allowlist`. Denials
+propagate to the provider. It never opens a parallel connection.
+
+For bounded ambient reads, `ctx.call_mcp(server, tool, arguments, timeout=2,
+skip_if_busy=True)` skips an occupied native RPC slot. Budget the entire recall
+composition, including hydration. The result envelope preserves nonreserved
+`_meta`, structured content and typed native errors. An oversized JSON result
+returns `ok: false`, `error: mcp_result_too_large`, and `truncated: true` rather
+than a successful partial JSON string.
+
+Provider tool handlers accepting `**kwargs` or `tool_call_id` receive the host's
+invocation ID in both sequential and concurrent dispatch. This ID is separate
+from model-supplied arguments. Persist the exact intent in `ctx.state` before
+submitting a replayable write, and recover the backend's receipt after an
+uncertain response. A transport acknowledgement alone does not prove durability.
+Handlers with the older two-argument signature still work.
+
 A provider may also expose read-only skills from the same callback. Skills are
 qualified by the entry-point name and are loaded only when that memory provider
 is active:
