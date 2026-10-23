@@ -453,7 +453,10 @@ def _mobile_push_presentation(session, push_scope, *, reply="", ask="", attentio
         return AlertPreview(attention=attention)
     return AlertPreview(title=session.get("_mobile_push_title") or push_scope.profile, reply=reply, ask=ask,
                         step=session.get("_mobile_push_step") or "", agents=session.get("_mobile_push_agents") or 0,
-                        plan_done=done, plan_total=total, attention=attention)
+                        plan_done=done, plan_total=total, attention=attention,
+                        tool=session.get("_mobile_push_tool") or "",
+                        step_id=session.get("_mobile_push_step_id") or "",
+                        step_started_at=session.get("_mobile_push_step_started_at") or 0)
 
 
 def _mobile_push_capture(obj):
@@ -545,7 +548,8 @@ def _mobile_push_capture_ordered(obj):
             session["_mobile_push_human_turns"] = pending[1:]
             # Continuations announce message.start before _run_prompt_submit announces it again.
             prior = session.get("_mobile_push_run_id") if current == "starting" else None
-            session.update(_mobile_push_step="", _mobile_push_agents=_mobile_push_agent_count(session),
+            session.update(_mobile_push_step="", _mobile_push_tool="", _mobile_push_step_id="",
+                           _mobile_push_step_started_at=0, _mobile_push_agents=_mobile_push_agent_count(session),
                            _mobile_push_plan=_mobile_push_plan(session))
             preview = _mobile_push_presentation(session, push_scope)
             run = service.start_run(push_scope, reuse_run_id=prior, listed=bool(session.get("_mobile_push_listed")),
@@ -563,8 +567,12 @@ def _mobile_push_capture_ordered(obj):
             return
         if event == "tool.start":
             session["_mobile_push_step"] = _mobile_push_step(payload)
+            session.update(_mobile_push_tool=payload.get("name") or "",
+                           _mobile_push_step_id=payload.get("tool_id") or "",
+                           _mobile_push_step_started_at=time.time())
         elif event != "todo.updated" and status != "usingTool":
-            session["_mobile_push_step"] = ""
+            session.update(_mobile_push_step="", _mobile_push_tool="",
+                           _mobile_push_step_id="", _mobile_push_step_started_at=0)
         if event in {"tool.start", "tool.complete"}:
             session["_mobile_push_agents"] = _mobile_push_agent_count(session)
         preview = _mobile_push_presentation(
@@ -591,9 +599,13 @@ def _mobile_push_finish(session, status):
         service = _mobile_push_service()
         scope = session.get("_mobile_push_scope")
         run_id = session.get("_mobile_push_run_id")
-        if service and scope and run_id:
+        if scope and run_id:
             terminal = {"error": "failed", "interrupted": "cancelled"}.get(status, "complete")
-            service.record(scope, run_id, "turn-finally", terminal)
+            if service is not None:
+                service.record(scope, run_id, "turn-finally", terminal)
+            else:
+                from tui_gateway.mobile_push import _offline_store
+                _offline_store(_hermes_home, lambda store: store.record(scope, run_id, "turn-finally", terminal))
             session["_mobile_push_status"] = terminal
     except Exception as error:
         logger.warning("mobile push terminal projection unavailable (%s)", type(error).__name__)

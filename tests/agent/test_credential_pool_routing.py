@@ -13,7 +13,7 @@ Covers:
 import json
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ class TestGatewayTurnRoutePool:
 # ---------------------------------------------------------------------------
 
 class TestPoolRotationCycle:
-    """Verify the retry-same → rotate → exhaust flow in _recover_with_credential_pool."""
+    """Verify the rotate-if-available → exhaust flow in _recover_with_credential_pool."""
 
     def _make_agent_with_pool(self, pool_entries=3):
         from run_agent import AIAgent
@@ -106,6 +106,7 @@ class TestPoolRotationCycle:
 
         pool = MagicMock()
         pool.has_credentials.return_value = True
+        pool.has_available.return_value = pool_entries > 1
         # Must be set explicitly — MagicMock.provider returns a truthy
         # child mock, which would trigger the provider-mismatch guard.
         pool.provider = ""
@@ -130,15 +131,16 @@ class TestPoolRotationCycle:
 
         return agent, pool, entries
 
-    def test_first_429_sets_retry_flag_no_rotation(self):
-        """First 429 should just set has_retried_429=True, no rotation."""
-        agent, pool, _ = self._make_agent_with_pool(3)
+    def test_first_429_rotates_when_alternate_is_available(self):
+        """An available pooled account avoids a retry against the throttled one."""
+        agent, pool, entries = self._make_agent_with_pool(3)
         recovered, has_retried = agent._recover_with_credential_pool(
             status_code=429, has_retried_429=False
         )
-        assert recovered is False
-        assert has_retried is True
-        pool.mark_exhausted_and_rotate.assert_not_called()
+        assert recovered is True
+        assert has_retried is False
+        pool.mark_exhausted_and_rotate.assert_called_once()
+        agent._swap_credential.assert_called_once_with(entries[1])
 
     def test_second_429_rotates_to_next(self):
         """Second consecutive 429 should rotate to next credential."""
@@ -148,7 +150,8 @@ class TestPoolRotationCycle:
         )
         assert recovered is True
         assert has_retried is False  # reset after rotation
-        pool.mark_exhausted_and_rotate.assert_called_once_with(status_code=429, error_context=None, api_key_hint="test-api-key", failure_reason="rate_limit")
+        pool.mark_exhausted_and_rotate.assert_called_once_with(status_code=429, error_context={"bench_until": ANY}, api_key_hint="test-api-key", failure_reason="rate_limit")
+        assert pool.mark_exhausted_and_rotate.call_args.kwargs["error_context"]["bench_until"] > time.time()
         agent._swap_credential.assert_called_once_with(entries[1])
 
     def test_pool_exhaustion_returns_false(self):

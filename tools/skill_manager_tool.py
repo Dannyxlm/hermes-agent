@@ -37,6 +37,7 @@ from tools.skill_manager_batch import (
 from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
 
 logger = logging.getLogger(__name__)
+_skill_review_batch = _ctxvars.ContextVar("skill_review_batch", default=False)
 
 
 def _guard_agent_created_enabled() -> bool:
@@ -87,7 +88,9 @@ def _skill_lock_path(name: str) -> Path:
     ``.usage.json.lock``), never inside the skill dir so delete/recreate cannot unlink it under a
     waiting writer. Keyed by a digest of the basename so ``foo`` and ``category/foo`` share one
     lock and no name can hit a filesystem limit (callers validate the basename first)."""
-    digest = hashlib.sha256(Path(name).name.encode("utf-8", "surrogatepass")).hexdigest()
+    skill = _find_skill(name)
+    lock_name = Path(skill["path"]).name if skill else Path(name).name
+    digest = hashlib.sha256(lock_name.encode("utf-8", "surrogatepass")).hexdigest()
     return _skills_dir() / ".locks" / f"{digest}.lock"
 
 
@@ -732,7 +735,7 @@ _ACTION_HANDLERS = {
 
 
 def _record_success(action, name, result, *, file_path, absorbed_into, task_id,
-                    session_id, ledger_before) -> None:
+                    session_id, ledger_before, ledger_complete=False) -> None:
     """Best-effort post-mutation side effects (never break the tool): ledger, prompt-cache
     clear, curator telemetry (which fires ``on_skill_lifecycle`` for plugins)."""
     with suppress(Exception):
@@ -742,6 +745,8 @@ def _record_success(action, name, result, *, file_path, absorbed_into, task_id,
         _evidence = ({"absorbed_into": absorbed_into, "archived": bool(result.get("_archived"))}
                      if action == "delete" else {})
         _evidence.update({k: v for k, v in (("session_id", session_id), ("file_path", file_path)) if v})
+        _evidence.update(review_committed=not _skill_review_batch.get(),
+                         capture_complete=ledger_complete, anchor_message_id=None)
         _ledger.record_mutation(
             action, name, before=ledger_before if ledger_before is not None else [],
             after_root=_post["path"] if _post else None, evidence=_evidence)
@@ -802,12 +807,16 @@ def skill_manage(
         # complete it from the newest curator backup or a restore is hollow.
         # Audit ledger (tracker #79686 P3): capture the pre-mutation state of the skill directory so every
         # mutation — any actor — lands in the append-only JSONL ledger with before/after blobs.
-        _ledger_before = None
+        _ledger_before = _pre = None
+        _ledger_complete = False
         with suppress(Exception):
             from tools import skill_ledger as _ledger
             _pre = _find_skill(name)
             _ledger_before = _ledger.capture_before(
                 _pre["path"] if _pre else None, complete_package=(action == "delete"), skill=name)
+        with suppress(Exception):
+            from hermex_skill_changes import capture_is_complete
+            _ledger_complete = capture_is_complete(_pre["path"] if _pre else None, _ledger_before)
         handler = _ACTION_HANDLERS.get(action, lambda a: _err(
             f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"))
         result = handler({"name": name, **args})
@@ -816,7 +825,8 @@ def skill_manage(
         if result.get("success"):
             _record_success(
                 action, name, result, file_path=file_path, absorbed_into=absorbed_into,
-                task_id=task_id, session_id=session_id, ledger_before=_ledger_before)
+                task_id=task_id, session_id=session_id, ledger_before=_ledger_before,
+                ledger_complete=_ledger_complete)
     return json.dumps(result, ensure_ascii=False)
 
 

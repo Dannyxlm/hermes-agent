@@ -36,49 +36,74 @@ _PRIVATE_BROWSER_SENTINEL = "_HERMES_BU_PRIVATE_BROWSER"
 # Internal route provenance: this exec resolved to a browser on the Bot Desktop display and must use
 # the same human-control lease fence as the built-in browser tools. Popped before launching the CLI.
 _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
+# Internal route provenance: this exec resolved to a browser OTHER tasks also drive (operator BU_CDP_*,
+# /browser connect / browser.cdp_url, the real-profile browser). Popped before launching the CLI.
+_SHARED_BROWSER_SENTINEL = "_HERMES_BU_SHARED_BROWSER"
 
-# Prepended to the model's code for named sessions on SHARED browsers (a /browser connect CDP override): the
-# harness daemon attaches to the first existing page at startup, so two fresh named daemons can land on the
-# SAME tab. Steering each onto a tab it created prevents clobbering. Runs once per daemon (marker keyed by
-# BU_NAME + daemon pid).
-_OWN_TAB_PREAMBLE = """\
-# hermes: pin this named session to its own tab (once per daemon process)
-def _hermes_ensure_own_tab():
-    import os as _os, tempfile as _tf
-    _name = _os.environ.get("BU_NAME", "default")
-    try:
-        # Key the marker by the daemon's pid so a daemon restart (which
-        # re-attaches to the first shared page) re-pins automatically,
-        # while agent-driven tab switches mid-session are left alone.
-        from browser_harness import _ipc as _bipc
-        _dpid = _bipc.pid_path(_name).read_text().strip() or "0"
-    except Exception:
-        _dpid = "0"
-    _uid = _os.getuid() if hasattr(_os, "getuid") else 0
-    _marker = _os.path.join(
-        _tf.gettempdir(), "hermes-bu-owntab-%s-%s-%s" % (_uid, _name, _dpid)
-    )
-    if _os.path.exists(_marker):
+# Named sessions on SHARED browsers need no Hermes-side tab pinning: browser-harness (>=0.1.13, pinned in
+# pyproject) gives every non-default daemon its own dedicated BACKGROUND tab and closes it on shutdown.
+# Hermes' former own-tab preamble opened a second, FOREGROUND tab that stole the visible tab of a watched
+# browser and outlived its daemon.
+
+# Env var naming the per-lane tab ledger the prelude below appends to (one targetId per line).
+_TABS_FILE_ENV = "HERMES_BH_TABS_FILE"
+# Prepended to the model's code while idle-lane reaping is on: records every tab the session opens with
+# new_tab() so the reaper can close them after it stops the idle daemon (the daemon itself only closes its
+# dedicated tab). Wraps the pre-imported helper in the exec namespace; the original stays reachable.
+_TAB_LEDGER_PRELUDE = """\
+# hermes: remember tabs this session opens so idle-lane cleanup can close them
+def _hermes_track_new_tabs():
+    import os as _os
+    _path = _os.environ.get("HERMES_BH_TABS_FILE")
+    _orig = globals().get("new_tab")
+    _cdp = globals().get("cdp")
+    if not _path or _orig is None or _cdp is None or getattr(_orig, "_hermes_tracked", False):
         return
-    try:
-        # Force a fresh target: new_tab() would REUSE a blank current tab,
-        # which is exactly the tab a sibling daemon may also hold.
-        _tid = cdp("Target.createTarget", url="about:blank").get("targetId")
-        if _tid:
-            switch_tab(_tid)
-    except Exception:
-        pass  # best-effort: worst case is pre-fix behavior
-    try:
-        open(_marker, "w").close()
-    except OSError:
-        pass
-_hermes_ensure_own_tab()
-del _hermes_ensure_own_tab
+    def new_tab(url="about:blank"):
+        # new_tab() may REUSE the attached blank tab (possibly the user's): record only targets that did
+        # not exist before the call, and nothing at all when the before-set is unknown.
+        try:
+            _known = {t.get("targetId") for t in _cdp("Target.getTargets").get("targetInfos", [])}
+        except Exception:
+            _known = None
+        _tid = _orig(url)
+        if _known is not None and _tid and _tid not in _known:
+            try:
+                with open(_path, "a", encoding="utf-8") as _f:
+                    _f.write("%s\\n" % _tid)
+            except Exception:
+                pass
+        return _tid
+    new_tab.__doc__ = _orig.__doc__
+    new_tab._hermes_tracked = True
+    globals()["new_tab"] = new_tab
+_hermes_track_new_tabs()
+del _hermes_track_new_tabs
 """
+
+# Idle-lane reaping (``browser.exec_idle_minutes``). A lane is one harness daemon (one BU_NAME) in the
+# lanes namespace beside the harness runtime dir (``<dir>-l``, see ``_lanes_runtime_dir``), which only
+# stamping callers use. Hermes stamps ``bu-<name>.hermes-lane`` there at every call start; a lane whose
+# stamp is older than the idle window is stopped through the harness's own ``--reload`` (its dedicated tab
+# closes with it) after the tabs in ``bu-<name>.hermes-tabs`` are closed through the still-live daemon.
+# The floor keeps the window above the longest possible call, so a running call is never cut.
+_LANE_STAMP_SUFFIX = ".hermes-lane"
+_LANE_TABS_SUFFIX = ".hermes-tabs"
+_LANE_LOCK_NAME = "hermes-lanes.lock"
+_REAP_INTERVAL_S = 300
+# A call waits this long for a reap of its runtime dir to finish; > two _STOP_STEP_TIMEOUT_S steps.
+_LOCK_WAIT_S = 75.0
+_STOP_STEP_TIMEOUT_S = 25
+_TARGET_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+# Env keys that decide where the harness keeps a daemon's pid/sock files.
+_HARNESS_DIR_ENV_KEYS = ("BH_RUNTIME_DIR", "BH_RUNTIME_DIR_SHARED", "BH_TMP_DIR", "BH_TMP_DIR_SHARED",
+                         "BH_HOME", "BROWSER_HARNESS_HOME", "XDG_CONFIG_HOME", "HOME")
 
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
 _MAX_TIMEOUT_S = 1800
+# Shortest idle window: above the longest call, so a lane mid-call is never stopped.
+_IDLE_FLOOR_S = _MAX_TIMEOUT_S + 300
 _STDERR_CAP_CHARS = 4000
 
 _TASK_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")  # filesystem-safe task ids
@@ -515,6 +540,7 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
     key (hybrid routing; see ``_hybrid_routes_locally``). It sits BELOW the two operator overrides, and the
     sidecar verdict never fires while a CDP override is set."""
     if _has_cdp_env(env):
+        env[_SHARED_BROWSER_SENTINEL] = "1"  # operator BU_CDP_* or the real-profile browser
         return None
     try:
         from tools.browser_tool_cloud import _get_cloud_provider
@@ -526,6 +552,7 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
     override = _quiet(_get_cdp_override, "")
     if override:
         _set_cdp_env(env, override)
+        env[_SHARED_BROWSER_SENTINEL] = "1"
         return None
     if force_local_sidecar:
         return _resolve_local_engine_cdp(env, task_id, session_name, sidecar=True)
@@ -712,6 +739,9 @@ def _run_cli_killing_process_group(cmd, code, env, timeout):
 # endpoint leaves later browser_exec calls in the old browser until these are stopped.
 _driven_daemons: set = set()
 _driven_daemons_lock = threading.Lock()
+# Same, for daemons in an idle-lane namespace (see _touch_lane): (lanes dir, BU_NAME) -> its dir env.
+_driven_lane_envs: dict[tuple, dict[str, str]] = {}
+_desktop_daemon_epochs: dict[tuple[str, str], int] = {}
 # Route cache key -> whether its last browser_exec ran on the hybrid local sidecar.
 _exec_route_is_sidecar: dict[str, bool] = {}
 
@@ -722,19 +752,278 @@ def stop_harness_daemons() -> None:
     with _driven_daemons_lock:
         names = sorted(_driven_daemons)
         _driven_daemons.clear()
-    cmd = _find_cli() if names else None
+        lanes = sorted(_driven_lane_envs.items())
+        _driven_lane_envs.clear()
+    cmd = _find_cli() if names or lanes else None
     if not cmd:
         return
     env = _base_subprocess_env()
     for name in names:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, "BU_NAME": name}, 15)
+    for (_dir, name), dir_env in lanes:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            _run_cli_killing_process_group([*cmd, "--reload"], "", {**env, **dir_env, "BU_NAME": name}, 15)
+
+
+def _exec_task_tabs_enabled(browser_cfg: dict) -> bool:
+    """``browser.exec_task_tabs``: on a SHARED browser, an unnamed call runs in this task's own lane."""
+    return is_truthy_value(browser_cfg.get("exec_task_tabs", False))
+
+
+def _exec_idle_seconds(browser_cfg: dict) -> int:
+    """``browser.exec_idle_minutes`` as seconds; 0 = never reap. Clamped up to ``_IDLE_FLOOR_S``."""
+    try:
+        minutes = float(browser_cfg.get("exec_idle_minutes", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(int(minutes * 60), _IDLE_FLOOR_S) if minutes > 0 else 0
+
+
+def _task_session_name(task_id: Optional[str]) -> str:
+    """Harness daemon name for a task's unnamed calls: readable, valid BU_NAME, distinct per task id."""
+    raw = str(task_id or "")
+    if not raw:
+        return ""
+    import hashlib
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-_")[:26]  # <= 40 chars: socket path budget
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"task-{safe}-{digest}" if safe else f"task-{digest}"
+
+
+def _harness_runtime_dir(env: dict) -> Optional[Path]:
+    """Where the harness keeps ``bu-<name>.pid`` for this env (mirrors ``browser_harness._ipc``), or None
+    for a caller-isolated single-daemon dir (bare ``bu.*`` stems carry no name to reap by)."""
+    raw = env.get("BH_RUNTIME_DIR") or env.get("BH_TMP_DIR")
+    if raw:
+        if env.get("BH_RUNTIME_DIR_SHARED") != "1":
+            return None
+        return Path(raw).expanduser()
+    home = env.get("BH_HOME") or env.get("BROWSER_HARNESS_HOME")
+    if home:
+        return Path(home).expanduser() / "runtime"
+    if env.get("XDG_CONFIG_HOME"):
+        return Path(env["XDG_CONFIG_HOME"]).expanduser() / "browser-harness" / "runtime"
+    base = Path(env["HOME"]) if env.get("HOME") else Path.home()
+    return base / ".config" / "browser-harness" / "runtime"
+
+
+class _LaneDir(NamedTuple):
+    env: dict[str, str]  # the harness-dir env keys a CLI subprocess needs to reach these daemons
+    idle_s: int
+
+
+# Harness runtime dirs this process has driven with reaping on -> how to reach and judge their lanes.
+_lane_dirs: dict[str, _LaneDir] = {}
+_lane_inflight: dict[tuple, int] = {}  # (runtime dir, BU_NAME) -> calls running in this process
+_lane_state_lock = threading.Lock()
+_lane_reaper_thread: Optional[threading.Thread] = None
+
+
+_LOCK_HELD, _LOCK_TIMEOUT, _LOCK_UNAVAILABLE = "held", "timeout", "unavailable"
+
+
+@contextlib.contextmanager
+def _lane_dir_lock(runtime_dir: Path, wait_s: Optional[float] = None):
+    """Cross-process lock on one runtime dir, serializing call stamps against reaps. Yields
+    ``_LOCK_HELD``, ``_LOCK_TIMEOUT`` (another holder kept it past ``wait_s``) or ``_LOCK_UNAVAILABLE``
+    (no ``fcntl`` / lock file unopenable — then no reaper can hold it either)."""
+    try:
+        import fcntl
+    except ImportError:  # Windows: no reaping (see _touch_lane), nothing to serialize
+        yield _LOCK_UNAVAILABLE
+        return
+    try:
+        fd = os.open(str(runtime_dir / _LANE_LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        yield _LOCK_UNAVAILABLE
+        return
+    held = False
+    try:
+        deadline = time.monotonic() + (_LOCK_WAIT_S if wait_s is None else wait_s)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        yield _LOCK_HELD if held else _LOCK_TIMEOUT
+    finally:
+        if held:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _lane_files(runtime_dir: Path, name: str) -> tuple[Path, Path]:
+    return runtime_dir / f"bu-{name}{_LANE_STAMP_SUFFIX}", runtime_dir / f"bu-{name}{_LANE_TABS_SUFFIX}"
+
+
+class _LaneTouch(NamedTuple):
+    tabs: Optional[Path]  # tab ledger to export as HERMES_BH_TABS_FILE; None = lane not tracked
+    busy: bool = False  # a reap of this runtime dir held the lock past the wait: do not dispatch
+
+
+def _lanes_runtime_dir(runtime_dir: Path) -> Path:
+    """The idle-lane namespace beside a harness runtime dir. Only callers that stamp every call under the
+    dir lock ever start daemons here, so an older Hermes (or a caller with reaping off) that drives the
+    same BU_NAME gets its own daemon in the original dir and can never be reaped. Kept short: the
+    daemon's AF_UNIX socket path lives in it."""
+    return runtime_dir.with_name(runtime_dir.name + "-l")
+
+
+def _touch_lane(env: dict, name: str, idle_s: int) -> _LaneTouch:
+    """Join the idle-lane protocol for this call: stamp lane ``name`` as used now (under the dir lock, so
+    no reap can be mid-flight), point ``env`` at the lanes namespace, and register it for reaping. A stamp
+    is only written while the lock is held; if a reap keeps it past the wait the call must not start,
+    because that reap may be about to stop this very daemon. On any other failure ``env`` is left on the
+    original namespace and the call runs untracked."""
+    if os.name == "nt" or idle_s <= 0 or name == "default":
+        return _LaneTouch(None)
+    base_dir = _harness_runtime_dir(env)
+    if base_dir is None:
+        return _LaneTouch(None)
+    runtime_dir = _lanes_runtime_dir(base_dir)
+    try:
+        runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        return _LaneTouch(None)
+    stamp, tabs = _lane_files(runtime_dir, name)
+    with _lane_dir_lock(runtime_dir) as lock:
+        if lock == _LOCK_TIMEOUT:
+            return _LaneTouch(None, busy=True)
+        if lock != _LOCK_HELD:
+            return _LaneTouch(None)  # nobody can lock, so nobody can reap: run untracked
+        try:
+            stamp.touch()
+        except OSError:
+            return _LaneTouch(None)
+    lanes_env = {"BH_RUNTIME_DIR": str(runtime_dir), "BH_RUNTIME_DIR_SHARED": "1",
+                 "BH_TMP_DIR": str(runtime_dir), "BH_TMP_DIR_SHARED": "1"}
+    env.update(lanes_env)
+    with _lane_state_lock:
+        _lane_dirs[str(runtime_dir)] = _LaneDir({k: env[k] for k in _HARNESS_DIR_ENV_KEYS if k in env}, idle_s)
+    _ensure_lane_reaper()
+    return _LaneTouch(tabs)
+
+
+def _ledger_tab_ids(tabs: Path) -> list[str]:
+    try:
+        lines = [line.strip() for line in tabs.read_text(encoding="utf-8-sig").splitlines()]
+    except OSError:
+        return []
+    return list(dict.fromkeys(t for t in lines if _TARGET_ID_RE.match(t)))
+
+
+def _stop_lane(dir_env: dict[str, str], name: str, tab_ids: list[str]) -> None:
+    """Close the lane's recorded tabs through its live daemon, then stop the daemon (closing its dedicated
+    tab). ``BH_REQUIRE_EXISTING_DAEMON`` keeps the close call from spawning a fresh daemon. Each step is
+    bounded by ``_STOP_STEP_TIMEOUT_S``, so a reap holds the dir lock well under ``_LOCK_WAIT_S``."""
+    cmd = _find_cli()
+    if not cmd:
+        return
+    env = {**_base_subprocess_env(), **dir_env, "BU_NAME": name}
+    for key in ("BU_CDP_URL", "BU_CDP_WS", "BU_AUTOSPAWN", _TABS_FILE_ENV):
+        env.pop(key, None)
+    if tab_ids:
+        close_code = (f"for _tid in {tab_ids!r}:\n    try:\n        cdp('Target.closeTarget', targetId=_tid)\n"
+                      "    except Exception:\n        pass\n")
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            _run_cli_killing_process_group(cmd, close_code, {**env, "BH_REQUIRE_EXISTING_DAEMON": "1"},
+                                           _STOP_STEP_TIMEOUT_S)
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        _run_cli_killing_process_group([*cmd, "--reload"], "", env, _STOP_STEP_TIMEOUT_S)
+
+
+def _reap_idle_lanes_once(now: Optional[float] = None) -> list[str]:
+    """One pass over every registered runtime dir: stop lanes idle past their window. Only lanes Hermes
+    stamped are candidates; a daemon with no stamp (an older Hermes, or another caller that never stamps)
+    is never touched, since its activity is invisible here. The shared ``default`` lane is never reaped.
+    Returns the reaped lane names."""
+    with _lane_state_lock:
+        dirs = dict(_lane_dirs)
+    reaped: list[str] = []
+    for dir_key, lane_dir in dirs.items():
+        runtime_dir = Path(dir_key)
+        try:
+            names = sorted(p.name[3:-len(_LANE_STAMP_SUFFIX)] for p in runtime_dir.glob(f"bu-*{_LANE_STAMP_SUFFIX}"))
+        except OSError:
+            continue
+        for name in names:
+            if name == "default" or (not _SESSION_RE.match(name) and not name.startswith("_local_")):
+                continue
+            with _lane_state_lock:
+                if _lane_inflight.get((dir_key, name)):
+                    continue
+            stamp, tabs = _lane_files(runtime_dir, name)
+            with _lane_dir_lock(runtime_dir, wait_s=1.0) as lock:
+                if lock != _LOCK_HELD:
+                    continue
+                current = time.time() if now is None else now
+                try:
+                    age = current - stamp.stat().st_mtime
+                except OSError:
+                    continue
+                if age < lane_dir.idle_s:
+                    continue
+                if (runtime_dir / f"bu-{name}.pid").exists():
+                    _stop_lane(lane_dir.env, name, _ledger_tab_ids(tabs))
+                    reaped.append(name)
+                    logger.info("browser_exec: stopped idle browser lane %s (idle %d min)", name, int(age // 60))
+                for path in (stamp, tabs):
+                    with contextlib.suppress(OSError):
+                        path.unlink()
+    return reaped
+
+
+def _lane_reaper_loop() -> None:
+    while True:
+        time.sleep(_REAP_INTERVAL_S)
+        try:
+            _reap_idle_lanes_once()
+        except (OSError, UnicodeError, subprocess.SubprocessError) as e:
+            logger.debug("browser_exec: idle lane reap failed: %s", e)
+
+
+def _ensure_lane_reaper() -> None:
+    global _lane_reaper_thread
+    with _lane_state_lock:
+        if _lane_reaper_thread is not None and _lane_reaper_thread.is_alive():
+            return
+        _lane_reaper_thread = threading.Thread(target=_lane_reaper_loop, name="browser-lane-reaper", daemon=True)
+        _lane_reaper_thread.start()
+
+
+def _reconnect_desktop_harness(cmd, env, task_id, epoch):
+    if epoch is None:
+        return
+    from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+
+    key = (_served_profile_tag(), env.get("BU_NAME", "default"))
+    with _driven_daemons_lock:
+        previous = _desktop_daemon_epochs.get(key)
+        if previous is not None and previous != epoch:
+            try:
+                stopped = _run_cli_killing_process_group([*cmd, "--reload"], "", env, 15)
+            except (OSError, subprocess.SubprocessError):
+                raise DesktopInputDenied("Desktop reconnect unavailable") from None
+            if stopped.returncode != 0:
+                raise DesktopInputDenied("Desktop reconnect unavailable")
+            SUPERVISOR_REGISTRY.stop(task_id or "default")
+            if assert_agent_admitted(env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or "") != epoch:
+                raise DesktopInputDenied("Desktop lease changed during reconnect")
+        _desktop_daemon_epochs[key] = epoch
 
 
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
     from agent.redact import redact_sensitive_text
+    from tools.browser_use_cli_lanes import prepare_lane_call
     from tools.registry import tool_error, tool_result
     if not code or not code.strip():
         return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
@@ -769,11 +1058,11 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     _exec_route_is_sidecar[route_key] = local_sidecar
     bot_desktop_browser = bool(env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None))
 
-    # SHARED browser (/browser connect CDP override): pin each named session to its own tab (see
-    # _OWN_TAB_PREAMBLE). Private per-name browsers skip this — nothing to collide with.
-    private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
-    if session and not private_browser:
-        code = _OWN_TAB_PREAMBLE + code
+    lane_call = prepare_lane_call(env, code, session, task_id, local_sidecar)
+    if lane_call.busy:
+        return tool_error("This browser session's lane is being cleaned up after sitting idle. Retry the "
+                          "same call in a minute; it will start in a fresh tab.")
+    code, lane_key, browser_cfg, _ = lane_call
 
     workspace = _workspace_dir(task_id)
     if workspace:
@@ -781,16 +1070,28 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
     # BU_AUTOSPAWN makes the CLI start a Browser Use cloud browser when no local
     # Chrome/CDP endpoint is reachable (their API key authenticates it)
-    if "BU_AUTOSPAWN" not in env and is_legacy_browser_use_cloud_config(_read_browser_cfg()):
+    if "BU_AUTOSPAWN" not in env and is_legacy_browser_use_cloud_config(browser_cfg):
         env["BU_AUTOSPAWN"] = "1"
 
     timeout = _clamp_timeout(timeout_s)
     started = time.time()
 
     def dispatch() -> dict[str, Any]:
+        from tools.desktop_admission import DesktopInputDenied, assert_agent_admitted
+        try:
+            epoch = assert_agent_admitted(env.get("BU_CDP_WS") or env.get("BU_CDP_URL") or "")
+            _reconnect_desktop_harness(cmd, env, task_id, epoch)
+        except DesktopInputDenied:
+            return {"error_result": tool_result({"success": False, "error_type": "human_has_control",
+                                                "error": "Desktop agent input is unavailable"})}
         _attach_vault_supervisor(env, task_id)
         with _driven_daemons_lock:
             _driven_daemons.add(env.get("BU_NAME", "default"))
+            if lane_key is not None:
+                _driven_lane_envs[lane_key] = {k: env[k] for k in _HARNESS_DIR_ENV_KEYS if k in env}
+        if lane_key is not None:
+            with _lane_state_lock:
+                _lane_inflight[lane_key] = _lane_inflight.get(lane_key, 0) + 1
         try:
             return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
         except subprocess.TimeoutExpired:
@@ -801,6 +1102,14 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             )}
         except OSError as e:
             return {"error_result": tool_error(f"Failed to launch browser-use CLI: {e}")}
+        finally:
+            if lane_key is not None:
+                with _lane_state_lock:
+                    left = _lane_inflight.get(lane_key, 1) - 1
+                    if left > 0:
+                        _lane_inflight[lane_key] = left
+                    else:
+                        _lane_inflight.pop(lane_key, None)
 
     if bot_desktop_browser:
         from tools.browser_tool_session import run_fenced

@@ -61,6 +61,21 @@ def test_block_names_skills_created_earlier_in_this_session_only(ledger_env):
     assert session_skill_activity_block(("chat-c", None)) == ""
 
 
+def test_block_names_skills_undone_in_this_session_only(ledger_env):
+    from agent.background_review_skills import session_skill_activity_block
+    from tools import skill_ledger
+
+    skill_ledger.record_mutation("undo", "undone-here", actor="user",
+                                 evidence={"session_id": "chat-a", "undo_of": "prior-change"})
+    skill_ledger.record_mutation("undo", "undone-elsewhere", actor="user",
+                                 evidence={"session_id": "chat-b", "undo_of": "other-change"})
+
+    block = session_skill_activity_block(("chat-a", None))
+
+    assert "undone-here (no longer active)" in block
+    assert "undone-elsewhere" not in block
+
+
 def test_spawned_skill_review_prompt_carries_the_session_block(ledger_env, monkeypatch):
     from agent import background_review
 

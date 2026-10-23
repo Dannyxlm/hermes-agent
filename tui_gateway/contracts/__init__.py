@@ -7,10 +7,13 @@ from . import (
     config_free_tier_control,
     connectors,
     connectors_operation,
+    desktop,
     display,
     events,
+    files,
     groups_bot_relay,
     human_input,
+    hermex_live,
     i18n,
     liveness,
     machine,
@@ -21,8 +24,10 @@ from . import (
     prompt_voice,
     server_requests,
     sessions,
+    team_schedule,
     tools_commands,
     tools_mcp_plugins,
+    usage,
 )
 from .base import JsonValue, Params, Payload, Result, WireEnum
 from .registry import EVENTS, METHODS, SERVER_REQUESTS

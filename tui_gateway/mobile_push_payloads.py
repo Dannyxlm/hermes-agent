@@ -105,6 +105,9 @@ class AlertPreview:
     plan_done: int = 0
     plan_total: int = 0
     attention: dict | None = None
+    tool: str = ""
+    step_id: str = ""
+    step_started_at: float = 0
 
     def alert(self, status):
         alert = generic_alert(status)
@@ -156,8 +159,39 @@ def destination(subscription, scope, run_id):
     return target
 
 
+def completion_summary(run, preview=None):
+    """Public elapsed time and plan counts; independent of preview permission."""
+    seconds = max(0, int(run["updated_at"] - run["started_at"]))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes_part = divmod(minutes, 60)
+    duration = f"{hours}h {minutes_part:02d}m {seconds:02d}s" if hours else f"{minutes}m {seconds:02d}s"
+    total = _count(preview.plan_total) if preview else 0
+    return duration + (f" · {total} steps" if total else "")
+
+
+def long_completion(run):
+    return run["status"] == "complete" and run["updated_at"] - run["started_at"] > 1500
+
+
+def tool_verb(name):
+    """Exact HermexOrbVerb.toolVerb identifiers; opaque executors stay Running."""
+    if name in {"patch", "write_file"}:
+        return "editing"
+    if name == "delegate_task":
+        return "delegating"
+    if name in {"image_generate", "video_generate", "xai_video_edit", "xai_video_extend", "text_to_speech"}:
+        return "making"
+    if name in {"web_search", "web_extract", "x_search", "session_search", "search_files", "read_file",
+                "vision_analyze", "video_analyze", "feishu_doc_read", "read_terminal", "read_window_below",
+                "browser_navigate", "browser_snapshot", "browser_get_images", "browser_vision", "browser_console"}:
+        return "searching"
+    return "working"
+
+
 def alert_payload(subscription, run, scope, preview=None):
     alert = preview.alert(run["status"]) if subscription["preview_enabled"] and preview else generic_alert(run["status"])
+    if long_completion(run):
+        alert["subtitle"] = "Done · " + completion_summary(run, preview)
     # thread-id is the opaque scope digest, so one chat stacks as one thread without naming it.
     aps = {"alert": alert, "sound": "default", "mutable-content": 1, "thread-id": scope.key}
     payload = {"aps": aps, "hermex.destination": destination(subscription, scope, run["run_id"]),
@@ -195,6 +229,10 @@ def content_state(run, scope, *, preview=None, previews=False):
         "startedAt": run["started_at"] - SWIFT_EPOCH, "updatedAt": run["updated_at"] - SWIFT_EPOCH,
         "isStale": False, "isFinal": final,
         "contentVersion": CONTENT_VERSION, "previewsEnabled": bool(previews)}
+    if status == "usingTool":
+        content["verb"] = tool_verb(preview.tool)
+    elif status in {"starting", "thinking", "responding"}:
+        content["verb"] = "writing" if status == "responding" else "thinking"
     if (ident := agent_id(scope.profile)) is not None:
         content["agentID"] = ident
     if status in INPUT_KINDS:
@@ -222,8 +260,10 @@ def content_state(run, scope, *, preview=None, previews=False):
     if status == "failed":
         content["errorSummary"] = "Open the chat for details."
     if run.get("activity_expired"):
+        content["activityExpired"] = True
         content["currentActivity"] = "Open the chat for the latest"
     if run.get("closed_reason") in CLOSED_LINES:
+        content["closedReason"] = run["closed_reason"]
         content["currentActivity"] = CLOSED_LINES[run["closed_reason"]]
     return content
 
@@ -244,7 +284,7 @@ def activity_payload(run, scope, now, *, preview=None, previews=False):
            "content-state": content_state(run, scope, preview=preview, previews=previews),
            "relevance-score": 100 if run["status"] in ATTENTION else 0 if final else 10}
     from .mobile_push_attention import freshness
-    aps["dismissal-date" if final else "stale-date"] = int(now + 300) if final else freshness(aps, now)
+    aps["dismissal-date" if final else "stale-date"] = int(run["updated_at"] + 120) if final else freshness(aps, now)
     return {"aps": aps}
 
 

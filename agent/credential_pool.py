@@ -442,7 +442,7 @@ def _singleton_predates_entry(state: Any, entry: PooledCredential) -> bool:
     return state_ts < entry_ts
 
 
-def _normalize_error_context(error_context: Optional[dict[str, Any]]) -> dict[str, Any]:
+def _normalize_error_context(error_context: Optional[dict[str, Any]], *, use_bench: bool = True) -> dict[str, Any]:
     if not isinstance(error_context, dict):
         return {}
     normalized: dict[str, Any] = {}
@@ -456,12 +456,17 @@ def _normalize_error_context(error_context: Optional[dict[str, Any]]) -> dict[st
         or error_context.get("retry_until")
     )
     parsed_reset_at = _parse_absolute_timestamp(reset_at)
+    if parsed_reset_at is not None and parsed_reset_at <= time.time():
+        parsed_reset_at = None
+    bench = _parse_absolute_timestamp(error_context.get("bench_until")) if use_bench else None
+    if bench is not None and bench > time.time():
+        parsed_reset_at = max(bench, parsed_reset_at or 0)
     message = error_context.get("message")
     if parsed_reset_at is None and isinstance(message, str):
         retry_delay_seconds = reset_delay_from_message(message)
         if retry_delay_seconds is not None:
             parsed_reset_at = time.time() + retry_delay_seconds
-    if parsed_reset_at is not None:
+    if parsed_reset_at is not None and parsed_reset_at > time.time():
         normalized["reset_at"] = parsed_reset_at
     return normalized
 
@@ -1047,17 +1052,6 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         with self._lock:
             return bool(self._entries)
 
-    def has_available(self, *, model: Optional[str] = None) -> bool:
-        """True if at least one entry is not currently in exhaustion cooldown.
-
-        ``_available_entries`` is not read-only (it prunes aged-out DEAD
-        manual entries and persists), so it must run under ``self._lock``
-        like every other caller or a probe can race a concurrent rotation.
-        """
-        with self._lock:
-            available, _pending = self._available_entries(model=model)
-            return bool(available)
-
     def lift_reopened_cooldowns(self, *, model: Optional[str] = None) -> bool:
         """Clear cooldowns that have elapsed or (Codex) reopened early, then report availability.
 
@@ -1156,6 +1150,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             if api_key_hint is None:
                 return None
             matches = [e for e in self._entries if e.runtime_api_key == api_key_hint]
+            if not matches:
+                # A native resolver may have read a peer's newer bearer from disk.
+                for entry in list(self._entries):
+                    self._sync_entry_from_pool_store(entry)
+                matches = [e for e in self._entries if e.runtime_api_key == api_key_hint]
             return matches[0].id if len(matches) == 1 else None
 
     # ---- mutation primitives (self-locking) --------------------------------
@@ -1281,7 +1280,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         persist: bool = True,
         failure_reason: Optional[str] = None,
     ) -> PooledCredential:
-        normalized_error = _normalize_error_context(error_context)
+        normalized_error = _normalize_error_context(error_context, use_bench=status_code == 429 and not self._is_sole_credential())
         # Permanent OAuth failures become STATUS_DEAD, not STATUS_EXHAUSTED:
         # otherwise a revoked credential re-enters rotation every hour and
         # fails immediately until the user removes it (#32849); a row whose
@@ -2283,36 +2282,30 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
 
     # ---- rotation ----------------------------------------------------------
 
-    def _identify_failed_entry(
+    def identify_failed_entry(
         self, credential_id: Optional[str], api_key_hint: Optional[str],
+        *, allow_stale_key: bool = False,
     ) -> Optional[PooledCredential]:
-        """Resolve the entry that issued a failed request from its supplied identity."""
-        entry = None
-        if credential_id:
-            entry = self._find(lambda e: e.id == credential_id)
-            # #79156: when both identities disagree, trust the key that made
-            # the request. A stale ``_credential_pool_entry_id`` (per-turn env
-            # refresh rewrote ``api_key`` without rebinding the id) would
-            # otherwise quarantine a healthy fallback for days.
-            if entry is not None and api_key_hint and entry.runtime_api_key != api_key_hint:
-                hint_entry = self._find(lambda e: e.runtime_api_key == api_key_hint)
-                if hint_entry is not None:
+        """Resolve request provenance consistently for benching and the free-lap ledger."""
+        with self._lock:
+            if not (credential_id or api_key_hint):
+                return self._current_unlocked()
+            entry = self._find(lambda e: e.id == credential_id) if credential_id else None
+            if entry is not None and (not api_key_hint or entry.runtime_api_key == api_key_hint):
+                return entry
+            hint_entry = self._find(lambda e: e.runtime_api_key == api_key_hint) if api_key_hint else None
+            if hint_entry is not None:
+                if entry is not None and entry.id != hint_entry.id:
+                    # #79156: an env/priority switch can leave the old id behind.
                     logger.info(
-                        "credential pool: credential_id %s runtime key "
-                        "does not match api_key_hint; attributing failure "
-                        "to key-matched entry %s instead (#79156)",
-                        (entry.label or entry.id[:8]),
-                        (hint_entry.label or hint_entry.id[:8]),
+                        "credential pool: credential_id %s disagrees with request key; "
+                        "attributing failure to key-matched entry %s instead (#79156)",
+                        entry.label or entry.id[:8], hint_entry.label or hint_entry.id[:8],
                     )
-                # Otherwise the id is stale and the request key is not in the
-                # pool — drop the id so we do not mark the wrong entry.
-                entry = hint_entry
-        if entry is None and api_key_hint:
-            # Prefer the entry whose key actually failed: on a pool freshly
-            # loaded from disk current() is None and _select_unlocked() would
-            # return the NEXT key — the wrong one.
-            entry = self._find(lambda e: e.runtime_api_key == api_key_hint)
-        return entry
+                return hint_entry
+            if api_key_hint and not allow_stale_key:
+                return None
+            return entry
 
     def _rotate_unmatched(self) -> Optional[PooledCredential]:
         """Rotate without marking anything when the failed identity matches no entry.
@@ -2365,7 +2358,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
     ) -> Optional[PooledCredential]:
         with self._lock:
             identity_supplied = bool(credential_id or api_key_hint)
-            entry = self._identify_failed_entry(credential_id, api_key_hint)
+            entry = self.identify_failed_entry(credential_id, api_key_hint, allow_stale_key=status_code == 429)
             if entry is None and identity_supplied:
                 return self._rotate_unmatched()
             # A real entry was identified — any prior unmatched streak is stale.
@@ -2383,6 +2376,9 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 logger.info("credential pool: %s unavailable for model %s; other models stay available", _label, model)
                 self._current_id = None
                 next_entry, _pending = self._select_unlocked(refresh=False, model=model)
+                if next_entry is not None and next_entry.id == entry.id:
+                    self._current_id = None  # #97315 applies to model-scoped benches too.
+                    return None
                 return next_entry
             self._mark_exhausted(entry, status_code, error_context, failure_reason=failure_reason)
             # A 402/429/401 is a key-level failure, and the same key can back
@@ -2413,7 +2409,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             else:
                 logger.info("credential pool: marking %s exhausted (status=%s), rotating", _label, status_code)
             self._current_id = None
-            next_entry, _pending = self._select_unlocked(refresh=False)
+            next_entry, _pending = self._select_unlocked(refresh=False, model=model)
             if next_entry is not None and next_entry.id == entry.id:
                 # No-recovery guard (#97315): selection handed back the very entry that was
                 # just marked (the auth-store sync adopted fresher tokens, or a quota probe

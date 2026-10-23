@@ -81,6 +81,17 @@ The mode is a **driver** that composes with your configured browser backend: it 
 
 **Concurrent sessions:** `browser_exec` accepts a `session=<name>` argument that isolates browser work per name on every backend. Each name gets its own harness daemon (its own IPC socket, log, and state) and its own browser (a separate packaged Chromium locally, a separate cloud browser on cloud backends) — so parallel subagents or simultaneous chats no longer clobber a single shared connection. Omitting `session` uses the shared default daemon, which is fine for one-at-a-time browsing.
 
+On a **shared** browser (`/browser connect`, `browser.cdp_url`, or the real profile) every named session works in its own background tab, so several chats can use one signed-in browser at once without taking over the tab you are watching. Two opt-in settings tighten this for multi-chat use:
+
+```yaml
+# ~/.hermes/config.yaml
+browser:
+  exec_task_tabs: true     # unnamed browser_exec calls get a per-chat tab instead of the shared default one
+  exec_idle_minutes: 60    # stop sessions idle this long and close the tabs they opened (0 = never; min 35)
+```
+
+With `exec_idle_minutes` set, a session's next call after cleanup simply starts in a fresh tab.
+
 To opt out and force the built-in browser tools, use `/browser use off`, or:
 
 ```yaml

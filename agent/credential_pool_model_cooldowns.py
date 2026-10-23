@@ -9,7 +9,7 @@ auth, billing and payment failures keep benching the whole credential with.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent.credential_pool import PooledCredential
@@ -45,6 +45,20 @@ def merge_model_cooldowns(*maps: Any) -> dict[str, float]:
 
 
 class CredentialPoolModelCooldownMixin:
+    def has_available(
+        self, *, model: Optional[str] = None,
+        exclude: Optional[Callable[[PooledCredential], bool]] = None,
+    ) -> bool:
+        """True if an entry not matched by ``exclude`` can serve ``model`` now.
+
+        ``_available_entries`` is not read-only (it prunes aged-out DEAD
+        manual entries and persists), so it must run under ``self._lock``
+        like every other caller or a probe can race a concurrent rotation.
+        """
+        with self._lock:
+            available, _pending = self._available_entries(model=model)
+            return any(exclude is None or not exclude(entry) for entry in available)
+
     def token_is_blocked(self, token: str, *, model: Optional[str] = None) -> bool:
         """Whether a pool cooldown blocks *token* for *model*.
 
@@ -92,7 +106,7 @@ class CredentialPoolModelCooldownMixin:
         if failure_reason == "model_entitlement":
             until = time.time() + MODEL_ENTITLEMENT_BENCH_SECONDS
         else:
-            until = _normalize_error_context(error_context).get("reset_at") or (
+            until = _normalize_error_context(error_context, use_bench=not self._is_sole_credential()).get("reset_at") or (
                 time.time() + _exhausted_ttl(429, sole_credential=self._is_sole_credential())
             )
         failed_key = entry.runtime_api_key

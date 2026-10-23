@@ -82,7 +82,7 @@ def test_failed_entry_identity_names_the_wire_account(agent):
     from agent.agent_runtime_helpers import _failed_credential_identity
     api_key_hint, credential_id = _failed_credential_identity(agent, agent._credential_pool)
     assert api_key_hint == SJ and credential_id == "sj0001"
-    entry = agent._credential_pool._identify_failed_entry(credential_id, api_key_hint)
+    entry = agent._credential_pool.identify_failed_entry(credential_id, api_key_hint)
     assert entry is not None and entry.label == "SJ-ANT"
 
 

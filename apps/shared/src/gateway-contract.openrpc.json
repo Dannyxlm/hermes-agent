@@ -529,6 +529,42 @@
       }
     },
     {
+      "name": "config.defaults.get",
+      "summary": "Read profile-wide new-chat reasoning/delegation defaults, separate from session controls.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DefaultsGetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DefaultsResult"
+        }
+      }
+    },
+    {
+      "name": "config.defaults.set",
+      "summary": "Confirmed authenticated new-chat default write, audited and state-idempotent, with disk readback.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DefaultsSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DefaultsSetResult"
+        }
+      }
+    },
+    {
       "name": "config.get",
       "summary": "Read one normalised config value (or the whole effective config) the way the UIs render it.",
       "params": [
@@ -817,6 +853,24 @@
       }
     },
     {
+      "name": "cron.summary",
+      "summary": "Read-only bounded execution receipts with nullable aggregate coverage and scope-bound paging.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CronSummaryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CronSummaryResult"
+        }
+      }
+    },
+    {
       "name": "delegation.pause",
       "summary": "Block/unblock NEW spawns globally (active children keep running); returns the new state.",
       "params": [
@@ -849,6 +903,78 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/DelegationStatusResult"
+        }
+      }
+    },
+    {
+      "name": "desktop.action",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopActionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopReceipt"
+        }
+      }
+    },
+    {
+      "name": "desktop.action_status",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopActionStatusParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopReceipt"
+        }
+      }
+    },
+    {
+      "name": "desktop.observe",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopObserveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopObservation"
+        }
+      }
+    },
+    {
+      "name": "desktop.snapshot",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/DesktopSnapshotParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DesktopSnapshot"
         }
       }
     },
@@ -1047,6 +1173,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/FileAttachResult"
+        }
+      }
+    },
+    {
+      "name": "files.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FilesIndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FilesIndexResult"
         }
       }
     },
@@ -1803,6 +1947,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/LearningFramesResult"
+        }
+      }
+    },
+    {
+      "name": "links.index",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/IndexParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LinksIndexResult"
         }
       }
     },
@@ -4183,6 +4345,24 @@
       }
     },
     {
+      "name": "session.messages.window",
+      "summary": "Bounded display window at an exact message, including compression ancestors.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LiveWindowParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LiveWindowResult"
+        }
+      }
+    },
+    {
       "name": "session.most_recent",
       "summary": "Most recent human-facing session; errors fold into a null session_id.",
       "params": [
@@ -4287,6 +4467,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionSaveResult"
+        }
+      }
+    },
+    {
+      "name": "session.search",
+      "summary": "Paged message IDs and UTF-16 snippet ranges in owned history.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/LiveSearchParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/LiveSearchResult"
         }
       }
     },
@@ -4669,6 +4867,60 @@
       }
     },
     {
+      "name": "skills.changes.decide",
+      "summary": "Acknowledge or conflict-safely undo a recorded skill edit.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillChangeDecideParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillChangeDecisionResult"
+        }
+      }
+    },
+    {
+      "name": "skills.changes.get",
+      "summary": "Recorded skill diff and durable decision readback.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillChangeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillChangeResult"
+        }
+      }
+    },
+    {
+      "name": "skills.changes.list",
+      "summary": "Committed skill changes in an exact owned conversation lineage.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkillChangesListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkillChangesListResult"
+        }
+      }
+    },
+    {
       "name": "skills.manage",
       "summary": "Skills hub backend: list the profile's skills or search / browse / inspect / install from the hub.",
       "params": [
@@ -4957,6 +5209,24 @@
       }
     },
     {
+      "name": "team.activity",
+      "summary": "Owner-scoped verified positive runtime activity; unknown coverage never means free.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TeamActivityParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TeamActivityResult"
+        }
+      }
+    },
+    {
       "name": "terminal.resize",
       "summary": "Record the client's column width for server-side rendering.",
       "params": [
@@ -5061,6 +5331,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/UsageModel"
+        }
+      }
+    },
+    {
+      "name": "usage.estimate",
+      "summary": "Offline, sourced standard API value (est), independent of subscription billing.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/UsageEstimateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ApiValue"
+        }
+      }
+    },
+    {
+      "name": "usage.rollup",
+      "summary": "Read one profile's timestamped windows or retained all-time session totals; no transcript scan.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/UsageRollupParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/UsageRollupWireResult"
         }
       }
     },
@@ -5757,6 +6063,147 @@
         "title": "AgentProcessRow",
         "type": "object"
       },
+      "AgentUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "profile"
+        ],
+        "title": "AgentUsage",
+        "type": "object"
+      },
       "AgentsListParams": {
         "additionalProperties": false,
         "properties": {
@@ -5788,6 +6235,946 @@
           }
         },
         "title": "AgentsListResult",
+        "type": "object"
+      },
+      "AllTimeAgentUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "profile"
+        ],
+        "title": "AllTimeAgentUsage",
+        "type": "object"
+      },
+      "AllTimeChatUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "session_id",
+          "title"
+        ],
+        "title": "AllTimeChatUsage",
+        "type": "object"
+      },
+      "AllTimeMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events"
+        ],
+        "title": "AllTimeMetrics",
+        "type": "object"
+      },
+      "AllTimeModelUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelUsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "model",
+          "provider"
+        ],
+        "title": "AllTimeModelUsage",
+        "type": "object"
+      },
+      "AllTimeProviderUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "null"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "null"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "null"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "provider"
+        ],
+        "title": "AllTimeProviderUsage",
+        "type": "object"
+      },
+      "AllTimeUsageRollupResult": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "window": {
+            "const": "all",
+            "title": "Window",
+            "type": "string"
+          },
+          "source": {
+            "const": "session_totals",
+            "title": "Source",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AllTimeMetrics"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeAgentUsage"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeModelUsage"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeProviderUsage"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DailyUsage"
+            },
+            "maxItems": 0,
+            "title": "Days",
+            "type": "array"
+          },
+          "top_chats": {
+            "items": {
+              "$ref": "#/components/schemas/AllTimeChatUsage"
+            },
+            "title": "Top Chats",
+            "type": "array"
+          },
+          "chat_count": {
+            "title": "Chat Count",
+            "type": "integer"
+          },
+          "coverage": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderCoverage"
+            },
+            "title": "Coverage",
+            "type": "array"
+          },
+          "coverage_since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Since"
+          },
+          "partial": {
+            "const": true,
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "coverage_reason": {
+            "title": "Coverage Reason",
+            "type": "string"
+          },
+          "basis": {
+            "const": "standard_api_list_price",
+            "title": "Basis",
+            "type": "string"
+          },
+          "currency": {
+            "const": "USD",
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "window",
+          "source",
+          "start",
+          "end",
+          "timezone",
+          "totals",
+          "agents",
+          "models",
+          "providers",
+          "days",
+          "top_chats",
+          "chat_count",
+          "coverage",
+          "coverage_since",
+          "partial",
+          "coverage_reason",
+          "basis",
+          "currency"
+        ],
+        "title": "AllTimeUsageRollupResult",
+        "type": "object"
+      },
+      "ApiValue": {
+        "additionalProperties": false,
+        "properties": {
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "status": {
+            "enum": [
+              "est",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "pricing_date": {
+            "title": "Pricing Date",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "basis": {
+            "const": "standard_api_list_price",
+            "title": "Basis",
+            "type": "string"
+          },
+          "currency": {
+            "const": "USD",
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "estimated_cost_usd",
+          "status",
+          "reason",
+          "pricing_date",
+          "source_url",
+          "basis",
+          "currency"
+        ],
+        "title": "ApiValue",
         "type": "object"
       },
       "ApprovalCancelledPayload": {
@@ -8877,6 +10264,159 @@
         "title": "ChangeSignalPayload",
         "type": "object"
       },
+      "ChatUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "session_id",
+          "title"
+        ],
+        "title": "ChatUsage",
+        "type": "object"
+      },
       "ClarifyLockParams": {
         "additionalProperties": false,
         "properties": {
@@ -9580,6 +11120,23 @@
             ],
             "default": null,
             "title": "Profile"
+          },
+          "since_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since Revision"
+          },
+          "include_entries": {
+            "default": false,
+            "title": "Include Entries",
+            "type": "boolean"
           }
         },
         "title": "CommandsCatalogParams",
@@ -9588,6 +11145,61 @@
       "CommandsCatalogResult": {
         "additionalProperties": false,
         "properties": {
+          "catalog_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Catalog Version"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Observed At"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LiveCatalogEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
           "pairs": {
             "items": {
               "items": {
@@ -13576,6 +15188,255 @@
         "title": "CronRemovedJob",
         "type": "object"
       },
+      "CronSummaryCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "expected": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "succeeded": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Succeeded"
+          },
+          "retried": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retried"
+          },
+          "needs_attention": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Needs Attention"
+          }
+        },
+        "required": [
+          "expected",
+          "succeeded",
+          "retried",
+          "needs_attention"
+        ],
+        "title": "CronSummaryCounts",
+        "type": "object"
+      },
+      "CronSummaryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          },
+          "timezone": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "required": [
+          "profiles",
+          "timezone",
+          "start",
+          "end"
+        ],
+        "title": "CronSummaryParams",
+        "type": "object"
+      },
+      "CronSummaryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CronSummaryCounts"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/CronSummaryRun"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "timezone",
+          "start",
+          "end",
+          "complete",
+          "counts",
+          "runs",
+          "next_cursor"
+        ],
+        "title": "CronSummaryResult",
+        "type": "object"
+      },
+      "CronSummaryRun": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "delivery_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Summary"
+          }
+        },
+        "required": [
+          "profile",
+          "job_id",
+          "occurrence_id",
+          "started_at",
+          "finished_at",
+          "outcome",
+          "retry_of",
+          "delivery_summary"
+        ],
+        "title": "CronSummaryRun",
+        "type": "object"
+      },
       "CurrentSubscription": {
         "additionalProperties": false,
         "properties": {
@@ -13710,6 +15571,319 @@
         "title": "CurrentSubscription",
         "type": "object"
       },
+      "DailyUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "day": {
+            "title": "Day",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "provider",
+          "day"
+        ],
+        "title": "DailyUsage",
+        "type": "object"
+      },
+      "DefaultsGetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "DefaultsGetParams",
+        "type": "object"
+      },
+      "DefaultsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "reasoning": {
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "reasoning_levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoning Levels",
+            "type": "array"
+          },
+          "delegation_model": {
+            "title": "Delegation Model",
+            "type": "string"
+          },
+          "delegation_provider": {
+            "title": "Delegation Provider",
+            "type": "string"
+          },
+          "main_model": {
+            "title": "Main Model",
+            "type": "string"
+          },
+          "applies_to": {
+            "const": "new_chats_and_delegations",
+            "title": "Applies To",
+            "type": "string"
+          },
+          "reasoning_precedence": {
+            "title": "Reasoning Precedence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reasoning",
+          "reasoning_levels",
+          "delegation_model",
+          "delegation_provider",
+          "main_model",
+          "applies_to",
+          "reasoning_precedence"
+        ],
+        "title": "DefaultsResult",
+        "type": "object"
+      },
+      "DefaultsSetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "key": {
+            "enum": [
+              "reasoning",
+              "delegation"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "profile",
+          "key",
+          "value"
+        ],
+        "title": "DefaultsSetParams",
+        "type": "object"
+      },
+      "DefaultsSetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "reasoning": {
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "reasoning_levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoning Levels",
+            "type": "array"
+          },
+          "delegation_model": {
+            "title": "Delegation Model",
+            "type": "string"
+          },
+          "delegation_provider": {
+            "title": "Delegation Provider",
+            "type": "string"
+          },
+          "main_model": {
+            "title": "Main Model",
+            "type": "string"
+          },
+          "applies_to": {
+            "const": "new_chats_and_delegations",
+            "title": "Applies To",
+            "type": "string"
+          },
+          "reasoning_precedence": {
+            "title": "Reasoning Precedence",
+            "type": "string"
+          },
+          "changed": {
+            "title": "Changed",
+            "type": "boolean"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          }
+        },
+        "required": [
+          "reasoning",
+          "reasoning_levels",
+          "delegation_model",
+          "delegation_provider",
+          "main_model",
+          "applies_to",
+          "reasoning_precedence",
+          "changed",
+          "operation_id"
+        ],
+        "title": "DefaultsSetResult",
+        "type": "object"
+      },
       "DelegationPauseParams": {
         "additionalProperties": false,
         "properties": {
@@ -13778,6 +15952,805 @@
           "max_concurrent_children"
         ],
         "title": "DelegationStatusResult",
+        "type": "object"
+      },
+      "DesktopActionParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Client installation selector, not durable identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "expected_lease_epoch": {
+            "minimum": 0,
+            "title": "Expected Lease Epoch",
+            "type": "integer"
+          },
+          "action": {
+            "enum": [
+              "take_over",
+              "hand_back",
+              "saved_login",
+              "paste_login",
+              "navigate_back",
+              "not_now",
+              "open_page"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "viewer_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Viewer Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          },
+          "request_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Revision"
+          },
+          "login_handle": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Login Handle"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id",
+          "action_id",
+          "expected_revision",
+          "expected_lease_epoch",
+          "action"
+        ],
+        "title": "DesktopActionParams",
+        "type": "object"
+      },
+      "DesktopActionStatusParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Client installation selector, not durable identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Action Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id",
+          "action_id"
+        ],
+        "title": "DesktopActionStatusParams",
+        "type": "object"
+      },
+      "DesktopActive": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Session Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "title",
+          "stored_session_id",
+          "started_at"
+        ],
+        "title": "DesktopActive",
+        "type": "object"
+      },
+      "DesktopActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "at"
+        ],
+        "title": "DesktopActivity",
+        "type": "object"
+      },
+      "DesktopLease": {
+        "additionalProperties": false,
+        "properties": {
+          "holder": {
+            "enum": [
+              "agent",
+              "human",
+              "none"
+            ],
+            "title": "Holder",
+            "type": "string"
+          },
+          "epoch": {
+            "minimum": 0,
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "mine": {
+            "title": "Mine",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "required": [
+          "holder",
+          "epoch",
+          "mine",
+          "expires_at"
+        ],
+        "title": "DesktopLease",
+        "type": "object"
+      },
+      "DesktopObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          },
+          "viewer_id": {
+            "title": "Viewer Id",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "mode": {
+            "enum": [
+              "watch",
+              "control",
+              "replay"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "lease_epoch": {
+            "title": "Lease Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticket",
+          "viewer_id",
+          "url",
+          "expires_at",
+          "mode",
+          "lease_epoch"
+        ],
+        "title": "DesktopObservation",
+        "type": "object"
+      },
+      "DesktopObserveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Client installation selector, not durable identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "watch",
+              "control",
+              "replay"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "viewer_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Viewer Id"
+          },
+          "recording_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Recording Id"
+          },
+          "expected_lease_epoch": {
+            "minimum": 0,
+            "title": "Expected Lease Epoch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id",
+          "mode",
+          "expected_lease_epoch"
+        ],
+        "title": "DesktopObserveParams",
+        "type": "object"
+      },
+      "DesktopReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "conflict",
+              "expired",
+              "denied",
+              "outcome_unknown",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "lease_epoch": {
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          }
+        },
+        "required": [
+          "action_id",
+          "status",
+          "revision",
+          "lease_epoch",
+          "server_time"
+        ],
+        "title": "DesktopReceipt",
+        "type": "object"
+      },
+      "DesktopRecording": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Title"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "thumbnail_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Path"
+          },
+          "replay_available": {
+            "title": "Replay Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "agent",
+          "chat_title",
+          "started_at",
+          "duration_seconds",
+          "thumbnail_path",
+          "replay_available"
+        ],
+        "title": "DesktopRecording",
+        "type": "object"
+      },
+      "DesktopSignIn": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "number"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "login_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Login Handle"
+          },
+          "masked_identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masked Identifier"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "expires_at",
+          "origin",
+          "reason",
+          "allowed_actions",
+          "login_handle",
+          "masked_identifier"
+        ],
+        "title": "DesktopSignIn",
+        "type": "object"
+      },
+      "DesktopSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "const": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "watch",
+              "signin",
+              "takeover",
+              "idle"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "unavailable": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable",
+            "type": "array"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/DesktopLease"
+          },
+          "active": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesktopActive"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesktopSignIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activity": {
+            "items": {
+              "$ref": "#/components/schemas/DesktopActivity"
+            },
+            "title": "Activity",
+            "type": "array"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/DesktopRecording"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "resource_id",
+          "revision",
+          "server_time",
+          "state",
+          "complete",
+          "unavailable",
+          "lease",
+          "active",
+          "signin",
+          "activity",
+          "history",
+          "next_cursor"
+        ],
+        "title": "DesktopSnapshot",
+        "type": "object"
+      },
+      "DesktopSnapshotParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "space": {
+            "enum": [
+              "desktop",
+              "studio"
+            ],
+            "title": "Space",
+            "type": "string"
+          },
+          "connection_id": {
+            "description": "Connection selector, not durable Desktop identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "description": "Client installation selector, not durable identity or authority.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "cursor": {
+            "default": null,
+            "title": "Cursor",
+            "type": "null"
+          },
+          "limit": {
+            "default": 20,
+            "description": "Maximum retained activity events, newest first.",
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "space",
+          "connection_id",
+          "installation_id"
+        ],
+        "title": "DesktopSnapshotParams",
         "type": "object"
       },
       "DiagnosticsShareNousParams": {
@@ -15566,6 +18539,392 @@
           "uploaded"
         ],
         "title": "FileAttachResult",
+        "type": "object"
+      },
+      "FileCollection": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Member Ids",
+            "type": "array"
+          },
+          "picked_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picked Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "member_ids",
+          "picked_id"
+        ],
+        "title": "FileCollection",
+        "type": "object"
+      },
+      "FileIndexItem": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stored Session Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Relative Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "is_directory": {
+            "title": "Is Directory",
+            "type": "boolean"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileCollection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurrences": {
+            "items": {},
+            "title": "Occurrences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "kind",
+          "display_name",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "is_directory",
+          "mention_text",
+          "collection"
+        ],
+        "title": "FileIndexItem",
+        "type": "object"
+      },
+      "FilesIndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          },
+          "category": {
+            "default": "all",
+            "enum": [
+              "all",
+              "media",
+              "files"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "include_workspace": {
+            "default": false,
+            "title": "Include Workspace",
+            "type": "boolean"
+          },
+          "directory_path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Directory Path"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "FilesIndexParams",
+        "type": "object"
+      },
+      "FilesIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FileIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "FilesIndexResult",
         "type": "object"
       },
       "ForeignSessionRow": {
@@ -18836,6 +22195,187 @@
         "title": "InboxSummaryScope",
         "type": "object"
       },
+      "IndexCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "refresh_pending": {
+            "title": "Refresh Pending",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "complete",
+          "refresh_pending",
+          "updated_at"
+        ],
+        "title": "IndexCoverage",
+        "type": "object"
+      },
+      "IndexParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Workspace Id"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Q",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "author": {
+            "default": "all",
+            "enum": [
+              "all",
+              "agents",
+              "me"
+            ],
+            "title": "Author",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "IndexParams",
+        "type": "object"
+      },
+      "IndexTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files"
+          },
+          "links": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Links"
+          },
+          "messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Messages"
+          }
+        },
+        "required": [
+          "media",
+          "files",
+          "links",
+          "messages"
+        ],
+        "title": "IndexTotals",
+        "type": "object"
+      },
       "InflightTurn": {
         "additionalProperties": false,
         "description": "``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting\nclient rebuilds its bubbles from.",
@@ -19728,6 +23268,495 @@
         "title": "LegacyPluginRow",
         "type": "object"
       },
+      "LinkIndexItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "source_chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Chat Title"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          },
+          "author_kind": {
+            "enum": [
+              "agent",
+              "me",
+              "unknown"
+            ],
+            "title": "Author Kind",
+            "type": "string"
+          },
+          "author_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Profile"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preview",
+                  "internal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          },
+          "mention_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mention Text"
+          }
+        },
+        "required": [
+          "id",
+          "profile",
+          "url",
+          "title",
+          "stored_session_id",
+          "message_id",
+          "source_chat_title",
+          "observed_at",
+          "workspace_id",
+          "author_kind",
+          "author_profile",
+          "tag",
+          "mention_text"
+        ],
+        "title": "LinkIndexItem",
+        "type": "object"
+      },
+      "LinksIndexResult": {
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "index_revision": {
+            "title": "Index Revision",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/IndexTotals"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/IndexCoverage"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LinkIndexItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "profile",
+          "snapshot_id",
+          "index_revision",
+          "next_cursor",
+          "totals",
+          "coverage",
+          "items"
+        ],
+        "title": "LinksIndexResult",
+        "type": "object"
+      },
+      "LiveCatalogEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "slash": {
+            "title": "Slash",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "skill",
+              "command"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "is_new": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is New"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "mobile_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Action"
+          }
+        },
+        "required": [
+          "id",
+          "slash",
+          "kind",
+          "description",
+          "icon",
+          "is_new",
+          "updated_at",
+          "mobile_action"
+        ],
+        "title": "LiveCatalogEntry",
+        "type": "object"
+      },
+      "LiveSearchGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "lineage_root": {
+            "title": "Lineage Root",
+            "type": "string"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchMatch"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "match_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Match Count"
+          }
+        },
+        "required": [
+          "session_id",
+          "lineage_root",
+          "matches",
+          "match_count"
+        ],
+        "title": "LiveSearchGroup",
+        "type": "object"
+      },
+      "LiveSearchMatch": {
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "logical_id": {
+            "title": "Logical Id",
+            "type": "string"
+          },
+          "source_session_id": {
+            "title": "Source Session Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "message_id",
+          "logical_id",
+          "source_session_id",
+          "role",
+          "snippet",
+          "ranges"
+        ],
+        "title": "LiveSearchMatch",
+        "type": "object"
+      },
+      "LiveSearchParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "query"
+        ],
+        "title": "LiveSearchParams",
+        "type": "object"
+      },
+      "LiveSearchRange": {
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "length": {
+            "title": "Length",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "length"
+        ],
+        "title": "LiveSearchRange",
+        "type": "object"
+      },
+      "LiveSearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/LiveSearchGroup"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "profile",
+          "query",
+          "revision",
+          "results",
+          "next_cursor"
+        ],
+        "title": "LiveSearchResult",
+        "type": "object"
+      },
       "LiveSessionStatus": {
         "enum": [
           "idle",
@@ -19739,6 +23768,142 @@
         ],
         "title": "LiveSessionStatus",
         "type": "string"
+      },
+      "LiveWindowParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "message_id": {
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "expected_revision": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 120,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          }
+        },
+        "required": [
+          "profile",
+          "session_id",
+          "message_id",
+          "expected_revision"
+        ],
+        "title": "LiveWindowParams",
+        "type": "object"
+      },
+      "LiveWindowResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "anchor_message_id": {
+            "title": "Anchor Message Id",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "older_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Cursor"
+          },
+          "newer_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newer Cursor"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          }
+        },
+        "required": [
+          "version",
+          "profile",
+          "session_id",
+          "revision",
+          "anchor_message_id",
+          "messages",
+          "older_cursor",
+          "newer_cursor",
+          "offset"
+        ],
+        "title": "LiveWindowResult",
+        "type": "object"
       },
       "LlmOneshotParams": {
         "additionalProperties": false,
@@ -24970,6 +29135,245 @@
           "provider"
         ],
         "title": "ModelSaveKeyResult",
+        "type": "object"
+      },
+      "ModelUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "rates": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelUsageRates"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "model",
+          "provider"
+        ],
+        "title": "ModelUsage",
+        "type": "object"
+      },
+      "ModelUsageRates": {
+        "additionalProperties": false,
+        "description": "Offline base-context-tier list rates, not the aggregate's effective rates.",
+        "properties": {
+          "input_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Usd Per Million"
+          },
+          "output_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Usd Per Million"
+          },
+          "cache_read_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Usd Per Million"
+          },
+          "cache_write_usd_per_million": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write Usd Per Million"
+          },
+          "pricing_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pricing Date"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "required": [
+          "input_usd_per_million",
+          "output_usd_per_million",
+          "cache_read_usd_per_million",
+          "cache_write_usd_per_million",
+          "pricing_date",
+          "source_url"
+        ],
+        "title": "ModelUsageRates",
         "type": "object"
       },
       "NoticePayload": {
@@ -32727,6 +37131,35 @@
         "title": "PromptSubmitStatus",
         "type": "string"
       },
+      "ProviderCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "since": {
+            "title": "Since",
+            "type": "number"
+          },
+          "chat_count": {
+            "title": "Chat Count",
+            "type": "integer"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "provider",
+          "since",
+          "chat_count",
+          "session_count"
+        ],
+        "title": "ProviderCoverage",
+        "type": "object"
+      },
       "ProviderLimit": {
         "additionalProperties": false,
         "description": "``hermes_cli/inventory.py::_apply_limits`` \u2014 ``account``: the whole login is rate-limited until\n``resets_at`` (ISO, absent when unknown); ``models``: only these models are, each until its time.",
@@ -32851,6 +37284,147 @@
           "state"
         ],
         "title": "ProviderUsageAccount",
+        "type": "object"
+      },
+      "ProviderUsageTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events",
+          "provider"
+        ],
+        "title": "ProviderUsageTotals",
         "type": "object"
       },
       "ProviderUsageWindow": {
@@ -41005,6 +45579,371 @@
         "title": "SkillCatalogEntry",
         "type": "object"
       },
+      "SkillChangeDecideParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "change_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Change Id",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "keep",
+              "undo"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "expected_revision": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Expected Revision",
+            "type": "string"
+          },
+          "client_action_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Action Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "change_id",
+          "decision",
+          "expected_revision",
+          "client_action_id"
+        ],
+        "title": "SkillChangeDecideParams",
+        "type": "object"
+      },
+      "SkillChangeDecisionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "title": "Change Id",
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "kept",
+              "undone"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "change_id",
+          "decision",
+          "revision",
+          "receipt_id"
+        ],
+        "title": "SkillChangeDecisionResult",
+        "type": "object"
+      },
+      "SkillChangeItem": {
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "title": "Change Id",
+            "type": "string"
+          },
+          "skill": {
+            "title": "Skill",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "anchor_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Message Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/SkillChangeLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "decision": {
+            "enum": [
+              "unreviewed",
+              "kept",
+              "undone"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "can_undo": {
+            "title": "Can Undo",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "change_id",
+          "skill",
+          "session_id",
+          "anchor_message_id",
+          "created_at",
+          "revision",
+          "title",
+          "reason",
+          "lines",
+          "decision",
+          "can_undo"
+        ],
+        "title": "SkillChangeItem",
+        "type": "object"
+      },
+      "SkillChangeLine": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "add",
+              "remove"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "title": "SkillChangeLine",
+        "type": "object"
+      },
+      "SkillChangeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "change_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Change Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "change_id"
+        ],
+        "title": "SkillChangeParams",
+        "type": "object"
+      },
+      "SkillChangeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "change_id": {
+            "title": "Change Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff"
+          },
+          "can_undo": {
+            "title": "Can Undo",
+            "type": "boolean"
+          },
+          "decision": {
+            "enum": [
+              "unreviewed",
+              "kept",
+              "undone"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          }
+        },
+        "required": [
+          "version",
+          "change_id",
+          "revision",
+          "diff",
+          "can_undo",
+          "decision",
+          "receipt_id"
+        ],
+        "title": "SkillChangeResult",
+        "type": "object"
+      },
+      "SkillChangesListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "maxLength": 32768,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "session_id"
+        ],
+        "title": "SkillChangesListParams",
+        "type": "object"
+      },
+      "SkillChangesListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SkillChangeItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "version",
+          "profile",
+          "items",
+          "next_cursor"
+        ],
+        "title": "SkillChangesListResult",
+        "type": "object"
+      },
       "SkillCommandRef": {
         "additionalProperties": false,
         "properties": {
@@ -43786,6 +48725,199 @@
         "title": "TaskIdResult",
         "type": "object"
       },
+      "TeamActivityParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profiles": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Profiles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "TeamActivityParams",
+        "type": "object"
+      },
+      "TeamActivityResult": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "now": {
+            "title": "Now",
+            "type": "number"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "working_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working Count"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/TeamAgentActivity"
+            },
+            "title": "Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "version",
+          "now",
+          "complete",
+          "working_count",
+          "agents"
+        ],
+        "title": "TeamActivityResult",
+        "type": "object"
+      },
+      "TeamAgentActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "working": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working"
+          },
+          "last_human_chat_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Human Chat At"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamCurrent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "working",
+          "last_human_chat_at",
+          "current"
+        ],
+        "title": "TeamAgentActivity",
+        "type": "object"
+      },
+      "TeamChat": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "stored_session_id": {
+            "title": "Stored Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "stored_session_id"
+        ],
+        "title": "TeamChat",
+        "type": "object"
+      },
+      "TeamCurrent": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "work_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Label"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "open_chat": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamChat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "work_label",
+          "started_at",
+          "open_chat"
+        ],
+        "title": "TeamCurrent",
+        "type": "object"
+      },
       "TerminalClosePayload": {
         "additionalProperties": false,
         "properties": {
@@ -45566,6 +50698,37 @@
         "title": "Usage",
         "type": "object"
       },
+      "UsageBackfill": {
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "title": "Since",
+            "type": "number"
+          },
+          "until": {
+            "title": "Until",
+            "type": "number"
+          },
+          "basis": {
+            "const": "session_totals_by_start",
+            "title": "Basis",
+            "type": "string"
+          },
+          "session_count": {
+            "minimum": 0,
+            "title": "Session Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "basis",
+          "session_count"
+        ],
+        "title": "UsageBackfill",
+        "type": "object"
+      },
       "UsageBar": {
         "additionalProperties": false,
         "description": "``_serialize_usage_bar``: one bar, magnitudes pre-formatted; ``pct_used`` only for ``plan``.",
@@ -45619,6 +50782,185 @@
         ],
         "title": "UsageBarKind",
         "type": "string"
+      },
+      "UsageEstimateParams": {
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "input_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "UsageEstimateParams",
+        "type": "object"
+      },
+      "UsageMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "api_call_count": {
+            "title": "Api Call Count",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "cache_hit_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Percent"
+          },
+          "estimated_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost Usd"
+          },
+          "known_estimated_cost_usd": {
+            "title": "Known Estimated Cost Usd",
+            "type": "number"
+          },
+          "minimum_estimated_cost_usd": {
+            "title": "Minimum Estimated Cost Usd",
+            "type": "number"
+          },
+          "unknown_price_events": {
+            "title": "Unknown Price Events",
+            "type": "integer"
+          },
+          "cost_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Reason"
+          },
+          "pricing_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pricing Dates",
+            "type": "array"
+          },
+          "price_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Price Sources",
+            "type": "array"
+          },
+          "cost_status": {
+            "enum": [
+              "est",
+              "minimum",
+              "unknown"
+            ],
+            "title": "Cost Status",
+            "type": "string"
+          },
+          "turn_count": {
+            "title": "Turn Count",
+            "type": "integer"
+          },
+          "event_count": {
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "unattributed_turn_events": {
+            "title": "Unattributed Turn Events",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens",
+          "reasoning_tokens",
+          "api_call_count",
+          "total_tokens",
+          "cache_hit_percent",
+          "estimated_cost_usd",
+          "known_estimated_cost_usd",
+          "minimum_estimated_cost_usd",
+          "unknown_price_events",
+          "cost_reason",
+          "pricing_dates",
+          "price_sources",
+          "cost_status",
+          "turn_count",
+          "event_count",
+          "unattributed_turn_events"
+        ],
+        "title": "UsageMetrics",
+        "type": "object"
       },
       "UsageModel": {
         "additionalProperties": false,
@@ -45764,6 +51106,194 @@
         ],
         "title": "UsageModel",
         "type": "object"
+      },
+      "UsageRollupParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "window": {
+            "default": "7d",
+            "enum": [
+              "today",
+              "7d",
+              "30d",
+              "all"
+            ],
+            "title": "Window",
+            "type": "string"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "UsageRollupParams",
+        "type": "object"
+      },
+      "UsageRollupResult": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "number"
+          },
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageMetrics"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentUsage"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelUsage"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderUsageTotals"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/DailyUsage"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "top_chats": {
+            "items": {
+              "$ref": "#/components/schemas/ChatUsage"
+            },
+            "title": "Top Chats",
+            "type": "array"
+          },
+          "chat_count": {
+            "title": "Chat Count",
+            "type": "integer"
+          },
+          "coverage_since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Since"
+          },
+          "backfill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageBackfill"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "coverage_reason": {
+            "title": "Coverage Reason",
+            "type": "string"
+          },
+          "basis": {
+            "const": "standard_api_list_price",
+            "title": "Basis",
+            "type": "string"
+          },
+          "currency": {
+            "const": "USD",
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "start",
+          "end",
+          "timezone",
+          "totals",
+          "agents",
+          "models",
+          "providers",
+          "days",
+          "top_chats",
+          "chat_count",
+          "coverage_since",
+          "partial",
+          "coverage_reason",
+          "basis",
+          "currency"
+        ],
+        "title": "UsageRollupResult",
+        "type": "object"
+      },
+      "UsageRollupWireResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/UsageRollupResult"
+          },
+          {
+            "$ref": "#/components/schemas/AllTimeUsageRollupResult"
+          }
+        ],
+        "title": "UsageRollupWireResult"
       },
       "ValueResult": {
         "additionalProperties": false,
