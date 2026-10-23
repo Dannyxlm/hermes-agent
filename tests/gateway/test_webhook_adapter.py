@@ -33,6 +33,7 @@ from gateway.platforms.webhook import (
     _INSECURE_NO_AUTH,
     _is_usable_secret,
 )
+from tests.waiting import async_wait_until
 
 
 # ---------------------------------------------------------------------------
@@ -525,10 +526,10 @@ class TestPayloadFilters:
                 resp = await cli.post("/webhooks/probe", json={"note": "hi"},
                                       headers={"X-GitHub-Delivery": "bare-multiplex-1"})
                 assert resp.status == 202, await resp.text()
-            await asyncio.sleep(0.05)
+            await async_wait_until(lambda: captured, what="the bare route's dispatch")
         finally:
             set_multiplex_active(False)
-        assert captured and captured[0].text == "Script: ran:hi"
+        assert captured[0].text == "Script: ran:hi"
         assert seen_secret == ["owner-value"]
 
 
