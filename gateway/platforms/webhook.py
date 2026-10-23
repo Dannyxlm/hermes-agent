@@ -502,6 +502,24 @@ class WebhookAdapter(BasePlatformAdapter):
         from hermes_cli.profiles import get_profile_dir
         return _profile_runtime_scope(get_profile_dir(profile))
 
+    @classmethod
+    def _ingress_scope(cls, profile: Optional[str]):
+        """Scope for a route's script, prompt render and skill lookup.
+
+        A ``/p/<profile>/`` request uses that profile's scope. Under multiplexing a bare route is
+        bound to the gateway's own profile, so enter that scope too: without a bound secret scope
+        the route script's ``build_subprocess_env()`` raises ``UnscopedSecretError`` and the event
+        is dropped as "script ignored" with a 200, so the sender never retries. Single-profile
+        gateways keep the no-op and read the process environment as before."""
+        if profile and isinstance(profile, str):
+            return cls._profile_scope(profile)
+        from agent.secret_scope import is_multiplex_active
+        if not is_multiplex_active():
+            return nullcontext()
+        from gateway.run import _profile_runtime_scope
+        from hermes_constants import get_routing_process_hermes_home
+        return _profile_runtime_scope(get_routing_process_hermes_home())
+
     async def _read_authenticated_body(self, request: web.Request, route_name: str,
                                        route_config: dict) -> tuple[Optional[bytes], Optional[web.Response]]:
         """Auth-before-body: size-cap, read, then HMAC-validate. Returns ``(body, None)`` or ``(None, response)``."""
@@ -661,8 +679,8 @@ class WebhookAdapter(BasePlatformAdapter):
             return web.json_response({"status": "ignored", "reason": "filter", "route": route_name})
         # Script, prompt render and skill lookup read the profile's home (skills/, config); the runner
         # only enters the routed profile's scope later around handle_message, so enter it here.
-        # See #67277.
-        with self._profile_scope(profile):
+        # See #67277. Bare routes under multiplexing enter the gateway's own profile scope.
+        with self._ingress_scope(profile):
             script = route_config.get("script")
             if script:
                 # Shells out (up to its timeout) — worker thread so the loop isn't blocked; to_thread
