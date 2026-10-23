@@ -552,6 +552,15 @@ function backendRollbackMetadata(res: BackendUpdateCheckResponse) {
   }
 }
 
+function backendTargetSha(
+  res: BackendUpdateCheckResponse,
+  managedBehind: number | null,
+  upstreamHead: DesktopManagedSourceUpdate['upstreamHead'],
+) {
+  if (res.managed_source) return managedBehind !== null ? upstreamHead : undefined
+  return res.update_available ? `backend:${res.current_version}` : undefined
+}
+
 export function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
   const backendBehind = res.behind === undefined ? 0 : res.behind
   const checkFailed = !res.managed_source && res.can_apply && res.behind === null
@@ -616,14 +625,7 @@ export function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateS
     channel: res.channel,
     branch: res.branch ?? undefined,
     latestTag: !managed && res.source_version && !res.rollback_to ? `v${res.source_version}` : undefined,
-    targetSha:
-      managed && managedBehind !== null
-        ? managedSource?.upstreamHead
-        : res.update_available
-          ? managed
-            ? undefined
-            : `backend:${res.current_version}`
-          : undefined,
+    targetSha: backendTargetSha(res, managedBehind, managedSource?.upstreamHead),
     commits: res.commits,
     fetchedAt: Date.now(),
     managedSource

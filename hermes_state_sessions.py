@@ -2,6 +2,8 @@
 flags (end/reopen/archive/pin/hide/read), model_config patching, listing and
 counting, delete cascades, and the auto-archive sweep."""
 
+from hermes_state_sessions_metadata import workspace_key as _workspace_key, _delegate_from_json, _parse_model_config, _where_sql
+
 import glob
 import json
 import logging
@@ -28,16 +30,8 @@ from hermes_state_sessions_turn_leases import fence_delete_turn_leases
 
 # caplog tests pin the "hermes_state" logger name.
 logger = logging.getLogger("hermes_state")
+workspace_key = _workspace_key
 
-
-def workspace_key(row: dict[str, Any]) -> Optional[str]:
-    """Workspace grouping key: git repo root, else cwd, else None (branch excluded: a checkout must not
-    fragment history)."""
-    return (row.get("git_repo_root") or "").strip() or (row.get("cwd") or "").strip() or None
-
-
-def _delegate_from_json(col: str = "model_config") -> str:
-    return _sql_json_extract(col, "$._delegate_from")
 
 
 # _merge_model_config_json's "no such row" result — distinct from the legal None
@@ -73,15 +67,6 @@ _LINEAGE_CTE_SQL = """
               )"""
 
 
-def _parse_model_config(raw: Any) -> dict[str, Any]:
-    """Tolerant ``model_config`` decode: JSON text or dict -> dict copy; anything else -> {}."""
-    if isinstance(raw, str) and raw.strip():
-        try:
-            raw = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    return dict(raw) if isinstance(raw, dict) else {}
-
 
 def _cwd_prefix_clause(cwd_prefix: str) -> tuple[str, list[str]]:
     prefix = cwd_prefix.rstrip("/\\") or cwd_prefix
@@ -104,10 +89,6 @@ def _workspace_key_clause(key: str) -> tuple[str, list[str]]:
         [prefix, *cwd_params],
     )
 
-
-def _where_sql(clauses: list[str], lead: str = "") -> str:
-    """``WHERE a AND b`` (with *lead* prefix) or "" when there are no clauses."""
-    return f"{lead}WHERE {' AND '.join(clauses)}" if clauses else ""
 
 
 def _session_filter_where(

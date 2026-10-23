@@ -2,6 +2,7 @@
 
 import io
 import json
+from tests.tui_gateway.protocol_capture_helpers import _frames, _request_frame_without_clock, _not_shown
 import os
 import subprocess
 import sys
@@ -158,13 +159,6 @@ def test_emit_with_payload(capture):
 # ── Server→client requests (tui_gateway/server_requests.py) ─────────
 
 
-def _frames(buf):
-    return [json.loads(line) for line in buf.getvalue().splitlines()]
-
-
-def _request_frame_without_clock(frame):
-    # server_time is sampled on every replay; all other wire fields must match.
-    return {**frame, "params": {k: v for k, v in frame.get("params", {}).items() if k != "server_time"}}
 
 
 def _wait_open(server_requests, buf=None, timeout=10.0, windows=()):
@@ -367,10 +361,6 @@ def _two_window_session(server, sid):
     _ws_session(server, sid, FanoutTransport(*windows))
     return windows
 
-
-def _not_shown(req):
-    from tui_gateway import server_requests
-    return {"jsonrpc": "2.0", "id": req.id, "error": {"code": server_requests.NOT_SHOWN_CODE, "message": "not here"}}
 
 
 def test_window_owned_request_refuses_at_once_when_no_window_shows_the_session(server):
