@@ -199,46 +199,110 @@ class TestMetaPassthrough:
         data = json.loads(handler({}))
         assert data == {"result": "done"}
 
-    def test_meta_exclude_drops_named_keys(self, _patch_mcp_server):
-        """A server's ``meta_exclude`` keeps those exact keys out; other keys still ride."""
-        session = _patch_mcp_server
-        mcp_tool._servers["test-server"]._config = {"meta_exclude": ["brain_hot_memory"]}
-        session.call_tool = AsyncMock(
-            return_value=_FakeCallToolResult(
-                content=[_FakeContentBlock("done")],
-                meta={"brain_hot_memory": {"facts": [{"fact": "x"}]}, "retrieval": {"rows": 3}},
-            )
-        )
-        handler = _mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)
-        data = json.loads(handler({}))
-        assert data == {"result": "done", "_meta": {"retrieval": {"rows": 3}}}
+class TestMetaExclude:
+    """A server's ``meta_exclude`` names exact ``_meta`` keys kept out of its tool results.
 
-    def test_meta_exclude_of_every_key_omits_field(self, _patch_mcp_server):
-        session = _patch_mcp_server
-        mcp_tool._servers["test-server"]._config = {"meta_exclude": ["brain_hot_memory"]}
-        session.call_tool = AsyncMock(
-            return_value=_FakeCallToolResult(
-                content=[_FakeContentBlock("done")],
-                meta={"brain_hot_memory": {"facts": []}},
-            )
-        )
-        handler = _mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)
-        data = json.loads(handler({}))
-        assert data == {"result": "done"}
+    Configured through the discovery pass (``register_mcp_servers``), like every per-server
+    policy; the connected server object carries the config it connected with."""
 
-    def test_malformed_meta_exclude_is_ignored(self, _patch_mcp_server):
-        """Only a list of strings excludes anything; a bare string must not match by substring."""
-        session = _patch_mcp_server
-        mcp_tool._servers["test-server"]._config = {"meta_exclude": "brain_hot_memory"}
-        session.call_tool = AsyncMock(
-            return_value=_FakeCallToolResult(
-                content=[_FakeContentBlock("done")],
-                meta={"brain_hot_memory": {"facts": []}},
-            )
-        )
-        handler = _mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)
-        data = json.loads(handler({}))
-        assert data["_meta"] == {"brain_hot_memory": {"facts": []}}
+    @staticmethod
+    def _configure(servers: dict, connect: bool = False) -> None:
+        from tools import mcp_tool_discovery
+        if connect:  # what a connected server carries: its name, tools and the config it ran with
+            for name, cfg in servers.items():
+                server = mcp_tool._servers[name]
+                server.name, server._tools, server._config = name, [], cfg
+        mcp_tool_discovery.register_mcp_servers(servers)
+
+    @staticmethod
+    def _result(meta, **kw):
+        return _FakeCallToolResult(content=[_FakeContentBlock(kw.pop("text", "done"))], meta=meta, **kw)
+
+    @pytest.fixture(autouse=True)
+    def _discovery_seams(self, monkeypatch):
+        from tools import mcp_tool_config
+        monkeypatch.setattr(mcp_tool, "_ensure_mcp_sdk", lambda: True)
+        monkeypatch.setattr(mcp_tool_config, "_filter_suspicious_mcp_servers", lambda servers: servers)
+        with patch.dict(mcp_tool._server_meta_exclude, {}, clear=True):
+            yield
+
+    def _call(self, session, meta, server="test-server", **kw):
+        session.call_tool = AsyncMock(return_value=self._result(meta, **kw))
+        return json.loads(_mcp_handlers._make_tool_handler(server, "my-tool", 30.0)({}))
+
+    def test_drops_named_keys_and_keeps_the_rest(self, _patch_mcp_server):
+        self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}}, connect=True)
+        data = self._call(_patch_mcp_server, {"ambient_fact": {"items": [1]}, "call_detail": {"rows": 3}})
+        assert data == {"result": "done", "_meta": {"call_detail": {"rows": 3}}}
+
+    def test_excluding_every_key_omits_the_field(self, _patch_mcp_server):
+        self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}}, connect=True)
+        assert self._call(_patch_mcp_server, {"ambient_fact": {}}) == {"result": "done"}
+
+    def test_match_is_exact_never_substring(self, _patch_mcp_server):
+        self._configure({"test-server": {"meta_exclude": ["fact"]}}, connect=True)
+        data = self._call(_patch_mcp_server, {"fact": 1, "ambient_fact": 2, "facts": 3})
+        assert data["_meta"] == {"ambient_fact": 2, "facts": 3}
+
+    @pytest.mark.parametrize("malformed", [
+        "ambient_fact", {"ambient_fact": True}, None, 7, True, [["ambient_fact"]], [{"ambient_fact": 1}]])
+    def test_malformed_values_exclude_nothing(self, _patch_mcp_server, malformed):
+        """Only a list of strings counts; a bare string must not turn into substring matching."""
+        self._configure({"test-server": {"meta_exclude": malformed}}, connect=True)
+        data = self._call(_patch_mcp_server, {"ambient_fact": 1, "a": 2})
+        assert data["_meta"] == {"ambient_fact": 1, "a": 2}
+
+    def test_reserved_keys_stay_stripped(self, _patch_mcp_server):
+        self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}}, connect=True)
+        data = self._call(_patch_mcp_server, {
+            "modelcontextprotocol.io/progress": 1, "ambient_fact": 2, "com.example/k": 3})
+        assert data["_meta"] == {"com.example/k": 3}
+
+    def test_content_and_structured_content_are_untouched(self, _patch_mcp_server):
+        """Exclusion applies to ``_meta`` keys only: the same name in text or structuredContent rides."""
+        self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}}, connect=True)
+        data = self._call(_patch_mcp_server, {"ambient_fact": 1}, text="ambient_fact: see data",
+                          structuredContent={"ambient_fact": "payload", "rows": 2})
+        assert data == {"result": "ambient_fact: see data",
+                        "structuredContent": {"ambient_fact": "payload", "rows": 2}}
+
+    def test_each_server_keeps_its_own_list(self, _patch_mcp_server):
+        other = SimpleNamespace(session=MagicMock(), _rpc_lock=None)
+        with patch.dict(mcp_tool._servers, {"other-server": other}):
+            self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}, "other-server": {}},
+                            connect=True)
+            meta = {"ambient_fact": 1, "call_detail": 2}
+            assert self._call(_patch_mcp_server, meta)["_meta"] == {"call_detail": 2}
+            assert self._call(other.session, meta, server="other-server")["_meta"] == meta
+
+    def test_config_edit_applies_on_the_next_pass_without_a_reconnect(self, _patch_mcp_server):
+        """The connected server keeps the config it connected with; the next discovery pass re-reads
+        ``meta_exclude`` and the very next call honours it, on the same connection."""
+        server = mcp_tool._servers["test-server"]
+        self._configure({"test-server": {}}, connect=True)
+        meta = {"ambient_fact": 1, "call_detail": 2}
+        assert self._call(_patch_mcp_server, meta)["_meta"] == meta
+        self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}})
+        assert self._call(_patch_mcp_server, meta)["_meta"] == {"call_detail": 2}
+        self._configure({"test-server": {}})
+        assert self._call(_patch_mcp_server, meta)["_meta"] == meta
+        assert mcp_tool._servers["test-server"] is server
+
+    def test_session_expired_replay_keeps_the_exclusions(self, _patch_mcp_server, monkeypatch):
+        """A read-only call replayed after a session-expiry reconnect renders with the same list."""
+        from tools import mcp_tool_loop
+        server = mcp_tool._servers["test-server"]
+        server._reconnect_event = object()
+        monkeypatch.setattr(_mcp_handlers, "_mcp_loop_running", lambda: True)
+        monkeypatch.setattr(mcp_tool_loop, "_signal_reconnect_and_wait", lambda *a, **k: True)
+        self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}}, connect=True)
+        with patch.dict(mcp_tool._tool_read_only_hints, {"test-server": {"my-tool": True}}):
+            _patch_mcp_server.call_tool = AsyncMock(side_effect=[
+                RuntimeError("session not found"), self._result({"ambient_fact": 1, "call_detail": 2})])
+            data = json.loads(_mcp_handlers._make_tool_handler("test-server", "my-tool", 30.0)({}))
+        assert _patch_mcp_server.call_tool.await_count == 2
+        assert data == {"result": "done", "_meta": {"call_detail": 2}}
+
 
 class TestMetaExcludeKeys:
     def test_list_of_strings(self):

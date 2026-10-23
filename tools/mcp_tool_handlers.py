@@ -19,7 +19,7 @@ from tools.mcp_tool_common import _exc_str, _sanitize_error, mcp_field, _core
 from tools import mcp_tool_loop as _loop
 from tools.mcp_tool_content import (
     _MCP_HARD_RESULT_CAP_CHARS, _cache_mcp_audio_block, _cache_mcp_image_block, _mcp_result_with_native_images,
-    _meta_exclude_keys, _render_mcp_dropped_block_notice, _render_mcp_resource_block, _strip_reserved_meta_keys,
+    _render_mcp_dropped_block_notice, _render_mcp_resource_block, _strip_reserved_meta_keys,
     _truncate_mcp_text_result)
 from tools.mcp_tool_errors import (
     _auth_error_detail, _is_auth_error, _is_session_expired_error, _mcp_call_failed_message)
@@ -55,6 +55,13 @@ def _tool_is_read_only(server_name: str, tool_name: str) -> bool:
     connection's tools, so it lives under the connection key."""
     from tools.mcp_tool_scope import _resolve_server_key
     return _core._tool_read_only_hints.get(_resolve_server_key(server_name), {}).get(tool_name) is True
+
+
+def _calling_meta_exclude(server_name: str) -> frozenset[str]:
+    """The calling profile's ``meta_exclude`` for *server_name*, recorded by its last discovery pass
+    (an adopter of a shared connection keeps its own list, as it keeps its own trust tier)."""
+    from tools.mcp_tool_scope import _server_key
+    return _core._server_meta_exclude.get(_server_key(server_name), frozenset())
 
 
 def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
@@ -583,6 +590,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         # Only a tool annotated readOnlyHint=True is replayed after session expiry; a 401 is always
         # pre-dispatch so the auth recoverer keeps its retry for every tool.
         read_only = _tool_is_read_only(server_name, tool_name)
+        meta_exclude = _calling_meta_exclude(server_name)  # once, in the caller's scope (as trust); replays reuse it
         image_paths: list[str] = []  # the LAST attempt's cached images (a recoverer may retry _call)
 
         async def _call():
@@ -595,8 +603,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy
                 server._mark_session_proven()
             image_paths.clear()
-            return _render_call_tool_result(result, server_name, image_paths,
-                                            _meta_exclude_keys(getattr(server, "_config", None)))
+            return _render_call_tool_result(result, server_name, image_paths, meta_exclude)
 
         def _on_failure(exc):
             _core._bump_server_error(server_name)
