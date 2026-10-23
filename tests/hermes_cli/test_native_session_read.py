@@ -3,15 +3,13 @@
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_inbox_summaries import inbox, row
+from tests.tui_gateway.test_inbox_summaries import inbox, patch_sidebar, row
 from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
 from tui_gateway import server
 
 
 @pytest.fixture
 def read_client(inbox):
-    from hermes_cli.web_routers import sessions
-    inbox.app.include_router(sessions.manage_router)
     return inbox
 
 
@@ -26,9 +24,9 @@ def test_native_read_unread_roundtrip_stamps_root_tip_not_branch(read_client, mo
         db.create_session("branch", "desktop", parent_session_id="same",
                           model_config={"_branched_from": "same"}, profile_name="ops")
     server._sessions["ops"]["session_key"] = "tip"
-    monkeypatch.setattr("hermes_state_sessions.time.time", lambda: 200)
-    for sid, unread in [("tip", True), ("same", False), ("same", True), ("tip", False)]:
-        response = read_client.patch(f"/api/sessions/{sid}", json={"profile": "ops", "unread": unread})
+    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 200)
+    for index, (sid, unread) in enumerate([("tip", True), ("same", False), ("same", True), ("tip", False)]):
+        response = patch_sidebar(read_client, sid, request_id=f"read-{index}", unread=unread)
         assert response.status_code == 200, response.text
         assert response.json()["ok"] is True
         assert response.json()["unread"] is unread
@@ -59,8 +57,8 @@ def test_native_read_rejects_foreign_owner_before_any_mutation(read_client, mobi
                          "WHERE id='same'")
         db.create_session("tip", "desktop", parent_session_id="same", profile_name="ops")
         db._conn.execute("UPDATE sessions SET profile_name='default' WHERE id=?", (foreign_segment,))
-    response = read_client.patch("/api/sessions/tip", json={"profile": "ops", "unread": False,
-                                                          "title": "must not rename"})
+    response = patch_sidebar(read_client, "tip", request_id="foreign-read", unread=False,
+                             title="must not rename")
     assert response.status_code == 404
     with SessionDB(db_path=home / "state.db", read_only=True) as db:
         assert db.get_session("same")["last_read_at"] is None

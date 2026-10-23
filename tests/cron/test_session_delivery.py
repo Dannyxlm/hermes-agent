@@ -1,15 +1,12 @@
-"""Scheduled wakes use the existing owner's mailbox, never a second writer."""
-import threading
+"""Exact-session wakes retain their target while execution belongs to the canonical owner."""
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
-from cron import jobs, scheduler_delivery
-from hermes_cli.active_sessions import try_acquire_active_session
+from cron import bot_chat_legacy as pending, jobs, scheduler_delivery, session_delivery
+from hermes_constants import get_hermes_home
 from hermes_state import SessionDB
-from tools import bot_live_delivery as mailbox
-from tui_gateway import session_notifications
-from tui_gateway.method_ctx import rebind
-from tui_gateway.session_lifecycle import _session_turn_admission
 
 
 @pytest.fixture
@@ -27,6 +24,68 @@ def owner_home(tmp_path, monkeypatch):
         db.close()
 
 
+@pytest.fixture
+def native_owner(owner_home, monkeypatch):
+    """Exercise the real pending journal and native RPC boundary, never a live gateway."""
+    from hermes_cli import gateway_client, gateway_runtime
+    from tools import bot_live_delivery
+    import subprocess
+
+    home, _db = owner_home
+    endpoint = object()
+    state = SimpleNamespace(ready=True, calls=[], admissions=[], status="queued", outcome=None,
+                            drop_answer=False, target=None, receipt=None)
+
+    def discover(target_home, *, timeout):
+        assert target_home == home
+        return SimpleNamespace(state="ready" if state.ready else "missing",
+                               endpoint=endpoint if state.ready else None)
+
+    class Client:
+        async def rpc(self, method, **params):
+            state.calls.append((method, params))
+            if method == "session.resume":
+                return {"session_id": state.target or params["session_id"]}
+            if method == "prompt.submit":
+                key = params["submission_id"].removeprefix("cron-session:")
+                record = pending.read_pending(key)
+                assert record["status"] == "claimed"
+                assert record["home"] == str(home)
+                assert params["queued"] is True and params["finite"] is True
+                assert "unattended" not in params
+                state.admissions.append(params)
+                state.receipt = {"admission_id": "wake-" + key, "status": state.status,
+                                 "outcome": state.outcome, "ref": {"session_id": params["session_id"]}}
+                if state.drop_answer:
+                    raise ConnectionError("answer lost after possible admission")
+                return state.receipt
+            assert method == "prompt.receipt"
+            assert params["admission_id"] == state.receipt["admission_id"]
+            return {**state.receipt, "status": state.status, "outcome": state.outcome}
+
+    expected_endpoint = endpoint
+
+    @asynccontextmanager
+    async def connect(*, endpoint):
+        assert endpoint is expected_endpoint
+        assert get_hermes_home() == home
+        yield Client()
+
+    def no_spawn(*args, **kwargs):
+        pytest.fail("scheduled wakes must not spawn a gateway or local inference")
+
+    monkeypatch.setattr(gateway_runtime, "discover_gateway_endpoint", discover)
+    monkeypatch.setattr(gateway_runtime, "ensure_gateway_runtime", no_spawn)
+    monkeypatch.setattr(gateway_client, "connect_gateway", connect)
+    monkeypatch.setattr(subprocess, "run", no_spawn)
+    monkeypatch.setattr(bot_live_delivery, "read_delivery_result", lambda *a: None)
+    return state
+
+
+def receipt_key(job):
+    return job["_bot_chat_delivery_receipts"]["session:release-chat"]["delivery_id"]
+
+
 def test_delivery_validation_is_profile_local_and_atomic(owner_home, tmp_path):
     foreign = SessionDB(db_path=tmp_path / "foreign" / "state.db")
     foreign.create_session(session_id="foreign-chat", source="desktop")
@@ -36,209 +95,165 @@ def test_delivery_validation_is_profile_local_and_atomic(owner_home, tmp_path):
             jobs.create_job("Wake", "5m", deliver=target)
     assert jobs.list_jobs(include_disabled=True) == []
     job = jobs.create_job("Wake", "5m", deliver="session:release-chat")
-    assert jobs.get_job(job["id"])["deliver"] == "session:release-chat"
-    with pytest.raises(ValueError, match="session:<id>.*same profile"):
-        jobs.update_job(job["id"], {"deliver": "session:foreign-chat"})
-    with pytest.raises(ValueError, match="session:<id>.*same profile"):
-        jobs.update_job(job["id"], {"failure_deliver": "session:foreign-chat"})
+    for field in ("deliver", "failure_deliver"):
+        with pytest.raises(ValueError, match="session:<id>.*same profile"):
+            jobs.update_job(job["id"], {field: "session:foreign-chat"})
     assert jobs.get_job(job["id"])["deliver"] == "session:release-chat"
     assert "failure_deliver" not in jobs.get_job(job["id"])
 
 
-def test_busy_noncanonical_owner_receives_fifo_wakes_once(owner_home, monkeypatch):
-    home, db = owner_home
-    lease, refusal = try_acquire_active_session(
-        session_id="release-chat", surface="desktop", config={}, registry_home=home,
-        metadata={"live_session_id": "visible-chat", "bot_live_delivery_consumer": True})
-    assert refusal is None
-    session = dict(history_lock=threading.RLock(), agent=object(), session_key="release-chat",
-                   active_session_lease=lease, running=True)
-    submitted = []
-
-    def submit(rid, sid, state, text, **kwargs):
-        submitted.append((sid, text))
-        db.append_message("release-chat", "user", text)
-        db.append_message("release-chat", "assistant", "Resumed toy-marker-42")
-        kwargs["terminal_callback"]({"status": "settled", "text": "Resumed toy-marker-42"})
-        state["running"] = False
-        return True
-
-    poll = rebind(session_notifications._poll_bot_live_delivery_once, {
-        "_session_home": lambda state: home,
-        "_session_turn_admission": _session_turn_admission,
-        "_run_prompt_submit": submit,
-        "_notif_release_turn": lambda state: state.update(running=False),
-    })
-    monkeypatch.setattr(scheduler_delivery._sched, "load_config", dict)
+def test_owner_admits_each_execution_once_and_retains_fifo_intent(owner_home, native_owner, monkeypatch):
     from gateway import config
+    monkeypatch.setattr(scheduler_delivery._sched, "load_config", dict)
     monkeypatch.setattr(config, "load_gateway_config", lambda: None)
-    try:
-        for run, payload in (("first", "Gate ready"), ("second", "Review complete")):
-            job = jobs.create_job("Wake", "5m", name="Owner wake", deliver="session:release-chat")
-            job["execution_id"] = run
-            assert scheduler_delivery._deliver_result(job, payload) is None
-            assert jobs.get_job(job["id"])["last_delivery_queued"]["session:release-chat"]["status"] == "queued"
-            assert poll("visible-chat", session) is False
-            assert scheduler_delivery._deliver_result(job, payload) is None
-        session["running"] = False
-        assert poll("visible-chat", session) is True
-        assert poll("visible-chat", session) is True
-        assert poll("visible-chat", session) is False
-        assert submitted == [
-            ("visible-chat", '[Scheduled wake from cron job "Owner wake" (first), not the user.]\n\nGate ready'),
-            ("visible-chat", '[Scheduled wake from cron job "Owner wake" (second), not the user.]\n\nReview complete'),
-        ]
-        assert [m["content"] for m in db.get_messages("release-chat")] == [
-            "Remember toy-marker-42", "Armed toy-marker-42", submitted[0][1], "Resumed toy-marker-42",
-            submitted[1][1], "Resumed toy-marker-42",
-        ]
-        assert db.get_session_by_title("Bot Chat") is None
-    finally:
-        lease.release()
+    for run, payload in (("first", "Gate ready"), ("second", "Review complete")):
+        job = jobs.create_job("Wake", "5m", name="Owner wake", deliver="session:release-chat")
+        job["execution_id"] = run
+        assert scheduler_delivery._deliver_result(job, payload) is None
+        assert jobs.get_job(job["id"])["last_delivery_queued"]["session:release-chat"]["status"] == "queued"
+        assert scheduler_delivery._deliver_result(job, payload) is None
+    assert [item["text"] for item in native_owner.admissions] == [
+        '[Scheduled wake from cron job "Owner wake" (first), not the user.]\n\nGate ready',
+        '[Scheduled wake from cron job "Owner wake" (second), not the user.]\n\nReview complete',
+    ]
+    assert all(item["session_id"] == "release-chat" for item in native_owner.admissions)
+    assert owner_home[1].get_session_by_title("Bot Chat") is None
 
 
-def test_deleted_session_fails_preflight_without_creating_a_replacement(owner_home):
-    from cron.scheduler_preflight import _preflight_check_delivery
-    _home, db = owner_home
-    assert _preflight_check_delivery({"deliver": "session:missing"}) == (
-        "Invalid session:<id> delivery target 'missing': session must exist in the same profile. "
-        "Use an exact ID from `hermes sessions list` in this profile, or select the owning profile first.")
-    assert db.get_session("missing") is None
+def test_absent_owner_parks_then_admits_without_a_second_writer(owner_home, native_owner):
+    native_owner.ready = False
+    job = {"id": "toy", "execution_id": "first"}
+    assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    key = receipt_key(job)
+    pending.drain_legacy_pending()
+    assert pending.read_pending(key)["status"] == "queued"
+    assert native_owner.calls == []
+    native_owner.ready = True
+    pending.drain_legacy_pending()
+    pending.drain_legacy_pending()
+    assert len(native_owner.admissions) == 1
+    assert pending.read_pending(key)["status"] == "transferred"
 
 
-@pytest.mark.parametrize("outcome", ["settled", "ambiguous"])
-def test_unsupported_owner_defers_then_claims_once(owner_home, monkeypatch, outcome):
-    from cron import bot_chat_delivery as pending, session_delivery
-    home, _db = owner_home
-    lease, refusal = try_acquire_active_session(
-        session_id="release-chat", surface="cli", config={}, registry_home=home)
-    assert refusal is None
-    turns = []
-
-    def resume(target_home, session_id, message):
-        turns.append((target_home, session_id, message))
-        return None if outcome == "settled" else "unknown turn outcome"
-
-    monkeypatch.setattr(session_delivery, "_resume_session", resume)
-    job = {"id": "toy", "name": "Owner wake", "execution_id": "first"}
-    try:
-        assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
-        key = job["_bot_chat_delivery_receipts"]["session:release-chat"]["delivery_id"]
-        pending.drain()
-        assert turns == []
-        assert pending.read_pending(key)["status"] == "queued"
-    finally:
-        lease.release()
-    pending.drain()
-    assert turns == [(home, "release-chat", '[Scheduled wake from cron job "Owner wake" (first), not the user.]\n\nGate ready')]
-    assert pending.read_pending(key)["status"] == outcome
-    pending.drain()
-    assert len(turns) == 1
+@pytest.mark.parametrize("status,outcome,expected", [
+    ("terminal", "completed", "settled"), ("terminal", "failed", "failed"),
+    ("unknown", None, "ambiguous"),
+])
+def test_admitted_receipts_are_observed_not_resubmitted(owner_home, native_owner, status, outcome, expected):
+    job = {"id": "toy", "execution_id": "first"}
+    assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    native_owner.status, native_owner.outcome = status, outcome
+    pending.drain_legacy_pending()
+    assert pending.read_pending(receipt_key(job))["status"] == expected
     result = session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
-    assert result is None if outcome == "settled" else "ambiguous" in result
-    assert len(turns) == 1
+    assert result is None if expected == "settled" else expected in result
+    assert len(native_owner.admissions) == 1
 
 
-def test_failure_suppression_is_durable_and_results_still_wake(owner_home):
-    from cron import bot_chat_delivery as pending, session_delivery
+def test_lost_submit_answer_is_ambiguous_and_never_replayed(owner_home, native_owner):
+    native_owner.drop_answer = True
+    job = {"id": "toy", "execution_id": "first"}
+    assert "ambiguous" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    pending.drain_legacy_pending()
+    assert "ambiguous" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    assert len(native_owner.admissions) == 1
+
+
+def test_failure_suppression_is_durable_and_results_still_wake(owner_home, native_owner):
     home, _db = owner_home
     (home / "config.yaml").write_text("display: {suppress_warning_notifications: true}\n")
-    job = {"id": "toy", "name": "Owner wake", "execution_id": "first"}
+    job = {"id": "toy", "execution_id": "first"}
     assert session_delivery.deliver_to_session(job, "Failed", "release-chat", for_failure=True) is None
-    key = job["_bot_chat_delivery_receipts"]["session:release-chat"]["delivery_id"]
-    assert pending.read_pending(key)["status"] == "suppressed"
+    assert pending.read_pending(receipt_key(job))["status"] == "suppressed"
     (home / "config.yaml").write_text("display: {suppress_warning_notifications: false}\n")
     assert session_delivery.deliver_to_session(job, "Failed", "release-chat", for_failure=True) is None
-    assert pending.read_pending(key)["status"] == "suppressed"
+    assert native_owner.admissions == []
     assert "queued" in session_delivery.deliver_to_session(job, "Result", "release-chat")
-    assert job["_bot_chat_delivery_receipts"]["session:release-chat"]["status"] == "queued"
+    assert len(native_owner.admissions) == 1
 
 
-def test_pending_payload_is_redacted_before_persistence(owner_home):
-    from cron import bot_chat_delivery as pending, session_delivery
+def test_pending_payload_is_redacted_before_persistence(owner_home, native_owner):
+    native_owner.ready = False
     job = {"id": "toy", "execution_id": "first"}
     assert "queued" in session_delivery.deliver_to_session(job, "OPENAI_API_KEY=toy-private-value", "release-chat")
-    key = job["_bot_chat_delivery_receipts"]["session:release-chat"]["delivery_id"]
-    assert pending.read_pending(key)["content"] == "OPENAI_API_KEY=***"
+    assert pending.read_pending(receipt_key(job))["content"] == "OPENAI_API_KEY=***"
 
 
-def test_compressed_conversation_targets_its_live_tip(owner_home):
-    from cron import session_delivery
-    home, db = owner_home
+def test_compressed_conversation_targets_its_tip_not_a_bot_chat(owner_home, native_owner):
+    _home, db = owner_home
     db.end_session("release-chat", end_reason="compression")
     db.create_session("release-tip", source="desktop", parent_session_id="release-chat")
     db.create_session("unrelated-chat", source="desktop")
-    lease, refusal = try_acquire_active_session(
-        session_id="release-tip", surface="desktop", config={}, registry_home=home,
-        metadata={"live_session_id": "visible-tip", "bot_live_delivery_consumer": True})
-    assert refusal is None and lease is not None
-    try:
-        job = {"id": "toy", "execution_id": "first"}
-        assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
-        owner = mailbox.find_session_live_owner(home, "release-chat")
-        assert owner["session_id"] == "release-tip"
-        assert owner["live_session_id"] == "visible-tip"
-        assert mailbox.find_session_live_owner(home, "unrelated-chat") is None
-        record = mailbox.claim_pending_delivery(home, owner)
-        assert record["message"] == '[Scheduled wake from cron job "toy" (first), not the user.]\n\nGate ready'
-        assert mailbox.owner_holds_delivery(home, record) is True
-        assert mailbox.claim_pending_delivery(home, owner) is None
-    finally:
-        lease.release()
-    # An accepted claim is not replayed in a CLI after owner loss.
-    assert "claimed" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
-    assert not (home / "cron" / "bot_chat_pending").exists()
-
-
-@pytest.mark.parametrize("named", [False, True])
-def test_detached_child_pins_profile_and_exact_resume(owner_home, monkeypatch, named):
-    import subprocess
-    from pathlib import Path
-    from cron import session_delivery
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-    home, _db = owner_home
-    target = home / "profiles" / "secondary" if named else home
-    target.mkdir(parents=True, exist_ok=True)
-    captured = {}
-
-    def run(argv, env, report, timeout):
-        captured.update(argv=argv, home=env["HERMES_HOME"], message=Path(argv[-1]).read_text())
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(scheduler_delivery, "_run_bot_chat_turn", run)
-    token = set_hermes_home_override(str(target))
-    try:
-        assert session_delivery._resume_session(target, "release-chat", "Wake") is None
-    finally:
-        reset_hermes_home_override(token)
-    assert captured["home"] == str(target)
-    assert captured["message"] == "Wake"
-    assert captured["argv"][captured["argv"].index("chat"):] == [
-        "chat", "--in", "~", "--resume", "release-chat", "-Q", "--query-file", captured["argv"][-1]]
-    assert ("-p" in captured["argv"]) is (not named)
-
-
-def test_deferred_wake_retains_admitted_home_after_scope_changes(owner_home, monkeypatch, tmp_path):
-    from cron import bot_chat_delivery as pending, session_delivery
-    home, _db = owner_home
     job = {"id": "toy", "execution_id": "first"}
     assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
-    key = job["_bot_chat_delivery_receipts"]["session:release-chat"]["delivery_id"]
-    record = pending.read_pending(key)
-    turns = []
-    monkeypatch.setattr(session_delivery, "_resume_session", lambda target_home, sid, text: turns.append((target_home, sid)))
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "different-root"))
-    assert session_delivery.deliver_to_session(dict(record["job"]), "Gate ready", "release-chat", deferred=record) is None
-    assert turns == [(home, "release-chat")]
-    assert not (tmp_path / "different-root" / "state.db").exists()
+    assert native_owner.admissions[0]["session_id"] == "release-tip"
+    assert db.get_session_by_title("Bot Chat") is None
 
 
-def test_same_execution_cannot_replace_a_deferred_payload(owner_home):
-    from cron import bot_chat_delivery as pending, session_delivery
+def test_deferred_wake_keeps_its_home_after_scope_changes(owner_home, native_owner, monkeypatch, tmp_path):
+    home, _db = owner_home
+    native_owner.ready = False
+    job = {"id": "toy", "execution_id": "first"}
+    assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    path = home / "cron" / "bot_chat_pending" / (receipt_key(job) + ".json")
+    native_owner.ready = True
+    other = tmp_path / "different-root"
+    monkeypatch.setenv("HERMES_HOME", str(other))
+    pending._drain_one(path)
+    assert native_owner.admissions[0]["session_id"] == "release-chat"
+    assert get_hermes_home() == other
+    assert not (other / "state.db").exists()
+
+
+def test_same_execution_cannot_replace_a_deferred_payload(owner_home, native_owner):
+    native_owner.ready = False
     job = {"id": "toy", "execution_id": "first"}
     assert "queued" in session_delivery.deliver_to_session(job, "First", "release-chat")
-    key = job["_bot_chat_delivery_receipts"]["session:release-chat"]["delivery_id"]
     result = session_delivery.deliver_to_session(job, "Changed", "release-chat")
-    assert result == ("session:release-chat scheduled wake unverified: delivery id already belongs to a different payload; inspect before rearming")
-    assert pending.read_pending(key)["content"] == "First"
-    assert pending.read_pending(key)["status"] == "queued"
+    assert "delivery id already belongs to a different payload" in result
+    assert pending.read_pending(receipt_key(job))["content"] == "First"
+    assert native_owner.admissions == []
+
+
+def test_old_claimed_record_is_never_replayed(owner_home, native_owner):
+    from utils import atomic_json_write
+    native_owner.ready = False
+    job = {"id": "toy", "execution_id": "first"}
+    assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    key = receipt_key(job)
+    record = pending.read_pending(key)
+    record["status"] = "claimed"
+    atomic_json_write(owner_home[0] / "cron" / "bot_chat_pending" / (key + ".json"), record)
+    native_owner.ready = True
+    pending.drain_legacy_pending()
+    assert "claimed" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    assert native_owner.admissions == []
+
+
+def test_pre_cutover_transferred_record_without_native_receipt_is_not_replayed(owner_home, native_owner):
+    from utils import atomic_json_write
+    native_owner.ready = False
+    job = {"id": "toy", "execution_id": "first"}
+    assert "queued" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    key = receipt_key(job)
+    record = pending.read_pending(key)
+    record.update(status="transferred", receipt_status="claimed")
+    atomic_json_write(owner_home[0] / "cron" / "bot_chat_pending" / (key + ".json"), record)
+    native_owner.ready = True
+    pending.drain_legacy_pending()
+    assert "claimed" in session_delivery.deliver_to_session(job, "Gate ready", "release-chat")
+    assert native_owner.admissions == []
+
+
+def test_empty_session_target_in_legacy_record_never_becomes_bot_chat(owner_home, native_owner):
+    record = {"id": "a" * 64, "status": "queued", "home": str(owner_home[0]),
+              "content": "Wake", "session_id": "", "job": {"id": "toy"}}
+    assert pending._dispose(owner_home[0] / "unused.json", record) is True
+    assert record["status"] == "ambiguous"
+    assert native_owner.admissions == []
+
+
+def test_deleted_session_fails_preflight_without_a_replacement(owner_home):
+    from cron.scheduler_preflight import _preflight_check_delivery
+    assert "same profile" in _preflight_check_delivery({"deliver": "session:missing"})
+    assert owner_home[1].get_session("missing") is None

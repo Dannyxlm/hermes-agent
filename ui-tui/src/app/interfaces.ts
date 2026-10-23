@@ -35,6 +35,8 @@ import type {
   VaultUnlockReq
 } from '../types.js'
 
+import type { SubmissionDestination } from './submissionDestination.js'
+
 export interface StateSetter<T> {
   (value: SetStateAction<T>): void
 }
@@ -119,7 +121,7 @@ export interface GatewayProviderProps {
 // the SAME RPCs as the old slash flows (billing.charge / charge_status /
 // auto_reload / step_up).  Backend is unchanged & shared with the CLI.
 
-export type BillingScreen = 'autoreload' | 'buy' | 'confirm' | 'limit' | 'overview' | 'stepup'
+export type BillingScreen = 'autoreload' | 'buy' | 'confirm' | 'hermes' | 'limit' | 'overview' | 'stepup'
 
 /** Outcome of a charge attempt — lets the overlay route without tearing down. */
 export type BillingChargeOutcome =
@@ -137,6 +139,8 @@ export type BillingChargeOutcome =
 export interface BillingOverlayCtx {
   /** Run `billing.auto_reload` (enabled/threshold/top_up) → resolve ok/false. */
   applyAutoReload: (enabled: boolean, threshold?: number, topUp?: number) => Promise<boolean>
+  /** Run `billing.keep_going_on_credits` (window plans) → resolve ok/false. */
+  applyKeepGoingOnCredits: (enabled: boolean) => Promise<boolean>
   /**
    * Submit `billing.charge` for `amount` and poll to settlement. Resolves a
    * discriminated outcome so the overlay can route to the resumable step-up on
@@ -328,6 +332,7 @@ export interface TranscriptRow {
 }
 
 export interface UiState {
+  gatewayConnected?: boolean
   battery: boolean
   batteryStatus: BatteryInfo | null
   bgTasks: Set<string>
@@ -396,15 +401,18 @@ export interface ComposerActions {
   /** Attach an image by path in as a token. */
   attachImagePath: (path: string) => void
   /** Clear a submitted draft without detaching images the gateway must consume. */
-  clearForSubmit: () => void
-  dequeue: () => string | undefined
-  /** Discard the current draft and detach any images it owns. */
+  clearIn: () => void
+  /** Discard the current draft and release images owned by the legacy gateway. */
   discardIn: () => void
-  enqueue: (text: string, display?: string) => void
+  stage?: (text: string, display?: string, destination?: SubmissionDestination, attachments?: QueueItem['attachments']) => QueueItem
+  dequeue: (retry?: boolean) => QueueItem | undefined
+  enqueue: (text: string, display?: string, destination?: SubmissionDestination, attachments?: QueueItem['attachments']) => QueueItem | void
   handleTextPaste: (event: PasteEvent) => MaybePromise<ComposerPasteResult | null>
   openEditor: () => Promise<void>
-  prependQueue: (item: QueueItem) => void
+  prependQueue: (item: QueueItem, destination?: SubmissionDestination) => void
   pushHistory: (text: string) => void
+  /** Composer text for queue-edit slot `index` (local items first, then server-queued rows). */
+  queueDraft: (index: number) => string
   removeQueue: (index: number) => void
   setCompIdx: StateSetter<number>
   setComposerTokens: StateSetter<ComposerToken[]>
@@ -412,7 +420,7 @@ export interface ComposerActions {
   setInput: StateSetter<string>
   setInputBuf: StateSetter<string[]>
   setQueueEdit: (index: null | number) => void
-  takeQueue: (index: number, editedDisplay?: string) => QueueItem | undefined
+  takeQueue: (index: number, editedDisplay?: string) => QueueItem | Promise<QueueItem | undefined> | undefined
   /** Reconcile attached payloads against tokens still present in the text. */
   syncTokens: (value: string) => void
 }
@@ -454,7 +462,7 @@ export interface InputHandlerActions {
   appendMessage: (msg: Msg) => void
   cancelClarify: () => void
   die: () => void
-  dispatchSubmission: (full: string) => void
+  dispatchSubmission: (full: string | QueueItem) => void
   guardBusySessionSwitch: (what?: string) => boolean
   newSession: (msg?: string, title?: string) => void
   sys: (text: string) => void
@@ -493,6 +501,7 @@ export interface InputHandlerResult {
 
 export interface GatewayEventHandlerContext {
   composer: {
+    enqueue?: ComposerActions['enqueue']
     setInput: StateSetter<string>
   }
   gateway: GatewayServices
@@ -504,13 +513,13 @@ export interface GatewayEventHandlerContext {
     recoverSidRef?: MutableRefObject<null | string>
     resetSession: () => void
     resumeById: (id: string) => Promise<void>
-    setCatalog: StateSetter<null | SlashCatalog>
+    setCatalog: (catalog: null | SlashCatalog) => void
   }
   submission: {
     /** Submit text literally as a prompt — no slash/!/interpolation dispatch.
      *  Used for `-q` startup queries, which are arbitrary launcher-provided
      *  text (parity with one-shot's literal prompt handling). */
-    submitLiteralRef: MutableRefObject<(value: string) => void>
+    submitLiteralRef: MutableRefObject<(value: string, attachments?: Array<{ path: string; mime: string }>) => void>
     submitRef: MutableRefObject<(value: string) => void>
   }
   system: {
@@ -532,6 +541,21 @@ export interface GatewayEventHandlerContext {
   }
 }
 
+/**
+ * What a slash command's composer held at submit time. A skill or alias
+ * eventually sends ordinary user text, so the staged image descriptors and the
+ * token expander travel with the command instead of dying with the cleared
+ * composer.
+ */
+export interface SlashSubmission {
+  attachments: Array<{ path: string; mime: string }>
+  expand: (text: string) => string
+}
+
+/** `typed` is false for programmatic calls (a picker re-issuing `/model <x>`, the backend's alias
+ *  re-dispatch) so shared metrics count each user-typed command once. */
+export type SlashHandler = (cmd: string, submission?: SlashSubmission, typed?: boolean) => boolean
+
 export interface SlashHandlerContext {
   composer: {
     attachClipboardImage: () => void
@@ -549,7 +573,7 @@ export interface SlashHandlerContext {
     getHistoryItems: () => Msg[]
     getLastUserMsg: () => string
     maybeWarn: (value: unknown) => void
-    setCatalog: StateSetter<null | SlashCatalog>
+    setCatalog: (catalog: null | SlashCatalog) => void
   }
   session: {
     closeSession: (targetSid?: null | string, deferMessages?: boolean) => Promise<unknown>
@@ -559,14 +583,15 @@ export interface SlashHandlerContext {
     newLiveSession: (msg?: string, title?: string) => void
     newSession: (msg?: string, title?: string) => void
     resetVisibleHistory: (info?: null | SessionInfo) => void
-    resumeById: (id: string) => void
+    resumeById: (id: string) => Promise<void> | void
     setSessionStartedAt: StateSetter<number>
   }
   slashFlightRef: MutableRefObject<number>
   transcript: {
     page: (text: string, title?: string) => void
     panel: (title: string, sections: PanelSection[]) => void
-    send: (text: string, showUserMessage?: boolean, displayText?: string) => void
+    send: (text: string, showUserMessage?: boolean, displayText?: string, expandOverride?: (value: string) => string,
+      submitOpts?: { attachments?: Array<{ path: string; mime: string }> }) => void
     setHistoryItems: StateSetter<Msg[]>
     sys: (text: string) => void
     trimLastExchange: (items: Msg[]) => Msg[]
@@ -676,5 +701,5 @@ export interface AppOverlaysProps {
  * path, used to detach the image when its token is deleted.
  */
 export type ComposerToken =
-  | { index: number; kind: 'image'; label: string; path: string; text?: undefined }
+  | { index: number; kind: 'image'; label: string; path: string; mime?: string; text?: undefined }
   | { index?: undefined; kind: 'paste'; label: string; path?: string; text: string }

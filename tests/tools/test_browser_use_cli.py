@@ -769,7 +769,7 @@ class TestIdleLaneReaping:
         monkeypatch.setattr(bu_cli, "_isolate_served_profile_daemons",
                             lambda env: env.update(BH_RUNTIME_DIR=str(runtime), BH_RUNTIME_DIR_SHARED="1"))
         monkeypatch.setattr(bu_cli, "_lane_dirs", {})
-        monkeypatch.setattr(bu_cli, "_driven_lane_envs", {})
+        monkeypatch.setattr(bu_cli, "_driven_daemons", {})
         cli = _fake_cli(tmp_path, 'cat\necho "ledger:${HERMES_BH_TABS_FILE:-unset} rt:$BH_RUNTIME_DIR tmp:$BH_TMP_DIR"\n')
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
         result = json.loads(bu_cli.browser_exec("print('payload')", session="r7k2"))
@@ -780,7 +780,9 @@ class TestIdleLaneReaping:
         assert (lanes / "bu-r7k2.hermes-lane").exists()
         assert not (runtime / "bu-r7k2.hermes-lane").exists()
         assert started and list(bu_cli._lane_dirs) == [str(lanes)]
-        assert bu_cli._driven_lane_envs[(str(lanes), "r7k2")]["BH_RUNTIME_DIR"] == str(lanes)
+        identity = bu_cli.daemon_identity({"BH_RUNTIME_DIR": str(lanes), "BH_RUNTIME_DIR_SHARED": "1",
+                                            "BH_TMP_DIR": str(lanes), "BH_TMP_DIR_SHARED": "1", "BU_NAME": "r7k2"})
+        assert bu_cli._driven_daemons[identity] == bu_cli.hermes_home_key()
         assert bu_cli._lane_inflight == {}  # released after the call
 
     def test_old_and_new_callers_never_share_a_reapable_daemon(self, tmp_path, monkeypatch):
@@ -811,11 +813,11 @@ class TestIdleLaneReaping:
         log = tmp_path / "cli.log"
         cli = _fake_cli(tmp_path, 'echo "argv:$* name:$BU_NAME rt:${BH_RUNTIME_DIR:-none}" >> ' + str(log) + '\n')
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
-        monkeypatch.setattr(bu_cli, "_driven_daemons", set())
-        monkeypatch.setattr(bu_cli, "_driven_lane_envs", {("/x/rt-l", "r7k2"): {"BH_RUNTIME_DIR": "/x/rt-l"}})
+        identity = bu_cli.daemon_identity({"BH_RUNTIME_DIR": str(tmp_path / "rt-l"), "BU_NAME": "r7k2"})
+        monkeypatch.setattr(bu_cli, "_driven_daemons", {identity: bu_cli.hermes_home_key()})
         bu_cli.stop_harness_daemons()
-        assert "argv:--reload name:r7k2 rt:/x/rt-l" in log.read_text()
-        assert bu_cli._driven_lane_envs == {}
+        assert f"argv:--reload name:r7k2 rt:{tmp_path / 'rt-l'}" in log.read_text()
+        assert bu_cli._driven_daemons == {}
 
     def test_reaping_off_adds_nothing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("tools.browser_tool_cdp._get_cdp_override", lambda: "http://127.0.0.1:9222")
@@ -1595,7 +1597,7 @@ class TestExecHybridPrivateUrlRouting:
         monkeypatch.setattr(bt_cloud, "_get_cloud_provider", lambda: object())
         monkeypatch.setattr(bt_cloud, "_auto_local_for_private_urls", lambda: True)
         monkeypatch.setattr(bu_cli, "_exec_route_is_sidecar", {}, raising=False)
-        monkeypatch.setattr(bu_cli, "_driven_daemons", set())
+        monkeypatch.setattr(bu_cli, "_driven_daemons", {})
         self.cloud_keys = []
         monkeypatch.setattr(bt_session, "_get_session_info",
                             lambda key: self.cloud_keys.append(key) or {"cdp_url": "wss://cloud.example/x"})

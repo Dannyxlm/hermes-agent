@@ -1,10 +1,10 @@
 {
   "schema_version": "cloudseed-hermes-publication.v1",
-  "release_id": "hermes-20261017-d923a5e",
+  "release_id": "hermes-20261023-bf0203a",
   "official_repository": "NousResearch/hermes-agent",
   "official_branch": "main",
-  "official_revision": "d923a5eb487a17c0a68801bba9ef0f56c81040a8",
-  "official_release_tag": "v0.22.2",
+  "official_revision": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "official_release_tag": "v0.22.5",
   "integration_repository": "Dannyxlm/hermes-agent",
   "integration_branch": "main",
   "desktop_install_mode": "managed-publication",
