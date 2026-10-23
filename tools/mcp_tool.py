@@ -588,6 +588,10 @@ def _reset_server_error(server_name: str) -> None:
 # Servers opted into parallel tool calls, keyed by the consuming profile's own key (``foo-bar``/
 # ``foo_bar`` sanitize alike but must not share policy; neither do two profiles' same-named servers).
 _parallel_safe_servers: set = set()
+# Each server's ``meta_exclude`` keys, keyed the same way: an adopter of another profile's connection
+# applies ITS list (``meta_exclude`` is not part of the connection identity). Re-read every discovery
+# pass, so an edit applies without a reconnect (``server._config`` is the config it connected with).
+_server_meta_exclude: dict[Any, frozenset] = {}
 # registry tool name -> raw server name (the generated name is lossy; never re-parse it).
 _mcp_tool_server_names: dict[str, str] = {}
 

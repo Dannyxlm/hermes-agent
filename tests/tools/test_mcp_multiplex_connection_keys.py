@@ -41,7 +41,7 @@ def two_profiles(tmp_path, monkeypatch):
                "_server_connect_errors", "_server_connect_retry_after", "_server_connect_failures",
                "_server_error_counts", "_server_breaker_opened_at", "_lazy_server_configs",
                "_mcp_tool_server_names", "_orphaned_adopters", "_parallel_safe_servers",
-               "_server_trust_levels", "_tool_read_only_hints")
+               "_server_trust_levels", "_tool_read_only_hints", "_server_meta_exclude")
     saved = {n: type(getattr(core, n))(getattr(core, n)) for n in ledgers}
     for n in ledgers:
         getattr(core, n).clear()
@@ -291,6 +291,50 @@ def test_parallel_safe_opt_in_is_per_profile(two_profiles):
 
     two_profiles("a")
     assert disc.is_mcp_tool_parallel_safe("mcp__x__t") is False
+
+
+def test_meta_exclude_is_the_calling_profiles_own_on_a_shared_connection(two_profiles, monkeypatch):
+    """B adopts A's connection (same route and credentials; ``meta_exclude`` is not part of the
+    connection identity). Each profile's calls drop only the ``_meta`` keys ITS config names."""
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+    from tools import mcp_tool_discovery as disc, mcp_tool_handlers as handlers, mcp_tool_loop
+    from tools import mcp_tool_registration as reg
+
+    def _run_here(coro_or_factory, timeout=30):
+        coro = coro_or_factory() if callable(coro_or_factory) else coro_or_factory
+        loop = asyncio.new_event_loop()
+        try:
+            async def _with_lock():
+                srv_a._rpc_lock = asyncio.Lock()
+                return await coro
+            return loop.run_until_complete(_with_lock())
+        finally:
+            loop.close()
+
+    monkeypatch.setattr(mcp_tool_loop, "_run_on_mcp_loop", _run_here)
+    route = {"url": "https://mcp.example/x", "headers": {"Authorization": "Bearer shared"}}
+    cfg_a, cfg_b = dict(route, meta_exclude=["a_ambient"]), dict(route, meta_exclude=["b_ambient"])
+    meta = {"a_ambient": 1, "b_ambient": 2, "call_detail": 3}
+
+    scope_a = two_profiles("a")
+    disc._select_new_servers({"x": cfg_a})
+    srv_a = _server("x", cfg_a)
+    disc._adopt_server("x", srv_a)
+    srv_a._registered_tool_names = reg._register_server_tools("x", srv_a, cfg_a)
+    srv_a.session = MagicMock(call_tool=AsyncMock(return_value=SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="done")], isError=False, structuredContent=None, meta=meta)))
+
+    scope_b = two_profiles("b")
+    disc.register_mcp_servers({"x": cfg_b})
+    assert scope_b in reg._core._server_tool_scopes[(scope_a, "x")]  # B calls through A's connection
+    call = handlers._make_tool_handler("x", "t", 30.0)
+    assert json.loads(call({}))["_meta"] == {"a_ambient": 1, "call_detail": 3}
+
+    two_profiles("a")
+    assert json.loads(call({}))["_meta"] == {"b_ambient": 2, "call_detail": 3}
+    assert srv_a.session.call_tool.await_count == 2
 
 
 def test_served_profile_without_multiplex_flag_gets_its_own_connection(two_profiles, monkeypatch):

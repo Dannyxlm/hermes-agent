@@ -17,6 +17,7 @@ from tools import mcp_tool_errors as _errors
 from tools import mcp_tool_lifecycle as _lifecycle
 from tools import mcp_tool_loop as _loop
 from tools import mcp_tool_registration as _registration
+from tools.mcp_tool_content import _meta_exclude_keys
 from tools.mcp_tool_schema import MCP_TOOL_NAME_PREFIX
 from tools.mcp_tool_scope import _key_name, _key_scope, _key_visible_in_scope, _resolve_server_key, _server_key
 
@@ -390,6 +391,7 @@ def _select_new_servers(servers: dict[str, dict]) -> dict[str, dict]:
                 _core._parallel_safe_servers.add(own_key)
             else:
                 _core._parallel_safe_servers.discard(own_key)
+            _core._server_meta_exclude[own_key] = _meta_exclude_keys(srv_cfg)
     for srv in stale_cached:
         auth_park = getattr(srv, "_auth_park", None)
         # Parked on an OAuth failure and not re-authorized since: leave it to its timed self-probe.

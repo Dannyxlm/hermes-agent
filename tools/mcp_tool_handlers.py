@@ -57,6 +57,13 @@ def _tool_is_read_only(server_name: str, tool_name: str) -> bool:
     return _core._tool_read_only_hints.get(_resolve_server_key(server_name), {}).get(tool_name) is True
 
 
+def _calling_meta_exclude(server_name: str) -> frozenset[str]:
+    """The calling profile's ``meta_exclude`` for *server_name*, recorded by its last discovery pass
+    (an adopter of a shared connection keeps its own list, as it keeps its own trust tier)."""
+    from tools.mcp_tool_scope import _server_key
+    return _core._server_meta_exclude.get(_server_key(server_name), frozenset())
+
+
 def _trust_gate_check(server_name: str, tool_name: str) -> Optional[str]:
     """Approval gate for write-capable tools on ``trust: untrusted`` servers. None to proceed,
     else a ``tool_error``. Fail-closed: approval-system errors block."""
@@ -522,7 +529,8 @@ def _content_dual_emits_structured(result, structured) -> bool:
     return False
 
 
-def _render_call_tool_result(result, server_name: str, image_paths: Optional[list[str]] = None) -> str:
+def _render_call_tool_result(result, server_name: str, image_paths: Optional[list[str]] = None,
+                             meta_exclude: frozenset[str] = frozenset()) -> str:
     """Pure: ``CallToolResult`` -> handler JSON (``image_paths``, when given, receives the files this
     call's image blocks were cached to). ``content`` and ``structuredContent`` are both
     forwarded, except that a ``structuredContent`` whose JSON also sits verbatim in a text block
@@ -533,14 +541,15 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
     data lived only in ``structuredContent``, while the residual duplicate for a faithful
     reorganisation costs only tokens, so data-preservation wins. No richness or size heuristic is
     used. ``structuredContent`` fills ``result`` when the blocks rendered effectively empty
-    (structuredContent-only servers); ``_meta`` minus reserved keys is always surfaced."""
+    (structuredContent-only servers); ``_meta`` minus reserved keys and the server's
+    ``meta_exclude`` keys is always surfaced."""
     if mcp_field(result, "is_error", "isError", False):
         return tool_error(_sanitize_error(_truncate_mcp_text_result(_error_result_text(result) or "MCP tool returned an error")))
     text_result, usable_parts, cached_images = _render_content_blocks(result, server_name)
     if image_paths is not None:
         image_paths.extend(cached_images)
     structured = _capped_structured_content(result)
-    meta = _strip_reserved_meta_keys(mcp_field(result, "meta", "meta"))
+    meta = _strip_reserved_meta_keys(mcp_field(result, "meta", "meta"), meta_exclude)
     # A str here is the over-cap truncation stand-in (wire structuredContent is always an object): next to
     # usable text it would be a second multi-MB copy — the flood #56059 caps — so it only fills an empty result.
     if structured is not None and usable_parts > 0 and (isinstance(structured, str) or _content_dual_emits_structured(result, structured)):
@@ -581,6 +590,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         # Only a tool annotated readOnlyHint=True is replayed after session expiry; a 401 is always
         # pre-dispatch so the auth recoverer keeps its retry for every tool.
         read_only = _tool_is_read_only(server_name, tool_name)
+        meta_exclude = _calling_meta_exclude(server_name)  # once, in the caller's scope (as trust); replays reuse it
         image_paths: list[str] = []  # the LAST attempt's cached images (a recoverer may retry _call)
 
         async def _call():
@@ -593,7 +603,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy
                 server._mark_session_proven()
             image_paths.clear()
-            return _render_call_tool_result(result, server_name, image_paths)
+            return _render_call_tool_result(result, server_name, image_paths, meta_exclude)
 
         def _on_failure(exc):
             _core._bump_server_error(server_name)
