@@ -1,4 +1,6 @@
 """Restart is a resumable state, not the final receipt for a resumed launch."""
+from functools import partial
+
 import pytest
 
 from hermes_state import SessionDB
@@ -24,20 +26,20 @@ def test_resume_clears_restart_and_normal_end_records_the_real_cause(tmp_path, r
         db.bind_launch('launch', child_session_id='child')
         db.end_session('child', 'startup_orphan_reap')
         assert state(db)[1] == 'owner_restart'
-        if resume == 'bind':
-            db.bind_launch('launch', child_session_id='child')
-        elif resume == 'record':
-            db.record_launch('launch', **fields)
-        elif resume == 'local':
-            bind_resumed_launch(db, epoch=epoch, session_id='child', fields=dict(
-                started_by_session='parent', started_by_profile='default', launch_kind=kind, launch_id='launch'))
-        elif resume == 'reopen':
-            db.reopen_session('child')
-        else:
+        def claim_turn():
             rt.admit_session_input(db, epoch=epoch, principal_id='human', session_id='child',
                                    request_id='turn', payload={'text': 'resume'})
             claimed = rt.claim_session_input(db, epoch=epoch, session_id='child')
             assert claimed['status'] == 'started'
+        resumers = {
+            'bind': partial(db.bind_launch, 'launch', child_session_id='child'),
+            'record': partial(db.record_launch, 'launch', **fields),
+            'local': partial(bind_resumed_launch, db, epoch=epoch, session_id='child', fields=dict(
+                started_by_session='parent', started_by_profile='default', launch_kind=kind, launch_id='launch')),
+            'reopen': partial(db.reopen_session, 'child'),
+            'turn': claim_turn,
+        }
+        resumers[resume]()
         assert state(db) == (None, None), f'{resume} left a resumed launch paused by restart'
         db.reopen_session('child')
         db.end_session('child', 'user_stop')
