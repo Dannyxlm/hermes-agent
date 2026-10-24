@@ -551,6 +551,7 @@ CREATE TABLE IF NOT EXISTS work_launches (
 CREATE INDEX IF NOT EXISTS idx_work_launches_launcher ON work_launches(launcher_profile, launcher_session_id);
 CREATE INDEX IF NOT EXISTS idx_work_launches_child ON work_launches(child_session_id);
 CREATE INDEX IF NOT EXISTS idx_work_launches_batch ON work_launches(batch_id);
+CREATE INDEX IF NOT EXISTS idx_work_launches_parent ON work_launches(parent_launch_id);
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
