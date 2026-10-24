@@ -58,6 +58,58 @@ def wake_message(job: dict, content: str) -> str:
         f'({run_id}), not the user.]\n\n{content}', "session wake")
 
 
+def _delivery_key(home: Path, job: dict, session_id: str, for_failure: bool) -> str:
+    run_id = job.get("execution_id") or job.get("_session_run_id")
+    return hashlib.sha256(json.dumps(
+        [str(home), job.get("id"), str(run_id), session_id, for_failure],
+        separators=(",", ":")).encode()).hexdigest()
+
+
+def _wake_subject(home: Path, session_id: str) -> str | None:
+    """Recover only the exact row's local login stamp, never a caller-supplied principal."""
+    # Job creation is host-equivalent; the wake acts for the target row's owner.
+    # Multi-login job isolation would require a creator principal stamped at creation.
+    from gateway.session_identity import authenticated_subject, parse_authenticated_subject
+    from hermes_state import SessionDB
+    from hermes_state_local_migration import LEGACY_LOCAL_SOURCES, legacy_account_label
+
+    db = SessionDB(db_path=home / "state.db", read_only=True)
+    try:
+        row = db.get_session(session_id)
+    finally:
+        db.close()
+    if not row or row['source'] not in LEGACY_LOCAL_SOURCES | {'local'}:
+        return None
+    owner = row.get('user_id')
+    if parse_authenticated_subject(owner) is not None:
+        return owner
+    if (row['source'] in {'tui', 'gui', 'desktop'} and isinstance(owner, str)
+            and not legacy_account_label(row)):
+        provider, sep, user = owner.partition(':')
+        if sep and provider and user and provider not in {'uid', 'auth', 'local'}:
+            subject = authenticated_subject({'provider': provider, 'user_id': user})
+            from hermes_state_mutation_binding import _login_label
+            if _login_label(subject) == owner:
+                return subject
+    return None
+
+
+def _wake_binding(path: Path, home: Path, record: dict) -> tuple[str, str | None]:
+    from hermes_cli.gateway_client import GatewayRPCError
+
+    expected = _delivery_key(home, record.get('job') or {}, record['session_id'], bool(record.get('for_failure')))
+    if (record['id'] != expected
+            or path.resolve() != (home / 'cron' / 'bot_chat_pending' / (expected + '.json')).resolve()):
+        raise GatewayRPCError('permission_denied')
+    target = resolve_session(record['session_id'], home)
+    subject = _wake_subject(home, record['session_id'])
+    if (_wake_subject(home, target) != subject
+            or ('wake_subject' in record and record['wake_subject'] != subject)
+            or (not record.get('admission_id') and record.get('target_session_id') not in (None, target))):
+        raise GatewayRPCError('permission_denied')
+    return target, subject
+
+
 def _admission_status(receipt: dict) -> str:
     status = receipt["status"]
     if status == "terminal":
@@ -75,10 +127,11 @@ async def _wake_rpc(home: Path, record: dict, save) -> dict | None:
     discovery = await asyncio.to_thread(discover_gateway_endpoint, home, timeout=5)
     if discovery.state != "ready" or discovery.endpoint is None:
         return None
-    target_session = record.get("target_session_id") or await asyncio.to_thread(resolve_session, record["session_id"], home)
+    target_session = await asyncio.to_thread(resolve_session, record["session_id"], home)
     token = set_hermes_home_override(home)
     try:
-        async with connect_gateway(endpoint=discovery.endpoint) as client:
+        forwarded = {'subject': record['wake_subject']} if record.get('wake_subject') else {}
+        async with connect_gateway(endpoint=discovery.endpoint, **forwarded) as client:
             snapshot = await client.rpc("session.resume",
                 session_id=target_session,
                 omit_messages=True, defer_history=True)
@@ -104,6 +157,7 @@ def transfer_pending(path: Path, record: dict) -> bool:
     from cron.scheduler_delivery import BOT_CHAT_POLICY_PLATFORM
     from gateway.warning_notifications import warning_notifications_enabled
     from hermes_cli.config_effective import load_user_config_effective
+    from hermes_cli.gateway_client import GatewayRPCError
     from utils import atomic_json_write
     import asyncio
 
@@ -121,6 +175,10 @@ def transfer_pending(path: Path, record: dict) -> bool:
     def save():
         atomic_json_write(path, record, fsync_dir=True, mode=0o600)
     try:
+        _target, subject = _wake_binding(path, home, record)
+        if 'wake_subject' not in record:
+            record['wake_subject'] = subject
+            save()
         # The synchronous scheduler runs off-loop; never block its owning authority loop.
         try:
             asyncio.get_running_loop()
@@ -137,7 +195,14 @@ def transfer_pending(path: Path, record: dict) -> bool:
         record.update(admission_id=receipt["admission_id"], receipt_status=status,
                       status="transferred" if status in {"queued", "claimed"} else status, error=None)
         return True
-    except Exception:
+    except Exception as exc:
+        if isinstance(exc, GatewayRPCError) and str(exc) in {'not_found', 'permission_denied', 'profile_mismatch'}:
+            if record.get('status') == 'claimed' or record.get('admission_id'):
+                record.update(status='ambiguous', error='scheduled wake admission unverified; inspect before rearming')
+            else:
+                record.update(status='failed', error=f'scheduled wake ownership refused ({exc}); not delivered')
+            save()
+            return True
         if record.get("status") == "claimed":
             record.update(status="ambiguous", error="scheduled wake admission unverified; inspect before rearming")
             save()
@@ -168,10 +233,9 @@ def deliver_to_session(job: dict, content: str, session_id: str, *,
     home = get_hermes_home().resolve()
     try:
         resolve_session(session_id, home)
-        run_id = job.get("execution_id") or job.setdefault("_session_run_id", uuid.uuid4().hex)
-        key = hashlib.sha256(json.dumps(
-            [str(home), job.get("id"), str(run_id), session_id, for_failure],
-            separators=(",", ":")).encode()).hexdigest()
+        if not job.get("execution_id"):
+            job.setdefault("_session_run_id", uuid.uuid4().hex)
+        key = _delivery_key(home, job, session_id, for_failure)
         content = _redact_cron_payload(content, "session wake")
         message = wake_message(job, content)
         # A pre-cutover live mailbox claim remains authoritative; never start another turn.

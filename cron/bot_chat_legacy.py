@@ -48,7 +48,7 @@ def defer(key: str, job: dict, content: str, home: Path, *, for_failure: bool,
     path = _pending_path(key)
     make_user_dir(path.parent, parents=True, exist_ok=True, mode=0o700)
     with _FileLock(path.with_suffix(".lock")):
-        record = read_pending(key)
+        record: dict | None = read_pending(key)
         if record is not None:
             if (record.get("content") != content or record.get("home") != str(home)
                     or bool(record.get("for_failure")) != for_failure
@@ -63,6 +63,8 @@ def defer(key: str, job: dict, content: str, home: Path, *, for_failure: bool,
             job={k: job[k] for k in ("id", "name", "execution_id", "_session_run_id") if k in job},
             content=content, home=str(home), for_failure=for_failure, sequence=time.time_ns())
         if session_id is not None:
+            from cron.session_delivery import _wake_subject
+            record['wake_subject'] = _wake_subject(home, session_id)
             record["session_id"] = session_id
         atomic_json_write(path, record, fsync_dir=True, mode=0o600)
         return record
