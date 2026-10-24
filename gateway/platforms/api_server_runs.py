@@ -79,6 +79,7 @@ _ROOM_RETENTION_REQUEST_KEY = (
 # Forwarded subagent lifecycle fields; free-text ones are secret-redacted.
 _SUBAGENT_EVENT_KEYS = (
     "goal", "task_count", "task_index", "subagent_id", "child_session_id", "delegation_id", "parent_id",
+    "batch_id", "batch_name", "title", "step_kind", "step_tool",
     "depth", "model", "tool_count", "status", "summary", "duration_seconds", "input_tokens",
     "output_tokens", "reasoning_tokens", "api_calls", "cost_usd", "files_read", "files_written",
     "output_tail")

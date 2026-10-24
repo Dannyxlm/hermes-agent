@@ -99,6 +99,8 @@ def interrupt_subagent(subagent_id: str) -> bool:
     if agent is None:
         return False
     try:
+        from hermes_state_launch_causes import stamp_stop
+        stamp_stop(agent, "user_stop")
         return bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
     except Exception as exc:
         logger.debug("interrupt_subagent(%s) failed: %s", subagent_id, exc)

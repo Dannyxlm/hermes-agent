@@ -586,12 +586,13 @@ def _interrupt_worker_tids(agent, tids, *, reason=_NO_REASON) -> None:
             _ra()._set_interrupt(True, tid, **kwargs)
 
 
-def _set_worker_activity_callback(agent) -> None:
+def _set_worker_activity_callback(agent, function_name=None) -> None:
     """The activity callback is thread-local: bind it on THIS thread so tool-layer heartbeats fire."""
     with contextlib.suppress(Exception):
         from tools.environments.base import set_activity_callback
 
-        set_activity_callback(agent._touch_activity)
+        from functools import partial
+        set_activity_callback(partial(agent._touch_activity, step_kind="tool", step_tool=function_name))
 
 
 # Must stay far below the gateway turn-inactivity timeout (default 1800s) so a silent tool never looks idle.
@@ -603,7 +604,7 @@ def _run_tool_activity_heartbeat(
     stop_event: threading.Event,
     label: str,
     interval: float = _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S,
-    worker_tid: int | None = None,
+    worker_tid: int | None = None, step_tool: str | None = None,
 ) -> None:
     """Daemon thread stamping ``agent._touch_activity`` every ``interval`` seconds until
     ``stop_event`` is set, so the gateway inactivity watchdog never abandons a turn whose
@@ -619,7 +620,8 @@ def _run_tool_activity_heartbeat(
         while not stop_event.wait(interval):
             if is_thread_interrupted(worker_tid):
                 return
-            agent._touch_activity(label)
+            agent._touch_activity(label, step_kind="waiting_helpers" if step_tool == "delegate_task" else "tool",
+                                  step_tool=step_tool)
     except Exception:
         pass  # a heartbeat must never break the agent loop
 
@@ -634,7 +636,8 @@ def _run_with_activity_heartbeat(agent, function_name: str, fn):
         # here, so a single heartbeat covers every tool.
         target=_run_tool_activity_heartbeat,
         args=(agent, stop, f"tool running: {function_name}"),
-        kwargs={"interval": _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S, "worker_tid": threading.current_thread().ident},
+        kwargs={"interval": _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S, "worker_tid": threading.current_thread().ident,
+                "step_tool": function_name},
         daemon=True,
         name=f"tool-activity-hb-{function_name[:24]}",
     )
@@ -898,7 +901,9 @@ def _poll_sequential_future(agent, future, function_name: str, deadline: float |
             elapsed = int(time.monotonic() - started)
             if elapsed - _last_heartbeat >= 30:
                 _last_heartbeat = elapsed
-                agent._touch_activity(f"sequential tool running ({elapsed}s): {function_name}")
+                agent._touch_activity(f"sequential tool running ({elapsed}s): {function_name}",
+                                      step_kind="waiting_helpers" if function_name == "delegate_task" else "tool",
+                                      step_tool=function_name)
 
 
 def _run_sequential_tool_execution_middleware(
@@ -1027,8 +1032,10 @@ def _begin_tool_execution(agent, ref: _ToolCallRef, display_index: int | None) -
             print(f"  📞 {prefix}: {function_name}({list(function_args.keys())}) - {_preview(json.dumps(display_args, ensure_ascii=False), agent.log_prefix_chars)}")
 
     agent._current_tool = function_name
-    agent._touch_activity(f"executing tool: {function_name}")
-    _set_worker_activity_callback(agent)
+    agent._touch_activity(f"executing tool: {function_name}", step_kind=(
+        "waiting_helpers" if function_name == "delegate_task" else "waiting_input" if function_name == "clarify" else "tool"),
+                          step_tool=function_name)
+    _set_worker_activity_callback(agent, function_name)
 
     if agent.tool_progress_callback:
         try:
@@ -1124,7 +1131,7 @@ def _commit_tool_result(
 
     agent._current_tool = None
     _status_suffix = " (error)" if is_error else ""
-    agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}")
+    agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}", step_kind="thinking")
 
     persisted_result = function_result
     if _is_multimodal_tool_result(persisted_result):
@@ -1405,7 +1412,7 @@ class _ConcurrentBatch:
             # An interrupt may have fanned out before our registration; apply it to our tid.
             if agent._interrupt_requested:
                 _interrupt_worker_tids(agent, [_worker_tid], reason=getattr(agent, "_tool_interrupt_reason", None))
-            _set_worker_activity_callback(agent)
+            _set_worker_activity_callback(agent, pc.name)
             start_gate = _WorkerStartOnce(self.gate, start_order, pc.name)
             try:
                 outcome = self._dispatch_worker(index, pc.ref(self.effective_task_id), pc.scope_block, start_gate)
@@ -1485,7 +1492,7 @@ class _ConcurrentBatch:
                     _still_running = self._running_names(not_done, future_to_index)
                     agent._touch_activity(
                         f"concurrent tools running ({_conc_elapsed}s, "
-                        f"{len(not_done)} remaining: {', '.join(_still_running[:3])})"
+                        f"{len(not_done)} remaining: {', '.join(_still_running[:3])})", step_kind="tool"
                     )
                 continue
             for f in not_done:
@@ -1612,7 +1619,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     timeout_s = _resolve_concurrent_tool_timeout()
     batch = _ConcurrentBatch(agent, messages, effective_task_id, parsed_calls, timeout_s)
     agent._current_tool = tool_names_str
-    agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}")
+    agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}", step_kind="tool")
 
     spinner = _start_quiet_tool_spinner(agent, "", {}, label=f"⚡ running {num_tools} tools concurrently")
     try:

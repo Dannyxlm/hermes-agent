@@ -422,7 +422,7 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 
 # Fields that must never change after creation: ``id`` is a path component under OUTPUT_DIR, so an
 # update could leak ``../escape``/absolute/nested values into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "creator_profile", "creator_session_id", "launch_title"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -1590,6 +1590,8 @@ def _save_jobs_unlocked(
             # against an OUTER caller's stale payload. Later saves take the full merge (fail-safe).
             _record_load_stamp(None)
             store_health.note_writable(jobs_file.parent)
+            from cron.launches import sync_jobs
+            sync_jobs(jobs, removed_ids)
             return
     except BaseException:
         _unlink_quiet(tmp_path)
@@ -1869,6 +1871,7 @@ def create_job(
         f["provider"], f["model"] = _main_model_pin()
     next_run_at = _next_run_or_reject_past_oneshot(parsed_schedule, name, schedule, "")
 
+    from cron.launches import capture_creator
     job = {
         "id": job_id,
         "name": name,
@@ -1904,6 +1907,8 @@ def create_job(
         "failure_streak": 0,
         "deliver": f["deliver"],
         "origin": origin,  # Tracks where job was created for "origin" delivery
+        **capture_creator(),
+        "launch_title": name[:39] + "…" if len(name) > 40 else name,
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
     }
@@ -2195,6 +2200,7 @@ def trigger_job(job_id: str, extra_prompt: Optional[str] = None) -> Optional[dic
             f"Create a new occurrence with 'hermes cron resume {name} "
             "--run-now' or '--at <ISO-8601>'.")
     manual_run_at = _hermes_now().isoformat()
+    from cron.launches import capture_creator
     return update_job(job["id"], {
         "enabled": True,
         "state": "scheduled",
@@ -2204,6 +2210,7 @@ def trigger_job(job_id: str, extra_prompt: Optional[str] = None) -> Optional[dic
         # Run-now intent, so cron expression/TZ repair guards don't treat it as stale state.
         "manual_run_at": manual_run_at,
         "manual_run_prompt": (extra_prompt or None),
+        "manual_launch": capture_creator(),
     })
 
 
@@ -2347,6 +2354,7 @@ def _record_run_outcome(
     job.pop("manual_run_at", None)
     # The transient manual-run context is single-fire: the run that just completed consumed it.
     job.pop("manual_run_prompt", None)
+    job.pop("manual_launch", None)
     delivery_failed = isinstance(delivery_error, str) and bool(delivery_error.strip())
     job["last_status"] = status or (
         "error" if not success else ("delivery_failed" if delivery_failed else "ok"))

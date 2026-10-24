@@ -93,6 +93,11 @@ class ProcessListParams(Params):
 
 
 class ProcessEntry(_Open):
+    batch_id: str | None = None
+    batch_name: str | None = None
+    title: str | None = None
+    step_kind: str | None = None
+    step_tool: str | None = None
     """``tools/process_registry.py::list_sessions`` row plus the gateway's ``output_tail``."""
 
     session_id: str

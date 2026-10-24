@@ -4826,8 +4826,12 @@ export interface ProcessListParams {
 export interface ProcessListResult {
   processes?: ProcessEntry[]
 }
-/** ``tools/process_registry.py::list_sessions`` row plus the gateway's ``output_tail``. */
 export interface ProcessEntry {
+  batch_id?: string | null
+  batch_name?: string | null
+  title?: string | null
+  step_kind?: string | null
+  step_tool?: string | null
   session_id: string
   command?: string
   cwd?: string | null
@@ -6429,6 +6433,11 @@ export interface GroupsDiscardResult {
 }
 export interface CanonicalCreateParams {
   profile?: string | null
+  started_by_session?: string | null
+  started_by_profile?: string | null
+  launch_title?: string | null
+  launch_kind?: string | null
+  launch_id?: string | null
   request_id?: string | null
   source?: 'cli' | 'tui' | 'gui' | 'acp' | 'tool' | 'oneshot'
   cwd?: string | null
@@ -6544,6 +6553,11 @@ export interface CanonicalSnapshotInfo {
 }
 export interface CanonicalResumeParams {
   profile?: string | null
+  started_by_session?: string | null
+  started_by_profile?: string | null
+  launch_title?: string | null
+  launch_kind?: string | null
+  launch_id?: string | null
   session_id?: string
   title?: string | null
   latest?: 'cli' | 'tui' | null
@@ -7530,6 +7544,11 @@ export interface SubagentEventPayload {
   parent_id?: string | null
   child_session_id?: string | null
   delegation_id?: string | null
+  batch_id?: string | null
+  batch_name?: string | null
+  title?: string | null
+  step_kind?: string | null
+  step_tool?: string | null
   depth?: number | null
   model?: string | null
   tool_count?: number | null

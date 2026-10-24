@@ -600,7 +600,7 @@ def _report_stale_nonstream_kill(agent, api_kwargs: dict, elapsed: float, stale_
 
 def _touch_stale_kill_activity(agent, elapsed: float) -> None:
     try:
-        agent._touch_activity(f"stale non-streaming call killed after {int(elapsed)}s")
+        agent._touch_activity(f"stale non-streaming call killed after {int(elapsed)}s", step_kind="retrying")
     except Exception:
         logger.debug("stale activity touch failed", exc_info=True)
 
@@ -889,7 +889,7 @@ class _InlineRequest:
         # deadlock this path exists to avoid (#60203). This ticker only refreshes the clock.
         while not self._hb_stop.wait(_DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS):
             with contextlib.suppress(Exception):
-                self.agent._touch_activity("waiting for non-streaming API response")
+                self.agent._touch_activity("waiting for non-streaming API response", step_kind="thinking")
 
     def _on_stale(self) -> None:
         # Timer thread: aborts sockets only, never issues a request (keeps the no-worker
@@ -988,7 +988,7 @@ def direct_api_call(agent, api_kwargs: dict):
     equal to the stale budget is the backstop when the abort finds nothing (#85252).
     Both surface a retryable ``TimeoutError`` for the outer retry loop."""
     _check_stale_giveup(agent)
-    agent._touch_activity("waiting for non-streaming API response")
+    agent._touch_activity("waiting for non-streaming API response", step_kind="thinking")
     # Resolve the budget BEFORE the heartbeat starts: the resolver may raise
     # (fail-closed), and a leaked heartbeat thread would mask real stalls forever.
     call_start = time.time()
@@ -2866,8 +2866,9 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _count_chunk(self, diag, chunk) -> None:
         """Stamp liveness for a real chunk; diagnostics are best-effort."""
+        from agent.session_activity import stream_chunk_step
         self.last_chunk_time["t"] = time.time()
-        self.agent._touch_activity("receiving stream response")
+        self.agent._touch_activity("receiving stream response", step_kind=stream_chunk_step(chunk))
         with contextlib.suppress(Exception):
             diag["chunks"] = int(diag.get("chunks", 0)) + 1
             if diag.get("first_chunk_at") is None:
@@ -2883,7 +2884,7 @@ class _StreamingCall(StreamingWaitMonitor):
             return False
         self.last_chunk_time["t"] = now = time.time()
         self.prompt_progress["progress"], self.prompt_progress["t"] = progress, now
-        self.agent._touch_activity("model reading the prompt")
+        self.agent._touch_activity("model reading the prompt", step_kind="thinking")
         return True
 
     @staticmethod
@@ -2960,8 +2961,9 @@ class _StreamingCall(StreamingWaitMonitor):
             stream_kwargs["stream_options"] = {"include_usage": True}
         request_client = self._attempt_request_client = self.clients.set_client(
             self.agent._create_request_openai_client(reason="chat_completion_stream_request", api_kwargs=stream_kwargs))
+        from agent.session_activity import stream_chunk_step
         self.last_chunk_time["t"] = time.time()
-        self.agent._touch_activity("waiting for provider response (streaming)")
+        self.agent._touch_activity("waiting for provider response (streaming)", step_kind="thinking")
         # #93650: as above — the streaming path carries the same bulk
         # messages/tools payload and pays the same client-side walk.
         stream_kwargs = bypass_chat_sdk_request_transform(stream_kwargs, request_client)
@@ -3855,7 +3857,7 @@ class _StreamingCall(StreamingWaitMonitor):
         # Reset the timer so we don't kill repeatedly while the worker unwinds.
         self.last_chunk_time["t"] = time.time()
         self.agent._emit_diagnostic_wait(f"⚠ no output from provider for {int(elapsed)}s — reconnecting...")
-        self.agent._touch_activity(f"stale stream detected after {int(elapsed)}s, reconnecting")
+        self.agent._touch_activity(f"stale stream detected after {int(elapsed)}s, reconnecting", step_kind="retrying")
 
     def _abort_for_interrupt(self, stale_elapsed: float) -> None:
         """/stop seen by the monitor: mark cancelled, abort the request-local

@@ -51,6 +51,9 @@ async def subagent_control(connection, ref, params, *, steer):
         child = next((r['agent'] for r in _owner_objects(connection.authority, ref)[1] if r.get('subagent_id') == sub), None)
     if not steer:
         from agent.interrupt_compat import request_hard_interrupt
+        if child is not None:
+            from hermes_state_launch_causes import stamp_stop
+            stamp_stop(child, "user_stop")
         return {'found': child is not None and bool(request_hard_interrupt(child, f'Interrupted via Desktop ({sub})')),
                 'subagent_id': sub}
     from tools import delegate_tool_registry as registry

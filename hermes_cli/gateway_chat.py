@@ -138,20 +138,20 @@ async def _resume(client, args, **params):
         raise
 
 
-async def _resume_latest(client, args):
+async def _resume_latest(client, args, launch=None):
     """Bare ``-c``: this terminal's breadcrumb session when the owner still has it, else (and for
     ``--resume latest``) the owner's most recent CLI session, this workspace first."""
     from hermes_cli.terminal_breadcrumbs import read_breadcrumb
     crumb = (read_breadcrumb() or {}).get("session_id") if getattr(args, "continue_last", None) is True else None
     if isinstance(crumb, str) and crumb:
         try:
-            return await _resume(client, args, session_id=crumb)
+            return await _resume(client, args, session_id=crumb, **(launch or {}))
         except GatewayClientError as exc:
             if str(exc) not in RESUME_REFUSALS:
                 raise
     workspace = await asyncio.to_thread(_workspace_key, _caller_cwd(args))
     try:
-        return await _resume(client, args, latest="cli", **({"workspace": workspace} if workspace else {}))
+        return await _resume(client, args, latest="cli", **({"workspace": workspace} if workspace else {}), **(launch or {}))
     except GatewayClientError as exc:
         if str(exc) != "not_found":
             raise
@@ -160,6 +160,8 @@ async def _resume_latest(client, args):
 
 
 async def run_gateway_chat(args, emitter=None):
+    from hermes_cli.launch_provenance import take_launch
+    family_launch = take_launch(args)
     from hermes_cli.gateway_chat_view import GatewayChatView
     query = getattr(args, "query", None) or getattr(args, "q", None)
     oneshot_prompt = getattr(args, "oneshot", None)
@@ -175,18 +177,18 @@ async def run_gateway_chat(args, emitter=None):
         create_if_missing = bool(title and getattr(args, "create_if_missing", False))
         latest = wants_latest(args)
         if latest:
-            snapshot = await _resume_latest(client, args)
+            snapshot = await _resume_latest(client, args, family_launch)
             check_resume_policy(args, snapshot)
         elif getattr(args, "resume", None) or (title and not create_if_missing):
             name = getattr(args, "resume", None) or title
             try:
                 # Exact id first, then title (latest lineage continuation), as the classic CLI did.
-                snapshot = await _resume(client, args, session_id=name)
+                snapshot = await _resume(client, args, session_id=name, **family_launch)
             except GatewayClientError as exc:
                 if str(exc) != "not_found":
                     raise
                 try:
-                    snapshot = await _resume(client, args, title=name)
+                    snapshot = await _resume(client, args, title=name, **family_launch)
                 except GatewayClientError as exc:
                     if str(exc) != "not_found":
                         raise
@@ -207,6 +209,7 @@ async def run_gateway_chat(args, emitter=None):
             policy.pop("source", None)
             if create_if_missing:
                 policy["title"] = title
+            policy.update(family_launch)
             policy.update(env_launch_flags())
             policy.update(client_env_policy(parameters))
             cwd = await asyncio.to_thread(_caller_cwd, args)

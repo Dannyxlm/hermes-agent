@@ -65,8 +65,19 @@ def human_input_request(kind: str, *, prompt: str = "", session_key: str | None 
     if session_key is not None:
         payload["session_key"] = session_key
     request = HumanInputRequest(payload["request_id"])
+    from agent.subagent_lifecycle import get_active_subagent_parent
+    agent = get_active_subagent_parent()
+    previous = None
+    if callable(getattr(agent, "_touch_activity", None)):
+        previous = (getattr(agent, "_last_activity_desc", ""), getattr(agent, "_last_activity_kind", None),
+                    getattr(agent, "_last_activity_tool", None))
+        with contextlib.suppress(Exception):
+            agent._touch_activity(previous[0], step_kind="waiting_input")
     _fire("on_human_input_request", payload)
     try:
         yield request
     finally:
+        if previous is not None:
+            with contextlib.suppress(Exception):
+                agent._touch_activity(previous[0], step_kind=previous[1], step_tool=previous[2])
         _fire("on_human_input_resolved", {**payload, "outcome": str(request.outcome or "error")})

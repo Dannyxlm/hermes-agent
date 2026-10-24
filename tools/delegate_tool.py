@@ -122,7 +122,7 @@ def check_delegate_requirements() -> bool:
     return True
 
 
-def _open_child_session_db(parent_agent) -> Any:
+def _open_child_session_db(parent_agent, launch=None) -> Any:
     """DEDICATED SessionDB handle for the child, or None: the parent's handle can be closed by its own lifecycle while
     a background child still flushes (transcript silently dropped). It MUST open the same db FILE as the parent's
     handle (non-launch profiles), else lineage / session_search break; released by the child's close() via
@@ -146,7 +146,7 @@ def _open_child_session_db(parent_agent) -> Any:
         if getattr(parent_agent, "_persist_disabled", False) is True:
             return None
         from agent.runtime_session_child import reserve_child_store
-        return reserve_child_store(parent_session_db)
+        return reserve_child_store(parent_session_db, launch=launch)
     if parent_session_db is None or getattr(parent_agent, "_persist_disabled", False) is True:
         return None
     with _quiet("subagent: failed to open dedicated SessionDB; child persistence disabled", exc_info=True):
@@ -233,6 +233,7 @@ def _build_child_agent(
     override_reasoning_effort: Any = None,
     profile_home: Optional[Path] = None,
     override_service_tier: Optional[str] = None,  # a route's checked speed tier (tools/delegate_tool_tuning.py)
+    batch_id: Optional[str] = None, batch_name: Optional[str] = None, title: Optional[str] = None,
 ):
     """Build (don't run) a child AIAgent on the main thread. override_* (from delegation config) replace parent
     inheritance so children can run on a different provider:model pair. ``profile_home`` builds (and later runs,
@@ -267,7 +268,9 @@ def _build_child_agent(
 
     # Shared ref: session_id once the child exists, delegation_id once
     # delegate_task stamps it — both ride on every relayed event.
-    child_session_ref: dict[str, Any] = {}
+    from tools.delegate_launches import launch_metadata, reserve_local_child
+    launch = launch_metadata(batch_id=batch_id, batch_name=batch_name, title=title)
+    child_session_ref: dict[str, Any] = {k: launch[k] for k in ("batch_id", "batch_name", "title")}
     child_progress_cb = _build_child_progress_callback(
         task_index, goal, parent_agent, task_count, subagent_id=subagent_id, parent_id=parent_subagent_id,
         depth=max(0, child_depth - 1),  # 0 = first-level child for the UI
@@ -290,7 +293,10 @@ def _build_child_agent(
         else:
             request_overrides = {} if override_provider else dict(getattr(parent_agent, "request_overrides", {}) or {})
         parent_sid = getattr(parent_agent, "session_id", None)
-        child_session_db = _open_child_session_db(parent_agent)
+        child_session_db = _open_child_session_db(parent_agent, launch=launch)
+        child_sid = getattr(child_session_db, "reserved_session_id", None)
+        if not child_sid and parent_sid:
+            child_sid = reserve_local_child(child_session_db, parent_sid, launch)
         with delegated_child_context():
             try:
                 child = AIAgent(
@@ -304,7 +310,7 @@ def _build_child_agent(
                         if child_progress_cb else None
                     ),
                     session_db=child_session_db, parent_session_id=parent_sid, request_overrides=request_overrides,
-                    session_id=getattr(child_session_db, "reserved_session_id", None),
+                    session_id=child_sid,
                     tool_progress_callback=child_progress_cb,
                     iteration_budget=None,  # fresh budget per subagent
                     # A profile route carries that profile's identity (its SOUL.md under the bound home).
@@ -312,6 +318,8 @@ def _build_child_agent(
                 )
             except BaseException:
                 # No child close() will ever run: release the dedicated handle here.
+                if child_session_db is not None and child_sid:
+                    child_session_db.finish_launch(launch["launch_id"], "failed_start")
                 if child_session_db is not None:
                     with _quiet(None):
                         from hermes_state_registry import release_or_close
@@ -337,6 +345,7 @@ def _build_child_agent(
     # reference), and no parent teardown can close it out from under a background child (#81267).
     child_session_ref["session_id"] = getattr(child, "session_id", "") or ""
     child._progress_identity_ref = child_session_ref
+    child._launch_id = launch["launch_id"] if child_sid else None
     child._delegate_depth, child._delegate_role = child_depth, effective_role  # post-degrade role
     child._subagent_id, child._parent_subagent_id = subagent_id, parent_subagent_id
     _apply_child_compression_cap(child, delegation_cfg)
@@ -385,6 +394,7 @@ def _run_single_child(
 
     * ``"completed"``       — normal finish. See #97655.
     """
+    child._launch_executed = True
     child_progress_cb = getattr(child, "tool_progress_callback", None)
     child_pool, leased_cred_id = _lease_child_credential(child)
     # Heartbeat keeps the parent's _last_activity_ts moving so the gateway inactivity timeout doesn't fire while the
@@ -459,6 +469,7 @@ def _build_children(
     task_list: list[dict[str, Any]], task_schemas: list[Optional[dict[str, Any]]], routes: list[Any], *,
     top_role: str, max_iterations: int, parent_agent,
     live_deleg_id: Optional[str], live_writers: list, task_images: Optional[list[Optional[list[str]]]] = None,
+    batch_id: Optional[str] = None, batch_name: Optional[str] = None,
 ) -> tuple[list[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe), each on its task's route;
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
@@ -479,6 +490,7 @@ def _build_children(
                 toolsets=None,  # always inherit the parent's toolsets
                 model=route.creds["model"], max_iterations=max_iterations, task_count=len(task_list),
                 parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **_route_overrides(route),
+                batch_id=batch_id, batch_name=batch_name, title=t.get("title"),
             )
         except ValueError as exc:
             # An owner refusal can land mid-batch: the siblings built so far hold reservations.
@@ -562,7 +574,7 @@ def delegate_task(
     max_iterations: Optional[int] = None, role: Optional[str] = None, background: Optional[bool] = None,
     output_schema: Optional[dict[str, Any]] = None, images: Optional[list[str]] = None, action: Optional[str] = None,
     subagent_id: Optional[str] = None, message: Optional[str] = None, parent_agent=None,
-    credentials_cfg: Optional[dict[str, Any]] = None,
+    credentials_cfg: Optional[dict[str, Any]] = None, batch_name: Optional[str] = None,
 ) -> str:
     """Spawn child agents (single ``goal`` or ``tasks=[...]`` batch) or control running ones. ``action``
     list/steer/stop run synchronously and bypass the pause gate, depth limit and async dispatch. ``role`` is legacy
@@ -634,6 +646,12 @@ def delegate_task(
     if err:
         return tool_error(err)
 
+    from uuid import uuid4
+    batch_id = str(uuid4())
+    if batch_name is not None and not isinstance(batch_name, str):
+        return tool_error("batch_name must be a string")
+    if any(t.get("title") is not None and not isinstance(t["title"], str) for t in task_list):
+        return tool_error("task title must be a string")
     overall_start = time.monotonic()
     # Live transcripts: cache/delegation/live/<id>/task-<n>.log per task, a side channel with zero effect on message
     # content or prompt caching. Best-effort: on failure live_paths is empty and delegation proceeds.
@@ -664,6 +682,7 @@ def delegate_task(
         children, err = _build_children(
             task_list, task_schemas, routes, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
             live_deleg_id=live_deleg_id, live_writers=live_writers, task_images=task_images,
+            batch_id=batch_id, batch_name=batch_name,
         )
         if err:
             return tool_error(err)
@@ -798,12 +817,14 @@ DELEGATE_TASK_SCHEMA = {
             # wrapped into a one-entry batch at dispatch, and a per-task `role` (legacy, ignored: capability is
             # depth-derived). Both unadvertised on purpose (old transcripts only); do not re-add. No maxItems — the
             # runtime limit (delegation.max_concurrent_children) is enforced with a clear error in delegate_task().
+            "batch_name": _p("string", "Optional name for this fan-out batch."),
             "tasks": {
                 "type": "array",
                 "minItems": 1,
                 "items": {
                     "type": "object",
                     "properties": {
+                        "title": _p("string", "Optional short launch title; truncated to 40 characters."),
                         "goal": _p(
                             "string",
                             "What this subagent should accomplish. Be specific and self-contained — it knows "

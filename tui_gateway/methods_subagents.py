@@ -96,6 +96,8 @@ def _(rid, params):
     found = False
     if agent is not None:
         try:
+            from hermes_state_launch_causes import stamp_stop
+            stamp_stop(agent, "user_stop")
             found = bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
         except Exception:
             logger.debug("subagent interrupt failed", exc_info=True)

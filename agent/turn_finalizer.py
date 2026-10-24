@@ -339,7 +339,7 @@ def _log_turn_exit(agent, messages, final_response, api_call_count, _turn_exit_r
         # aborted — from when the loop actually finished, not from the last provider
         # response. Never raises into the finalizer.
         try:
-            _touch("turn end logged")
+            _touch("turn end logged", step_kind="finalizing")
         except Exception:
             logger.debug("turn-end activity stamp failed", exc_info=True)
     _last_msg_role = messages[-1].get("role") if messages else None
@@ -809,4 +809,6 @@ def finalize_turn(
 
     agent._turn_preflight_display_snapshot = None
     agent._turn_received_provider_response = False
+    from hermes_state_launch_causes import result_cause
+    result["terminal_cause"] = result_cause(result, stop_cause=getattr(agent, "_launch_stop_cause", None))
     return result

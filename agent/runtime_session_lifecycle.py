@@ -6,6 +6,19 @@ separate from ending its session and settling execution (including deferred work
 
 
 class RuntimeSessionLifecycleMixin:
+    def record_launch(self, launch_id, **fields):
+        return self._apply('launch.record', dict(fields, launch_id=launch_id))['value']
+
+    def bind_launch(self, launch_id, *, child_session_id=None, backend_ref=None):
+        return self._apply('launch.bind', dict(launch_id=launch_id, child_session_id=child_session_id,
+                                              backend_ref=backend_ref))['value']
+
+    def finish_launch(self, launch_id, terminal_cause):
+        return self._apply('launch.finish', dict(launch_id=launch_id, terminal_cause=terminal_cause))['value']
+
+    def schedule_launch(self, launch_id, next_run_at):
+        return self._apply('launch.schedule', dict(launch_id=launch_id, next_run_at=next_run_at))['value']
+
     def create_session(self, session_id, source, *, model=None, model_config=None,
                        system_prompt=None, user_id=None, session_key=None, chat_id=None,
                        chat_type=None, thread_id=None, parent_session_id=None, cwd=None,
@@ -47,9 +60,11 @@ class RuntimeSessionLifecycleMixin:
     def get_next_title_in_lineage(self, base_title):
         return self._apply('session.next_title', {'base_title': base_title})['value']
 
-    def touch_session_activity(self, session_id, ts=None, *, description=None, provenance=None):
+    def touch_session_activity(self, session_id, ts=None, *, description=None, provenance=None,
+                               step_kind=None, step_tool=None):
         self._session(session_id)
-        self._apply('session.activity', {'ts': ts, 'description': description, 'provenance': provenance})
+        self._apply('session.activity', {'ts': ts, 'description': description, 'provenance': provenance,
+                                         'step_kind': step_kind, 'step_tool': step_tool})
 
     def clear_session_activity_labels(self, session_id):
         self._session(session_id)

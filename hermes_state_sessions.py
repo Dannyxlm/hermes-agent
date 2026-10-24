@@ -468,6 +468,8 @@ class SessionSessionsMixin:
         changed = conn.execute(sql, params).rowcount
         if changed:
             self._bump_conversation_generation(conn, session_id, reason)
+            from hermes_state_launch_causes import finish_on_end
+            finish_on_end(conn, session_id, reason)
         return changed
 
     @staticmethod
@@ -609,7 +611,7 @@ class SessionSessionsMixin:
 
     def touch_session_activity(
         self, session_id: str, ts: Optional[float] = None, *, description: Optional[str] = None,
-        provenance: Optional[ActivityProvenance] = None,
+        provenance: Optional[ActivityProvenance] = None, step_kind: Optional[str] = None, step_tool: Optional[str] = None,
     ) -> None:
         """Stamp durable mid-turn activity (observation-only; rate-limited by the caller) so surfaces see
         activity before any message row lands. Never moves ``last_activity_at`` backwards.
@@ -620,14 +622,16 @@ class SessionSessionsMixin:
         """
         if not session_id:
             return
+        from agent.session_activity import validate_step
+        step_kind, step_tool = validate_step(step_kind, step_tool)
         when = float(ts if ts is not None else time.time())
         self._write_sql(
             "UPDATE sessions SET last_activity_at = ?, "
-            "last_activity_description = ?, last_activity_provenance = ? "
+            "last_activity_description = ?, last_activity_provenance = ?, last_activity_kind = ?, last_activity_tool = ? "
             "WHERE id = ? AND (last_activity_at IS NULL OR last_activity_at < ?)",
             (
                 when, bound_activity_description(description),
-                normalize_activity_provenance(provenance).value, session_id, when,
+                normalize_activity_provenance(provenance).value, step_kind, step_tool, session_id, when,
             ),
             patience_s=self._ACTIVITY_WRITE_PATIENCE_S,
         )
@@ -650,15 +654,18 @@ class SessionSessionsMixin:
             return
         try:
             row = self._read_one(
-                "SELECT last_activity_description, last_activity_provenance FROM sessions WHERE id = ?",
+                "SELECT last_activity_description, last_activity_provenance, last_activity_kind, last_activity_tool "
+                "FROM sessions WHERE id = ?",
                 (session_id,),
             )
         except sqlite3.Error:
             row = None
-        if row is not None and not row[0] and (not row[1] or row[1] == ActivityProvenance.UNKNOWN.value):
+        if (row is not None and not row[0] and (not row[1] or row[1] == ActivityProvenance.UNKNOWN.value)
+                and row[2] in (None, "idle") and row[3] is None):
             return
         self._write_sql(
-            "UPDATE sessions SET last_activity_description = ?, last_activity_provenance = ? WHERE id = ?",
+            "UPDATE sessions SET last_activity_description = ?, last_activity_provenance = ?, "
+            "last_activity_kind = 'idle', last_activity_tool = NULL WHERE id = ?",
             ("", ActivityProvenance.UNKNOWN.value, session_id), patience_s=self._ACTIVITY_WRITE_PATIENCE_S,
         )
 

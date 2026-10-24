@@ -153,7 +153,7 @@ def handle_api_error(
     elapsed_time = time.time() - api_start_time
     # Liveness/watchdog label only (never shown in chat), so the classifier's
     # "not retryable" verdict is named on the logged attempt line below instead.
-    agent._touch_activity(f"API error recovery (attempt {retry_count}/{max_retries})")
+    agent._touch_activity(f"API error recovery (attempt {retry_count}/{max_retries})", step_kind="retrying")
 
     error_type, error_msg, _provider, _base, _model = log_api_error_attempt(
         agent, api_error, retry_count=retry_count, max_retries=max_retries, status_code=status_code,

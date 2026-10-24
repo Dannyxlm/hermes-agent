@@ -40,6 +40,9 @@ def interrupt_side_agents(runner, reason):
     for authority in all_authorities(runner):
         for _, holder in side_agents(authority):
             if holder and holder[0] is not None:
+                from hermes_state_launch_causes import result_cause, stamp_stop
+                cause = result_cause({'interrupted': True, 'interrupt_message': reason})
+                stamp_stop(holder[0], 'owner_restart' if cause == 'owner_restart' else 'parent_stop')
                 count += bool(request_hard_interrupt(holder[0], reason))
     return count
 

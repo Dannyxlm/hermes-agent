@@ -644,6 +644,11 @@ class SubagentEventPayload(Payload):
     parent_id: str | None = None
     child_session_id: str | None = None
     delegation_id: str | None = None
+    batch_id: str | None = None
+    batch_name: str | None = None
+    title: str | None = None
+    step_kind: str | None = None
+    step_tool: str | None = None
     depth: int | None = None
     model: str | None = None
     tool_count: int | None = None

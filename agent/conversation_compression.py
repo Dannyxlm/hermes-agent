@@ -1756,14 +1756,15 @@ class _CompressionActivityHeartbeat:
             return
         # Force persist: /compress never hits run_conversation's turn-end clear, so
         # durable labels would stay "in progress" for the 60s persist window.
-        self._touch(desc, force_persist=True)
+        self._touch(desc, force_persist=True, step_kind="idle")
 
     def _should_suppress(self) -> bool:
         if not self._suppressed and self._commit_fence is not None and self._commit_fence.is_cancelled:
             self._suppressed = True
         return self._suppressed
 
-    def _touch(self, desc: str, *, allow_terminal_overwrite: bool = False, force_persist: bool = False) -> None:
+    def _touch(self, desc: str, *, allow_terminal_overwrite: bool = False, force_persist: bool = False,
+               step_kind: str = "compressing") -> None:
         with _swallow('compression activity heartbeat touch failed', exc_info=True):
             if not allow_terminal_overwrite:
                 if self._should_suppress():
@@ -1778,7 +1779,7 @@ class _CompressionActivityHeartbeat:
                 # TIMEOUT between the earlier guard and the write.
                 if not allow_terminal_overwrite and self._should_suppress():
                     return
-                touch(desc, provenance=ActivityProvenance.AGENT_COMPRESSION, force_persist=force_persist)
+                touch(desc, provenance=ActivityProvenance.AGENT_COMPRESSION, force_persist=force_persist, step_kind=step_kind)
 
     def _emit_progress_status(self) -> None:
         """Re-publish the compacting status so remote transports see progress.

@@ -401,7 +401,7 @@ def begin_iteration(
 
     api_call_count += 1
     agent._api_call_count = api_call_count
-    agent._touch_activity(f"starting API call #{api_call_count}")
+    agent._touch_activity(f"starting API call #{api_call_count}", step_kind="thinking")
 
     # Grace call: budget exhausted but the model gets one more call. Consume the
     # flag so the loop exits after this iteration regardless of outcome.

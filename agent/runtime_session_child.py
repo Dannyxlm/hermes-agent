@@ -41,11 +41,14 @@ class ChildSessionStore(RuntimeSessionStore):
             super().close()
 
 
-def reserve_child_store(parent):
+def reserve_child_store(parent, *, launch=None):
     """A ``ChildSessionStore`` the owner reserved under ``parent``'s verified execution."""
     secret = secrets.token_urlsafe(32)
     # Reached from delegate_task's tool callback, which can run on Relay's loop (#139029).
-    result = call_off_event_loop(parent._apply, 'child.reserve', {'secret': secret})
+    payload = {'secret': secret}
+    if launch is not None:
+        payload['launch'] = launch
+    result = call_off_event_loop(parent._apply, 'child.reserve', payload)
     if 'refused' in result:
         raise ValueError(_REFUSALS.get(result['refused'], 'the gateway owner refused a subagent: ' + result['refused']))
     child = result['child']

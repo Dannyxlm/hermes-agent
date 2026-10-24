@@ -179,16 +179,21 @@ class WorkerControls:
         self.channel, self.route = channel, route
         self.agent = None
         self.stopped = threading.Event()
+        self.terminal_cause = "unknown"
         self.finish = threading.Event()
         self.clarifications = {}
         self.lock = threading.Lock()
         self.reader = threading.Thread(target=self.read, name='managed-controls', daemon=True)
         self.reader.start()
 
-    def stop(self):
+    def stop(self, terminal_cause="unknown"):
+        if not self.stopped.is_set():
+            self.terminal_cause = terminal_cause
         self.stopped.set()
         if self.agent is not None:
             from agent.interrupt_compat import request_hard_interrupt
+            from hermes_state_launch_causes import stamp_stop
+            stamp_stop(self.agent, self.terminal_cause)
             request_hard_interrupt(self.agent)  # parity with the canonical Stop (SessionAuthority.interrupt)
         with self.lock:
             for state in self.clarifications.values():
@@ -200,8 +205,12 @@ class WorkerControls:
         try:
             while True:
                 frame = read_frame(sys.stdin.buffer)
-                if frame == {'type': 'stop'}:
-                    self.stop()
+                if frame.get('type') == 'stop':
+                    cause = frame.get('terminal_cause', 'user_stop')
+                    if (set(frame) - {'type', 'terminal_cause'} or
+                            cause not in {'user_stop', 'parent_stop', 'owner_restart', 'unknown'}):
+                        raise ValueError('invalid_managed_control')
+                    self.stop(cause)
                     continue
                 if frame == {'type': 'finish'}:
                     self.finish.set()
@@ -383,6 +392,8 @@ def execute(frame, channel):
             controls.agent = agent
             if controls.stopped.is_set():
                 from agent.interrupt_compat import request_hard_interrupt
+                from hermes_state_launch_causes import stamp_stop
+                stamp_stop(agent, controls.terminal_cause)
                 request_hard_interrupt(agent)
             channel.send('ready', pid=os.getpid())
             history = store.get_messages_as_conversation(scope['session_id'])

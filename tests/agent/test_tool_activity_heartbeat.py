@@ -58,7 +58,7 @@ def _make_agent(monkeypatch):
             self._tool_worker_threads_lock = threading.Lock()
             self._active_children_lock = threading.Lock()
 
-        def _touch_activity(self, desc):
+        def _touch_activity(self, desc, **kwargs):
             self._last_activity = time.time()
 
         def _vprint(self, msg, force=False):
@@ -113,7 +113,7 @@ def test_heartbeat_touches_periodically_and_stops():
     repeated = threading.Event()
 
     class _Agent:
-        def _touch_activity(self, desc):
+        def _touch_activity(self, desc, **kwargs):
             touches.append(desc)
             if len(touches) >= 2:
                 repeated.set()
@@ -152,7 +152,7 @@ def test_slow_tool_call_refreshes_activity_during_execution(monkeypatch):
         before_call=lambda name, args: MagicMock(allows_execution=True)
     )
     touches: list = []
-    agent._touch_activity = lambda desc: touches.append(time.time())
+    agent._touch_activity = lambda desc, **kwargs: touches.append(time.time())
 
     result = te._run_agent_tool_execution_middleware(
         agent,
@@ -183,7 +183,7 @@ def test_fast_tool_call_does_not_leave_stray_heartbeat(monkeypatch):
         before_call=lambda name, args: MagicMock(allows_execution=True)
     )
     touches: list = []
-    agent._touch_activity = lambda desc: touches.append(time.time())
+    agent._touch_activity = lambda desc, **kwargs: touches.append(time.time())
 
     te._run_agent_tool_execution_middleware(
         agent,
@@ -212,7 +212,7 @@ def test_heartbeat_stops_when_execute_raises(monkeypatch):
         before_call=lambda name, args: MagicMock(allows_execution=True)
     )
     touches: list = []
-    agent._touch_activity = lambda desc: touches.append(time.time())
+    agent._touch_activity = lambda desc, **kwargs: touches.append(time.time())
 
     def _boom(next_args):
         raise RuntimeError("tool exploded")
@@ -244,7 +244,7 @@ def test_concurrent_tool_call_heartbeat(monkeypatch):
         before_call=lambda name, args: MagicMock(allows_execution=True)
     )
     touches: list = []
-    agent._touch_activity = lambda desc: touches.append(time.time())
+    agent._touch_activity = lambda desc, **kwargs: touches.append(time.time())
 
     agent._execute_tool_calls_concurrent = (
         __import__("run_agent").AIAgent._execute_tool_calls_concurrent.__get__(agent)
@@ -289,7 +289,7 @@ def test_heartbeat_exits_once_worker_tid_is_interrupted():
     fake_worker_tid = 10**9 + 111922  # not a live thread; only the bit matters
 
     class _Agent:
-        def _touch_activity(self, desc):
+        def _touch_activity(self, desc, **kwargs):
             touches.append(desc)
 
     thread = threading.Thread(
@@ -340,7 +340,7 @@ def test_sequential_timeout_stops_abandoned_workers_heartbeat(monkeypatch):
             self._tool_worker_threads_lock = threading.Lock()
             self.stamps: list = []
 
-        def _touch_activity(self, desc):
+        def _touch_activity(self, desc, **kwargs):
             self.stamps.append((time.monotonic(), desc))
 
         def interrupt(self, *a, **k):
