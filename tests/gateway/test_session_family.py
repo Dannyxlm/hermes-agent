@@ -165,3 +165,36 @@ async def test_canonical_pending_input_is_generation_bound_and_read_only(tmp_pat
             assert set(authority.sessions) == {"child"}
         finally:
             await connection.close()
+
+
+
+@pytest.mark.asyncio
+async def test_resident_execution_is_not_erased_by_an_idle_authority_handle(tmp_path, monkeypatch):
+    import sys
+    import threading
+    from gateway.session_authority import LiveSession, SessionAuthority
+    from gateway.session_controls import AuthorityConnection
+    from hermes_state_runtime import begin_runtime_epoch
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
+    with SessionDB(db_path=home / "state.db") as db:
+        db.create_session("root", source="test")
+        db.create_session("child", source="subagent", parent_session_id="root")
+        db._conn.executescript(LAUNCH_DDL)
+        launch(db._conn, "child")
+        db._conn.commit()
+        agent = SimpleNamespace(session_id="child", _session_db=db)
+        registry = SimpleNamespace(_active_subagents_lock=threading.Lock(),
+            _active_subagents={"child": {"agent": agent, "status": "running"}})
+        monkeypatch.setitem(sys.modules, "tools.delegate_tool_registry", registry)
+        authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="resident",
+                                    db=db, epoch=begin_runtime_epoch(db, instance_id="resident"))
+        authority.sessions["child"] = LiveSession(None, "route")
+        connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
+        try:
+            response = await connection.dispatch({"id": 1, "method": "session.family",
+                "params": {"profile": "default", "session_id": "root"}})
+            assert response["result"]["nodes"][0]["status"] == "working"
+        finally:
+            await connection.close()
