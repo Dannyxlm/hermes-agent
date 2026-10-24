@@ -6429,6 +6429,11 @@ export interface GroupsDiscardResult {
 }
 export interface CanonicalCreateParams {
   profile?: string | null
+  started_by_session?: string | null
+  started_by_profile?: string | null
+  launch_title?: string | null
+  launch_kind?: string | null
+  launch_id?: string | null
   request_id?: string | null
   source?: 'cli' | 'tui' | 'gui' | 'acp' | 'tool' | 'oneshot'
   cwd?: string | null

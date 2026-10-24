@@ -160,6 +160,8 @@ async def _resume_latest(client, args):
 
 
 async def run_gateway_chat(args, emitter=None):
+    from hermes_cli.launch_provenance import take_launch
+    family_launch = take_launch(args)
     from hermes_cli.gateway_chat_view import GatewayChatView
     query = getattr(args, "query", None) or getattr(args, "q", None)
     oneshot_prompt = getattr(args, "oneshot", None)
@@ -207,6 +209,7 @@ async def run_gateway_chat(args, emitter=None):
             policy.pop("source", None)
             if create_if_missing:
                 policy["title"] = title
+            policy.update(family_launch)
             policy.update(env_launch_flags())
             policy.update(client_env_policy(parameters))
             cwd = await asyncio.to_thread(_caller_cwd, args)

@@ -163,7 +163,9 @@ class GatewaySessionStore:
         title step); adopts and returns the new session id. ``record_cwd=False`` (``/new``,
         ``--create-if-missing``) leaves the row's cwd empty, as main's explicit creates did."""
         from agent.session_source import CLI_FAMILY_SOURCES, session_source_for
+        from hermes_cli.launch_provenance import take_launch
         params = _creation_policy(launch or {})
+        params.update(take_launch())
         params["cwd"] = os.path.realpath(os.getenv("TERMINAL_CWD") or os.getcwd())
         # Main's row label: ``cli``, ``oneshot`` for a finite -q/-Q run, or an explicit --source.
         params["source"] = session_source_for("cli")

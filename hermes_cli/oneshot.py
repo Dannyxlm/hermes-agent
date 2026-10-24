@@ -500,7 +500,30 @@ def _apply_stored_session_runtime(
     return choice
 
 
-def _run_agent(
+def _run_agent(prompt, model=None, provider=None, toolsets=None, use_config_toolsets=True,
+               skills=None, resume=None, reasoning=None, ledger=False):
+    from hermes_cli.launch_provenance import take_launch, record_for_db
+    fields = take_launch()
+    db = _create_session_db_for_oneshot()
+    launch_id = record_for_db(db, fields)
+    started = [False]
+    try:
+        response, result = _run_agent_impl(prompt, model, provider, toolsets, use_config_toolsets,
+                                           skills, resume, reasoning, ledger, session_db=db,
+                                           family_launch=launch_id, launch_started=started)
+        if launch_id:
+            db.finish_launch(launch_id, 'success' if result.get('completed') else 'error')
+        return response, result
+    except BaseException:
+        if launch_id:
+            db.finish_launch(launch_id, 'error' if started[0] else 'failed_start')
+        raise
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _run_agent_impl(
     prompt: str,
     model: Optional[str] = None,
     provider: Optional[str] = None,
@@ -509,7 +532,7 @@ def _run_agent(
     skills: object = None,
     resume: Optional[str] = None,
     reasoning: object = None,
-    ledger: bool = False,
+    ledger: bool = False, *, session_db=None, family_launch=None, launch_started=None,
 ) -> tuple[str, dict]:
     """Build an AIAgent exactly like a normal CLI chat turn, run one conversation, and return
     ``(final_response, run_result)``. Imports are local to keep CLI startup cheap. *ledger* (set when
@@ -524,7 +547,6 @@ def _run_agent(
     # Resume resolves BEFORE the runtime provider: the session's stored model/route must
     # replace the ambient config (see _apply_stored_session_runtime) and the ended row must
     # be reopened before the agent can stamp a new lifecycle boundary.
-    session_db = _create_session_db_for_oneshot()
     resume_sid, conversation_history, resume_meta = _load_resume_target(session_db, resume)
     choice = _apply_stored_session_runtime(choice, resume_meta, explicit_model=bool((model or "").strip()))
     # Resolution-time fallback (#81209): a quota-exhausted/expired primary raises AuthError here, before
@@ -597,6 +619,10 @@ def _run_agent(
             # commands via HERMES_YOLO_MODE=1, skill secret capture degrades gracefully.
             clarify_callback=_oneshot_clarify_callback,
         )
+        if family_launch:
+            agent._ensure_db_session()
+            session_db.bind_launch(family_launch, child_session_id=agent.session_id)
+            launch_started[0] = True
         # Belt-and-braces: no streaming display callbacks may bypass our stdout capture.
         agent.suppress_status_output = True
         agent.stream_delta_callback = None
@@ -612,7 +638,7 @@ def _run_agent(
                                     fallback_session_id=agent.session_id or resume_sid)
         return (result.get("final_response") or "", result)
     finally:
-        _close_agent(agent, session_db, relay_session_id)
+        _close_agent(agent, None, relay_session_id)
 
 
 def _quietly(what: str, fn) -> None:

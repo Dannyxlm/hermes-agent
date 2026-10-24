@@ -19,6 +19,11 @@ class CanonicalSessionParams(ProfileParams):
 
 
 class CanonicalCreateParams(ProfileParams):
+    started_by_session: str | None = None
+    started_by_profile: str | None = None
+    launch_title: str | None = None
+    launch_kind: str | None = None
+    launch_id: str | None = None
     request_id: str | None = None
     source: Literal['cli', 'tui', 'gui', 'acp', 'tool', 'oneshot'] = 'cli'
     cwd: str | None = None
