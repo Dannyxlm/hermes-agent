@@ -5,6 +5,10 @@ import json
 import pytest
 
 from hermes_cli import web_server_dashboard as dashboard
+from hermes_cli import plugins as plugins_mod
+from tests.hermes_cli import test_plugin_api_consent_gate as consent
+
+daemon = consent.daemon
 
 
 @pytest.mark.parametrize("enabled,disabled,allowed", [
@@ -28,3 +32,32 @@ def test_existing_bundled_dashboard_default_is_preserved():
     plugin = {"name": "existing", "source": "bundled"}
     assert dashboard._plugin_api_mount_skip_reason(plugin, set(), set()) is None
     assert dashboard._plugin_api_mount_skip_reason(plugin, set(), {"existing"}) is not None
+
+
+def test_optional_bundle_refuses_api_assets_and_tab_until_enabled(daemon, tmp_path, monkeypatch):
+    bundled_home = tmp_path / "bundled"
+    imported = consent._install(bundled_home, "optional-probe")
+    manifest = imported.parent / "manifest.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["default_enabled"] = False
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(plugins_mod, "get_bundled_plugins_dir", lambda: bundled_home / "plugins")
+    consent._plugins(daemon.launch)
+    ping = "/api/plugins/optional-probe/ping"
+    asset = "/dashboard-plugins/optional-probe/index.js"
+
+    def visible():
+        return {p["name"] for p in daemon.client.get("/api/dashboard/plugins", headers=daemon.owner).json()}
+
+    assert daemon.client.get(ping, headers=daemon.owner).status_code == 404
+    assert daemon.client.get(asset).status_code == 404
+    assert "optional-probe" not in visible()
+    assert not imported.exists()
+    consent._plugins(daemon.launch, enabled=["optional-probe"])
+    assert daemon.client.get(ping, headers=daemon.owner).json() == {"pong": True}
+    assert daemon.client.get(asset).status_code == 200
+    assert "optional-probe" in visible()
+    consent._plugins(daemon.launch)
+    assert daemon.client.get(ping, headers=daemon.owner).status_code == 404
+    assert daemon.client.get(asset).status_code == 404
+    assert "optional-probe" not in visible()
