@@ -83,6 +83,14 @@ def test_job_creator_cannot_change_during_update(tmp_path, monkeypatch):
     assert jobs.get_job(job['id'])['creator_session_id'] == 'creator'
 
 
+def test_unlinked_legacy_execution_does_not_create_a_session_store(tmp_path, monkeypatch):
+    from cron import executions
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    run = executions.create_execution('legacy-unlinked-job', source='builtin')
+    executions.finish_execution(run['id'], success=True)
+    assert not (tmp_path / 'state.db').exists()
+
+
 def test_unstarted_cron_attempt_has_failed_start_receipt(tmp_path, monkeypatch):
     from cron import jobs, executions
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
