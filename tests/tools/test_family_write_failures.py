@@ -163,8 +163,10 @@ def test_cron_only_updates_changed_launches_in_one_transaction(tmp_path, monkeyp
     import hermes_state_launch_context
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     with SessionDB(tmp_path / 'state.db') as db:
+        depths = []
         @contextmanager
         def writer():
+            depths.append(getattr(jobs._jobs_lock_state, 'depth', 0))
             yield db
         monkeypatch.setattr(hermes_state_launch_context, 'launch_writer', writer)
         first = jobs.create_job('first', 'every 2h')
@@ -176,7 +178,7 @@ def test_cron_only_updates_changed_launches_in_one_transaction(tmp_path, monkeyp
         writes = [s for s in statements if s.startswith('UPDATE work_launches')]
         begins = [s for s in statements if s.startswith('BEGIN IMMEDIATE')]
         assert len(begins) == 1 and len(writes) == 1, statements
-        assert getattr(jobs._jobs_lock_state, 'depth', 0) == 0
+        assert depths and set(depths) == {0}
 
 
 def test_cron_execution_does_not_reload_job_store(tmp_path, monkeypatch):
@@ -191,3 +193,111 @@ def test_cron_execution_does_not_reload_job_store(tmp_path, monkeypatch):
     except Exception:
         pass
     assert finished is not None and finished['status'] == 'completed'
+
+
+
+def test_failed_worker_launch_does_not_poison_transcript_outbox(tmp_path):
+    from tests.hermes_state.test_runtime_worker_lifecycle import setup_store
+    db, store, _scope = setup_store(tmp_path)
+    original = store.rpc
+    def failed_metadata(method, **params):
+        if params['operation'].startswith('launch.'):
+            raise RuntimeError('fixture optional RPC refusal')
+        return original(method, **params)
+    store.rpc = failed_metadata
+    try:
+        try:
+            store.record_launch('optional', kind='process', launcher_profile='fixture',
+                                launcher_session_id='owned', child_profile='fixture')
+        except Exception:
+            pass
+        saved = False
+        try:
+            store.append_messages_batch('owned', [{'role': 'assistant', 'content': 'real result'}])
+            saved = True
+        except Exception:
+            pass
+        assert saved and not store.journal['pending'] and store.failure is None
+        assert db.get_messages_as_conversation('owned')[0]['content'] == 'real result'
+    finally:
+        store.close()
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_background_runs_when_launch_reservation_fails(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    from gateway import session_tui_side as side
+    from gateway.session_controls import AuthorityConnection
+    from tests.gateway.test_local_source_labels import _authority
+    import hermes_state_launches
+    authority, _ = await _authority(tmp_path, monkeypatch)
+    connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+    done, ran = threading.Event(), []
+    def build(authority, policy, live, task_id, **kwargs):
+        ran.append(task_id)
+        return SimpleNamespace(run_conversation=lambda **kw: {'completed': True, 'final_response': 'real result'},
+                               close=lambda: done.set())
+    monkeypatch.setattr(side, '_side_agent', build)
+    try:
+        created = await connection.dispatch({'id': 1, 'method': 'session.create',
+            'params': dict(request_id='optional-bg', source='cli', cwd=str(tmp_path))})
+        sid = created['result']['stored_session_id']
+        monkeypatch.setattr(hermes_state_launches, 'record_launch', unavailable)
+        spawned = await connection.dispatch({'id': 2, 'method': 'prompt.background',
+            'params': dict(session_id=sid, text='fixture')})
+        assert 'result' in spawned, spawned
+        assert await asyncio.to_thread(done.wait, 5)
+        assert ran == [spawned['result']['task_id']]
+    finally:
+        await connection.close()
+        authority.db.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_metadata_conflict_keeps_original_row(tmp_path, monkeypatch):
+    from gateway.session_controls import AuthorityConnection
+    from tests.gateway.test_local_source_labels import _authority
+    authority, _ = await _authority(tmp_path, monkeypatch)
+    connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+    try:
+        created = await connection.dispatch({'id': 1, 'method': 'session.create',
+            'params': dict(request_id='resume-fixture', source='cli', cwd=str(tmp_path))})
+        fields = dict(session_id=created['result']['stored_session_id'], launch_id='fixed',
+                      started_by_session='parent', started_by_profile='default')
+        for i, title in enumerate(('original', 'different'), 2):
+            result = await connection.dispatch({'id': i, 'method': 'session.resume',
+                'params': dict(fields, launch_title=title)})
+            assert 'result' in result, result
+        row = authority.db._read_one('SELECT title,child_session_id FROM work_launches WHERE launch_id=?', ('fixed',))
+        assert tuple(row) == ('original', fields['session_id'])
+    finally:
+        await connection.close()
+        authority.db.close()
+
+
+def test_batch_names_are_capped_at_the_producer():
+    from tools.delegate_launches import launch_metadata
+    assert launch_metadata(batch_name='x' * 200)['batch_name'] == 'x' * 39 + '…'
+
+
+
+def test_worker_process_launch_uses_compression_lineage(tmp_path):
+    from tests.hermes_state.test_runtime_worker_lifecycle import setup_store
+    db, store, _scope = setup_store(tmp_path)
+    try:
+        db.end_session('owned', 'compression')
+        db.create_session('continuation', 'cli', parent_session_id='owned', profile_name='fixture')
+        recorded = None
+        try:
+            recorded = store.record_launch('continued-process', kind='process', launcher_profile='fixture',
+                launcher_session_id='continuation', child_profile='fixture', backend_ref='process-ref')
+        except Exception:
+            pass
+        assert recorded == 'continued-process'
+        row = db._read_one('SELECT launcher_session_id FROM work_launches WHERE launch_id=?', ('continued-process',))
+        assert row[0] == 'continuation'
+    finally:
+        store.close()
+        db.close()
