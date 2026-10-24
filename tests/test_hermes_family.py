@@ -357,3 +357,36 @@ def test_failed_helper_requires_parent_turn_end_evidence(tmp_path, statuses, vis
         db.executemany("INSERT INTO session_admissions VALUES ('root',?)", [(status,) for status in statuses])
     result = Family({"default": read_profile("default", path)}, now=NOW).overview(since=0)
     assert bool(result["failed"]) is visible
+
+
+
+def test_since_excludes_old_finished_parent_without_hiding_live_child(tmp_path):
+    from hermes_family import read_profile, Family, node_id
+    path = tmp_path / "window.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        session(db, "old-parent")
+        launch(db, "old-parent", cause="success", finished=1)
+        session(db, "live-child")
+        launch(db, "live-child", launcher="old-parent")
+    family = Family({"default": read_profile("default", path)},
+                    live={("default", "live-child"): {"running": True}}, now=NOW)
+    result = family.session_family("default", "root", since=NOW - 10, limit=1)
+    assert [n["session_id"] for n in result["nodes"]] == ["live-child"]
+    assert result["nodes"][0]["parent_node_id"] == node_id("default", "old-parent")
+
+
+def test_limit_drops_oldest_finished_parent_before_newer_finished_child(tmp_path):
+    from hermes_family import read_profile, Family, node_id
+    path = tmp_path / "terminal-window.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        session(db, "old-parent")
+        launch(db, "old-parent", cause="success", finished=NOW - 100)
+        session(db, "new-child")
+        launch(db, "new-child", launcher="old-parent", cause="success", finished=NOW)
+    family = Family({"default": read_profile("default", path)}, now=NOW)
+    result = family.session_family("default", "root", since=0, limit=1)
+    assert [n["session_id"] for n in result["nodes"]] == ["new-child"]
+    assert result["nodes"][0]["parent_node_id"] == node_id("default", "old-parent")
+    assert result["truncated"] is True
