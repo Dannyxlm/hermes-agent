@@ -101,21 +101,9 @@ def _session_filter_where(
     """Shared ``sessions s`` WHERE builder so counts line up with listed rows. ``exclude_children``
     hides sub-agent runs and compression continuations but keeps branch/reset children
     (``_LISTABLE_CHILD_SQL``); ``include_subagents`` re-admits the sub-agent runs only
-    (``sessions.show_subagents``). Clause order is part of the SQL text contract."""
+    (``sessions.show_subagents``). Cheap filters precede JSON checks to avoid parsing discarded rows."""
     where: list[str] = []
     params: list[Any] = []
-    if exclude_children and include_subagents:
-        where.append(f"({_LISTABLE_CHILD_SQL} OR {_delegate_from_json('s.model_config')} IS NOT NULL)")
-    elif exclude_children:
-        where += [_LISTABLE_CHILD_SQL, f"{_delegate_from_json('s.model_config')} IS NULL"]
-    # Show roots and user-visible branch/reset sessions, while still hiding sub-agent runs and compression
-    # continuations. All four carry parent_session_id, so the shared predicate classifies the edge from
-    # stable markers plus legacy-compatible parent metadata. Branch sessions are identified two ways, OR'd
-    # for robustness: 1. A stable ``_branched_from`` marker in model_config, written by /branch at creation
-    # time. This survives the parent being reopened and re-ended with a different end_reason (e.g.
-    # tui_shutdown overwriting 'branched'), which otherwise hides the branch — see issue #20856. 2. The
-    # legacy heuristic (parent ended with 'branched' before the child started), covering branch sessions
-    # created before the marker existed.
     include_sources = [source] if source else list(sources or [])
     source_clause, source_params = _source_match_clause(include_sources, local_created_sources)
     for clause, values in (
@@ -132,6 +120,18 @@ def _session_filter_where(
         where.append("s.archived = 1")
     elif not include_archived:
         where.append("s.archived = 0")
+    # Show roots and user-visible branch/reset sessions, while still hiding sub-agent runs and compression
+    # continuations. All four carry parent_session_id, so the shared predicate classifies the edge from
+    # stable markers plus legacy-compatible parent metadata. Branch sessions are identified two ways, OR'd
+    # for robustness: 1. A stable ``_branched_from`` marker in model_config, written by /branch at creation
+    # time. This survives the parent being reopened and re-ended with a different end_reason (e.g.
+    # tui_shutdown overwriting 'branched'), which otherwise hides the branch — see issue #20856. 2. The
+    # legacy heuristic (parent ended with 'branched' before the child started), covering branch sessions
+    # created before the marker existed.
+    if exclude_children and include_subagents:
+        where.append(f"({_LISTABLE_CHILD_SQL} OR {_delegate_from_json('s.model_config')} IS NOT NULL)")
+    elif exclude_children:
+        where += [_LISTABLE_CHILD_SQL, f"{_delegate_from_json('s.model_config')} IS NULL"]
     return where, params
 
 
@@ -1344,11 +1344,11 @@ class SessionSessionsMixin(SessionActivityMixin):
             # require child.started_at >= parent.ended_at: races insert the
             # continuation before ended_at is written.
             outer_where, id_params = self._chain_search_where(
-                where_sql, (id_query or "").strip().lower(), (search_query or "").strip().lower(),
+                "", (id_query or "").strip().lower(), (search_query or "").strip().lower(),
             )
             query = f"""
-                WITH RECURSIVE chain(root_id, cur_id) AS (
-                    SELECT s.id, s.id FROM sessions s {where_sql}
+                WITH RECURSIVE admitted(id) AS MATERIALIZED (SELECT s.id FROM sessions s {where_sql}), chain(root_id, cur_id) AS (
+                    SELECT id, id FROM admitted
                     UNION ALL
                     SELECT c.root_id, child.id
                     FROM chain c
@@ -1369,14 +1369,14 @@ class SessionSessionsMixin(SessionActivityMixin):
                 )
                 {select_head}{_sql_session_last_active("s")} AS last_active,
                     COALESCE(cm.effective_last_active, {_sql_in_window("s.started_at")}) AS _effective_last_active
-                FROM sessions s
+                FROM admitted roots JOIN sessions s ON s.id = roots.id
                 LEFT JOIN chain_max cm ON cm.root_id = s.id
                 {prompt_join}
                 {outer_where}
                 ORDER BY _effective_last_active DESC, s.started_at DESC, s.id DESC
                 LIMIT ? OFFSET ?
             """
-            params = params + params + id_params + [limit, offset]  # WHERE binds twice (seed + outer)
+            params = params + id_params + [limit, offset]  # Scope is evaluated once in admitted.
         else:
             query = f"""
                 {select_head}{_sql_session_last_active("s")} AS last_active

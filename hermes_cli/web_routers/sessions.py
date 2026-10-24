@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -205,8 +206,9 @@ def get_sessions(
         raise HTTPException(status_code=400, detail="order must be one of: created, recent")
     profile_name = _cron_profile_home(profile)[0] if profile else None
     try:
+        from hermes_state_local import listing_lineage_scope
         db = _open_session_db_for_profile(profile, read_only=True)
-        try:
+        with closing(db), listing_lineage_scope(db):
             min_message_count = max(0, min_messages)
             archived_only = archived == "only"
             include_archived = archived == "include"
@@ -251,11 +253,10 @@ def get_sessions(
                     compact_rows=not full,
                     include_pinned=True,
                     **scope)
-            total = db.session_count(exclude_children=True, **scope)
+            from hermes_state_listing_counts import listing_counts
+            total, archived_count = listing_counts(db, exclude_children=True, **scope)
             now = time.time()
             row_profile = profile_name or _cron_default_profile()
-            archived_count = db.session_count(exclude_children=True, **{
-                **scope, "include_archived": False, "archived_only": True})
             from tui_gateway.inbox_summaries import page_attention, page_replies, summary_scope
             attention = page_attention(sessions, Path(db.db_path).parent)
             replies = page_replies(db, sessions)
@@ -279,8 +280,6 @@ def get_sessions(
                     "archived_count": archived_count, "storage": storage,
                     "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage),
                     **cursor_fields}
-        finally:
-            db.close()
     except HTTPException:
         raise
     except sqlite3.OperationalError as exc:

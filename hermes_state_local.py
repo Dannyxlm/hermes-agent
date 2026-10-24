@@ -1,12 +1,25 @@
 """Private local creation receipts in the canonical runtime transaction owner."""
 import json
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from hermes_state_runtime import RuntimeStoreError, _epoch, _json
 
 POLICY_PREFIX = 'gateway.local_policy.v1:'
 API_BINDING_PREFIX = 'gateway.api.binding.v1.'
 API_DECLARED_PREFIX = 'gateway.api.conversation.v1.'
+_LISTING_LINEAGES: ContextVar[tuple[object, dict] | None] = ContextVar('listing_lineages', default=None)
+
+
+@contextmanager
+def listing_lineage_scope(db):
+    """Share only a readonly list request's identical reader/generation lineage work."""
+    token = _LISTING_LINEAGES.set((db, {}))
+    try:
+        yield
+    finally:
+        _LISTING_LINEAGES.reset(token)
 
 
 def bind_resumed_launch(db, *, epoch, session_id, fields):
@@ -259,7 +272,16 @@ def exclude_superseded_segments(db, where_clauses, params):
     """Drop earlier reset segments from a listing or count query (one conversation, one row),
     in SQL before paging; returns ``heads`` for :func:`annotate_local_lineages`."""
     with db._read_ctx() as conn:
-        superseded, heads = local_lineage_index(conn)
+        scope = _LISTING_LINEAGES.get()
+        if scope is not None and scope[0] is db and db.read_only:
+            cache = scope[1]
+            key = (conn, conn.execute('PRAGMA data_version').fetchone()[0])
+            if key not in cache:
+                cache.clear()
+                cache[key] = local_lineage_index(conn)
+            superseded, heads = cache[key]
+        else:
+            superseded, heads = local_lineage_index(conn)
     if superseded:
         where_clauses.append("s.id NOT IN (SELECT value FROM json_each(?))")
         params.append(json.dumps(sorted(superseded)))
