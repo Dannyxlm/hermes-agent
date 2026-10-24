@@ -42,3 +42,86 @@ async def test_canonical_family_entrypoint(tmp_path, monkeypatch):
 
 async def _no_restore(*args):
     raise AssertionError("Family polling attempted cold adoption")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_scoped", [False, True])
+async def test_canonical_profile_grant_is_not_provenance(tmp_path, monkeypatch, host_scoped):
+    import asyncio
+    from contextlib import suppress
+    from gateway.session_authorities import SessionAuthorities
+    from gateway.session_authority import LiveSession, SessionAuthority
+    from gateway.session_controls import AuthorityConnection
+    from hermes_state_runtime import begin_runtime_epoch
+    home = tmp_path / "home"
+    other = home / "profiles" / "iris"
+    other.mkdir(parents=True)
+    monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
+    monkeypatch.setattr("gateway.session_local_adoption.adopt_before_restore", _no_restore)
+    registry = SessionAuthorities(home, multiplexed=True)
+    runner = SimpleNamespace(_draining=False, session_authorities=registry)
+    with SessionDB(db_path=home / "state.db") as db, SessionDB(db_path=other / "state.db") as foreign:
+        for store in (db, foreign):
+            store._conn.executescript(LAUNCH_DDL)
+        db.create_session("root", source="test")
+        foreign.create_session("thread", source="tool")
+        foreign.create_session("helper", source="subagent", parent_session_id="thread")
+        launch(foreign._conn, "thread", kind="teammate", profile="iris")
+        launch(foreign._conn, "helper", profile="iris", launcher="thread", launcher_profile="iris")
+        foreign._conn.commit()
+        authorities = []
+        for path, store, name in ((home, db, "default"), (other, foreign, "iris")):
+            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, db=store,
+                epoch=begin_runtime_epoch(store, instance_id=name))
+            registry.add(path, authority, name=None if name == "default" else name)
+            authorities.append(authority)
+        authorities[0].sessions["root"] = LiveSession(None, "root-route")
+        task = asyncio.create_task(asyncio.Event().wait())
+        authorities[1].sessions["thread"] = LiveSession(None, "thread-route", task=task)
+        identity = {"user_id": "owner", "profile_scope": "host" if host_scoped else "profile"}
+        connection = AuthorityConnection(authorities[0], object(), identity)
+        try:
+            result = await connection.dispatch({"id": 1, "method": "session.family",
+                "params": {"profile": "default", "session_id": "root", "since": 0}})
+            assert "result" in result, result
+            family = result["result"]
+            assert family["complete"] is host_scoped
+            assert family["unavailable_profiles"] == ([] if host_scoped else ["iris"])
+            assert {n["session_id"] for n in family["nodes"]} == ({"thread", "helper"} if host_scoped else set())
+            overview = (await connection.dispatch({"id": 2, "method": "family.overview", "params": {}}))["result"]
+            assert {p["profile"] for p in overview["team"]} == ({"default", "iris"} if host_scoped else {"default"})
+            assert len(overview["roots"]) == (1 if host_scoped else 0)
+            assert set(authorities[0].sessions) == {"root"}
+            assert set(authorities[1].sessions) == {"thread"}
+        finally:
+            await connection.close()
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+@pytest.mark.asyncio
+async def test_canonical_cold_stored_root_never_adopts_or_reads_another_local_owner(tmp_path, monkeypatch):
+    from gateway.session_authority import SessionAuthority
+    from gateway.session_controls import AuthorityConnection
+    from hermes_state_runtime import begin_runtime_epoch
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
+    monkeypatch.setattr("gateway.session_local_adoption.adopt_before_restore", _no_restore)
+    with SessionDB(db_path=home / "state.db") as db:
+        db.create_session("root", source="test")
+        db.create_session("private", source="local")
+        db._conn.execute("UPDATE sessions SET user_id='somebody-else' WHERE id='private'")
+        db._conn.commit()
+        authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="cold",
+                                    db=db, epoch=begin_runtime_epoch(db, instance_id="cold"))
+        connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
+        try:
+            for sid, readable in (("root", True), ("private", False), ("missing", False)):
+                result = await connection.dispatch({"id": 1, "method": "session.family",
+                    "params": {"profile": "default", "session_id": sid}})
+                assert ("result" in result) is readable, result
+            assert not authority.sessions
+        finally:
+            await connection.close()

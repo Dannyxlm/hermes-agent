@@ -199,3 +199,124 @@ def test_since_does_not_hide_live_descendants_or_their_ancestors(night):
     result = family.session_family("default", "root", since=NOW)
     assert "approval" in {n["title"] for n in result["nodes"]}
     assert "six-0" not in {n["title"] for n in result["nodes"]}
+
+
+@pytest.mark.parametrize("reason", ["cli_close", "tui_close", "ws_disconnect", "idle_timeout", "agent_close",
+                                    "startup_orphan_reap", "compression", "session_reset", "cron_complete"])
+def test_end_reason_and_null_end_never_claim_completion_or_liveness(tmp_path, reason):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "old.db"
+    with fixture_db(path, old=True) as db:
+        session(db, "root", source="desktop")
+        session(db, "helper", source="subagent", parent="root", ended=NOW)
+        db.execute("UPDATE sessions SET end_reason=? WHERE id='helper'", (reason,))
+    result = Family({"default": read_profile("default", path)}, now=NOW).session_family("default", "root")
+    assert result["nodes"][0]["status"] == "unknown"
+    assert result["nodes"][0]["actions"] == ["open"]
+    assert result["nodes"][0]["step_kind"] is None
+
+
+def test_activity_is_typed_not_parsed_and_terminal_reply_is_only_a_hint(tmp_path):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "activity.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        for sid, cause in (("lane", "success"), ("helper", None)):
+            session(db, sid)
+            launch(db, sid, kind="lane" if sid == "lane" else "helper", cause=cause, finished=NOW if cause else None)
+        db.execute("UPDATE sessions SET last_activity_description='ERROR executing tool: fake' WHERE id='helper'")
+        db.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,tool_calls TEXT)")
+        db.execute("INSERT INTO messages VALUES (1,'lane','assistant','Verified fixture result\nDetails',NULL)")
+        db.execute("INSERT INTO messages VALUES (2,'lane','assistant','Not a final reply','[{}]')")
+    snapshot = read_profile("default", path)
+    family = Family({"default": snapshot}, live={("default", "helper"): {"running": True}}, now=NOW)
+    nodes = {n["session_id"]: n for n in family.session_family("default", "root", since=0)["nodes"]}
+    assert nodes["lane"]["status"] == "done" and nodes["lane"]["report_hint"] == "Verified fixture result"
+    assert nodes["helper"]["status"] == "working" and nodes["helper"]["step_kind"] is None
+    snapshot.sessions["helper"]["last_activity_kind"] = "tool"
+    snapshot.sessions["helper"]["last_activity_tool"] = "actual_tool"
+    nodes = Family({"default": snapshot}, live={("default", "helper"): {"running": True}}, now=NOW).session_family("default", "root")["nodes"]
+    helper = next(n for n in nodes if n["session_id"] == "helper")
+    assert (helper["step_kind"], helper["step_tool"]) == ("tool", "actual_tool")
+
+
+def test_bfs_old_parent_still_connects_live_grandchild_and_depth_is_bounded(tmp_path):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "deep.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        parent = "root"
+        for i in range(70):
+            sid = f"child-{i}"
+            session(db, sid, source="subagent", parent=parent)
+            launch(db, sid, launcher=parent, cause="success" if i == 0 else None, finished=1 if i == 0 else None)
+            parent = sid
+    family = Family({"default": read_profile("default", path)}, live={("default", "child-1"): {"running": True}}, now=NOW)
+    result = family.session_family("default", "root", since=NOW - 1, limit=1)
+    assert result["truncated"] is True
+    nodes = {n["session_id"]: n for n in result["nodes"]}
+    assert len(nodes) == 64
+    assert nodes["child-1"]["parent_node_id"] == nodes["child-0"]["node_id"]
+    assert nodes["child-0"]["status"] == "done"
+
+
+def test_failed_start_without_child_and_deleted_child_no_resurrection(tmp_path):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "failed.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        launch(db, "not-started", kind="lane", cause="failed_start", finished=NOW)
+        db.execute("UPDATE work_launches SET child_session_id=NULL WHERE launch_id='not-started'")
+        launch(db, "deleted-child")
+    family = Family({"default": read_profile("default", path)}, now=NOW)
+    result = family.session_family("default", "root", since=0)
+    assert len(result["nodes"]) == 1
+    assert (result["nodes"][0]["title"], result["nodes"][0]["status"]) == ("not-started", "failed")
+    earlier = family.overview(since=0)["earlier"]
+    assert earlier[0]["total_count"] == 2 and earlier[0]["failed_count"] == 1
+
+
+def test_limit_removes_oldest_finished_before_newer_finished(tmp_path):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "limited.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        for sid, finished in (("old", NOW - 100), ("new", NOW)):
+            session(db, sid)
+            launch(db, sid, cause="success", finished=finished)
+    family = Family({"default": read_profile("default", path)}, now=NOW)
+    result = family.session_family("default", "root", since=0, limit=1)
+    assert result["truncated"] is True
+    assert [n["session_id"] for n in result["nodes"]] == ["new"]
+
+
+
+def test_unknown_profile_provenance_is_not_an_open_permission(tmp_path):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "profiles.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        session(db, "invalid-location")
+        launch(db, "invalid-location", profile="unknown")
+    result = Family({"default": read_profile("default", path)}, now=NOW).session_family("default", "root")
+    assert result["nodes"] == []
+    assert result["complete"] is False and result["unavailable_profiles"] == ["unknown"]
+
+
+def test_query_bound_with_real_schema_and_hundreds_of_launches(tmp_path):
+    from hermes_state import SessionDB
+    from hermes_family import read_profile, Family
+    path = tmp_path / "state.db"
+    with SessionDB(db_path=path) as db:
+        db._conn.executescript(LAUNCH_DDL)
+        db.create_session("root", source="test")
+        for i in range(300):
+            db.create_session(f"helper-{i}", source="subagent", parent_session_id="root")
+            launch(db._conn, f"helper-{i}")
+        db._conn.commit()
+    statements = []
+    snapshot = read_profile("default", path, trace=statements.append)
+    assert len(statements) <= 9
+    result = Family({"default": snapshot}, now=NOW).session_family("default", "root", limit=500)
+    assert len(result["nodes"]) == 300 and not result["truncated"]
+    assert all(n["status"] == "unknown" for n in result["nodes"])
