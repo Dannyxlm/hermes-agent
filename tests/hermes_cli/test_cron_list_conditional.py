@@ -58,6 +58,17 @@ def test_unchanged_cron_list_is_bodyless_without_job_reads(cron_client):
     assert "private" in second.headers["cache-control"]
 
 
+def test_unchanged_unconditional_cron_list_reuses_payload(cron_client):
+    client, _paths, loads = cron_client
+    first = client.get("/api/cron/jobs")
+    assert first.status_code == 200
+    before = len(loads)
+    second = client.get("/api/cron/jobs")
+    assert second.status_code == 200
+    assert second.content == first.content
+    assert len(loads) == before, "Legacy Desktop sends unconditional reads; reuse their unchanged payload too"
+
+
 def test_cron_validator_cannot_hide_file_or_profile_changes(cron_client):
     client, paths, _loads = cron_client
     first = client.get("/api/cron/jobs?profile=default")
