@@ -16,15 +16,19 @@ def compression_edge(columns, child="child", parent="parent"):
     return clause
 
 
-def selection(name, columns, has_launches, seeds, since):
+def selection(name, columns, has_launches, seeds, since, walk):
     """Return a recursive selector shared by launch and session reads."""
-    if seeds is None:
+    if seeds is None and since is None:
         return "", (), None
-    values = ",".join("(?,?,NULL)" for _ in seeds) or "(NULL,NULL,NULL)"
-    params = tuple(value for pair in seeds for value in pair)
+    if seeds is None and has_launches:
+        initial = "SELECT child_profile,child_session_id,launch_id FROM work_launches WHERE finished_at IS NULL OR finished_at>=?"
+        params = (since,)
+    else:
+        initial = "SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]'),NULL FROM json_each(?)"
+        params = (json.dumps(seeds or []),)
     edge = compression_edge(columns)
     sql = f"""WITH RECURSIVE reached(profile,sid,lid) AS (
-        VALUES {values}
+        {initial}
         UNION
         SELECT ?,parent.id,NULL FROM reached r CROSS JOIN sessions child ON child.id=r.sid
         JOIN sessions parent ON parent.id=child.parent_session_id
@@ -35,7 +39,20 @@ def selection(name, columns, has_launches, seeds, since):
         WHERE r.profile=? AND {edge}
     """
     params += (name, name, name, name)
-    if has_launches:
+    if has_launches and walk == "ancestors":
+        sql += """ UNION
+        SELECT w.launcher_profile,w.launcher_session_id,NULL FROM reached r
+        CROSS JOIN work_launches w ON w.launch_id=r.lid WHERE r.profile=?
+        UNION
+        SELECT w.child_profile,w.child_session_id,w.launch_id FROM reached r
+        CROSS JOIN work_launches w ON w.child_session_id=r.sid WHERE r.profile=?
+        UNION
+        SELECT w.child_profile,w.child_session_id,w.launch_id FROM reached r
+        CROSS JOIN work_launches child ON child.launch_id=r.lid
+        JOIN work_launches w ON w.launch_id=child.parent_launch_id WHERE r.profile=?
+        """
+        params += (name, name, name)
+    elif has_launches:
         sql += """ UNION
         SELECT w.child_profile,w.child_session_id,w.launch_id FROM reached r
         CROSS JOIN work_launches w ON w.launcher_profile=r.profile AND w.launcher_session_id=r.sid
@@ -47,24 +64,15 @@ def selection(name, columns, has_launches, seeds, since):
     return sql + ") ", params, "id IN (SELECT sid FROM reached WHERE profile=?)"
 
 
-def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None, lineage_only=False):
-    has_launches = "work_launches" in tables and not lineage_only
-    cte, params, where = selection(name, columns, has_launches, seeds, since)
-    if seeds is not None:
-        launches = [dict(r) for r in conn.execute(cte + "SELECT * FROM work_launches WHERE launch_id IN "
-                    "(SELECT lid FROM reached WHERE profile=?)", (*params, name))] if has_launches else []
-        session_where, session_params = "s." + where, (*params, name)
-    elif since is not None:
-        launches = [dict(r) for r in conn.execute("SELECT * FROM work_launches WHERE finished_at IS NULL OR finished_at>=?",
-                                                  (since,))] if has_launches else []
-        seeds = {(r["child_profile"], r["child_session_id"]) for r in launches if r["child_session_id"]}
-        seeds.update((r["launcher_profile"], r["launcher_session_id"]) for r in launches)
-        # Overview already selected launches by window. Only their session lineage is needed.
-        cte, params, where = selection(name, columns, False, sorted(seeds), since)
-        session_where, session_params = "s." + where, (*params, name)
-    else:
-        launches = [dict(r) for r in conn.execute("SELECT * FROM work_launches")] if has_launches else []
-        session_where, session_params = "1", ()
+def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None, walk="descendants"):
+    has_launches = "work_launches" in tables and walk != "lineage"
+    walk = "ancestors" if seeds is None and since is not None else walk
+    cte, params, where = selection(name, columns, has_launches, seeds, since, walk)
+    launch_where = "launch_id IN (SELECT lid FROM reached WHERE profile=?)" if cte else "1"
+    selected_params = (*params, name) if cte else ()
+    launches = [dict(r) for r in conn.execute(cte + "SELECT * FROM work_launches WHERE " + launch_where,
+                                             selected_params)] if has_launches else []
+    session_where, session_params = ("s." + where, selected_params) if cte else ("1", ())
     turn = (",(SELECT MAX(status IN ('started','unknown')) FROM session_admissions WHERE target_session_id=s.id) AS turn_unresolved"
             ",(SELECT MAX(status='terminal') FROM session_admissions WHERE target_session_id=s.id) AS turn_terminal"
             if "session_admissions" in tables else ",NULL AS turn_unresolved,NULL AS turn_terminal")
@@ -109,6 +117,39 @@ def probe_path(path, seeds):
         return launch_probe(conn, seeds)
 
 
+def merge_snapshot(snapshot, extra):
+    snapshot.sessions.update(extra.sessions)
+    launches = {r["launch_id"]: r for r in snapshot.launches}
+    launches.update((r["launch_id"], r) for r in extra.launches)
+    snapshot.launches = list(launches.values())
+    snapshot.aliases.update(extra.aliases)
+    snapshot.owners.update(extra.owners)
+
+
+def overview_ancestors(paths, profiles, reader, since, filter_snapshot):
+    seen = {(p, sid) for p, snapshot in profiles.items() for sid in snapshot.sessions}
+    unavailable = []
+    while True:
+        refs = {(r["launcher_profile"], r["launcher_session_id"])
+                for snapshot in profiles.values() for r in snapshot.launches} - seen
+        refs = {(p, sid) for p, sid in refs if p in profiles}
+        if not refs:
+            return unavailable
+        seen.update(refs)
+        for profile, snapshot in profiles.items():
+            seeds = sorted((p, sid) for p, sid in refs if p == profile)
+            if not seeds:
+                continue
+            try:
+                extra = reader(profile, paths[profile], seeds=seeds, since=since, walk="ancestors")
+            except (OSError, sqlite3.Error):
+                unavailable.append(profile)
+                continue
+            filter_snapshot(extra)
+            merge_snapshot(snapshot, extra)
+            seen.update((profile, sid) for sid in extra.sessions)
+
+
 def read_graph(paths, reader, *, root=None, since=None, filter_snapshot=lambda snapshot: None, probe=None):
     from hermes_family import Profile
     probe = probe or (lambda profile, seeds: probe_path(paths[profile], seeds))
@@ -125,21 +166,7 @@ def read_graph(paths, reader, *, root=None, since=None, filter_snapshot=lambda s
         filter_snapshot(snapshot)
         profiles[profile] = snapshot
     if not root:
-        refs = {(r["launcher_profile"], r["launcher_session_id"])
-                for snapshot in profiles.values() for r in snapshot.launches}
-        for profile, snapshot in profiles.items():
-            seeds = sorted((p, sid) for p, sid in refs if p == profile and sid not in snapshot.sessions)
-            if not seeds:
-                continue
-            try:
-                extra = reader(profile, paths[profile],
-                                     seeds=seeds, since=since, lineage_only=True)
-                filter_snapshot(extra)
-                snapshot.sessions.update(extra.sessions)
-                snapshot.aliases.update(extra.aliases)
-                snapshot.owners.update(extra.owners)
-            except (OSError, sqlite3.Error):
-                unavailable.append(profile)
+        unavailable.extend(overview_ancestors(paths, profiles, reader, since, filter_snapshot))
     if root:
         reached = {root}
         for snapshot in profiles.values():
@@ -163,41 +190,51 @@ def read_graph(paths, reader, *, root=None, since=None, filter_snapshot=lambda s
                     unavailable.append(profile)
                     continue
                 filter_snapshot(extra)
-                snapshot = profiles[profile]
-                snapshot.sessions.update(extra.sessions)
-                launches = {r["launch_id"]: r for r in snapshot.launches}
-                launches.update((r["launch_id"], r) for r in extra.launches)
-                snapshot.launches = list(launches.values())
-                snapshot.aliases.update(extra.aliases)
-                snapshot.owners.update(extra.owners)
+                merge_snapshot(profiles[profile], extra)
                 reached.update((profile, sid) for sid in extra.sessions)
     return profiles, unavailable
 
 
 
-def lineage_maps(sessions):
-    """Compression continuations share one tip; forks and delegates stay separate."""
-    children = {}
+def resolve_paths(edges):
+    resolved = {}
+    for start in edges:
+        path, current = set(), start
+        while current in edges and current not in resolved and current not in path:
+            path.add(current)
+            current = edges[current]
+        target = resolved.get(current, current)
+        resolved.update((key, target) for key in path)
+        resolved.setdefault(current, target)
+    return resolved
+
+
+def compression_parent(row, sessions):
+    parent = sessions.get(row.get("parent_session_id"))
+    if not parent or parent.get("end_reason") != "compression" or row.get("source") in {"subagent", "tool"}:
+        return None
+    config = row.get("model_config")
+    try:
+        config = json.loads(config) if isinstance(config, str) and config else config
+    except json.JSONDecodeError:
+        config = None
+    if isinstance(config, dict) and any(config.get(k) == parent["id"] for k in ("_branched_from", "_delegate_from", "_reset_from")):
+        return None
+    return parent["id"]
+
+
+def compression_tips(sessions):
+    """Normalize every compression alias to its preferred continuation, including stale siblings."""
+    parents, children = {}, {}
     for sid, row in sessions.items():
-        parent = sessions.get(row.get("parent_session_id"))
-        if not parent or parent.get("end_reason") != "compression" or row.get("source") in {"subagent", "tool"}:
-            continue
-        config = row.get("model_config")
-        config = json.loads(config) if isinstance(config, str) and config else {}
-        if any(config.get(k) == parent["id"] for k in ("_branched_from", "_delegate_from", "_reset_from")):
-            continue
-        children.setdefault(parent["id"], []).append(sid)
+        parent = compression_parent(row, sessions)
+        if parent:
+            parents[sid] = parent
+            children.setdefault(parent, []).append(sid)
     def priority(sid):
         row = sessions[sid]
         return (2 if row.get("end_reason") == "compression" else 1 if row.get("ended_at") is None else 0,
                 row.get("last_activity_at") or row.get("started_at") or 0, row.get("started_at") or 0, sid)
-    forward = {sid: max(ids, key=priority) for sid, ids in children.items()}
-    tips, lineages = {}, {}
-    for sid in sessions:
-        path, tip = set(), sid
-        while tip in forward and tip not in path:
-            path.add(tip)
-            tip = forward[tip]
-        tips[sid] = tip
-        lineages.setdefault(tip, set()).add(sid)
-    return tips, lineages
+    roots = resolve_paths(parents)
+    tips = resolve_paths({sid: max(ids, key=priority) for sid, ids in children.items()})
+    return {sid: tips.get(roots.get(sid, sid), roots.get(sid, sid)) for sid in sessions}

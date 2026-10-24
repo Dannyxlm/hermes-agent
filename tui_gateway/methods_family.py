@@ -81,14 +81,14 @@ def _family_live(profiles, unavailable):
 def _family_root_owned(profile, stored_id):
     from hermes_cli.profiles import get_profile_dir
     from hermes_family import read_profile
-    from hermes_family_storage import lineage_maps
+    from hermes_family_storage import compression_tips
     home = get_profile_dir(profile).resolve()
     if not (home / "state.db").is_file():
         return False
-    snapshot = read_profile(profile, home / "state.db", seeds=[(profile, stored_id)], lineage_only=True)
+    snapshot = read_profile(profile, home / "state.db", seeds=[(profile, stored_id)], walk="lineage")
     if stored_id not in snapshot.sessions:
         return False
-    tips = lineage_maps(snapshot.sessions)[0]
+    tips = compression_tips(snapshot.sessions)
     tip = tips[stored_id]
     with _sessions_lock:
         sessions = tuple(_sessions.items())

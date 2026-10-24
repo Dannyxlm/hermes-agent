@@ -12,7 +12,7 @@ from pathlib import Path
 import sqlite3
 import time
 
-from hermes_family_storage import lineage_maps, read_metadata
+from hermes_family_storage import compression_tips, read_metadata
 
 
 LIVE = frozenset({"working", "quiet", "needs_you"})
@@ -35,7 +35,7 @@ class Profile:
     owners: dict[str, str] = field(default_factory=dict)
 
 
-def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, lineage_only=False) -> Profile:
+def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, walk="descendants") -> Profile:
     """One read-only metadata cut, optionally restricted to an indexed launch graph."""
     uri = Path(path).resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=2)) as conn:
@@ -48,7 +48,7 @@ def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, l
         columns = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
         fields = ",".join(f's."{field}"' if field in columns else f'NULL AS "{field}"' for field in SESSION_FIELDS)
         sessions, launches, aliases, owners = read_metadata(
-            conn, name, tables, columns, fields, seeds=seeds, since=since, lineage_only=lineage_only)
+            conn, name, tables, columns, fields, seeds=seeds, since=since, walk=walk)
         conn.rollback()
     return Profile(name, sessions, launches, aliases, owners)
 
@@ -95,7 +95,7 @@ class Family:
         self.by_launch = {}
         self.children = defaultdict(list)
         self.root_chats = {}
-        self.tips = {p: lineage_maps(s.sessions)[0] for p, s in profiles.items()}
+        self.tips = {p: compression_tips(s.sessions) for p, s in profiles.items()}
         self.live = dict(self.live)
         for (profile, sid), signal in list(self.live.items()):
             tip = self.tips.get(profile, {}).get(sid, sid)
@@ -254,6 +254,7 @@ class Family:
         if parent and status_for(self.rows[parent], signal, self.now) in FINISHED | {"paused_by_restart"}:
             return True
         snapshot = self.profiles.get(profile)
+        sid = self.tips.get(profile, {}).get(sid, sid)
         session = snapshot.sessions.get(sid, {}) if snapshot else {}
         return session.get("turn_terminal") == 1 and session.get("turn_unresolved") == 0
 

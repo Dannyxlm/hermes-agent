@@ -42,7 +42,7 @@ def _connections(connection):
 
 def _pending(live, generation):
     from tools.approval import list_gateway_approvals
-    for prompt_id, (route, prompt) in live.controls.pending.items():
+    for prompt_id, (route, prompt) in tuple(live.controls.pending.items()):
         if generation is None or prompt["execution_generation"] != generation:
             continue
         active = prompt_id in live.controls.remote_responders
@@ -86,8 +86,8 @@ def _live_signals(connections, profiles):
         if profile not in profiles:
             continue
         authority, snapshot = connection.authority, profiles[profile]
-        from hermes_family_storage import lineage_maps
-        tips = lineage_maps(snapshot.sessions)[0]
+        from hermes_family_storage import compression_tips
+        tips = compression_tips(snapshot.sessions)
         for sid, live in tuple(authority.sessions.items()):
             if live.superseded:
                 continue
@@ -103,7 +103,7 @@ def _live_signals(connections, profiles):
             running = True if active_task else False if stored.get("turn_unresolved") == 0 and not pending else None
             session_signals[(profile, target)] = {"running": running, "pending_kind": pending,
                 "can_answer": ("session:respond" if pending == "clarify" else "session:approve") in connection.actor.capabilities}
-            session_signals[(profile, tip)] = session_signals[(profile, target)]
+            session_signals[(profile, tip)] = dict(session_signals[(profile, target)])
             context = _stop_context(connection, target, live, registry)
             if context:
                 parent, owners = context
@@ -148,6 +148,7 @@ def _read_profiles(connections, *, root=None, since=None):
     return read_graph(paths, read_profile, root=root, since=since, probe=probe,
                       filter_snapshot=lambda snapshot: _filter_principal(snapshot, connections[snapshot.name]))
 
+
 async def read(connection, ref, params, *, overview=False):
     from pydantic import ValidationError
     from tui_gateway.contracts.family import FamilySessionParams, FamilyOverviewParams
@@ -165,8 +166,6 @@ async def read(connection, ref, params, *, overview=False):
         root=None if overview else (profile, params["session_id"]), since=since)
     unavailable += failed
     if not overview:
-        from gateway.session_authorities import served_profile_name
-        profile = served_profile_name(connection.authority.profile_id)
         if profile in failed:
             raise RuntimeStoreError("storage_unavailable")
         if profile not in profiles or params["session_id"] not in profiles[profile].sessions:
