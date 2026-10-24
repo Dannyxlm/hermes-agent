@@ -48,13 +48,26 @@ def _is_reserved_mcp_meta_key(key: str) -> bool:
     return any(label in ("modelcontextprotocol", "mcp") and i < len(labels) - 1 for i, label in enumerate(labels))
 
 
-def _strip_reserved_meta_keys(meta) -> Optional[dict[str, Any]]:
-    """Drop protocol-reserved keys from ``_meta``; None if nothing model-facing remains or the
-    input wasn't a mapping."""
+def _strip_reserved_meta_keys(meta, exclude: frozenset[str] = frozenset()) -> Optional[dict[str, Any]]:
+    """Drop protocol-reserved keys and the server's ``meta_exclude`` keys from ``_meta``; None if
+    nothing model-facing remains or the input wasn't a mapping."""
     if not isinstance(meta, dict):
         return None
-    out = {k: v for k, v in meta.items() if isinstance(k, str) and (not _is_reserved_mcp_meta_key(k))}
+    out = {k: v for k, v in meta.items()
+           if isinstance(k, str) and k not in exclude and not _is_reserved_mcp_meta_key(k)}
     return out or None
+
+
+def _meta_exclude_keys(config) -> frozenset[str]:
+    """Exact ``_meta`` key names one server's ``meta_exclude`` config keeps out of tool results.
+
+    For servers that attach ambient payloads to every response (for example a memory server's
+    hot-facts block) that the agent should not see. Anything but a list of strings is ignored.
+    """
+    raw = config.get("meta_exclude") if isinstance(config, dict) else None
+    if not isinstance(raw, (list, tuple)):
+        return frozenset()
+    return frozenset(k for k in raw if isinstance(k, str) and k)
 
 
 def _base_mime(mime_type) -> str:
