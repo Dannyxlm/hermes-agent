@@ -78,3 +78,24 @@ def test_cron_heartbeat_age_does_not_freeze_behind_validator(cron_client, monkey
     later = client.get("/api/cron/jobs?profile=default", headers={"If-None-Match": tag})
     assert later.status_code == 200
     assert later.json()[0]["scheduler_heartbeat_age_s"] == 531
+
+
+def test_execution_only_transition_invalidates_cron_list(cron_client):
+    from cron import executions
+    from hermes_cli.web_server_cron import _cron_store_scope
+
+    client, paths, _loads = cron_client
+    home = paths["default"].parent.parent
+    with _cron_store_scope(home):
+        execution = executions.create_execution("default", source="fixture")
+    ledger = home / "cron" / "executions.db"
+    os.utime(ledger, (10, 10))
+    first = client.get("/api/cron/jobs?profile=default")
+    assert first.status_code == 200
+    assert first.json()[0]["latest_execution"]["status"] == "claimed"
+    tag = first.headers.get("etag", 'W/"base-has-no-validator"')
+    with _cron_store_scope(home):
+        executions.mark_execution_running(execution["id"])
+    changed = client.get("/api/cron/jobs?profile=default", headers={"If-None-Match": tag})
+    assert changed.status_code == 200
+    assert changed.json()[0]["latest_execution"]["status"] == "running"
