@@ -157,10 +157,13 @@ def _teammate(tmp_path, home, root):
                "--provider", "custom", "--model", "test-model", "--base-url", url,
                "--ignore-rules", "-q", "TEAMMATE_PROOF", "--max-turns", "2"]
     try:
-        with daemon(REPO, home, env, barrier=False):
+        with daemon(REPO, home, env, barrier=False) as (owner, _):
             result = subprocess.run(command, cwd=tmp_path, env=env, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=75, check=False)
-        assert result.returncode == 0, (result.stdout, result.stderr)
+                                    capture_output=True, text=True, timeout=75, check=False,
+                                    start_new_session=True)
+            assert result.returncode == 0, {"returncode": result.returncode,
+                "stdout": result.stdout, "stderr": result.stderr, "owner_returncode": owner.poll()}
+            assert owner.poll() is None, "teammate's runtime owner exited before its viewer"
         assert "RECOVERY_ACK_TEAMMATE_PROOF" in result.stdout
         assert peer.requests
     finally:
