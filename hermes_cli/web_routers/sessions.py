@@ -251,11 +251,10 @@ def get_sessions(
                     compact_rows=not full,
                     include_pinned=True,
                     **scope)
-            total = db.session_count(exclude_children=True, **scope)
+            from hermes_state_listing_counts import listing_counts
+            total, archived_count = listing_counts(db, exclude_children=True, **scope)
             now = time.time()
             row_profile = profile_name or _cron_default_profile()
-            archived_count = db.session_count(exclude_children=True, **{
-                **scope, "include_archived": False, "archived_only": True})
             from tui_gateway.inbox_summaries import page_attention, page_replies, summary_scope
             attention = page_attention(sessions, Path(db.db_path).parent)
             replies = page_replies(db, sessions)
