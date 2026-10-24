@@ -1,7 +1,7 @@
 """Optional Family metadata must not change the authoritative work outcome."""
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from types import SimpleNamespace
 
 import pytest
@@ -132,6 +132,17 @@ def test_invalid_cli_provenance_is_ignored(monkeypatch, values):
     assert result == {}, 'optional provenance aborted CLI startup'
 
 
+def test_nonstring_cli_provenance_is_ignored():
+    from hermes_cli import launch_provenance as lp
+    lp._pending.clear()
+    fields = None
+    try:
+        fields = lp.take_launch(SimpleNamespace(launch_kind={}))
+    except Exception:
+        pass
+    assert fields == {}
+
+
 def test_profile_not_inferred_from_child_home(tmp_path, monkeypatch):
     from hermes_cli import launch_provenance as lp
     lp._pending.clear()
@@ -226,7 +237,8 @@ def test_failed_worker_launch_does_not_poison_transcript_outbox(tmp_path):
         assert saved and not store.journal['pending'] and store.failure is None
         assert db.get_messages_as_conversation('owned')[0]['content'] == 'real result'
     finally:
-        store.close()
+        with suppress(Exception):
+            store.close()
         db.close()
 
 
@@ -305,7 +317,8 @@ def test_worker_process_launch_uses_compression_lineage(tmp_path):
         row = db._read_one('SELECT launcher_session_id FROM work_launches WHERE launch_id=?', ('continued-process',))
         assert row[0] == 'continuation'
     finally:
-        store.close()
+        with suppress(Exception):
+            store.close()
         db.close()
 
 
