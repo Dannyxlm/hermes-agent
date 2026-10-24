@@ -73,6 +73,25 @@ def test_unrelated_commit_between_list_and_replies_is_not_a_conflict(inbox_reade
     assert all(item["reply"] is not None for item in chats)
 
 
+def test_page_keeps_one_sqlite_cut_when_visible_reply_changes(inbox_reader, monkeypatch):
+    path, read, _, _ = inbox_reader
+    before = read().json()
+    original = mobile_widget_inbox.page_replies
+
+    def concurrent_reply(db, rows):
+        with SessionDB(db_path=path) as writer:
+            writer.append_message("chat-104", "assistant", "new visible reply", timestamp=1000)
+        return original(db, rows)
+
+    monkeypatch.setattr(mobile_widget_inbox, "page_replies", concurrent_reply)
+    response = read()
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == before["items"]
+    assert response.json()["revision"] == before["revision"]
+    monkeypatch.setattr(mobile_widget_inbox, "page_replies", original)
+    assert read().json()["revision"] != before["revision"]
+
+
 @pytest.mark.parametrize("change", ["title", "read", "reply", "archive", "delete"])
 def test_relevant_projection_change_refuses_old_cursor(inbox_reader, change):
     path, read, _, _ = inbox_reader
