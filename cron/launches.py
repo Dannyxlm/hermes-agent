@@ -43,19 +43,30 @@ def sync_jobs(jobs, removed_ids=()):
             db.finish_launch('cron-job:' + jid, 'user_stop')
 
 
-def record_run(record):
+def record_run(record, *, creating=False, launcher=None, terminal_cause=None):
     from cron.jobs import get_job
     from hermes_state_launch_context import launch_writer
     job = get_job(record['job_id'])
-    if job is None or job.get('creator_profile') is None:
+    cause = terminal_cause or {'completed': 'success', 'failed': 'error', 'unknown': 'unknown'}.get(record['status'])
+    if creating and (job is None or job.get('creator_profile') is None):
+        return
+    if not creating and not cause:
         return
     with launch_writer() as db:
-        fields = run_fields(job, record['id'])
-        db.record_launch(**fields)
-        db.bind_launch(fields['launch_id'], backend_ref=record['id'])
-        cause = {'completed': 'success', 'failed': 'error', 'unknown': 'unknown'}.get(record['status'])
+        lid = run_launch_id(record['id'])
+        if creating:
+            trigger = launcher or (job.get('manual_launch') if job.get('manual_run_at') else None)
+            if trigger is None and record['source'] in {'manual', 'direct'}:
+                captured = capture_creator()
+                trigger = captured if captured['creator_session_id'] else None
+            fields = run_fields(job, record['id'])
+            if trigger:
+                fields.update(launcher_profile=trigger['creator_profile'],
+                              launcher_session_id=trigger['creator_session_id'])
+            db.record_launch(**fields)
+            db.bind_launch(lid, backend_ref=record['id'])
         if cause:
-            db.finish_launch(fields['launch_id'], cause)
+            db.finish_launch(lid, cause)
 
 
 def run_fields(job, execution_id):
@@ -73,5 +84,6 @@ def bind_run_session(conn, request, session_id):
         return
     eid = scheduler_execution_id(job['id'], request['request_id'])
     fields = run_fields(job, eid)
-    record_launch(conn, **fields)
+    if not conn.execute('SELECT 1 FROM work_launches WHERE launch_id=?', (fields['launch_id'],)).fetchone():
+        record_launch(conn, **fields)
     bind_launch(conn, fields['launch_id'], child_session_id=session_id, backend_ref=eid)

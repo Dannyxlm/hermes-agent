@@ -90,11 +90,15 @@ class SessionLaunchesMixin:
 def worker_launch(db, conn, session_id, payload, *, operation):
     from hermes_state_runtime import RuntimeStoreError
     try:
+        profile = conn.execute('SELECT profile_name FROM sessions WHERE id=?', (session_id,)).fetchone()[0]
+        profile = profile or db._own_profile_name() or 'default'
         if operation == 'record':
             validate_record(payload)
-            profile = conn.execute('SELECT profile_name FROM sessions WHERE id=?', (session_id,)).fetchone()[0]
-            if (payload['launcher_session_id'] != session_id or payload['launcher_profile'] != profile
-                    or payload['child_profile'] != profile):
+            shared_job = payload['kind'] == 'check_in' and conn.execute(
+                "SELECT 1 FROM work_launches WHERE launch_id=? AND kind='check_in' AND child_profile=?",
+                (payload['launch_id'], profile)).fetchone()
+            if (payload['child_profile'] != profile or (not shared_job and (
+                    payload['launcher_session_id'] != session_id or payload['launcher_profile'] != profile))):
                 raise RuntimeStoreError('permission_denied')
             return {'value': record_launch(conn, **payload)}
         fields = {'bind': {'launch_id', 'child_session_id', 'backend_ref'},
@@ -104,7 +108,12 @@ def worker_launch(db, conn, session_id, payload, *, operation):
         row = conn.execute('SELECT * FROM work_launches WHERE launch_id=?', (payload['launch_id'],)).fetchone()
         from hermes_state_runtime_workers import runtime_lineage
         scope = runtime_lineage(conn, session_id)
-        if row is None or not scope.intersection((row['launcher_session_id'], row['child_session_id'])):
+        if row is None and operation == 'finish':
+            finish_launch(conn, **payload)
+            return {'value': None}
+        shared_job = (row is not None and operation in {'schedule', 'finish'} and
+                      row['kind'] == 'check_in' and row['child_profile'] == profile)
+        if row is None or (not shared_job and not scope.intersection((row['launcher_session_id'], row['child_session_id']))):
             raise RuntimeStoreError('permission_denied')
         if operation == 'schedule':
             when = payload['next_run_at']
@@ -119,5 +128,7 @@ def worker_launch(db, conn, session_id, payload, *, operation):
         else:
             finish_launch(conn, **payload)
         return {'value': None}
+    except RuntimeStoreError:
+        raise
     except (ValueError, TypeError) as exc:
         raise RuntimeStoreError('invalid_params') from exc

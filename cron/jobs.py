@@ -422,7 +422,7 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 
 # Fields that must never change after creation: ``id`` is a path component under OUTPUT_DIR, so an
 # update could leak ``../escape``/absolute/nested values into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "creator_profile", "creator_session_id", "launch_title"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -2200,6 +2200,7 @@ def trigger_job(job_id: str, extra_prompt: Optional[str] = None) -> Optional[dic
             f"Create a new occurrence with 'hermes cron resume {name} "
             "--run-now' or '--at <ISO-8601>'.")
     manual_run_at = _hermes_now().isoformat()
+    from cron.launches import capture_creator
     return update_job(job["id"], {
         "enabled": True,
         "state": "scheduled",
@@ -2209,6 +2210,7 @@ def trigger_job(job_id: str, extra_prompt: Optional[str] = None) -> Optional[dic
         # Run-now intent, so cron expression/TZ repair guards don't treat it as stale state.
         "manual_run_at": manual_run_at,
         "manual_run_prompt": (extra_prompt or None),
+        "manual_launch": capture_creator(),
     })
 
 
@@ -2352,6 +2354,7 @@ def _record_run_outcome(
     job.pop("manual_run_at", None)
     # The transient manual-run context is single-fire: the run that just completed consumed it.
     job.pop("manual_run_prompt", None)
+    job.pop("manual_launch", None)
     delivery_failed = isinstance(delivery_error, str) and bool(delivery_error.strip())
     job["last_status"] = status or (
         "error" if not success else ("delivery_failed" if delivery_failed else "ok"))
