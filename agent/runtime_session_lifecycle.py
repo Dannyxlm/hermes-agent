@@ -6,18 +6,29 @@ separate from ending its session and settling execution (including deferred work
 
 
 class RuntimeSessionLifecycleMixin:
+    def _launch(self, operation, payload):
+        # Metadata has no ordered outbox entry: a lost ACK must not poison transcript writes.
+        from hermes_state_optional_launch import optional_launch
+        with optional_launch(operation), self.lock:
+            return self.rpc('worker.persist', **self.scope, sequence=0,
+                            operation=operation, payload=payload)['value']
+        return None
+
+    def sync_launch_jobs(self, jobs, removed_ids):
+        return self._launch('launch.sync', dict(jobs=jobs, removed_ids=removed_ids))
+
     def record_launch(self, launch_id, **fields):
-        return self._apply('launch.record', dict(fields, launch_id=launch_id))['value']
+        return self._launch('launch.record', dict(fields, launch_id=launch_id))
 
     def bind_launch(self, launch_id, *, child_session_id=None, backend_ref=None):
-        return self._apply('launch.bind', dict(launch_id=launch_id, child_session_id=child_session_id,
-                                              backend_ref=backend_ref))['value']
+        return self._launch('launch.bind', dict(launch_id=launch_id, child_session_id=child_session_id,
+                                              backend_ref=backend_ref))
 
     def finish_launch(self, launch_id, terminal_cause):
-        return self._apply('launch.finish', dict(launch_id=launch_id, terminal_cause=terminal_cause))['value']
+        return self._launch('launch.finish', dict(launch_id=launch_id, terminal_cause=terminal_cause))
 
     def schedule_launch(self, launch_id, next_run_at):
-        return self._apply('launch.schedule', dict(launch_id=launch_id, next_run_at=next_run_at))['value']
+        return self._launch('launch.schedule', dict(launch_id=launch_id, next_run_at=next_run_at))
 
     def create_session(self, session_id, source, *, model=None, model_config=None,
                        system_prompt=None, user_id=None, session_key=None, chat_id=None,

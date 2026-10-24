@@ -34,6 +34,9 @@ class WorkerLaunchWriter:
         from agent.runtime_session_store import call_off_event_loop
         return call_off_event_loop(getattr(self.store, method), *args, **kwargs)
 
+    def sync_launch_jobs(self, *args, **kwargs):
+        return self._call('sync_launch_jobs', *args, **kwargs)
+
     def record_launch(self, *args, **kwargs):
         return self._call('record_launch', *args, **kwargs)
 

@@ -887,8 +887,7 @@ class TestSpawnEnvSanitization:
 
         with patch.dict(os.environ, {
             "PATH": "/usr/bin:/bin",
-            "HOME": "/home/user",
-            "HERMES_HOME": str(tmp_path),
+            "HOME": "/home/user", "HERMES_HOME": str(tmp_path),
             "USER": "tester",
             "TELEGRAM_BOT_TOKEN": "bot-secret",
             "FIRECRAWL_API_KEY": "fc-secret",

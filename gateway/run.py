@@ -1018,14 +1018,6 @@ def _float_env(name: str, default: float) -> float:
         return float(default)
 
 
-def _stamp_hygiene_compression_provenance(
-    agent: Any, desc: str, provenance: ActivityProvenance, debug_label: str) -> None:
-    """Best-effort activity provenance stamp for hygiene compression transitions."""
-    try:
-        agent._touch_activity(desc, provenance=provenance, step_kind=(
-            "retrying" if provenance == ActivityProvenance.AGENT_COMPRESSION_TIMEOUT else "compressing"))
-    except Exception:
-        logger.debug(debug_label, exc_info=True)
 
 
 def _is_fresh_gateway_interruption(

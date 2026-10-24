@@ -39438,6 +39438,7 @@
       },
       "ProcessEntry": {
         "additionalProperties": true,
+        "description": "``tools/process_registry.py::list_sessions`` row plus the gateway's ``output_tail``.",
         "properties": {
           "batch_id": {
             "anyOf": [
@@ -39474,30 +39475,6 @@
             ],
             "default": null,
             "title": "Title"
-          },
-          "step_kind": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Step Kind"
-          },
-          "step_tool": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Step Tool"
           },
           "session_id": {
             "title": "Session Id",

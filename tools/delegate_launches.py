@@ -1,7 +1,9 @@
 """Launch reservation shares the transaction that creates a delegated session."""
+from hermes_state_optional_launch import best_effort
 from uuid import uuid4
 
 
+@best_effort
 def reserve_local_child(db, parent_session_id, metadata):
     from hermes_state import SessionDB
     from hermes_state_ids import new_session_id
@@ -20,11 +22,11 @@ def reserve_local_child(db, parent_session_id, metadata):
                                           model_config={'_delegate_from': parent_session_id},
                                           parent_session_id=parent_session_id, profile_name=profile)
         bind_launch(conn, metadata['launch_id'], child_session_id=child_sid)
-    db._execute_write(reserve)
+    db._execute_write(reserve, patience_s=0)
     return child_sid
 
 
 def launch_metadata(*, batch_id=None, batch_name=None, title=None):
     from hermes_state_launches import short_title
     return dict(launch_id=str(uuid4()), batch_id=batch_id or str(uuid4()),
-                batch_name=batch_name, title=short_title(title))
+                batch_name=short_title(batch_name), title=short_title(title))

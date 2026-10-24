@@ -52,6 +52,8 @@ def test_process_stop_source_is_not_provider_error(tmp_path, monkeypatch, source
     registry = ProcessRegistry()
     with scoped_current_session_id('parent'):
         process = registry._new_session('fixture command', 'task', 'task', 'route', str(tmp_path))
+        from tools.process_launches import record_process_launch
+        record_process_launch(process)
     with SessionDB(tmp_path / 'state.db') as db:
         if not getattr(process, 'launch_id', None):
             process.launch_id = 'process:' + process.id

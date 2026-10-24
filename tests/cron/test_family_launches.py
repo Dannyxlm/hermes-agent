@@ -1,5 +1,5 @@
 """Cron job provenance is separate from delivery; each exact fire links back to its job."""
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from cron import jobs, executions
 from hermes_state import SessionDB
@@ -18,7 +18,7 @@ def test_cli_and_tool_job_creator_is_retained_and_next_fire_tracks_saves(tmp_pat
         assert row['backend_ref'] == job['id']
         assert row['launcher_session_id'] == 'creator'
         assert row['next_run_at'] == datetime.fromisoformat(job['next_run_at']).timestamp()
-        newer = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+        newer = (datetime.now(UTC) + timedelta(hours=4)).isoformat()
         job['next_run_at'] = newer
         jobs.save_jobs([job])
         assert db._read_one('SELECT next_run_at FROM work_launches WHERE launch_id=?',

@@ -120,7 +120,7 @@ def _abandoned(holder):
     return bool(abandoned and abandoned())
 
 
-def _spawn(authority, ref, task_id, event_type, body, extra=None, holder=None, launch_id=None):
+def _spawn(authority, ref, task_id, event_type, body, extra=None, holder=None):
     """Run ``body()`` on a daemon thread; publish its text (or ``error: <exc>``) on the session.
 
     The thread is owner work until it unwinds: the authority's ``_side_agents`` ledger is counted by
@@ -166,8 +166,6 @@ def _spawn(authority, ref, task_id, event_type, body, extra=None, holder=None, l
         thread.start()
     except BaseException:
         ledger.pop(thread, None)
-        if launch_id:
-            authority.db.finish_launch(launch_id, "failed_start")
         raise
     persist_work_count(authority)
     return {'task_id': task_id}
@@ -178,12 +176,12 @@ async def background(connection, ref, params):
     live, policy, text, task_id = _admit(connection, ref, params, 'bg')
     authority = connection.authority
     from hermes_state_background import reserve_background, finish_background
-    launch_id = await asyncio.to_thread(reserve_background, authority.db, ref.session_id, task_id, text, policy.platform)
     holder = [None]
 
     def body():
         from tui_gateway.methods_prompt import _final_response_text
         with _side_scope(authority, policy, task_id):
+            launch_id = reserve_background(authority.db, ref.session_id, task_id, text, policy.platform)
             agent = None
             try:
                 agent = holder[0] = _side_agent(authority, policy, live, task_id)
@@ -198,7 +196,7 @@ async def background(connection, ref, params):
                     agent.close()
         return _final_response_text(result)
 
-    return _spawn(authority, ref, task_id, 'background.complete', body, holder=holder, launch_id=launch_id)
+    return _spawn(authority, ref, task_id, 'background.complete', body, holder=holder)
 
 
 async def btw(connection, ref, params):

@@ -306,6 +306,9 @@ def _jobs_lock():
 
     with _jobs_file_lock:
         _jobs_lock_state.depth = 1
+        _jobs_lock_state.launch_before = None
+        _jobs_lock_state.launch_changed = {}
+        _jobs_lock_state.launch_removed = set()
         # jobs.json stamp as of this section's load_jobs(): lets _save_jobs_unlocked skip the
         # shrink-merge parse when the file provably hasn't changed. Reset on entry/exit so stale
         # stamps from unlocked loads or prior sections can never suppress a needed merge.
@@ -339,6 +342,8 @@ def _jobs_lock():
         finally:
             _jobs_lock_state.depth = 0
             _jobs_lock_state.load_stamp = None
+    from cron.launches import sync_jobs
+    sync_jobs(list(_jobs_lock_state.launch_changed.values()), _jobs_lock_state.launch_removed)
 
 
 @contextlib.contextmanager
@@ -1350,6 +1355,10 @@ def _parse_jobs_file(jobs_file: Path) -> tuple[Any, bool]:
         return json.loads(raw, strict=False), True
 
 
+from cron.launches import remember_jobs
+
+
+@remember_jobs
 def load_jobs() -> list[dict[str, Any]]:
     """Load all jobs from storage."""
     jobs_file = _current_cron_store().jobs_file
@@ -1557,6 +1566,8 @@ def _save_jobs_unlocked(
     rewrite for tests, disaster recovery and load_jobs' auto-repair of unmergeable shapes)."""
     jobs_file = _current_cron_store().jobs_file
     ensure_dirs()
+    from cron.launches import capture_before_save
+    capture_before_save()
     # Owner snapshot BEFORE replace so a root writer can hand the file back to the gateway user.
     _stat_before = None
     for probe in (jobs_file, jobs_file.parent):
@@ -1590,8 +1601,8 @@ def _save_jobs_unlocked(
             # against an OUTER caller's stale payload. Later saves take the full merge (fail-safe).
             _record_load_stamp(None)
             store_health.note_writable(jobs_file.parent)
-            from cron.launches import sync_jobs
-            sync_jobs(jobs, removed_ids)
+            from cron.launches import queue_jobs
+            queue_jobs(jobs, removed_ids)
             return
     except BaseException:
         _unlink_quiet(tmp_path)

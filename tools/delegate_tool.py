@@ -319,7 +319,9 @@ def _build_child_agent(
             except BaseException:
                 # No child close() will ever run: release the dedicated handle here.
                 if child_session_db is not None and child_sid:
-                    child_session_db.finish_launch(launch["launch_id"], "failed_start")
+                    from hermes_state_optional_launch import optional_launch
+                    with optional_launch("delegate.failed_start"):
+                        child_session_db.finish_launch(launch["launch_id"], "failed_start")
                 if child_session_db is not None:
                     with _quiet(None):
                         from hermes_state_registry import release_or_close
@@ -652,6 +654,8 @@ def delegate_task(
         return tool_error("batch_name must be a string")
     if any(t.get("title") is not None and not isinstance(t["title"], str) for t in task_list):
         return tool_error("task title must be a string")
+    from hermes_state_launches import short_title
+    batch_name = short_title(batch_name)
     overall_start = time.monotonic()
     # Live transcripts: cache/delegation/live/<id>/task-<n>.log per task, a side channel with zero effect on message
     # content or prompt caching. Best-effort: on failure live_paths is empty and delegation proceeds.

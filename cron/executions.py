@@ -113,12 +113,12 @@ def _fetch(conn: sqlite3.Connection, execution_id: str) -> Optional[dict[str, An
 
 def _emit_execution_state(
     record: Optional[dict[str, Any]], *, delivery_outcome: Optional[str] = None,
-    launch_create: bool = False, launcher=None, terminal_cause=None
+    launch_create: bool = False, launcher=None, terminal_cause=None, job=None
 ) -> None:
     """Record launch provenance, then publish the optional monitoring projection."""
     if record is not None:
         from cron.launches import record_run
-        record_run(record, creating=launch_create, launcher=launcher, terminal_cause=terminal_cause)
+        record_run(record, creating=launch_create, launcher=launcher, terminal_cause=terminal_cause, job=job)
     try:
         from agent.monitoring.cron_health import emit_execution_state
 
@@ -214,8 +214,11 @@ def _prune_unlocked(conn: sqlite3.Connection) -> None:
     )
 
 
+_JOB_UNSET = object()
+
+
 def create_execution(
-    job_id: str, *, source: str, scheduled_instant: Optional[str] = None, launcher=None,
+    job_id: str, *, source: str, scheduled_instant: Optional[str] = None, launcher=None, job=_JOB_UNSET,
 ) -> dict[str, Any]:
     """Persist a claimed attempt before executor/provider dispatch."""
     from cron.occurrences import scheduled_instant as canonical_instant
@@ -233,7 +236,13 @@ def create_execution(
              _process_start_time(pid), now, canonical_instant(scheduled_instant)),
         )
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record, launch_create=True, launcher=launcher)
+    if job is _JOB_UNSET:
+        from cron.jobs import get_job
+        from hermes_state_optional_launch import optional_launch
+        job = None
+        with optional_launch("cron.execution.snapshot"):
+            job = get_job(job_id)
+    _emit_execution_state(record, launch_create=True, launcher=launcher, job=job)
     return record  # type: ignore[return-value]
 
 
@@ -422,9 +431,9 @@ def settle_unstarted_execution(execution_id: str, job_id: str, error: str) -> No
     so a ledger write cannot mask the failure the caller logs or re-raises."""
     try:
         finish_execution(execution_id, success=False, error=error, terminal_cause="failed_start")
-    except (sqlite3.Error, OSError) as record_err:
+    except Exception as record_err:
         logger.error("Job '%s': failed to close execution receipt %s (%s): %s",
-                     job_id, execution_id, error, record_err)
+                     job_id, execution_id, error, record_err, exc_info=True)
 
 
 def recover_interrupted_executions() -> int:

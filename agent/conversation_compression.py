@@ -1763,8 +1763,7 @@ class _CompressionActivityHeartbeat:
             self._suppressed = True
         return self._suppressed
 
-    def _touch(self, desc: str, *, allow_terminal_overwrite: bool = False, force_persist: bool = False,
-               step_kind: str = "compressing") -> None:
+    def _touch(self, desc: str, *, allow_terminal_overwrite: bool = False, force_persist: bool = False, step_kind: str = "compressing") -> None:
         with _swallow('compression activity heartbeat touch failed', exc_info=True):
             if not allow_terminal_overwrite:
                 if self._should_suppress():

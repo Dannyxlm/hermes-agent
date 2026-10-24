@@ -248,7 +248,8 @@ class _NonStreamRequest:
         h._report_stale_nonstream_kill(agent, self.api_kwargs, elapsed, wd.stale_timeout, hint=silent_hint)
         self._abort_request("stale_call_kill")
         h._bump_stale_streak(agent)
-        h._touch_stale_kill_activity(agent, elapsed)
+        from agent.session_activity import touch_stale_kill_activity
+        touch_stale_kill_activity(agent, elapsed)
         self._await_worker_after_kill(
             f"Non-streaming API call timed out after {int(elapsed)}s with no response (threshold: {int(wd.stale_timeout)}s)"
             + (f". {silent_hint}" if silent_hint else ""))

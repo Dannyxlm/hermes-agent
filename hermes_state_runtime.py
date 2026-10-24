@@ -262,7 +262,7 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (RESULT_PREFIX + admission_id, encoded))
         from hermes_state_launch_causes import finish_for_session, result_cause
-        finish_for_session(conn, row['target_session_id'], result_cause(result, outcome=outcome))
+        finish_for_session(conn, row['target_session_id'], result_cause(result, outcome=outcome), turn_only=True)
         conn.execute("UPDATE session_admissions SET status='terminal',outcome=? WHERE admission_id=?", (outcome, admission_id))
         settle_steer_transfers(conn, epoch=epoch, generation=generation, transfers=_transfers, outcome=outcome)
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (row['target_session_id'],))
@@ -908,6 +908,10 @@ def _worker_finish(db, conn, session_id, payload):
 def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
                             sequence, operation, payload):
     """One closed durable mutation and receipt; never call a self-committing API here."""
+    if sequence == 0 and isinstance(operation, str) and operation.startswith('launch.'):
+        from hermes_state_launches import mutate_optional_worker_launch
+        return mutate_optional_worker_launch(db, epoch=epoch, execution_id=execution_id, session_id=session_id,
+                                            generation=generation, operation=operation, payload=payload)
     from hermes_state_worker_context import (worker_context, worker_prompt, worker_row_role, worker_sidecars,
                                              worker_tail_role, worker_tool_names)
     from hermes_state_worker_compression import WORKER_COMPRESSION_HANDLERS

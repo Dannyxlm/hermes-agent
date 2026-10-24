@@ -4,6 +4,7 @@ import pytest
 from gateway.session_context import scoped_current_session_id
 from hermes_state import SessionDB
 from tools.process_registry import ProcessRegistry
+from tools.process_launches import record_process_launch
 
 
 def test_process_launch_checkpoint_and_completion(tmp_path, monkeypatch):
@@ -14,6 +15,7 @@ def test_process_launch_checkpoint_and_completion(tmp_path, monkeypatch):
     with scoped_current_session_id('parent'):
         process = registry._new_session('a command with a descriptive title ' + 'x' * 60,
                                         'task', 'task', 'route', str(tmp_path))
+        record_process_launch(process)
     assert getattr(process, 'launcher_session_id', None) == 'parent'
     assert process.launcher_profile == 'default'
     assert len(process.title) == 40
@@ -41,14 +43,13 @@ def test_failed_popen_retains_failed_start_receipt(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
     registry = ProcessRegistry()
     def fail(*a, **kw):
-        with SessionDB(tmp_path / 'state.db') as db:
-            assert db._read_one('SELECT COUNT(*) FROM work_launches')[0] == 1
         raise OSError('fixture start failure')
     monkeypatch.setattr(module.subprocess, 'Popen', fail)
     monkeypatch.setattr(registry, '_scope_argv', lambda *a: ['fixture'])
     with scoped_current_session_id('parent'), pytest.raises(OSError, match='fixture'):
         registry.spawn_local('fixture command', cwd=str(tmp_path))
     with SessionDB(tmp_path / 'state.db') as db:
+        assert db._read_one('SELECT COUNT(*) FROM work_launches')[0] == 1
         assert db._read_one('SELECT terminal_cause FROM work_launches')[0] == 'failed_start'
 
 
@@ -59,6 +60,7 @@ def test_kill_receipt_wins_over_reader_exit_during_signal(tmp_path, monkeypatch)
     registry = ProcessRegistry()
     with scoped_current_session_id('parent'):
         process = registry._new_session('fixture', 'task', 'task', 'route', str(tmp_path))
+        record_process_launch(process)
     registry._running[process.id] = process
     def signal(*a):
         registry._finish_exited(process, -15)
