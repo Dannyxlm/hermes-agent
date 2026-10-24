@@ -12,6 +12,8 @@ from pathlib import Path
 import sqlite3
 import time
 
+from hermes_family_storage import lineage_maps, read_metadata
+
 
 LIVE = frozenset({"working", "quiet", "needs_you"})
 FINISHED = frozenset({"done", "failed", "stopped"})
@@ -20,7 +22,8 @@ STEPS = frozenset({"starting", "thinking", "writing", "tool", "waiting_helpers",
 TERMINAL = {"success": "done", "error": "failed", "failed_start": "failed",
             "user_stop": "stopped", "parent_stop": "stopped", "owner_restart": "paused_by_restart"}
 SESSION_FIELDS = ("id", "source", "user_id", "chat_id", "parent_session_id", "title", "started_at", "ended_at", "model",
-                  "last_activity_at", "last_activity_description", "last_activity_kind", "last_activity_tool", "runtime_generation")
+                  "last_activity_at", "last_activity_description", "last_activity_kind", "last_activity_tool", "runtime_generation",
+                  "end_reason", "model_config")
 
 
 @dataclass
@@ -32,8 +35,8 @@ class Profile:
     owners: dict[str, str] = field(default_factory=dict)
 
 
-def read_profile(name: str, path: Path, *, trace=None) -> Profile:
-    """One metadata cut per profile, constant statements, no schema bootstrap or writer handle."""
+def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, lineage_only=False) -> Profile:
+    """One read-only metadata cut, optionally restricted to an indexed launch graph."""
     uri = Path(path).resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=2)) as conn:
         conn.row_factory = sqlite3.Row
@@ -44,30 +47,8 @@ def read_profile(name: str, path: Path, *, trace=None) -> Profile:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         columns = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
         fields = ",".join(f's."{field}"' if field in columns else f'NULL AS "{field}"' for field in SESSION_FIELDS)
-        inflight = ("LEFT JOIN (SELECT target_session_id, MAX(status IN ('started','unknown')) AS unresolved, "
-                    "MAX(status='terminal') AS terminal FROM session_admissions GROUP BY target_session_id) a "
-                    "ON a.target_session_id=s.id") if "session_admissions" in tables else ""
-        turn = ",a.unresolved AS turn_unresolved,a.terminal AS turn_terminal" if inflight else ",NULL AS turn_unresolved,NULL AS turn_terminal"
-        sessions = {r["id"]: dict(r) for r in conn.execute(f"SELECT {fields}{turn} FROM sessions s {inflight}")}
-        launches = [dict(r) for r in conn.execute("SELECT * FROM work_launches")] if "work_launches" in tables else []
-        aliases, owners = {}, {}
-        if "state_meta" in tables:
-            prefix = "gateway.local_policy.v1:"
-            for row in conn.execute("SELECT substr(key,?), json_extract(value,'$.entry.session_id'), "
-                                    "json_extract(value,'$.principal_id') FROM state_meta "
-                                    "WHERE key GLOB ? AND json_valid(value)", (len(prefix) + 1, prefix + "*")):
-                if row[1]:
-                    aliases[row[0]] = row[1]
-                    owners[row[0]] = owners[row[1]] = row[2]
-        if "messages" in tables and "work_launches" in tables:
-            hints = dict(conn.execute("SELECT m.session_id, m.content FROM messages m JOIN "
-                "(SELECT MAX(m.id) AS id FROM messages m JOIN work_launches w ON w.child_session_id=m.session_id "
-                "WHERE w.kind='lane' AND w.terminal_cause IN ('success','error','user_stop','parent_stop') "
-                "AND m.role='assistant' AND m.content IS NOT NULL AND m.content<>'' "
-                "AND (m.tool_calls IS NULL OR m.tool_calls='[]') GROUP BY m.session_id) last ON last.id=m.id"))
-            for launch in launches:
-                text = hints.get(launch["child_session_id"])
-                launch["report_hint"] = text.splitlines()[0] if isinstance(text, str) and text else None
+        sessions, launches, aliases, owners = read_metadata(
+            conn, name, tables, columns, fields, seeds=seeds, since=since, lineage_only=lineage_only)
         conn.rollback()
     return Profile(name, sessions, launches, aliases, owners)
 
@@ -114,6 +95,14 @@ class Family:
         self.by_launch = {}
         self.children = defaultdict(list)
         self.root_chats = {}
+        self.tips = {p: lineage_maps(s.sessions)[0] for p, s in profiles.items()}
+        self.live = dict(self.live)
+        for (profile, sid), signal in list(self.live.items()):
+            tip = self.tips.get(profile, {}).get(sid, sid)
+            merged = {**self.live.get((profile, tip), {}), **signal}
+            if signal.get("running") is True or self.live.get((profile, tip), {}).get("running") is True:
+                merged["running"] = True
+            self.live[(profile, tip)] = merged
         self._index()
 
     def _index(self):
@@ -123,8 +112,12 @@ class Family:
                 sid = launch["child_session_id"]
                 if launch["child_profile"] != profile or (sid and sid not in snapshot.sessions):
                     continue
+                original = sid
+                sid = self.tips[profile].get(sid, sid)
                 key = node_id(profile, sid or launch["launch_id"], launch=not sid)
                 row = {**snapshot.sessions.get(sid, {}), **launch, "profile": profile, "session_id": sid}
+                if original:
+                    self.by_session[(profile, original)] = key
                 self.rows[key] = row
                 self.by_launch[(profile, launch["launch_id"])] = key
                 if sid:
@@ -134,6 +127,9 @@ class Family:
                 key = self.by_session.setdefault((profile, sid), node_id(profile, sid))
                 if key not in self.rows:
                     self.rows[key] = {**session, "profile": profile, "session_id": sid, "kind": "chat"}
+        for profile, tips in self.tips.items():
+            for sid, tip in tips.items():
+                self.by_session[(profile, sid)] = self.by_session[(profile, tip)]
         for key, row in self.rows.items():
             profile = row["profile"]
             parent = None
@@ -142,9 +138,6 @@ class Family:
                     parent = self.by_launch.get((profile, row["parent_launch_id"]))
                 else:
                     parent = self.by_session.get((row["launcher_profile"], row["launcher_session_id"]))
-            elif row.get("source") == "subagent" and row.get("parent_session_id"):
-                parent = self.by_session.get((profile, row["parent_session_id"]))
-                row["kind"] = "helper"
             row["parent"] = parent
             if parent and parent != key:
                 self.children[parent].append(key)
@@ -157,6 +150,8 @@ class Family:
             if not row.get("parent"):
                 root = ((row["launcher_profile"], row["launcher_session_id"]) if row.get("launch_id")
                         else (row["profile"], row["session_id"]))
+                if root[0] not in self.profiles or root[1] not in self.profiles[root[0]].sessions:
+                    root = (None, None)
                 break
             key = row["parent"]
         else:
@@ -164,10 +159,14 @@ class Family:
         self.root_chats.update((node, root) for node in path)
         return root
 
+    def _signal(self, profile, sid):
+        tip = self.tips.get(profile, {}).get(sid, sid)
+        return self.live.get((profile, tip), {})
+
     def _node(self, key, *, root=False, root_ref=None):
         row = self.rows[key]
         profile, sid = row["profile"], row["session_id"]
-        live = self.live.get((profile, sid or row.get("backend_ref") or row.get("launch_id")), {})
+        live = self._signal(profile, sid) if sid else self.live.get((profile, row.get("backend_ref") or row.get("launch_id")), {})
         status = status_for(row, live, self.now)
         pending = live.get("pending_kind") if status == "needs_you" else None
         step = row.get("last_activity_kind") or live.get("step_kind")
@@ -223,10 +222,9 @@ class Family:
         since = self.now - 43200 if since is None else since
         limit = 200 if limit is None else limit
         nodes, truncated = self._walk(root)
-        selected = {n["node_id"] for n in nodes if n["status"] not in FINISHED
-                    or n["ended_at"] is not None and n["ended_at"] >= since}
+        selected = {n["node_id"] for n in nodes if n["ended_at"] is None or n["ended_at"] >= since}
         nodes = sorted((n for n in nodes if n["node_id"] in selected), key=lambda n: (n["started_at"] or 0, n["node_id"]))
-        removable = sorted((n for n in nodes if n["status"] in FINISHED),
+        removable = sorted((n for n in nodes if n["ended_at"] is not None and n["status"] not in LIVE),
                            key=lambda n: (n["ended_at"] or 0, n["started_at"] or 0, n["node_id"]))
         drop = {n["node_id"] for n in removable[:max(0, len(nodes) - limit)]}
         truncated |= len(nodes) > limit
@@ -247,7 +245,7 @@ class Family:
     def _helper_parent_idle(self, row):
         profile = row.get("launcher_profile", row["profile"])
         sid = row.get("launcher_session_id", row.get("parent_session_id"))
-        signal = self.live.get((profile, sid), {})
+        signal = self._signal(profile, sid)
         if signal.get("running") is True or signal.get("pending_kind") in {"approval", "clarify"}:
             return False
         if signal.get("running") is False:
@@ -263,22 +261,16 @@ class Family:
         since = self.now - 43200 if since is None else since
         within = 7200 if coming_up_within is None else coming_up_within
         roots, earlier = [], []
-        all_nodes = {key: self._node(key) for key, row in self.rows.items()
-                     if row.get("parent") or (row.get("launch_id") and row["launcher_profile"] not in self.profiles)}
-        needs = {key: node for key, node in all_nodes.items() if node["status"] == "needs_you"}
-        coming = {key: node for key, node in all_nodes.items() if node["kind"] == "check_in"
-                  and node["next_run_at"] is not None and self.now <= node["next_run_at"] <= self.now + within}
+        all_nodes = {}
         for key, row in self.rows.items():
-            if row.get("parent") or row["kind"] != "chat" or not self.children[key]:
+            if (row.get("parent") or row["kind"] != "chat" or not self.children[key]
+                    or self.by_session[(row["profile"], row["session_id"])] != key):
                 continue
             result = self.session_family(row["profile"], row["session_id"], since=since, limit=len(self.rows))
             nodes, root = result["nodes"], result["root"]
             all_nodes.update((n["node_id"], n) for n in nodes)
             live = [n for n in nodes if n["status"] in LIVE]
             failed = sum(n["status"] == "failed" for n in nodes)
-            needs.update((n["node_id"], n) for n in nodes if n["status"] == "needs_you")
-            coming.update((n["node_id"], n) for n in nodes if n["kind"] == "check_in" and n["next_run_at"] is not None
-                          and self.now <= n["next_run_at"] <= self.now + within)
             if live:
                 live_parents = {n["parent_node_id"] for n in live}
                 roots.append({"root": root, "live_leaves": [n for n in live if n["node_id"] not in live_parents],
@@ -288,6 +280,15 @@ class Family:
                 ended = max(n["ended_at"] for n in nodes)
                 if ended >= since:
                     earlier.append({"root": root, "total_count": len(nodes) + 1, "failed_count": failed, "ended_at": ended})
+        for key, row in self.rows.items():
+            if not row.get("launch_id") or key in all_nodes:
+                continue
+            node = self._node(key)
+            if node["ended_at"] is None or node["ended_at"] >= since:
+                all_nodes[key] = node
+        needs = {key: node for key, node in all_nodes.items() if node["status"] == "needs_you"}
+        coming = {key: node for key, node in all_nodes.items() if node["kind"] == "check_in"
+                  and node["next_run_at"] is not None and self.now <= node["next_run_at"] <= self.now + within}
         team = []
         for profile in sorted(self.profiles):
             live = [n for n in all_nodes.values() if n["profile"] == profile and n["status"] in LIVE]

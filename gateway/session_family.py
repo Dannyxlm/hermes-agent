@@ -21,8 +21,8 @@ def _connections(connection):
         raise RuntimeStoreError("permission_denied")
     own = served_profile_name(connection.authority.profile_id)
     allowed, unavailable = {own: connection}, []
-    from hermes_cli.profiles import list_profiles
-    known = {profile.name for profile in list_profiles()}
+    from hermes_cli.profiles import list_profile_names
+    known = set(list_profile_names())
     for bot in local_bots(connection.authority.runner):
         known.add(bot.name)
         if bot.name == own:
@@ -86,6 +86,8 @@ def _live_signals(connections, profiles):
         if profile not in profiles:
             continue
         authority, snapshot = connection.authority, profiles[profile]
+        from hermes_family_storage import lineage_maps
+        tips = lineage_maps(snapshot.sessions)[0]
         for sid, live in tuple(authority.sessions.items()):
             if live.superseded:
                 continue
@@ -94,12 +96,14 @@ def _live_signals(connections, profiles):
             except RuntimeStoreError:
                 continue
             target = snapshot.aliases.get(sid, sid)
-            pending = _pending(live, snapshot.sessions.get(sid, {}).get("runtime_generation"))
+            tip = tips.get(target, target)
+            pending = _pending(live, snapshot.sessions.get(tip, {}).get("runtime_generation"))
             active_task = live.task is not None and not live.task.done()
-            stored = snapshot.sessions.get(sid, {})
+            stored = snapshot.sessions.get(tip, {})
             running = True if active_task else False if stored.get("turn_unresolved") == 0 and not pending else None
             session_signals[(profile, target)] = {"running": running, "pending_kind": pending,
                 "can_answer": ("session:respond" if pending == "clarify" else "session:approve") in connection.actor.capabilities}
+            session_signals[(profile, tip)] = session_signals[(profile, target)]
             context = _stop_context(connection, target, live, registry)
             if context:
                 parent, owners = context
@@ -122,26 +126,27 @@ def _live_signals(connections, profiles):
     return signals
 
 
-def _read_profiles(connections):
-    profiles, unavailable = {}, []
-    for profile, connection in connections.items():
-        try:
-            snapshot = read_profile(profile, Path(connection.authority.db.db_path))
-        except (OSError, sqlite3.Error):
-            unavailable.append(profile)
-            continue
-        # Local sessions retain the same principal ownership rule as authority.authorize.
-        if "session:operator" not in connection.actor.capabilities:
-            denied = {sid for sid, owner in snapshot.owners.items() if owner != connection.actor.subject}
-            denied.update(sid for sid, row in snapshot.sessions.items()
-                          if (row.get("source") == "local" or str(row.get("chat_id") or "").startswith("local-"))
-                          and row.get("user_id") != connection.actor.subject)
-            snapshot.sessions = {sid: row for sid, row in snapshot.sessions.items() if sid not in denied}
-            snapshot.launches = [r for r in snapshot.launches if r["child_session_id"] not in denied
-                                 and not (r["launcher_profile"] == profile and r["launcher_session_id"] in denied)]
-        profiles[profile] = snapshot
-    return profiles, unavailable
+def _filter_principal(snapshot, connection):
+    profile = snapshot.name
+    # Local sessions retain the same principal ownership rule as authority.authorize.
+    if "session:operator" not in connection.actor.capabilities:
+        denied = {sid for sid, owner in snapshot.owners.items() if owner != connection.actor.subject}
+        denied.update(sid for sid, row in snapshot.sessions.items()
+                      if (row.get("source") == "local" or str(row.get("chat_id") or "").startswith("local-"))
+                      and row.get("user_id") != connection.actor.subject)
+        snapshot.sessions = {sid: row for sid, row in snapshot.sessions.items() if sid not in denied}
+        snapshot.launches = [r for r in snapshot.launches if r["child_session_id"] not in denied
+                             and not (r["launcher_profile"] == profile and r["launcher_session_id"] in denied)]
 
+
+def _read_profiles(connections, *, root=None, since=None):
+    from hermes_family_storage import launch_probe, read_graph
+    paths = {p: Path(c.authority.db.db_path) for p, c in connections.items()}
+    def probe(profile, seeds):
+        with connections[profile].authority.db._read_ctx() as conn:
+            return launch_probe(conn, seeds)
+    return read_graph(paths, read_profile, root=root, since=since, probe=probe,
+                      filter_snapshot=lambda snapshot: _filter_principal(snapshot, connections[snapshot.name]))
 
 async def read(connection, ref, params, *, overview=False):
     from pydantic import ValidationError
@@ -150,12 +155,20 @@ async def read(connection, ref, params, *, overview=False):
         params = (FamilyOverviewParams if overview else FamilySessionParams).model_validate(params, strict=True).model_dump()
     except ValidationError as exc:
         raise RuntimeStoreError("invalid_params") from exc
-    connections, unavailable = _connections(connection)
-    profiles, failed = await asyncio.to_thread(_read_profiles, connections)
+    import time
+    from gateway.session_authorities import served_profile_name
+    profile = served_profile_name(connection.authority.profile_id)
+    since = params.get("since")
+    since = time.time() - 43200 if since is None else since
+    connections, unavailable = await asyncio.to_thread(_connections, connection)
+    profiles, failed = await asyncio.to_thread(_read_profiles, connections,
+        root=None if overview else (profile, params["session_id"]), since=since)
     unavailable += failed
     if not overview:
         from gateway.session_authorities import served_profile_name
         profile = served_profile_name(connection.authority.profile_id)
+        if profile in failed:
+            raise RuntimeStoreError("storage_unavailable")
         if profile not in profiles or params["session_id"] not in profiles[profile].sessions:
             raise RuntimeStoreError("not_found")
         # Stored IDs are the wire identity. Live local receipt IDs are not substituted.
@@ -163,7 +176,7 @@ async def read(connection, ref, params, *, overview=False):
         logical = next((key for key, target in profiles[profile].aliases.items() if target == sid), sid)
         if logical in connection.authority.sessions:
             connection.authority.authorize(connection.actor, SessionRef(connection.authority.profile_id, logical), "session:read")
-    signals = _live_signals(connections, profiles)
+    signals = await asyncio.to_thread(_live_signals, connections, profiles)
     def project():
         family = Family(profiles, live=signals, unavailable_profiles=unavailable)
         if overview:

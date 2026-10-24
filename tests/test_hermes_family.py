@@ -161,8 +161,7 @@ def test_old_database_only_recorded_delegate_edges(tmp_path):
     family = Family({"default": read_profile("default", path)}, now=NOW)
     result = family.session_family("default", "root")
     assert result["complete"] is True
-    assert [(n["session_id"], n["title"], n["batch_id"], n["status"]) for n in result["nodes"]] == [
-        ("helper", None, None, "unknown")]
+    assert result["nodes"] == []
 
 
 @pytest.mark.parametrize("kind,threshold", [("helper", 600), ("background", 600), ("process", 600),
@@ -209,9 +208,10 @@ def test_since_does_not_hide_live_descendants_or_their_ancestors(night):
 def test_end_reason_and_null_end_never_claim_completion_or_liveness(tmp_path, reason):
     from hermes_family import read_profile, Family
     path = tmp_path / "old.db"
-    with fixture_db(path, old=True) as db:
+    with fixture_db(path) as db:
         session(db, "root", source="desktop")
         session(db, "helper", source="subagent", parent="root", ended=NOW)
+        launch(db, "helper", cause="unknown", finished=NOW)
         db.execute("UPDATE sessions SET end_reason=? WHERE id='helper'", (reason,))
     result = Family({"default": read_profile("default", path)}, now=NOW).session_family("default", "root")
     assert result["nodes"][0]["status"] == "unknown"
@@ -440,9 +440,10 @@ def test_legacy_helper_target_comes_from_delegation_not_session_id(tmp_path, mon
     from hermes_family import read_profile, Family
     from hermes_family_runtime import resident_signals
     path = tmp_path / "state.db"
-    with fixture_db(path, old=True) as db:
+    with fixture_db(path) as db:
         session(db, "root", source="desktop")
         session(db, "stored-child", source="subagent", parent="root")
+        launch(db, "stored-child")
     agent = SimpleNamespace(session_id="stored-child", _session_db=SimpleNamespace(db_path=path))
     registry = SimpleNamespace(_active_subagents_lock=threading.Lock(), _active_subagents={
         "delegate-key": {"subagent_id": "sa-exact", "agent": agent, "status": "running"}})

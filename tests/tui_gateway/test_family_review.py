@@ -1,10 +1,9 @@
 """Legacy Family reads must not activate profile hosting or watch empty stores."""
 import pytest
 
-from tests.tui_gateway.test_family import family_home
 from tests.tui_gateway.test_methods_mobile import rpc
 
-pytest_plugins = ["tests.tui_gateway.test_methods_mobile"]
+pytest_plugins = ["tests.tui_gateway.test_methods_mobile", "tests.tui_gateway.test_family"]
 
 
 def test_family_reads_do_not_activate_profile_watchers(family_home, monkeypatch):

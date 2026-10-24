@@ -12,6 +12,26 @@ from tests.test_hermes_family import LAUNCH_DDL, NOW, launch
 
 
 @pytest.fixture
+def loaded_rows(monkeypatch):
+    rows = []
+    original = sqlite3.connect
+    class Cursor(sqlite3.Cursor):
+        def __next__(self):
+            row = super().__next__()
+            columns = {item[0] for item in self.description}
+            if "last_activity_description" in columns or "launch_id" in columns:
+                rows.append(row)
+            return row
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, parameters=(), /):
+            return self.cursor(factory=Cursor).execute(sql, parameters)
+    def connect(*args, **kwargs):
+        return original(*args, **dict(kwargs, factory=Connection))
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    return rows
+
+
+@pytest.fixture
 def reader(tmp_path, monkeypatch):
     from gateway.session_authority import SessionAuthority
     from gateway.session_controls import AuthorityConnection
@@ -35,7 +55,7 @@ async def family(connection, sid="root"):
 
 @pytest.mark.asyncio
 async def test_own_store_failure_is_retryable(reader, monkeypatch):
-    db, authority, connection = reader
+    _, _, connection = reader
     def broken(*args, **kwargs):
         raise sqlite3.OperationalError("fixture unavailable")
     monkeypatch.setattr("gateway.session_family.read_profile", broken)
@@ -67,8 +87,7 @@ async def test_profile_enumeration_and_store_signals_are_off_loop(reader, monkey
 
 
 @pytest.mark.asyncio
-async def test_root_poll_does_not_load_unrelated_history(reader, monkeypatch):
-    import gateway.session_family as module
+async def test_root_poll_does_not_load_unrelated_history(reader, loaded_rows):
     db, _, connection = reader
     for i in range(1000):
         db.create_session(f"unrelated-{i}", source="test")
@@ -76,45 +95,40 @@ async def test_root_poll_does_not_load_unrelated_history(reader, monkeypatch):
     db.create_session("child", source="subagent", parent_session_id="root")
     launch(db._conn, "child")
     db._conn.commit()
-    original, loaded = module.read_profile, []
-    def counted(*args, **kwargs):
-        snapshot = original(*args, **kwargs)
-        loaded.append(len(snapshot.sessions) + len(snapshot.launches))
-        return snapshot
-    monkeypatch.setattr(module, "read_profile", counted)
     try:
         result = await family(connection)
         assert "result" in result, result
         assert [n["session_id"] for n in result["result"]["nodes"]] == ["child"]
-        assert sum(loaded) <= 6, loaded
+        assert len(loaded_rows) <= 6, len(loaded_rows)
     finally:
         await connection.close()
 
 
 @pytest.mark.asyncio
-async def test_live_compressed_root_uses_logical_and_tip_signals(reader):
+@pytest.mark.parametrize("running", [False, True])
+async def test_live_compressed_root_uses_logical_and_tip_signals(reader, running):
     from gateway.session_authority import LiveSession
     db, authority, connection = reader
     db._conn.execute("UPDATE sessions SET ended_at=1,end_reason='compression' WHERE id='root'")
     db.create_session("tip", source="test", parent_session_id="root")
     db._conn.commit()
-    task = asyncio.create_task(asyncio.Event().wait())
+    task = asyncio.create_task(asyncio.Event().wait()) if running else None
     authority.sessions["root"] = LiveSession(None, "route", task=task)
     try:
         result = await family(connection, "tip")
         assert "result" in result, result
         assert result["result"]["root"]["session_id"] == "tip"
-        assert result["result"]["root"]["status"] == "working", result
+        assert result["result"]["root"]["status"] == ("working" if running else "unknown"), result
     finally:
         await connection.close()
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 @pytest.mark.asyncio
-async def test_overview_loads_only_live_and_recent_launch_rows(reader, monkeypatch):
-    import gateway.session_family as module
+async def test_overview_loads_only_live_and_recent_launch_rows(reader, loaded_rows):
     db, _, connection = reader
     for i in range(1000):
         db.create_session(f"past-{i}", source="test")
@@ -122,17 +136,11 @@ async def test_overview_loads_only_live_and_recent_launch_rows(reader, monkeypat
     db.create_session("recent", source="test")
     launch(db._conn, "recent", kind="lane", cause="error", finished=NOW)
     db._conn.commit()
-    original, loaded = module.read_profile, []
-    def counted(*args, **kwargs):
-        snapshot = original(*args, **kwargs)
-        loaded.append(len(snapshot.sessions) + len(snapshot.launches))
-        return snapshot
-    monkeypatch.setattr(module, "read_profile", counted)
     try:
         result = await connection.dispatch({"id": 1, "method": "family.overview", "params": {"since": NOW - 3600}})
         assert "result" in result, result
         assert [n["session_id"] for n in result["result"]["failed"]] == ["recent"]
-        assert sum(loaded) <= 4, loaded
+        assert len(loaded_rows) <= 4, len(loaded_rows)
     finally:
         await connection.close()
 
