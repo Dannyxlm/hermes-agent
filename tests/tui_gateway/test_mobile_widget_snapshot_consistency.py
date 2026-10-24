@@ -68,7 +68,9 @@ def test_unrelated_commit_between_list_and_replies_is_not_a_conflict(inbox_reade
     monkeypatch.setattr(mobile_widget_inbox, "page_replies", concurrent_reply)
     response = read()
     assert response.status_code == 200, response.text
-    assert all(item["reply"] is not None for item in response.json()["items"])
+    chats = [item for item in response.json()["items"] if item["session_id"].startswith("chat-")]
+    assert len(chats) == 99
+    assert all(item["reply"] is not None for item in chats)
 
 
 @pytest.mark.parametrize("change", ["title", "read", "reply", "archive", "delete"])
