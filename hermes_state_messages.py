@@ -1114,6 +1114,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
 
     def _is_model_only_row(self, row) -> bool:
         """Python twin of :data:`DISPLAY_VISIBLE_SQL`."""
+        if "model_only" in row.keys():
+            return bool(row["model_only"])
         return bool((self._decode_display_metadata(row["display_metadata"]) or {}).get(MODEL_ONLY_DISPLAY_METADATA_KEY))
 
     @staticmethod
@@ -1368,41 +1370,6 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         """Audit: every row; display: active plus compaction-archived (never Undo/Rewind rows); default: live."""
         return "" if include_inactive else (_DISPLAY_ACTIVE_CLAUSE if include_compacted else " AND active = 1")
 
-    def _lineage_display_page(self, session_ids, *, active_clause, limit, offset=0, latest=False,
-                              drop_removed=False):
-        """Fold the lineage's identities before loading page payloads, within one read snapshot.
-
-        Removed copies hide ancestors by identity or absorbed uid; summary carriers fold by uid.
-        Current stores need no bodies for this pass; legacy rows compute their missing identity.
-        """
-        def read(conn):
-            own_snapshot = not conn.in_transaction
-            if own_snapshot:
-                conn.execute('BEGIN')
-            try:
-                columns = {row[1] for row in conn.execute('PRAGMA table_info(messages)')}
-                stored = 'display_identity' if 'display_identity' in columns else 'NULL'
-                candidates = conn.execute(
-                    f"SELECT id, role, timestamp, tool_call_id, tool_calls, tool_name, display_kind, "
-                    f"display_metadata, message_uid, absorbed_message_uids, _compressed_summary, active, compacted, "
-                    f"{stored} AS display_identity, CASE WHEN {stored} IS NULL THEN content END AS content "
-                    f"FROM messages WHERE session_id IN ({_placeholders(session_ids)})"
-                    f"{'' if drop_removed else active_clause} ORDER BY id", session_ids)
-                rows = self._dedupe_display_generations(
-                    list(candidates), drop_removed=drop_removed, stored_identities=True)
-                rows = rows[::-1][offset:][:limit][::-1] if latest else rows[offset:][:limit]
-                selected_ids = [row['id'] for row in rows]
-                selected = {}
-                for start in range(0, len(selected_ids), 900):
-                    chunk = selected_ids[start:start + 900]
-                    selected.update({row['id']: row for row in conn.execute(
-                        f"SELECT * FROM messages WHERE id IN ({_placeholders(chunk)})", chunk)})
-                return [selected[row_id] for row_id in selected_ids]
-            finally:
-                if own_snapshot and conn.in_transaction:
-                    conn.execute('ROLLBACK')
-
-        return self._read_retrying_ioerr(read)
 
     def get_messages(self, session_id: str, include_inactive: bool = False, include_compacted: bool = False,
                      limit: Optional[int] = None, offset: int = 0, latest: bool = False,
@@ -1423,8 +1390,9 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         # Ancestor expansion uses the resume lineage (explicit /branch copies stay single-session).
         session_ids = self._resume_lineage_ids(session_id) if include_ancestors else [session_id]
         if len(session_ids) > 1:
-            rows = self._lineage_display_page(
-                session_ids, active_clause=active_clause, limit=limit, offset=offset, latest=latest,
+            from hermes_state_lineage_paging import lineage_display_page
+            rows = lineage_display_page(
+                self, session_ids, active_clause=active_clause, limit=limit, offset=offset, latest=latest,
                 drop_removed=include_compacted and not include_inactive)
         elif include_compacted and not include_inactive and self._ensure_display_order(session_id):
             # _read_retrying_ioerr: mode=ro pooled readers see a transient IOERR mid-checkpoint (#100871).
