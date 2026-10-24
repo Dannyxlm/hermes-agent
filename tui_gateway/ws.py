@@ -447,19 +447,19 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
         # dispatch() may schedule long handlers on the pool; it returns None then and the worker
         # writes the response itself via transport.write (a separate thread, so that is the safe
         # path). Inline handlers return the response dict, written here from the loop.
-        try:
-            with rpc_dispatch_metrics(req_method, server._methods):
+        with rpc_dispatch_metrics(req_method, server._methods):
+            try:
                 resp = await _dispatch_request(authority_connection, req, req_method, transport)
-        # health: allow BLE001 -- dispatch boundary: logs the traceback (_log.exception) and answers -32603
-        except Exception:
-            dispatch_crashes += 1
-            _log.exception("ws dispatch crash peer=%s id=%s method=%s", peer, req_id, req_method)
-            await _reply(_error(-32603, "internal error", req_id), "send_failed_after_dispatch_crash",
-                         "ws dispatch-crash reply send failed peer=%s id=%s method=%s", peer, req_id, req_method)
-            return
-        if resp is not None:
-            await _reply(resp, "send_failed_after_response",
-                         "ws response send failed peer=%s id=%s method=%s", peer, req_id, req_method)
+            # health: allow BLE001 -- dispatch boundary: logs the traceback (_log.exception) and answers -32603
+            except Exception:
+                dispatch_crashes += 1
+                _log.exception("ws dispatch crash peer=%s id=%s method=%s", peer, req_id, req_method)
+                await _reply(_error(-32603, "internal error", req_id), "send_failed_after_dispatch_crash",
+                             "ws dispatch-crash reply send failed peer=%s id=%s method=%s", peer, req_id, req_method)
+                return
+            if resp is not None:
+                await _reply(resp, "send_failed_after_response",
+                             "ws response send failed peer=%s id=%s method=%s", peer, req_id, req_method)
 
     async def _dispatch_concurrent_read(req: Any) -> None:
         async with concurrent_read_slots:

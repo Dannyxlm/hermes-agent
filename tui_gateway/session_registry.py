@@ -790,7 +790,8 @@ def _live_visible_history(session: dict, db, in_memory_fallback: list[dict]) -> 
 
 def _live_session_payload(
     sid: str, session: dict, *, cols: int | None = None, touch: bool = False,
-    transport: Transport | None = None, omit_messages: bool = False, inline_images: bool = True) -> dict:
+    transport: Transport | None = None, omit_messages: bool = False, inline_images: bool = True,
+    include_info: bool = True) -> dict:
     with session["history_lock"]:
         if cols is not None:
             session["cols"] = cols
@@ -815,7 +816,8 @@ def _live_session_payload(
     messages = ([] if omit_messages else
                 _history_to_messages(history, profile_home=session.get("profile_home"), image_urls=inline_images))
     payload = {
-        "info": _fallback_session_info(session), "message_count": len(history) if omit_messages else len(messages),
+        "info": _fallback_session_info(session) if include_info else {},
+        "message_count": len(history) if omit_messages else len(messages),
         "messages": messages,
         "messages_omitted": omit_messages, "running": running, "turn_started_at": turn_started_at,
         "session_id": sid, "session_key": _session_lookup_key(session, fallback=sid),

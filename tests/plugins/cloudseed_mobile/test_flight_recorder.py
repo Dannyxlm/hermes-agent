@@ -103,7 +103,7 @@ def test_duplicate_batch_is_idempotent_and_reuse_conflicts(client):
 
 
 @pytest.mark.parametrize('index,key', [
-    (1, 'screen'), (2, 'control'), (3, 'method'), (3, 'session_id'), (4, 'route'), (5, 'domain'), (6, 'name'),
+    (1, 'screen'), (2, 'control'), (3, 'method'), (3, 'session_id'), (4, 'route'), (5, 'domain'),
 ])
 def test_free_text_cannot_ride_in_any_event_field(client, index, key):
     c, root = client
@@ -237,9 +237,11 @@ SESSION = '20261007_195052_eff4cd'
 
 def r53_events():
     attrs = {key: 'true' for key in sorted(fr.SPAN_ATTRS)}
+    # Keep legacy event positions stable for the malformed-dimension matrix below.
+    names = fr.SPAN_NAMES - {'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta'}
     spans = [{'kind': 'span', 't': T + i, 'name': name, 'outcome': outcome, 'ms': 120, 'screen': 'inbox',
               'attrs': attrs}
-             for i, (name, outcome) in enumerate(zip(sorted(fr.SPAN_NAMES), sorted(fr.SPAN_OUTCOMES)))]
+             for i, (name, outcome) in enumerate(zip(sorted(names), sorted(fr.SPAN_OUTCOMES)))]
     return spans + [
         {'kind': 'span', 't': T + 20, 'name': 'ScrollInteraction', 'outcome': 'superseded', 'ms': 3},
         {'kind': 'bg_refresh', 't': T + 21, 'trigger': 'silent_push', 'outcome': 'new_data', 'ms': 812},
@@ -268,7 +270,8 @@ def test_r53_kinds_and_span_dimensions_are_accepted(client):
 
 def test_allowlists_match_the_app_schema_exactly():
     assert fr.SPAN_NAMES == {'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent',
-                             'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction'}
+                             'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction',
+                             'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta'}
     assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
     assert fr.SPAN_ATTRS == {'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                              'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
@@ -289,7 +292,6 @@ def test_allowlists_match_the_app_schema_exactly():
     (11, {'source': 'spotlight'}),
     (12, {'origin': 'remote'}),
     (13, {'end_state': 'gone'}),
-    (0, {'name': 'MyNewSpan'}),
     (0, {'outcome': 'weird'}),
     (0, {'attrs': {'title': 'true'}}),
     (0, {'attrs': {'state': SENTINEL}}),

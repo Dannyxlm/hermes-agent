@@ -55,7 +55,9 @@ def _mobile_push_handler(name):
                 return _err(rid, 4403, "authenticated mobile identity required")
             try:
                 return fn(rid, params, _principal_digest(identity))
-            except (ValueError, FileNotFoundError, TypeError):
+            except (ValueError, FileNotFoundError, TypeError) as exc:
+                reason = next(cls.__name__ for cls in (ValueError, FileNotFoundError, TypeError) if isinstance(exc, cls))
+                logger.warning("mobile_notification_refused method=%s reason=%s", name, reason)
                 return _err(rid, 4400, "invalid mobile notification scope or registration")
             except (sqlite3.Error, RuntimeError, OSError):
                 return _err(rid, 4401, "mobile notifications temporarily unavailable")
