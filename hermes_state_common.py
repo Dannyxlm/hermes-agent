@@ -552,6 +552,9 @@ CREATE INDEX IF NOT EXISTS idx_work_launches_launcher ON work_launches(launcher_
 CREATE INDEX IF NOT EXISTS idx_work_launches_child ON work_launches(child_session_id);
 CREATE INDEX IF NOT EXISTS idx_work_launches_batch ON work_launches(batch_id);
 CREATE INDEX IF NOT EXISTS idx_work_launches_parent ON work_launches(parent_launch_id);
+CREATE INDEX IF NOT EXISTS idx_work_launches_finished ON work_launches(finished_at);
+CREATE INDEX IF NOT EXISTS idx_work_launches_restart
+  ON work_launches(terminal_cause) WHERE terminal_cause='owner_restart';
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
