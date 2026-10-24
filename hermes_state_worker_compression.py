@@ -182,20 +182,28 @@ def worker_boundary(db, conn, sid, payload):
 
 def worker_history(db, conn, sid, payload):
     _fields(payload, ('target', 'include_ancestors', 'include_inactive', 'repair_alternation',
-                      'include_row_ids', 'include_compacted'))
-    if any(type(v) is not bool for k, v in payload.items() if k != 'target'):
+                      'include_row_ids', 'include_compacted'),
+            optional=('only_inactive', 'exclude_message_uid'))
+    if any(type(v) is not bool for k, v in payload.items()
+           if k not in ('target', 'exclude_message_uid')):
         raise RuntimeStoreError('invalid_params')
+    if payload.get('exclude_message_uid') is not None:
+        _text(payload['exclude_message_uid'])
     view = CompressionSnapshot(db, conn)
     target = payload['target']
     view.authorize(sid, target)
     ids = view._resume_lineage_ids(target) if payload['include_ancestors'] else [target]
-    active = db._active_clause(payload['include_inactive'], payload['include_compacted'])
-    display = payload['include_compacted'] and not payload['include_inactive']
+    active = (' AND active = 0' if payload.get('only_inactive', False)
+              else db._active_clause(payload['include_inactive'], payload['include_compacted']))
+    display = (payload['include_compacted'] and not payload['include_inactive']
+               and not payload.get('only_inactive', False))
     rows = conn.execute(f'SELECT {"compacted, " if display else ""}{db._CONVERSATION_ROW_COLUMNS} FROM messages '
                         f'WHERE session_id IN ({",".join("?" for _ in ids)}){active} ORDER BY id', ids).fetchall()
     if display:  # the owner's display reads' rule: a message whose newest copy was removed stays hidden
         from hermes_state_messages import SessionMessagesMixin
         rows = SessionMessagesMixin._with_removed_identities(view, rows, ids)
+    if payload.get('exclude_message_uid'):
+        rows = [row for row in rows if row['message_uid'] != payload['exclude_message_uid']]
     if payload['include_compacted']:
         rows = db._dedupe_display_generations(rows, drop_removed=display)
     return {'messages': db._rows_to_conversation(rows, session_id=target,
