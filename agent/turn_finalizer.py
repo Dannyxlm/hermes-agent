@@ -809,4 +809,6 @@ def finalize_turn(
 
     agent._turn_preflight_display_snapshot = None
     agent._turn_received_provider_response = False
+    from hermes_state_launch_causes import result_cause
+    result["terminal_cause"] = result_cause(result, stop_cause=getattr(agent, "_launch_stop_cause", None))
     return result

@@ -564,6 +564,7 @@ class ProcessSession:
     # The last stop of ``systemd_unit`` failed, so its descendants may still be alive; bulk
     # cleanup retries the stop even after the session finished.
     _scope_stop_pending: bool = field(default=False, repr=False)
+    _launch_pending_kills: int = field(default=0, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
     _reader_finish_requested: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -2129,6 +2130,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             if consume_output and not finalizing:
                 self._completion_consumed.add(session_id)
             return result
+        with session._lock:
+            session._launch_pending_kills += 1
         try:
             early = self._signal_kill(session, session_id, consume_output)
             if early is not None:
@@ -2193,6 +2196,13 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 "termination_source": session.termination_source, **output}
         except Exception as e:
             return {"status": "error", "error": str(e)}
+        finally:
+            with session._lock:
+                session._launch_pending_kills -= 1
+                settled = session.exited and session._launch_pending_kills == 0
+            if settled:
+                from tools.process_launches import finish_process_launch
+                finish_process_launch(session)
 
     @staticmethod
     def _stop_scope(session: ProcessSession) -> bool:

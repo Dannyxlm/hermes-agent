@@ -23,5 +23,6 @@ def reserve_background(db, parent_session_id, child_session_id, title, source='c
 def finish_background(db, launch_id, result=None, *, cause=None):
     if launch_id:
         if cause is None:
-            cause = 'success' if result and result.get('completed') else 'error'
+            from hermes_state_launch_causes import result_cause
+            cause = result_cause(result)
         db.finish_launch(launch_id, cause)

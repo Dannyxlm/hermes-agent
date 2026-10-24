@@ -2624,8 +2624,10 @@ _INTERRUPT_REASON_EVICTED = "Session ended while the turn was running"
 _INTERRUPT_TOOL_REASON_EVICTED = "session evicted"
 _INTERRUPT_TOOL_REASON_GATEWAY_SHUTDOWN = "gateway shutdown"
 _INTERRUPT_REASON_SSE_DISCONNECT = "SSE client disconnected"
-_INTERRUPT_REASON_GATEWAY_SHUTDOWN = "Gateway shutting down"
-_INTERRUPT_REASON_GATEWAY_RESTART = "Gateway restarting"
+from hermes_state_launch_causes import (
+    GATEWAY_SHUTDOWN as _INTERRUPT_REASON_GATEWAY_SHUTDOWN,
+    GATEWAY_RESTART as _INTERRUPT_REASON_GATEWAY_RESTART,
+)
 
 
 def _reap_gateway_turn_processes(
@@ -4164,6 +4166,7 @@ class GatewayRunner(
             agent._last_activity_ts = time.time()
             agent._last_activity_desc = "starting new turn (cached)"
             agent._last_activity_kind, agent._last_activity_tool = "starting", None
+            agent._launch_stop_cause = None
             agent._last_activity_provenance = ActivityProvenance.UNKNOWN
             # Reset the SessionDB flush cursor so the new turn's messages are fully persisted — a stale
             # value from the previous turn makes `_flush_messages_to_session_db` skip new rows.

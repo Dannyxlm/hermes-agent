@@ -260,6 +260,10 @@ class InterruptControlMixin:
         for child in children_copy:
             try:
                 if hard_cancel:
+                    from hermes_state_launch_causes import result_cause, stamp_stop
+                    cause = result_cause({"interrupted": True, "interrupt_message": message})
+                    restarting = cause == "owner_restart" or getattr(self, "_launch_stop_cause", None) == "owner_restart"
+                    stamp_stop(child, "owner_restart" if restarting else "parent_stop")
                     request_hard_interrupt(child, message, tool_reason=tool_interrupt_reason)
                 else:
                     child.interrupt(message)

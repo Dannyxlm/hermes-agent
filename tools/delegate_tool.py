@@ -394,6 +394,7 @@ def _run_single_child(
 
     * ``"completed"``       — normal finish. See #97655.
     """
+    child._launch_executed = True
     child_progress_cb = getattr(child, "tool_progress_callback", None)
     child_pool, leased_cred_id = _lease_child_credential(child)
     # Heartbeat keeps the parent's _last_activity_ts moving so the gateway inactivity timeout doesn't fire while the

@@ -886,6 +886,8 @@ class SessionAuthority:
         from agent.interrupt_compat import request_hard_interrupt
         from tools.async_delegation import interrupt_for_session
         if agent is not None:
+            from hermes_state_launch_causes import stamp_stop
+            stamp_stop(agent, "user_stop")
             request_hard_interrupt(agent)
         for parent in dict.fromkeys((ref.session_id, self.physical_target(ref))):
             interrupt_for_session(session_key=live.route, parent_session_id=parent, reason='user_stop')
@@ -951,6 +953,8 @@ class SessionAuthority:
             if self.pending_stops.get(session_id) == generation:
                 del self.pending_stops[session_id]
                 from agent.interrupt_compat import request_hard_interrupt
+                from hermes_state_launch_causes import stamp_stop
+                stamp_stop(agent, "user_stop")
                 request_hard_interrupt(agent)
             latched, steers = self.pending_steers.pop(session_id, (None, ()))
             for text in steers if latched == generation else ():

@@ -7,6 +7,7 @@ import pytest
 @pytest.mark.parametrize('cause', ['user_stop', 'parent_stop', 'owner_restart'])
 def test_managed_stop_carries_typed_cause_to_agent(monkeypatch, cause):
     from agent import managed_worker
+    monkeypatch.setattr(managed_worker.threading.Thread, "start", lambda self: None)
     frames = iter([{'type': 'stop', 'terminal_cause': cause}, {'type': 'finish'}])
     monkeypatch.setattr(managed_worker, 'read_frame', lambda stream: next(frames))
     interrupted = []
@@ -21,6 +22,7 @@ def test_managed_stop_carries_typed_cause_to_agent(monkeypatch, cause):
 
 def test_managed_stop_rejects_success_as_a_stop_cause(monkeypatch):
     from agent import managed_worker
+    monkeypatch.setattr(managed_worker.threading.Thread, "start", lambda self: None)
     monkeypatch.setattr(managed_worker, 'read_frame', lambda stream: {'type': 'stop', 'terminal_cause': 'success'})
     agent = SimpleNamespace(hard_interrupt=lambda: None)
     controls = managed_worker.WorkerControls(SimpleNamespace(), 'fixture-route')

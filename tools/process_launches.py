@@ -21,7 +21,12 @@ def finish_process_launch(session, cause=None):
         return
     from agent.runtime_session_store import is_worker_process
     if cause is None:
-        cause = ('success' if session.exit_code == 0 else 'error') if session.exit_code is not None else 'unknown'
+        from hermes_state_launch_causes import process_cause
+        with session._lock:
+            # The signal receipt, not a raced reader exit, owns an in-progress kill's cause.
+            if session._launch_pending_kills:
+                return
+            cause = process_cause(session)
     if is_worker_process():
         from hermes_state_launch_context import launch_writer
         with launch_writer() as db:

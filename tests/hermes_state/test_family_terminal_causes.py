@@ -102,3 +102,14 @@ def test_interruption_cause_requires_receipt_and_precedes_cancellation_error():
     assert result_cause({'interrupted': True}) == 'unknown'
     assert result_cause({'interrupted': True, 'error': 'cancelled'}, stop_cause='parent_stop') == 'parent_stop'
     assert result_cause({'interrupted': True, 'interrupt_message': GATEWAY_RESTART}) == 'owner_restart'
+
+
+def test_a_later_restart_does_not_reclassify_an_already_requested_user_stop():
+    from threading import Event
+    from types import SimpleNamespace
+    from hermes_state_launch_causes import stamp_stop
+    agent = SimpleNamespace(_hard_interrupt_requested=Event())
+    stamp_stop(agent, 'user_stop')
+    agent._hard_interrupt_requested.set()
+    stamp_stop(agent, 'owner_restart')
+    assert agent._launch_stop_cause == 'user_stop'

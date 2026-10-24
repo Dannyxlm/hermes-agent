@@ -261,6 +261,8 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) '
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (RESULT_PREFIX + admission_id, encoded))
+        from hermes_state_launch_causes import finish_for_session, result_cause
+        finish_for_session(conn, row['target_session_id'], result_cause(result, outcome=outcome))
         conn.execute("UPDATE session_admissions SET status='terminal',outcome=? WHERE admission_id=?", (outcome, admission_id))
         settle_steer_transfers(conn, epoch=epoch, generation=generation, transfers=_transfers, outcome=outcome)
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (row['target_session_id'],))

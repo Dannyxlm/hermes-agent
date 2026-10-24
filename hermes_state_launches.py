@@ -55,8 +55,9 @@ def bind_launch(conn, launch_id, *, child_session_id=None, backend_ref=None):
 def finish_launch(conn, launch_id, terminal_cause):
     if terminal_cause not in TERMINAL_CAUSES:
         raise ValueError('invalid terminal cause')
-    conn.execute('UPDATE work_launches SET finished_at=?,terminal_cause=? '
-                 'WHERE launch_id=? AND finished_at IS NULL', (time.time(), terminal_cause, launch_id))
+    conn.execute('UPDATE work_launches SET finished_at=COALESCE(finished_at,?),terminal_cause=? '
+                 "WHERE launch_id=? AND (finished_at IS NULL OR (terminal_cause='unknown' AND ? != 'unknown'))",
+                 (time.time(), terminal_cause, launch_id, terminal_cause))
 
 
 class SessionLaunchesMixin:
@@ -97,7 +98,9 @@ def worker_launch(db, conn, session_id, payload, *, operation):
         if set(payload) != fields or not isinstance(payload['launch_id'], str):
             raise ValueError('invalid launch fields')
         row = conn.execute('SELECT * FROM work_launches WHERE launch_id=?', (payload['launch_id'],)).fetchone()
-        if row is None or session_id not in (row['launcher_session_id'], row['child_session_id']):
+        from hermes_state_runtime_workers import runtime_lineage
+        scope = runtime_lineage(conn, session_id)
+        if row is None or not scope.intersection((row['launcher_session_id'], row['child_session_id'])):
             raise RuntimeStoreError('permission_denied')
         if operation == 'schedule':
             when = payload['next_run_at']

@@ -512,7 +512,8 @@ def _run_agent(prompt, model=None, provider=None, toolsets=None, use_config_tool
                                            skills, resume, reasoning, ledger, session_db=db,
                                            family_launch=launch_id, launch_started=started)
         if launch_id:
-            db.finish_launch(launch_id, 'success' if result.get('completed') else 'error')
+            from hermes_state_launch_causes import result_cause
+            db.finish_launch(launch_id, result_cause(result))
         return response, result
     except BaseException:
         if launch_id:
@@ -636,7 +637,14 @@ def _run_agent_impl(
         if ledger:
             _attach_auxiliary_usage(result, session_db, aux_before,
                                     fallback_session_id=agent.session_id or resume_sid)
+        if family_launch:
+            from hermes_state_launch_causes import result_cause
+            session_db.finish_launch(family_launch, result_cause(result))
         return (result.get("final_response") or "", result)
+    except BaseException:
+        if family_launch:
+            session_db.finish_launch(family_launch, "error" if launch_started[0] else "failed_start")
+        raise
     finally:
         _close_agent(agent, None, relay_session_id)
 

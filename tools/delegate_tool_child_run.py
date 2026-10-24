@@ -86,6 +86,9 @@ def _append_missed_steer(entry: dict[str, Any], late_steer: Optional[str]) -> No
 def _close_child(child: Any, log_message: str) -> None:
     """Best-effort ``child.close()`` (tool sandboxes, browser daemons, httpx clients)."""
     with _quiet(log_message, exc_info=True):
+        from hermes_state_launch_causes import finish_child
+        if not getattr(child, "_launch_executed", False):
+            finish_child(child, cause="failed_start")
         close = getattr(child, "close", None)
         if callable(close):
             close()
@@ -129,10 +132,14 @@ def _detach_child(parent_agent: Any, child: Any) -> None:
     except (ValueError, UnboundLocalError) as e:
         logger.debug("Could not remove child from active_children: %s", e)
 
-def _signal_child_stop(child: Any, *reason: str, tool_reason: str = "parent delegation ended") -> None:
+def _signal_child_stop(child: Any, *reason: str, tool_reason: str = "parent delegation ended",
+                       terminal_cause="parent_stop") -> None:
     """Cooperative interrupt so the child's worker thread can exit cleanly. ``tool_reason`` is the
     fixed cause the child's tools see (a pending approval wait reports it instead of a user deny)."""
     with _quiet(None):
+        if child is not None:
+            from hermes_state_launch_causes import stamp_stop
+            stamp_stop(child, terminal_cause)
         if (child is not None and not request_hard_interrupt(child, *reason, tool_reason=tool_reason)
                 and hasattr(child, "_interrupt_requested")):
             child._interrupt_requested = True
@@ -832,6 +839,8 @@ class _ChildRun:
     ) -> dict[str, Any]:
         """Shared tail of every failure path: emit ``subagent.complete`` (``status`` defaults to the entry's), note
         the steer text that won the race with the failure, report the worktree."""
+        from hermes_state_launch_causes import finish_child
+        finish_child(self.child, cause=getattr(self.child, "_launch_stop_cause", None) or "error")
         _safe_progress(
             self.child_progress_cb, "subagent.complete", preview=redact_child_text(preview, force=False), status=status or entry["status"],
             duration_seconds=entry["duration_seconds"],
@@ -947,7 +956,7 @@ class _ChildRun:
                 # here on purpose: the success path's `_merge_late_steer` (or the failure
                 # path below) is the linearization boundary, so a concurrent steer is never
                 # lost either way.
-                _signal_child_stop(child)
+                _signal_child_stop(child, terminal_cause="error")
                 grace = _STALE_RESULT_GRACE_SECONDS
                 grace_done = threading.Event()
                 future.add_done_callback(lambda _f: grace_done.set())
@@ -966,7 +975,7 @@ class _ChildRun:
             executor.shutdown(wait=False)
 
         _late_pending_steer = self.close_steering()
-        _signal_child_stop(child)
+        _signal_child_stop(child, terminal_cause="error")
         is_timeout = isinstance(exc, (FuturesTimeoutError, TimeoutError))
         # What actually ended the wait: the stale threshold pre-empts a longer configured cap.
         timeout_cause = stale_after if stale_after is not None else child_timeout
@@ -1070,6 +1079,8 @@ class _ChildRun:
     def emit_complete(self, result: dict[str, Any], entry: dict[str, Any], duration: float) -> None:
         """Fire ``subagent.complete`` with the per-branch observability payload (tokens, cost, files touched,
         tool-output tail); every field is optional and degrades gracefully on the client."""
+        from hermes_state_launch_causes import finish_child
+        finish_child(self.child, result=result)
         if not self.child_progress_cb:
             return
         child = self.child

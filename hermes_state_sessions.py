@@ -468,6 +468,8 @@ class SessionSessionsMixin:
         changed = conn.execute(sql, params).rowcount
         if changed:
             self._bump_conversation_generation(conn, session_id, reason)
+            from hermes_state_launch_causes import finish_on_end
+            finish_on_end(conn, session_id, reason)
         return changed
 
     @staticmethod
