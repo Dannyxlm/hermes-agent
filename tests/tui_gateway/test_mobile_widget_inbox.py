@@ -30,12 +30,12 @@ def test_full_inbox_pages_read_markers_and_scoped_rotation(push_service, mobile_
     (mobile_home / 'profiles' / 'ops' / '.env').write_text('WIDGET_INBOX_SCOPE_FIXTURE=secondary-only\n')
     before = dict(os.environ)
     observed = []
-    original = mobile_widget_inbox.page_replies
-    def scoped_replies(db, rows):
+    original = mobile_widget_inbox.page_attention
+    def scoped_replies(rows, home):
         observed.append((Path(get_hermes_home()).resolve(), get_secret('WIDGET_INBOX_SCOPE_FIXTURE')))
-        return original(db, rows)
+        return original(rows, home)
     from pathlib import Path
-    monkeypatch.setattr(mobile_widget_inbox, 'page_replies', scoped_replies)
+    monkeypatch.setattr(mobile_widget_inbox, 'page_attention', scoped_replies)
     path = mobile_home / "profiles" / "ops" / "state.db"
     with SessionDB(db_path=path) as db:
         for n in range(125):
@@ -107,11 +107,11 @@ def test_inbox_capability_cannot_expand_authority_and_logout_wins(push_service, 
     peer.auth_identity = {"user_id": "fixture-owner", "provider": "fixture-auth"}
     assert 'error' in rpc('mobile.widget.inbox.register', **{**params, 'profile': '../ops'})
     identity = {k: params[k] for k in ('installation_id', 'connection_id')}
-    original = mobile_widget_inbox.page_replies
-    def revoke(db, rows):
-        result = original(db, rows)
+    original = mobile_widget_inbox.page_attention
+    def revoke(rows, home):
+        result = original(rows, home)
         rpc('mobile.widget.unregister', **identity)
         return result
-    monkeypatch.setattr(mobile_widget_inbox, 'page_replies', revoke)
+    monkeypatch.setattr(mobile_widget_inbox, 'page_attention', revoke)
     assert client.get(route + '?inbox=1', headers=headers).status_code == 401
     assert push_service.store.widget_reader(params['read_token']) is None

@@ -225,15 +225,6 @@ def test_pre_upgrade_receipt_without_subject_is_bound_to_its_exact_row(wake_owne
     assert wake_owner.subjects == [ALICE]
 
 
-def test_a_claimed_record_is_not_rearmed_by_a_direct_transfer(wake_owner):
-    path, record = queue(wake_owner)
-    record['status'] = 'claimed'
-    wake_owner.ready = True
-    assert session_delivery.transfer_pending(path, record) is True
-    assert record['status'] == 'ambiguous'
-    assert wake_owner.methods == []
-
-
 @pytest.mark.parametrize('reason', ['not_found', 'permission_denied', 'profile_mismatch'])
 def test_definite_pre_admission_refusal_does_not_retry(wake_owner, monkeypatch, reason):
     from hermes_cli.gateway_client import GatewayRPCError

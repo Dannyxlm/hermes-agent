@@ -67,6 +67,8 @@ def _delivery_key(home: Path, job: dict, session_id: str, for_failure: bool) -> 
 
 def _wake_subject(home: Path, session_id: str) -> str | None:
     """Recover only the exact row's local login stamp, never a caller-supplied principal."""
+    # Job creation is host-equivalent; the wake acts for the target row's owner.
+    # Multi-login job isolation would require a creator principal stamped at creation.
     from gateway.session_identity import authenticated_subject, parse_authenticated_subject
     from hermes_state import SessionDB
     from hermes_state_local_migration import LEGACY_LOCAL_SOURCES, legacy_account_label
@@ -97,7 +99,7 @@ def _wake_binding(path: Path, home: Path, record: dict) -> tuple[str, str | None
 
     expected = _delivery_key(home, record.get('job') or {}, record['session_id'], bool(record.get('for_failure')))
     if (record['id'] != expected
-            or path.resolve() != home / 'cron' / 'bot_chat_pending' / (expected + '.json')):
+            or path.resolve() != (home / 'cron' / 'bot_chat_pending' / (expected + '.json')).resolve()):
         raise GatewayRPCError('permission_denied')
     target = resolve_session(record['session_id'], home)
     subject = _wake_subject(home, record['session_id'])
@@ -159,9 +161,6 @@ def transfer_pending(path: Path, record: dict) -> bool:
     from utils import atomic_json_write
     import asyncio
 
-    if record.get('status') == 'claimed':
-        record.update(status='ambiguous', error='scheduled wake admission unverified; inspect before rearming')
-        return True
     home = Path(record["home"]).resolve()
     if not record.get("admission_id"):
         try:

@@ -1,5 +1,6 @@
 """Inbox pages depend on their projection, not unrelated SQLite commits."""
 import json
+from collections import OrderedDict
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,14 +59,14 @@ def test_unrelated_chat_append_preserves_cursor_and_revision(inbox_reader):
 
 def test_unrelated_commit_between_list_and_replies_is_not_a_conflict(inbox_reader, monkeypatch):
     path, read, _, _ = inbox_reader
-    original = mobile_widget_inbox.page_replies
+    original = SessionDB.list_sessions_rich
 
-    def concurrent_reply(db, rows):
+    def concurrent_reply(db, *args, **kwargs):
         with SessionDB(db_path=path) as writer:
             writer.append_message("unrelated", "assistant", "concurrent reply")
-        return original(db, rows)
+        return original(db, *args, **kwargs)
 
-    monkeypatch.setattr(mobile_widget_inbox, "page_replies", concurrent_reply)
+    monkeypatch.setattr(SessionDB, "list_sessions_rich", concurrent_reply)
     response = read()
     assert response.status_code == 200, response.text
     chats = [item for item in response.json()["items"] if item["session_id"].startswith("chat-")]
@@ -76,19 +77,21 @@ def test_unrelated_commit_between_list_and_replies_is_not_a_conflict(inbox_reade
 def test_page_keeps_one_sqlite_cut_when_visible_reply_changes(inbox_reader, monkeypatch):
     path, read, _, _ = inbox_reader
     before = read().json()
-    original = mobile_widget_inbox.page_replies
+    # Exercise an actual cold projection read, not the unchanged-page cache hit.
+    monkeypatch.setattr(mobile_widget_inbox, "_PROJECTIONS", OrderedDict(), raising=False)
+    original = SessionDB.list_sessions_rich
 
-    def concurrent_reply(db, rows):
+    def concurrent_reply(db, *args, **kwargs):
         with SessionDB(db_path=path) as writer:
             writer.append_message("chat-104", "assistant", "new visible reply", timestamp=1000)
-        return original(db, rows)
+        return original(db, *args, **kwargs)
 
-    monkeypatch.setattr(mobile_widget_inbox, "page_replies", concurrent_reply)
+    monkeypatch.setattr(SessionDB, "list_sessions_rich", concurrent_reply)
     response = read()
     assert response.status_code == 200, response.text
     assert response.json()["items"] == before["items"]
     assert response.json()["revision"] == before["revision"]
-    monkeypatch.setattr(mobile_widget_inbox, "page_replies", original)
+    monkeypatch.setattr(SessionDB, "list_sessions_rich", original)
     assert read().json()["revision"] != before["revision"]
 
 
@@ -118,13 +121,13 @@ def test_epoch_change_during_read_fails_closed(inbox_reader, monkeypatch):
     _, read, _, _ = inbox_reader
     from tui_gateway import server_requests
 
-    original = mobile_widget_inbox.page_replies
+    original = mobile_widget_inbox.page_attention
 
-    def new_epoch(db, rows):
-        result = original(db, rows)
+    def new_epoch(rows, home):
+        result = original(rows, home)
         monkeypatch.setattr(server_requests, "inbox_epoch", lambda: "replacement-process-epoch")
         return result
 
-    monkeypatch.setattr(mobile_widget_inbox, "page_replies", new_epoch)
+    monkeypatch.setattr(mobile_widget_inbox, "page_attention", new_epoch)
     response = read()
     assert response.status_code == 409, json.loads(response.content)
