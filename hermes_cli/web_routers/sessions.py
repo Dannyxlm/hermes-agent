@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -205,8 +206,9 @@ def get_sessions(
         raise HTTPException(status_code=400, detail="order must be one of: created, recent")
     profile_name = _cron_profile_home(profile)[0] if profile else None
     try:
+        from hermes_state_local import listing_lineage_scope
         db = _open_session_db_for_profile(profile, read_only=True)
-        try:
+        with closing(db), listing_lineage_scope(db):
             min_message_count = max(0, min_messages)
             archived_only = archived == "only"
             include_archived = archived == "include"
@@ -278,8 +280,6 @@ def get_sessions(
                     "archived_count": archived_count, "storage": storage,
                     "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage),
                     **cursor_fields}
-        finally:
-            db.close()
     except HTTPException:
         raise
     except sqlite3.OperationalError as exc:
