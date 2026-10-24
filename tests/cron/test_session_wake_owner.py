@@ -119,7 +119,7 @@ def test_login_owned_tui_wake_reaches_real_admission(wake_owner):
     assert saved['target_session_id'] == 'chat'
     assert wake_owner.subjects == [ALICE]
     with SessionDB(wake_owner.home / 'state.db', read_only=True) as db:
-        admission = db._conn.execute('SELECT principal_id,session_id FROM runtime_admissions').fetchall()
+        admission = db._conn.execute('SELECT principal_id,target_session_id FROM session_admissions').fetchall()
         assert [tuple(row) for row in admission] == [(ALICE, 'chat')]
         assert db.get_session('other')['session_key'] is None
 
@@ -138,7 +138,7 @@ def test_foreign_login_refusal_is_final_and_does_not_adopt(wake_owner):
     with SessionDB(wake_owner.home / 'state.db', read_only=True) as db:
         assert db.get_session('chat')['user_id'] == 'basic:alice'
         assert db.get_session('chat')['session_key'] is None
-        assert db._conn.execute('SELECT count(*) FROM runtime_admissions').fetchone()[0] == 0
+        assert db._conn.execute('SELECT count(*) FROM session_admissions').fetchone()[0] == 0
 
 
 def test_claimed_then_lost_stays_ambiguous_and_never_replays(wake_owner):
@@ -152,7 +152,7 @@ def test_claimed_then_lost_stays_ambiguous_and_never_replays(wake_owner):
     pending.drain_legacy_pending()
     assert wake_owner.methods == before == ['session.resume', 'prompt.submit']
     with SessionDB(wake_owner.home / 'state.db', read_only=True) as db:
-        assert db._conn.execute('SELECT count(*) FROM runtime_admissions').fetchone()[0] == 1
+        assert db._conn.execute('SELECT count(*) FROM session_admissions').fetchone()[0] == 1
 
 
 def test_queued_target_cannot_be_replaced_with_another_row(wake_owner):
