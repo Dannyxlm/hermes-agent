@@ -1389,11 +1389,11 @@ class SessionSessionsMixin:
             # require child.started_at >= parent.ended_at: races insert the
             # continuation before ended_at is written.
             outer_where, id_params = self._chain_search_where(
-                where_sql, (id_query or "").strip().lower(), (search_query or "").strip().lower(),
+                "", (id_query or "").strip().lower(), (search_query or "").strip().lower(),
             )
             query = f"""
-                WITH RECURSIVE chain(root_id, cur_id) AS (
-                    SELECT s.id, s.id FROM sessions s {where_sql}
+                WITH RECURSIVE admitted(id) AS MATERIALIZED (SELECT s.id FROM sessions s {where_sql}), chain(root_id, cur_id) AS (
+                    SELECT id, id FROM admitted
                     UNION ALL
                     SELECT c.root_id, child.id
                     FROM chain c
@@ -1414,14 +1414,14 @@ class SessionSessionsMixin:
                 )
                 {select_head}{_sql_session_last_active("s")} AS last_active,
                     COALESCE(cm.effective_last_active, {_sql_in_window("s.started_at")}) AS _effective_last_active
-                FROM sessions s
+                FROM admitted roots JOIN sessions s ON s.id = roots.id
                 LEFT JOIN chain_max cm ON cm.root_id = s.id
                 {prompt_join}
                 {outer_where}
                 ORDER BY _effective_last_active DESC, s.started_at DESC, s.id DESC
                 LIMIT ? OFFSET ?
             """
-            params = params + params + id_params + [limit, offset]  # WHERE binds twice (seed + outer)
+            params = params + id_params + [limit, offset]  # Scope is evaluated once in admitted.
         else:
             query = f"""
                 {select_head}{_sql_session_last_active("s")} AS last_active
