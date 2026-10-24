@@ -71,9 +71,11 @@ def wake_owner(request, tmp_path, monkeypatch):
         assert answer['ok'], answer
         grant = control.ticket_store.redeem(answer['result']['ticket'], profile_id=str(home), purpose='interactive')
         store = SessionStore(home / 'sessions', GatewayConfig())
+        store._db = SessionDB(home / 'state.db')
         runner = run.GatewayRunner.__new__(run.GatewayRunner)
         runner.adapters, runner.session_store, runner._session_db, runner._draining = {}, store, store._db, False
         authority = await initialize_session_authority(runner, profile_id=str(home), instance_id='test')
+        assert authority.db.get_session('chat')['user_id'] == 'basic:alice'
         authority._schedule = lambda ref: None
         conn = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {
             'provider': 'local', 'user_id': grant['subject'], 'profile_id': grant['profile_id'],
