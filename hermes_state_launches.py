@@ -34,11 +34,17 @@ def record_launch(conn, **payload):
     if row is not None:
         if any(row[k] != v for k, v in payload.items() if k != 'next_run_at'):
             raise ValueError('launch identity conflict')
+        resume_launch(conn, payload['launch_id'])
         return payload['launch_id']
     fields = list(payload) + ['created_at']
     conn.execute(f"INSERT INTO work_launches ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})",
                  [*payload.values(), time.time()])
     return payload['launch_id']
+
+
+def resume_launch(conn, launch_id):
+    conn.execute("UPDATE work_launches SET finished_at=NULL,terminal_cause=NULL "
+                 "WHERE launch_id=? AND terminal_cause='owner_restart'", (launch_id,))
 
 
 def bind_launch(conn, launch_id, *, child_session_id=None, backend_ref=None):
@@ -55,6 +61,7 @@ def bind_launch(conn, launch_id, *, child_session_id=None, backend_ref=None):
     conn.execute('UPDATE work_launches SET child_session_id=COALESCE(child_session_id,?), '
                  'backend_ref=COALESCE(backend_ref,?),bound_at=COALESCE(bound_at,?) WHERE launch_id=?',
                  (child_session_id, backend_ref, time.time(), launch_id))
+    resume_launch(conn, launch_id)
 
 
 def finish_launch(conn, launch_id, terminal_cause):

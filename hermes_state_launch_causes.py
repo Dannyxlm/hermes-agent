@@ -1,5 +1,5 @@
 """Typed terminal causes derived from execution receipts, never from activity descriptions."""
-from hermes_state_optional_launch import best_effort
+from hermes_state_optional_launch import best_effort, transactional_launch
 import json
 import time
 
@@ -28,8 +28,12 @@ def result_cause(result, *, stop_cause=None, outcome=None):
     return 'unknown'
 
 
-@best_effort
+@transactional_launch
 def finish_for_session(conn, session_id, terminal_cause, *, turn_only=False):
+    _finish_for_session(conn, session_id, terminal_cause, turn_only=turn_only)
+
+
+def _finish_for_session(conn, session_id, terminal_cause, *, turn_only=False):
     from hermes_state_runtime_workers import runtime_lineage
     if conn.execute('SELECT 1 FROM work_launches LIMIT 1').fetchone() is None:
         return
@@ -41,7 +45,7 @@ def finish_for_session(conn, session_id, terminal_cause, *, turn_only=False):
                  (time.time(), terminal_cause, terminal_cause, json.dumps(sorted(ids)), int(turn_only)))
 
 
-@best_effort
+@transactional_launch
 def finish_on_end(conn, session_id, end_reason):
     if end_reason in CONTINUATION_END_REASONS:
         return
@@ -58,7 +62,17 @@ def finish_on_end(conn, session_id, end_reason):
             'ORDER BY a.seq DESC LIMIT 1', (RESULT_PREFIX, json.dumps(sorted(ids)))).fetchone()
         if receipt is not None and receipt['status'] == 'terminal':
             cause = result_cause(load_result(receipt['value']) if receipt['value'] else {}, outcome=receipt['outcome'])
-    finish_for_session(conn, session_id, cause)
+    _finish_for_session(conn, session_id, cause)
+
+
+@transactional_launch
+def resume_for_session(conn, session_id):
+    from hermes_state_runtime_workers import runtime_lineage
+    ids = runtime_lineage(conn, session_id)
+    conn.execute("UPDATE work_launches SET finished_at=NULL,terminal_cause=NULL "
+                 "WHERE child_session_id IN (SELECT value FROM json_each(?)) "
+                 "AND kind IN ('lane','teammate') AND terminal_cause='owner_restart'",
+                 (json.dumps(sorted(ids)),))
 
 
 def stamp_stop(agent, cause):

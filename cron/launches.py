@@ -1,5 +1,5 @@
 """Cron creator provenance and exact execution identities share the profile's launch ledger."""
-from hermes_state_optional_launch import best_effort
+from hermes_state_optional_launch import best_effort, transactional_launch
 from datetime import datetime
 
 
@@ -73,7 +73,7 @@ def run_fields(job, execution_id):
                 title=job.get('launch_title'), backend_ref=execution_id)
 
 
-@best_effort
+@transactional_launch
 def bind_run_session(conn, request, session_id):
     from gateway.session_cron import scheduler_execution_id
     from hermes_state_launches import record_launch, bind_launch

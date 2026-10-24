@@ -30,12 +30,33 @@ def log_lock_holders(db_path, patience_s):
 
 
 @contextmanager
-def optional_launch(operation):
+def optional_launch(operation, *, conn=None):
+    saved = False
     try:
+        if conn is not None:
+            conn.execute('SAVEPOINT optional_launch')
+            saved = True
         yield
+        if saved:
+            conn.execute('RELEASE SAVEPOINT optional_launch')
     except Exception as exc:
-        if warning_due(operation):
-            logger.warning('Optional launch metadata skipped (%s): %s', operation, type(exc).__name__, exc_info=True)
+        warn(operation, exc)
+        if conn is not None:
+            # FULL, IOERR, NOMEM and INTERRUPT can abort the caller's entire transaction.
+            if not conn.in_transaction:
+                raise
+            if saved:
+                conn.execute('ROLLBACK TO SAVEPOINT optional_launch')
+                conn.execute('RELEASE SAVEPOINT optional_launch')
+
+
+def transactional_launch(fn):
+    @wraps(fn)
+    def wrapped(conn, *args, **kwargs):
+        with optional_launch(fn.__qualname__, conn=conn):
+            return fn(conn, *args, **kwargs)
+        return None
+    return wrapped
 
 
 def best_effort(fn):

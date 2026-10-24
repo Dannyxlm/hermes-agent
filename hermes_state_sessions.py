@@ -520,6 +520,8 @@ class SessionSessionsMixin(SessionActivityMixin):
             conn.execute(
                 "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?", (session_id,),
             )
+            from hermes_state_launch_causes import resume_for_session
+            resume_for_session(conn, session_id)
             # Resuming re-activates the chat: drop the idle sweep's archive (never a manual one).
             self._unarchive_auto_archived_lineage(conn, session_id)
         self._execute_write(_do)
