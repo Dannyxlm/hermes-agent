@@ -1,0 +1,209 @@
+{
+  "appTitle": "Панель чергового",
+  "appSubtitle": "Поточний стан розмов, фонових завдань і завдань за розкладом",
+  "openIn": "Де відкривати посилання",
+  "discordApp": "Застосунок Discord",
+  "browser": "Браузер",
+  "warnings": "Деякі дані недоступні",
+  "waiting": "Чекають на вашу відповідь",
+  "waitingHint": "Остання відповідь потребує вашого рішення; найдавніші розмови першими",
+  "unanswered": "Ви написали, але відповіді немає",
+  "waitingEmpty": "Ніщо не чекає на вашу відповідь",
+  "unansweredAge": "очікування: {value}",
+  "waitingAge": "очікування: {value}",
+  "causedBy": "Причина: {value}",
+  "you": "Ви: {value}",
+  "openInDiscord": "Відкрити в Discord",
+  "web": "Веб",
+  "dismiss": "Приховати",
+  "seen": "Переглянуто",
+  "collapse": "Згорнути",
+  "expandMore": {
+    "one": "Показати ще {count} елемент",
+    "few": "Показати ще {count} елементи",
+    "many": "Показати ще {count} елементів",
+    "other": "Показати ще {count} елемента"
+  },
+  "running": "Виконуються",
+  "runningHint": "Повна шкала відповідає одній годині",
+  "allIdle": "Немає активності",
+  "runningFor": "виконується {value}",
+  "stalledFor": "без активності {value}",
+  "doing": "У роботі",
+  "privateConversation": "Співрозмовник: {who}",
+  "someone": "хтось",
+  "privateContent": "Вміст приховано",
+  "delegations": "Фонові завдання",
+  "noDelegations": "Немає фонових завдань, що виконуються",
+  "completedNotDelivered": "Завершено, але результат не доставлено",
+  "delegationHint": "Результат може бути в новішій розмові; відкрийте її, перевірте й приховайте картку",
+  "parallel": {
+    "one": "Паралельно: {count} субагент",
+    "few": "Паралельно: {count} субагенти",
+    "many": "Паралельно: {count} субагентів",
+    "other": "Паралельно: {count} субагента"
+  },
+  "completedAt": "завершено: {value}",
+  "handled": "Опрацьовано",
+  "cron": "Завдання за розкладом",
+  "cronPaused": {
+    "one": "{count} завдання призупинено",
+    "few": "{count} завдання призупинено",
+    "many": "{count} завдань призупинено",
+    "other": "{count} завдання призупинено"
+  },
+  "cronRunning": "Виконується",
+  "cronScript": "скрипт",
+  "cronUpcoming": "наступне: {time} · {name}",
+  "cronReason": {
+    "lastError": "Помилка: {detail}",
+    "deliveryError": "Не вдалося доставити результат: {detail}",
+    "state": "Стан: {detail}",
+    "overdue": "Прострочено"
+  },
+  "recentDone": "Нещодавно завершені",
+  "recentDoneHint": "За останню добу; остання відповідь — звіт, а не запитання",
+  "promised": "Обіцяно повернутися з відповіддю",
+  "none": "Немає",
+  "goals": "Довгострокові цілі",
+  "staleGoals": {
+    "one": "Приховано {count} давнішу ціль",
+    "few": "Приховано {count} давніші цілі",
+    "many": "Приховано {count} давніших цілей",
+    "other": "Приховано {count} давнішої цілі"
+  },
+  "noGoals": "За розглянутий період немає довгострокових цілей",
+  "progress": {
+    "one": "{turns}/{count} хід",
+    "few": "{turns}/{count} ходи",
+    "many": "{turns}/{count} ходів",
+    "other": "{turns}/{count} ходу"
+  },
+  "active": "Активно",
+  "paused": "Призупинено",
+  "gateway": {
+    "connected": "підключено",
+    "retrying": "повторне підключення",
+    "disconnected": "відключено",
+    "error": "помилка"
+  },
+  "refreshed": "оновлено {value} тому",
+  "justNow": "щойно оновлено",
+  "loading": "Завантаження…",
+  "loadFailed": "Не вдалося завантажити: {error}",
+  "stale": "дані не оновлювалися {value}",
+  "sectionUnavailable": "Розділ недоступний",
+  "neverRan": "Ще не запускалося",
+  "ago": "{value} тому",
+  "in": "через {value}",
+  "soon": "незабаром",
+  "conversation": "Розмова",
+  "activity": {
+    "output": "Потокове виведення",
+    "response": "Очікування відповіді моделі",
+    "waiting": "Очікування відповіді: {who} · {duration}",
+    "call": "Виклик моделі №{n}",
+    "callDone": "Виклик моделі завершено",
+    "starting": "Щойно розпочато",
+    "retry": "Повторний виклик API {a}/{b}",
+    "tool": "Виконується: {tool}",
+    "toolDone": "Завершено: {tool}",
+    "toolError": "Помилка: {tool}",
+    "terminal": "Виконується команда термінала ({duration})",
+    "script": "Виконується скрипт ({duration})",
+    "compressed": "Стиснення контексту завершено",
+    "subtask": "Підзавдання · {value}"
+  },
+  "section": {
+    "conversations": "Розмови",
+    "gateway": "Стан шлюзу",
+    "database": "База даних Hermes"
+  },
+  "issue": {
+    "missingTable": "{section}: таблицю {detail} не знайдено",
+    "missingColumn": "{section}: стовпець {detail} не знайдено",
+    "collectorFailed": "{section}: не вдалося прочитати дані ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "Електронна пошта",
+    "sms": "СМС"
+  },
+  "chat": {
+    "empty": "Зараз ніщо не потребує вашої уваги.",
+    "ownerOnly": "Цей огляд доступний лише власнику панелі.",
+    "configureOwner": "Задайте owner у duty-board/settings.json перед використанням команди в чаті.",
+    "oldHost": "Для цієї команди в чаті потрібен Hermes 0.21.7 або новіший.",
+    "isolated": "Зведення в чаті недоступні, поки плагіни працюють в окремому процесі (plugins.isolation: host): там неможливо перевірити, хто викликає команду. Використовуйте панель або встановіть plugins.isolation: in_process.",
+    "dmHint": "Напишіть боту в особисті повідомлення або відкрийте панель для подробиць.",
+    "error": "Панель недоступна ({error}).",
+    "stalled": "{age} (зупинилося)",
+    "privatePlace": "Приватна розмова",
+    "untitled": "Без назви",
+    "localPlace": "Локально",
+    "waitingHeading": "Чекають на вас (включно з повідомленнями без відповіді)",
+    "cronHeading": "Проблеми завдань за розкладом",
+    "units": {
+      "minute": "хв",
+      "hour": "год",
+      "day": "дн"
+    },
+    "headline": "Панель чергового · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "Вміст приховано",
+    "runningHeading": "Виконуються",
+    "droppedHeading": "Завершено, але результат не доставлено",
+    "goalsHeading": "Довгострокові цілі",
+    "waitingCount": {
+      "one": "{count} чекає на вас",
+      "few": "{count} чекають на вас",
+      "many": "{count} чекають на вас",
+      "other": "{count} чекають на вас"
+    },
+    "runningCount": {
+      "one": "{count} виконується",
+      "few": "{count} виконуються",
+      "many": "{count} виконуються",
+      "other": "{count} виконуються"
+    },
+    "droppedCount": {
+      "one": "{count} недоставлений результат",
+      "few": "{count} недоставлені результати",
+      "many": "{count} недоставлених результатів",
+      "other": "{count} недоставлених результатів"
+    },
+    "cronCount": {
+      "one": "{count} проблема завдання за розкладом",
+      "few": "{count} проблеми завдань за розкладом",
+      "many": "{count} проблем завдань за розкладом",
+      "other": "{count} проблем завдань за розкладом"
+    },
+    "goalsCount": {
+      "one": "{count} постійна ціль",
+      "few": "{count} постійні цілі",
+      "many": "{count} постійних цілей",
+      "other": "{count} постійних цілей"
+    },
+    "more": {
+      "one": "Ще {count}",
+      "few": "Ще {count}",
+      "many": "Ще {count}",
+      "other": "Ще {count}"
+    }
+  }
+}

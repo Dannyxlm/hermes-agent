@@ -51,6 +51,10 @@
       "summary": "Pinned official model-map and profile-route delegation backends, available without runtime installation and inactive until selected"
     },
     {
+      "id": "bundled-plugin-batch",
+      "summary": "Pinned reviewed draft cards, redaction patterns, profile picker and duty board with explicit owner opt-in"
+    },
+    {
       "id": "cloudseed-mobile-plugin",
       "summary": "Owner-authenticated mobile photos, reminders, account preferences and profile memory with retained integration stores"
     }

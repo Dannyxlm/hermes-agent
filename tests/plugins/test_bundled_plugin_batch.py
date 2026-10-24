@@ -25,6 +25,10 @@ def discover(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setattr(plugins_mod, "get_bundled_plugins_dir", lambda: REPO / "plugins")
+    from hermes_cli import version_info
+
+    monkeypatch.setattr(version_info, "_cached_version_info", version_info.VersionInfo(
+        "0.22.5", "0.22.5", None, "0" * 40, None, "build"))
     managers = []
 
     def run(enabled=(), disabled=()):

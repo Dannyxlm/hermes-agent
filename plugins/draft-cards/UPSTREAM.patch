@@ -1,0 +1,34 @@
+--- a/dashboard/manifest.json
++++ b/dashboard/manifest.json
+@@ -7 +7,3 @@
+-  "tab": { "hidden": true },
++  "tab": {
++    "hidden": true
++  },
+@@ -9 +11,2 @@
+-  "api": "plugin_api.py"
++  "api": "plugin_api.py",
++  "default_enabled": false
+--- a/dashboard/plugin_api.py
++++ b/dashboard/plugin_api.py
+@@ -63 +63 @@
+-    except Exception as exc:  # noqa: BLE001 - polling covers a missed event
++    except Exception as exc:  # health: allow BLE001 -- Pinned upstream best-effort event notification; polling remains the fallback.
+--- a/desktop/plugin.js
++++ b/desktop/plugin.js
+@@ -1044,0 +1045 @@
++  defaultEnabled: false,
+--- a/tools.py
++++ b/tools.py
+@@ -100 +100 @@
+-    except Exception as exc:  # noqa: BLE001 - an event miss must never fail the tool
++    except Exception as exc:  # health: allow BLE001 -- Pinned upstream best-effort event notification; draft persistence already succeeded.
+@@ -154 +154 @@
+-        except Exception as exc:  # noqa: BLE001
++        except Exception as exc:
+@@ -169 +169 @@
+-        except Exception as exc:  # noqa: BLE001
++        except Exception as exc:
+@@ -181 +181 @@
+-        except Exception as exc:  # noqa: BLE001
++        except Exception as exc:

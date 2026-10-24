@@ -1,0 +1,187 @@
+{
+  "appTitle": "Arbeitsübersicht",
+  "appSubtitle": "Echtzeitstatus von Unterhaltungen, Hintergrundaufgaben und geplanten Aufgaben",
+  "openIn": "Links öffnen in",
+  "discordApp": "Discord-App",
+  "browser": "Webbrowser",
+  "warnings": "Einige Daten sind nicht verfügbar",
+  "waiting": "Wartet auf deine Antwort",
+  "waitingHint": "Die letzte Antwort bittet dich um eine Entscheidung; älteste zuerst",
+  "unanswered": "Nachricht gesendet, aber keine Antwort erhalten",
+  "waitingEmpty": "Keine Antwort von dir erforderlich",
+  "unansweredAge": "wartet seit {value}",
+  "waitingAge": "wartet seit {value}",
+  "causedBy": "Grund: {value}",
+  "you": "Du: {value}",
+  "openInDiscord": "In Discord öffnen",
+  "web": "Web",
+  "dismiss": "Ausblenden",
+  "seen": "Gesehen",
+  "collapse": "Einklappen",
+  "expandMore": {
+    "one": "{count} weiteren Eintrag anzeigen",
+    "other": "{count} weitere Einträge anzeigen"
+  },
+  "running": "Läuft",
+  "runningHint": "Ein voller Balken entspricht einer Stunde",
+  "allIdle": "Alle im Leerlauf",
+  "runningFor": "läuft seit {value}",
+  "stalledFor": "keine Aktivität seit {value}",
+  "doing": "In Bearbeitung",
+  "privateConversation": "Unterhaltung mit {who}",
+  "someone": "jemandem",
+  "privateContent": "Inhalt ausgeblendet",
+  "delegations": "Hintergrundaufgaben",
+  "noDelegations": "Keine laufenden Hintergrundaufgaben",
+  "completedNotDelivered": "Fertig, Ergebnis nicht zugestellt",
+  "delegationHint": "Das Ergebnis ist möglicherweise in einer neueren Unterhaltung. Zum Prüfen öffnen, dann ausblenden",
+  "parallel": {
+    "one": "{count} Subagent läuft parallel",
+    "other": "{count} Subagenten laufen parallel"
+  },
+  "completedAt": "abgeschlossen: {value}",
+  "handled": "Erledigt",
+  "cron": "Geplante Aufgaben",
+  "cronPaused": {
+    "one": "{count} pausiert",
+    "other": "{count} pausiert"
+  },
+  "cronRunning": "Läuft",
+  "cronScript": "Skript",
+  "cronUpcoming": "nächste Ausführung {time} · {name}",
+  "cronReason": {
+    "lastError": "Fehler: {detail}",
+    "deliveryError": "Zustellung fehlgeschlagen: {detail}",
+    "state": "Status: {detail}",
+    "overdue": "Überfällig"
+  },
+  "recentDone": "Kürzlich abgeschlossen",
+  "recentDoneHint": "Innerhalb der letzten 24 Stunden; die letzte Antwort war ein Bericht, keine Frage",
+  "promised": "Rückmeldung zugesagt",
+  "none": "Keine",
+  "goals": "Langfristige Ziele",
+  "staleGoals": {
+    "one": "{count} älteres Ziel ausgeblendet",
+    "other": "{count} ältere Ziele ausgeblendet"
+  },
+  "noGoals": "Keine langfristigen Ziele im betrachteten Zeitraum",
+  "progress": {
+    "one": "{turns}/{count} Runde",
+    "other": "{turns}/{count} Runden"
+  },
+  "active": "Aktiv",
+  "paused": "Pausiert",
+  "gateway": {
+    "connected": "verbunden",
+    "retrying": "Verbindung wird wiederhergestellt",
+    "disconnected": "getrennt",
+    "error": "Fehler"
+  },
+  "refreshed": "vor {value} aktualisiert",
+  "justNow": "gerade aktualisiert",
+  "loading": "Lädt…",
+  "loadFailed": "Laden fehlgeschlagen: {error}",
+  "stale": "Daten sind {value} alt",
+  "sectionUnavailable": "Bereich nicht verfügbar",
+  "neverRan": "Noch nie ausgeführt",
+  "ago": "vor {value}",
+  "in": "in {value}",
+  "soon": "bald",
+  "conversation": "Unterhaltung",
+  "activity": {
+    "output": "Ausgabe läuft",
+    "response": "Wartet auf Modellantwort",
+    "waiting": "Wartet auf {who} · {duration}",
+    "call": "Modellaufruf Nr. {n}",
+    "callDone": "Modellaufruf abgeschlossen",
+    "starting": "Gerade gestartet",
+    "retry": "API-Aufruf wird wiederholt {a}/{b}",
+    "tool": "Ausführung von {tool}",
+    "toolDone": "{tool} abgeschlossen",
+    "toolError": "{tool} fehlgeschlagen",
+    "terminal": "Terminalbefehl läuft ({duration})",
+    "script": "Skript läuft ({duration})",
+    "compressed": "Kontextkomprimierung abgeschlossen",
+    "subtask": "Teilaufgabe · {value}"
+  },
+  "section": {
+    "conversations": "Unterhaltungen",
+    "gateway": "Gateway-Status",
+    "database": "Hermes-Datenbank"
+  },
+  "issue": {
+    "missingTable": "{section}: Tabelle {detail} nicht gefunden",
+    "missingColumn": "{section}: Spalte {detail} nicht gefunden",
+    "collectorFailed": "{section}: Lesen fehlgeschlagen ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "E-Mail",
+    "sms": "SMS"
+  },
+  "chat": {
+    "empty": "Im Moment braucht nichts deine Aufmerksamkeit.",
+    "ownerOnly": "Diese Zusammenfassung steht nur dem Eigentümer der Arbeitsübersicht zur Verfügung.",
+    "configureOwner": "Lege vor der Nutzung im Chat owner in duty-board/settings.json fest.",
+    "oldHost": "Dieser Befehl erfordert im Chat Hermes 0.21.7 oder neuer.",
+    "isolated": "Chat-Zusammenfassungen sind nicht verfügbar, solange Plugins in einem eigenen Prozess laufen (plugins.isolation: host): Dort lässt sich nicht prüfen, wer fragt. Nutze das Dashboard oder setze plugins.isolation: in_process.",
+    "dmHint": "Schreibe dem Bot eine Direktnachricht oder öffne das Dashboard für Details.",
+    "error": "Arbeitsübersicht nicht verfügbar ({error}).",
+    "stalled": "{age} (stockt)",
+    "privatePlace": "Privates Gespräch",
+    "untitled": "Ohne Titel",
+    "localPlace": "Lokal",
+    "waitingHeading": "Wartet auf dich (einschließlich unbeantworteter Nachrichten)",
+    "cronHeading": "Cron-Probleme",
+    "units": {
+      "minute": "Min.",
+      "hour": "Std.",
+      "day": "T."
+    },
+    "headline": "Arbeitsübersicht · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "Inhalt ausgeblendet",
+    "runningHeading": "Läuft",
+    "droppedHeading": "Fertig, Ergebnis nicht zugestellt",
+    "goalsHeading": "Langfristige Ziele",
+    "waitingCount": {
+      "one": "{count} wartet auf dich",
+      "other": "{count} warten auf dich"
+    },
+    "runningCount": {
+      "one": "{count} läuft",
+      "other": "{count} laufen"
+    },
+    "droppedCount": {
+      "one": "{count} nicht zugestelltes Ergebnis",
+      "other": "{count} nicht zugestellte Ergebnisse"
+    },
+    "cronCount": {
+      "one": "{count} Cron-Problem",
+      "other": "{count} Cron-Probleme"
+    },
+    "goalsCount": {
+      "one": "{count} dauerhaftes Ziel",
+      "other": "{count} dauerhafte Ziele"
+    },
+    "more": {
+      "one": "+{count} weitere",
+      "other": "+{count} weitere"
+    }
+  }
+}
