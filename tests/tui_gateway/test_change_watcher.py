@@ -21,6 +21,7 @@ def watcher_home(tmp_path, monkeypatch):
     (tmp_path / "config.yaml").write_text("display: {}\n")
     (tmp_path / "cron").mkdir()
 
+    monkeypatch.setattr(server, "_stdio_is_rpc_channel", True)
     monkeypatch.setattr(server, "_hermes_home", str(tmp_path))
     monkeypatch.setattr(server, "_cfg_cache", None)
     monkeypatch.setattr(server, "_change_sigs", {})

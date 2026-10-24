@@ -443,6 +443,12 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
     """One pass: recompute due signatures, broadcast events whose signature moved.
     First sighting seeds silently so a gateway boot never fires a refresh storm."""
     from tui_gateway import session_change_cursor
+    with _live_transports_lock:
+        live = list(_live_transports)
+    # Durable Inbox push owns its leased-store refresh in mobile_inbox_invalidation.process;
+    # this UI watcher has no work without a WebSocket or the stdio TUI.
+    if not live and not _stdio_is_rpc_channel:
+        return
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
         if event == "sessions.changed":

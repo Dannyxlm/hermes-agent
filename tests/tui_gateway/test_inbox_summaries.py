@@ -126,7 +126,7 @@ def test_final_reply_is_page_batched_and_profile_isolated(inbox, mobile_home, mo
     summaries = [r for r in response["sessions"] if "last_assistant_reply" in r]
     assert len(summaries) == 6
     assert next(r for r in summaries if r["id"] == "same")["last_assistant_reply"] == {"row_id": final_id, "at": 123, "preview": "final reply", "unread": False}
-    assert len([sql for sql in queries if "MAX(id)" in sql and "finish_reason" in sql]) == 1
+    assert len([sql for sql in queries if "finish_reason" in sql]) == 1
     assert "last_assistant_reply" not in row(inbox, "default")
 
 
