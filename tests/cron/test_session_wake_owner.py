@@ -75,7 +75,8 @@ def wake_owner(request, tmp_path, monkeypatch):
         runner = run.GatewayRunner.__new__(run.GatewayRunner)
         runner.adapters, runner.session_store, runner._session_db, runner._draining = {}, store, store._db, False
         authority = await initialize_session_authority(runner, profile_id=str(home), instance_id='test')
-        assert authority.db.get_session('chat')['user_id'] == 'basic:alice'
+        assert Path(authority.db.db_path) == home / 'state.db'
+        assert authority.db.get_session('chat') is not None
         authority._schedule = lambda ref: None
         conn = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {
             'provider': 'local', 'user_id': grant['subject'], 'profile_id': grant['profile_id'],
@@ -200,6 +201,37 @@ def test_receipt_cannot_change_its_exact_target_binding(wake_owner):
     saved = pending._drain_one(path)
     assert saved['status'] == 'failed', saved
     assert wake_owner.subjects == []
+
+
+@pytest.mark.parametrize('source,owner', [('tui', ALICE), ('desktop', 'basic:alice'), ('gui', 'basic:alice')])
+def test_other_dashboard_owner_representations_reach_admission(wake_owner, source, owner):
+    with SessionDB(wake_owner.home / 'state.db') as db:
+        db._conn.execute('UPDATE sessions SET source=?,user_id=? WHERE id=?', (source, owner, 'chat'))
+        db._conn.commit()
+    path, _ = queue(wake_owner)
+    wake_owner.ready = True
+    saved = pending._drain_one(path)
+    assert saved['status'] == 'transferred', saved
+    assert wake_owner.subjects == [ALICE]
+
+
+def test_pre_upgrade_receipt_without_subject_is_bound_to_its_exact_row(wake_owner):
+    path, record = queue(wake_owner)
+    record.pop('wake_subject', None)
+    atomic_json_write(path, record)
+    wake_owner.ready = True
+    saved = pending._drain_one(path)
+    assert saved['status'] == 'transferred', saved
+    assert wake_owner.subjects == [ALICE]
+
+
+def test_a_claimed_record_is_not_rearmed_by_a_direct_transfer(wake_owner):
+    path, record = queue(wake_owner)
+    record['status'] = 'claimed'
+    wake_owner.ready = True
+    assert session_delivery.transfer_pending(path, record) is True
+    assert record['status'] == 'ambiguous'
+    assert wake_owner.methods == []
 
 
 @pytest.mark.parametrize('reason', ['not_found', 'permission_denied', 'profile_mismatch'])
