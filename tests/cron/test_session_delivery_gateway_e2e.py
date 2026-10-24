@@ -56,6 +56,7 @@ def test_exact_session_wakes_idle_busy_cold_and_rotated(tmp_path, monkeypatch, m
     root = Path(__file__).resolve().parents[2]
     env = {k: os.environ[k] for k in ('PATH', 'LANG', 'TZ') if k in os.environ}
     env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home),
+               TMPDIR=str(tmp_path.parent.parent),
                PYTHONPATH=str(root), PYTHONUNBUFFERED='1',
                OPENAI_API_KEY='loopback-only', OPENAI_BASE_URL=model_url)
 
@@ -85,6 +86,9 @@ def test_exact_session_wakes_idle_busy_cold_and_rotated(tmp_path, monkeypatch, m
         try:
             descriptor = wait_until(ready, timeout=45, what='disposable gateway readiness')
             assert descriptor['api_origin'].startswith('http://127.0.0.1:')
+            pointer = home / 'gateway.sock.path'
+            control_path = Path(pointer.read_text().strip()) if pointer.exists() else home / 'gateway.sock'
+            assert control_path.is_relative_to(tmp_path.parent.parent)
             wait_until(lambda: settled(cold_key), timeout=45, what='next-tick cold wake completion')
             idle_key = deliver('idle')
             wait_until(lambda: settled(idle_key), timeout=45, what='idle wake completion')
