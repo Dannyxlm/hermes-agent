@@ -1738,6 +1738,9 @@ export interface FamilyNode {
   command: string | null
   report_hint: string | null
   child_count: number
+  backend_ref: string | null
+  root_session_id: string | null
+  root_profile: string | null
   actions: ('open' | 'answer' | 'resume' | 'stop')[]
 }
 export interface FamilyNeedsYou {

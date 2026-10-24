@@ -17,7 +17,7 @@ def resident_signals(homes, *, can_stop_helper=lambda agent: False, can_stop_pro
             profile = by_home.get(str(Path(path).resolve().parent)) if path else None
             if profile and sid:
                 signals[(profile, sid)] = {"running": record.get("status") in {"running", "queued", "starting"},
-                                           "can_stop": can_stop_helper(agent)}
+                                           "can_stop": can_stop_helper(agent), "backend_ref": record.get("subagent_id")}
     module = sys.modules.get("tools.process_registry")
     if module is not None:
         registry = module.process_registry
@@ -38,5 +38,5 @@ def resident_signals(homes, *, can_stop_helper=lambda agent: False, can_stop_pro
                         cause = "success" if process.exit_code == 0 else "error"
                 signals[(profile, process.id)] = {"running": not process.exited and not process.detached,
                     "terminal_cause": cause, "can_stop": can_stop_process(process), "exit_code": process.exit_code, "command": process.command[:200],
-                    "ended_at": process.exited_at or None, "last_activity_at": process._heartbeat_last or None}
+                    "backend_ref": process.id, "ended_at": process.exited_at or None, "last_activity_at": process._heartbeat_last or None}
     return signals

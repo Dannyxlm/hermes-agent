@@ -113,6 +113,7 @@ class Family:
         self.by_session = {}
         self.by_launch = {}
         self.children = defaultdict(list)
+        self.root_chats = {}
         self._index()
 
     def _index(self):
@@ -148,7 +149,22 @@ class Family:
             if parent and parent != key:
                 self.children[parent].append(key)
 
-    def _node(self, key, *, root=False):
+    def _root_chat(self, key):
+        path = set()
+        while key not in self.root_chats and key not in path:
+            path.add(key)
+            row = self.rows[key]
+            if not row.get("parent"):
+                root = ((row["launcher_profile"], row["launcher_session_id"]) if row.get("launch_id")
+                        else (row["profile"], row["session_id"]))
+                break
+            key = row["parent"]
+        else:
+            root = self.root_chats.get(key, (None, None))
+        self.root_chats.update((node, root) for node in path)
+        return root
+
+    def _node(self, key, *, root=False, root_ref=None):
         row = self.rows[key]
         profile, sid = row["profile"], row["session_id"]
         live = self.live.get((profile, sid or row.get("backend_ref") or row.get("launch_id")), {})
@@ -158,6 +174,8 @@ class Family:
         step = step if status in LIVE and step in STEPS else None
         session = self.profiles[profile].sessions.get(sid, {})
         kind = "chat" if root else row["kind"]
+        root_profile, root_session_id = (profile, sid) if root else root_ref or self._root_chat(key)
+        backend_ref = (row.get("backend_ref") or live.get("backend_ref")) if kind in {"helper", "process", "check_in"} else None
         actions = ["open"] if sid or row.get("launch_id") else []
         needs = {"kind": pending, "session_id": sid, "profile": profile} if pending and sid else None
         if needs and live.get("can_answer"):
@@ -180,9 +198,11 @@ class Family:
                 "exit_code": live.get("exit_code") if kind == "process" else None,
                 "command": live.get("command") if kind == "process" else None,
                 "report_hint": (row.get("report_hint") or live.get("report_hint")) if kind == "lane" and status in FINISHED else None,
-                "child_count": len(self.children[key]), "actions": actions}
+                "child_count": len(self.children[key]), "backend_ref": backend_ref,
+                "root_profile": root_profile, "root_session_id": root_session_id, "actions": actions}
 
     def _walk(self, root):
+        root_ref = (self.rows[root]["profile"], self.rows[root]["session_id"])
         queue, seen, out = deque([(root, 0)]), {root}, []
         truncated = False
         while queue:
@@ -194,7 +214,7 @@ class Family:
                 if key in seen:
                     continue
                 seen.add(key)
-                out.append(self._node(key))
+                out.append(self._node(key, root_ref=root_ref))
                 queue.append((key, depth + 1))
         return out, truncated
 

@@ -23041,6 +23041,39 @@
             "title": "Child Count",
             "type": "integer"
           },
+          "backend_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend Ref"
+          },
+          "root_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Session Id"
+          },
+          "root_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Profile"
+          },
           "actions": {
             "items": {
               "enum": [
@@ -23079,6 +23112,9 @@
           "command",
           "report_hint",
           "child_count",
+          "backend_ref",
+          "root_session_id",
+          "root_profile",
           "actions"
         ],
         "title": "FamilyNode",

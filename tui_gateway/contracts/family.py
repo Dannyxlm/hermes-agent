@@ -53,6 +53,9 @@ class FamilyNode(Result):
     command: str | None
     report_hint: str | None
     child_count: int
+    backend_ref: str | None
+    root_session_id: str | None
+    root_profile: str | None
     actions: list[Literal["open", "answer", "resume", "stop"]]
 
 
