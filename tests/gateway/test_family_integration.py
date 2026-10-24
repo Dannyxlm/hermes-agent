@@ -3,12 +3,15 @@ import asyncio
 from contextlib import ExitStack, closing
 import http.server
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import threading
 from types import SimpleNamespace
+
+import pytest
 
 from hermes_state import SessionDB
 from tests.hermes_cli.test_finite_chat_delegation import (
@@ -109,6 +112,27 @@ async def _assert_recorded_fanout(home, root):
             assert response["result"]["batches"][0]["batch_name"] == "Release proof"
         finally:
             await connection.close()
+
+
+@pytest.mark.platforms("posix")
+def test_teammate_child_has_its_own_process_group(tmp_path, monkeypatch):
+    home = tmp_path / "iris"
+    home.mkdir()
+    run = subprocess.run
+    groups = []
+
+    def observed(command, **kwargs):
+        command = list(command)
+        command[2] = "import os; print('TEAMMATE_PGID=' + str(os.getpgrp()), flush=True); " + command[2]
+        result = run(command, **kwargs)
+        groups.extend(int(line.split("=", 1)[1]) for line in result.stdout.splitlines()
+                      if line.startswith("TEAMMATE_PGID="))
+        return result
+
+    monkeypatch.setattr(subprocess, "run", observed)
+    _teammate(tmp_path, home, "integration-root")
+    assert len(groups) == 1
+    assert groups[0] != os.getpgrp(), "teammate inherited the test worker's teardown group"
 
 
 def _teammate(tmp_path, home, root):
