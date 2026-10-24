@@ -7530,6 +7530,11 @@ export interface SubagentEventPayload {
   parent_id?: string | null
   child_session_id?: string | null
   delegation_id?: string | null
+  batch_id?: string | null
+  batch_name?: string | null
+  title?: string | null
+  step_kind?: string | null
+  step_tool?: string | null
   depth?: number | null
   model?: string | null
   tool_count?: number | null

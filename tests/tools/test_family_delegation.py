@@ -48,10 +48,10 @@ def test_fanout_titles_and_batch_survive_missing_transcripts(family_parent, monk
     from tools import delegation_live_log
     parent, db, events, observed = family_parent
     monkeypatch.setattr(delegation_live_log, 'create_live_transcripts', lambda *a, **k: (None, [], []))
-    result = json.loads(dt.delegate_task(tasks=[{'goal': 'first', 'title': 'A' * 60},
-                                               {'goal': 'second', 'title': 'short'}], parent_agent=parent))
+    result = json.loads(dt.delegate_task(tasks=[{'goal': 'Exercise first child', 'title': 'A' * 60},
+                                               {'goal': 'Exercise second child', 'title': 'short'}], parent_agent=parent))
     spawned = [kw for event, kw in events if event == 'subagent.spawn_requested']
-    assert len(spawned) == 2
+    assert len(spawned) == 2, result
     assert {kw.get('title') for kw in spawned} == {'A' * 39 + '…', 'short'}
     assert len(observed) == 2, result
     assert len({r['batch_id'] for r in observed}) == 1

@@ -325,6 +325,7 @@ class _ChildProgressRelay:
         for src, dst in (("session_id", "child_session_id"), ("delegation_id", "delegation_id")):
             if self.session_ref.get(src):
                 kw[dst] = str(self.session_ref[src])
+        kw.update({k: self.session_ref[k] for k in ("batch_id", "batch_name", "title") if k in self.session_ref})
         kw["tool_count"] = self.tool_count
         return kw
 
