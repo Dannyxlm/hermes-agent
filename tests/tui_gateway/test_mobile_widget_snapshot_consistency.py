@@ -5,8 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer
-from tests.tui_gateway.test_methods_mobile_push import push_service
+from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer  # noqa: PLC0414 - pytest fixtures
+from tests.tui_gateway.test_methods_mobile_push import push_service as push_service  # noqa: PLC0414 - pytest fixture
 from tests.tui_gateway.test_mobile_widget_inbox import register
 from tui_gateway import mobile_widget_inbox
 
