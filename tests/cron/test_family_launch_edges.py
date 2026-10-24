@@ -21,6 +21,7 @@ def test_worker_can_refresh_shared_job_but_not_a_foreign_profile(tmp_path, monke
     from cron import jobs
     import hermes_state_launch_context
     db, store, scope = setup_store(tmp_path)
+    (tmp_path / 'profiles' / 'fixture').mkdir(parents=True)
     monkeypatch.setenv('HERMES_HOME', str(tmp_path / 'profiles' / 'fixture'))
     monkeypatch.setattr(hermes_state_launch_context, 'launch_writer', writer(db))
     try:
@@ -45,13 +46,19 @@ def test_worker_can_refresh_shared_job_but_not_a_foreign_profile(tmp_path, monke
         db.close()
 
 
-def test_manual_run_keeps_trigger_and_finishes_after_job_removal(tmp_path, monkeypatch):
+@pytest.mark.parametrize('source', ['manual', 'builtin'])
+def test_manual_run_keeps_trigger_and_finishes_after_job_removal(tmp_path, monkeypatch, source):
     from cron import jobs, executions
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     with scoped_current_session_id('job-creator'):
         job = jobs.create_job('Manual fixture', 'every 2h')
-    with scoped_current_session_id('manual-trigger'):
-        run = executions.create_execution(job['id'], source='manual')
+    if source == 'builtin':
+        with scoped_current_session_id('manual-trigger'):
+            jobs.trigger_job(job['id'])
+        run = executions.create_execution(job['id'], source=source)
+    else:
+        with scoped_current_session_id('manual-trigger'):
+            run = executions.create_execution(job['id'], source=source)
     executions.mark_execution_running(run['id'])
     jobs.remove_job(job['id'])
     executions.finish_execution(run['id'], success=True)

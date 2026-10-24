@@ -88,3 +88,17 @@ def test_managed_launches_use_closed_receipts_and_cannot_mutate_foreign_launch(t
     finally:
         store.close()
         db.close()
+
+
+def test_managed_default_profile_and_absent_finish_are_idempotent(tmp_path):
+    db, store, scope = setup_store(tmp_path)
+    try:
+        db._write_sql('UPDATE sessions SET profile_name=NULL WHERE id=?', ('owned',))
+        store.record_launch('default-process', kind='process', launcher_profile='default',
+                            launcher_session_id='owned', child_profile='default')
+        store.finish_launch('absent-metadata', 'unknown')
+        assert len(launches(db)) == 1
+        assert launches(db)[0]['child_profile'] == 'default'
+    finally:
+        store.close()
+        db.close()
