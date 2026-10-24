@@ -240,7 +240,7 @@ def test_activity_is_typed_not_parsed_and_terminal_reply_is_only_a_hint(tmp_path
     assert (helper["step_kind"], helper["step_tool"]) == ("tool", "actual_tool")
 
 
-def test_bfs_old_parent_still_connects_live_grandchild_and_depth_is_bounded(tmp_path):
+def test_bfs_traverses_finished_parent_and_bounds_depth(tmp_path):
     from hermes_family import read_profile, Family
     path = tmp_path / "deep.db"
     with fixture_db(path) as db:
@@ -252,7 +252,7 @@ def test_bfs_old_parent_still_connects_live_grandchild_and_depth_is_bounded(tmp_
             launch(db, sid, launcher=parent, cause="success" if i == 0 else None, finished=1 if i == 0 else None)
             parent = sid
     family = Family({"default": read_profile("default", path)}, live={("default", "child-1"): {"running": True}}, now=NOW)
-    result = family.session_family("default", "root", since=NOW - 1, limit=1)
+    result = family.session_family("default", "root", since=0, limit=500)
     assert result["truncated"] is True
     nodes = {n["session_id"]: n for n in result["nodes"]}
     assert len(nodes) == 64

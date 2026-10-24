@@ -172,7 +172,8 @@ class Family:
                 "step_kind": step, "step_tool": (row.get("last_activity_tool") or live.get("step_tool")) if step == "tool" else None,
                 "activity_text": row.get("last_activity_description"),
                 "started_at": row.get("created_at", row.get("started_at")),
-                "ended_at": row.get("finished_at") or row.get("ended_at") or live.get("ended_at"),
+                "ended_at": next((value for value in (row.get("finished_at"), row.get("ended_at"), live.get("ended_at"))
+                                  if value is not None), None),
                 "last_activity_at": activity_at(row, live),
                 "model": row.get("model"), "terminal_cause": terminal_cause_for(row, live),
                 "needs_you": needs, "next_run_at": row.get("next_run_at") if kind == "check_in" else None,
@@ -203,16 +204,9 @@ class Family:
         limit = 200 if limit is None else limit
         nodes, truncated = self._walk(root)
         selected = {n["node_id"] for n in nodes if n["status"] not in FINISHED
-                    or n["ended_at"] is None or n["ended_at"] >= since}
-        # Keep connecting ancestors even when their receipts predate the requested window.
-        for key in tuple(selected):
-            parent = self.rows[key].get("parent")
-            while parent and parent != root and parent not in selected:
-                selected.add(parent)
-                parent = self.rows[parent].get("parent")
+                    or n["ended_at"] is not None and n["ended_at"] >= since}
         nodes = sorted((n for n in nodes if n["node_id"] in selected), key=lambda n: (n["started_at"] or 0, n["node_id"]))
-        parents = {n["parent_node_id"] for n in nodes}
-        removable = sorted((n for n in nodes if n["status"] in FINISHED and n["node_id"] not in parents),
+        removable = sorted((n for n in nodes if n["status"] in FINISHED),
                            key=lambda n: (n["ended_at"] or 0, n["started_at"] or 0, n["node_id"]))
         drop = {n["node_id"] for n in removable[:max(0, len(nodes) - limit)]}
         truncated |= len(nodes) > limit
