@@ -7,6 +7,7 @@ late-binding seam so ``monkeypatch.setattr(web_server_cron, ...)`` keeps working
 
 import asyncio
 import functools
+import hashlib
 import math
 import re
 import time
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from hermes_cli.web_deps import late
 from hermes_cli.config import cfg_get
@@ -698,9 +699,59 @@ def _delete_cron_job_sync(job_id: str, profile: Optional[str] = None):
 _CRON_FIRE_RETRY_AFTER_SECONDS = 60
 
 
+def _cron_list_revision(profile: str) -> str | None:
+    """Weak validator for job files and a bounded, 30-second heartbeat observation.
+
+    Never memoize a stopped ticker's age indefinitely, or reuse a racy file stamp.
+    """
+    from utils import mtime_is_racy
+
+    requested = (profile or "all").strip()
+    names = ([str(item["name"]) for item in _cron_profile_dicts() if item.get("name")]
+             if requested.lower() == "all" else [requested])
+    stamps = []
+    for name in sorted(names):
+        canonical, home = _cron_profile_home(name)
+        files = []
+        for filename in ("jobs.json", "ticker_heartbeat"):
+            try:
+                stat = (home / "cron" / filename).stat()
+            except FileNotFoundError:
+                files.append(None)
+                continue
+            except OSError:
+                return None  # unreadable is not an unchanged empty list
+            if mtime_is_racy(stat.st_mtime_ns):
+                return None
+            files.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+        stamps.append((canonical, str(home.resolve()), files))
+    digest = hashlib.blake2b(repr((int(time.time() // 30), stamps)).encode(), digest_size=16).hexdigest()
+    return f'W/"{digest}"'
+
+
+def _conditional_cron_jobs_sync(profile: str, if_none_match: str):
+    revision = _cron_list_revision(profile)
+    if revision and any(tag.strip() == "*" or tag.strip().removeprefix("W/") == revision[2:]
+                        for tag in if_none_match.split(",")):
+        return None, revision
+    jobs = _list_cron_jobs_sync(profile)
+    # A writer during the list must not label mixed rows as a stable cut.
+    return jobs, revision if revision == _cron_list_revision(profile) else None
+
+
 @router.get("/api/cron/jobs")
-async def list_cron_jobs(profile: str = "all"):
-    return await _run_cron_dashboard_io(_list_cron_jobs_sync, profile)
+async def list_cron_jobs(profile: str = "all", request: Request = None, response: Response = None):
+    if request is None:  # in-process callers retain the list contract
+        return await _run_cron_dashboard_io(_list_cron_jobs_sync, profile)
+    jobs, revision = await _run_cron_dashboard_io(
+        _conditional_cron_jobs_sync, profile, request.headers.get("if-none-match", ""))
+    headers = {"Cache-Control": "private, no-cache"}
+    if revision:
+        headers["ETag"] = revision
+    if jobs is None:
+        return Response(status_code=304, headers=headers)
+    response.headers.update(headers)
+    return jobs
 
 
 @router.get("/api/cron/jobs/{job_id}")
