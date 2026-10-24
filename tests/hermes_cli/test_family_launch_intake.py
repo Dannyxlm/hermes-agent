@@ -101,6 +101,21 @@ async def test_gateway_create_receipt_records_child_profile_only_and_is_idempote
         authority.db.close()
 
 
+def test_resume_binding_preserves_original_anchor_across_compression(tmp_path):
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('before-compression', 'oneshot')
+        db.record_launch('restart-stable', kind='lane', launcher_profile='default',
+                         launcher_session_id='launcher', child_profile='default')
+        db.bind_launch('restart-stable', child_session_id='before-compression')
+        db.end_session('before-compression', 'compression')
+        db.create_session('after-compression', 'oneshot', parent_session_id='before-compression')
+        db.bind_launch('restart-stable', child_session_id='after-compression')
+        assert db._read_one('SELECT child_session_id FROM work_launches')[0] == 'before-compression'
+        db.create_session('unrelated', 'oneshot')
+        with pytest.raises(ValueError):
+            db.bind_launch('restart-stable', child_session_id='unrelated')
+
+
 @pytest.mark.asyncio
 async def test_gateway_resume_binds_launch_before_the_next_admitted_turn(tmp_path, monkeypatch):
     from gateway.session_controls import AuthorityConnection

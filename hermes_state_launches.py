@@ -45,8 +45,12 @@ def bind_launch(conn, launch_id, *, child_session_id=None, backend_ref=None):
     if row is None:
         raise ValueError('unknown launch')
     for key, value in (('child_session_id', child_session_id), ('backend_ref', backend_ref)):
-        if value is not None and (not isinstance(value, str) or not value or row[key] not in (None, value)):
+        if value is not None and (not isinstance(value, str) or not value):
             raise ValueError('launch binding conflict')
+        if value is not None and row[key] not in (None, value):
+            from hermes_state_sessions import _expand_compression_lineage_ids
+            if key != 'child_session_id' or row[key] not in _expand_compression_lineage_ids(conn, [value]):
+                raise ValueError('launch binding conflict')
     conn.execute('UPDATE work_launches SET child_session_id=COALESCE(child_session_id,?), '
                  'backend_ref=COALESCE(backend_ref,?),bound_at=COALESCE(bound_at,?) WHERE launch_id=?',
                  (child_session_id, backend_ref, time.time(), launch_id))

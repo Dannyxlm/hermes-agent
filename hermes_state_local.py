@@ -9,6 +9,23 @@ API_BINDING_PREFIX = 'gateway.api.binding.v1.'
 API_DECLARED_PREFIX = 'gateway.api.conversation.v1.'
 
 
+def bind_resumed_launch(db, *, epoch, session_id, fields):
+    from hermes_cli.launch_provenance import launch_record
+    from hermes_state_launches import record_launch, bind_launch
+    def write(conn):
+        _epoch(conn, epoch)
+        if not conn.execute('SELECT 1 FROM sessions WHERE id=?', (session_id,)).fetchone():
+            raise RuntimeStoreError('not_found')
+        launch = launch_record(fields, db._own_profile_name() or 'default', launch_id='session:' + session_id)
+        if launch:
+            record_launch(conn, **launch)
+            bind_launch(conn, launch['launch_id'], child_session_id=session_id)
+    try:
+        db._execute_write(write)
+    except ValueError as exc:
+        raise RuntimeStoreError('invalid_params') from exc
+
+
 def commit_local_session(db, *, epoch, receipt):
     """Reserve the row, route and immutable policy together, before publication. A staged receipt's
     ``on_create`` (owner memory, never stored) is published by the transaction that creates the row

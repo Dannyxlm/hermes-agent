@@ -18,12 +18,15 @@ class CanonicalSessionParams(ProfileParams):
     session_id: str
 
 
-class CanonicalCreateParams(ProfileParams):
+class CanonicalLaunchParams(ProfileParams):
     started_by_session: str | None = None
     started_by_profile: str | None = None
     launch_title: str | None = None
     launch_kind: str | None = None
     launch_id: str | None = None
+
+
+class CanonicalCreateParams(CanonicalLaunchParams):
     request_id: str | None = None
     source: Literal['cli', 'tui', 'gui', 'acp', 'tool', 'oneshot'] = 'cli'
     cwd: str | None = None
@@ -60,7 +63,7 @@ class CanonicalCreateParams(ProfileParams):
     client_env: dict[str, str] | None = None
 
 
-class CanonicalResumeParams(ProfileParams):
+class CanonicalResumeParams(CanonicalLaunchParams):
     session_id: str = ''
     title: str | None = None
     # Bare `-c` / `--resume latest`: the owner resolves the most recent session of this surface

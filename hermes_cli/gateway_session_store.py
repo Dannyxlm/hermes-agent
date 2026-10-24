@@ -135,7 +135,10 @@ class GatewaySessionStore:
         refuses it instead, as the thin client does."""
         if session_id in self.snapshots:
             return self.snapshots[session_id]
-        snapshot = self.connection.resume(self.call, session_id, typed=typed)
+        from hermes_cli.launch_provenance import take_launch
+        launch = take_launch()
+        call = (lambda method, **params: self.call(method, **params, **launch)) if launch else self.call
+        snapshot = self.connection.resume(call, session_id, typed=typed)
         self._adopt(snapshot)
         return snapshot
 

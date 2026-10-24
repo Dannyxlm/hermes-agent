@@ -6553,6 +6553,11 @@ export interface CanonicalSnapshotInfo {
 }
 export interface CanonicalResumeParams {
   profile?: string | null
+  started_by_session?: string | null
+  started_by_profile?: string | null
+  launch_title?: string | null
+  launch_kind?: string | null
+  launch_id?: string | null
   session_id?: string
   title?: string | null
   latest?: 'cli' | 'tui' | null

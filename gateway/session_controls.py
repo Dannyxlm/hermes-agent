@@ -608,6 +608,14 @@ class AuthorityConnection:
         # reopens it (``reopen_local_session`` in the drain), so opening a finished chat
         # never re-lights DB-derived liveness with no new activity.
         self.authority.authorize(self.actor, ref, 'session:read')
+        from hermes_cli.launch_provenance import FIELDS
+        launch = {k: v for k, v in params.items() if k in FIELDS and v is not None}
+        if launch:
+            self.authority.authorize(self.actor, ref, 'session:control')
+            from hermes_state_local import bind_resumed_launch
+            from gateway.session_runtime_workers import tracked_write
+            await tracked_write(self.authority, partial(bind_resumed_launch, self.authority.db,
+                epoch=self.authority.epoch, session_id=ref.session_id, fields=launch))
         if 'session:control' in self.actor.capabilities:
             # A client attaching (main's `hermes -c` was a new process) re-reads the config-derived settings
             # (CFG-2); a snapshot poll on this attachment does not. Any open still adopts a frozen Bot Chat
