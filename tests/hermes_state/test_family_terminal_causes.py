@@ -72,6 +72,33 @@ def test_managed_child_reaped_by_new_owner_keeps_completed_sibling_receipt(tmp_p
                 'VALUES(?,?,?,?,0,?,?)', ('worker/child:' + str(i), sid, 'child', epoch, 'running', 'fixture')))
         db._execute_write(lambda conn: conn.execute(
             "UPDATE work_launches SET finished_at=?,terminal_cause='success' WHERE launch_id='finished-child'", (time.time(),)))
-        begin_runtime_epoch(db, instance_id='new')
+        from hermes_state_runtime import recover_session_inputs
+        new_epoch = begin_runtime_epoch(db, instance_id='new')
+        recover_session_inputs(db, epoch=new_epoch)
         assert cause(db, 'running-child') == 'owner_restart'
         assert cause(db, 'finished-child') == 'success'
+
+
+def test_compression_is_continuation_and_explicit_receipt_refines_unknown(tmp_path):
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('original', 'subagent')
+        db.record_launch('work', kind='helper', launcher_profile='default', launcher_session_id='parent',
+                         child_profile='default')
+        db.bind_launch('work', child_session_id='original')
+        db.end_session('original', 'compression')
+        assert cause(db, 'work') is None
+        db.create_session('continuation', 'subagent', parent_session_id='original')
+        db.end_session('continuation', 'agent_close')
+        assert cause(db, 'work') == 'unknown'
+        db.finish_launch('work', 'success')
+        db.end_session('continuation', 'startup_orphan_reap')
+        assert cause(db, 'work') == 'success'
+
+
+def test_interruption_cause_requires_receipt_and_precedes_cancellation_error():
+    from hermes_state_launch_causes import result_cause, GATEWAY_RESTART
+    assert result_cause({'completed': True}) == 'success'
+    assert result_cause({'error': 'fixture'}) == 'error'
+    assert result_cause({'interrupted': True}) == 'unknown'
+    assert result_cause({'interrupted': True, 'error': 'cancelled'}, stop_cause='parent_stop') == 'parent_stop'
+    assert result_cause({'interrupted': True, 'interrupt_message': GATEWAY_RESTART}) == 'owner_restart'

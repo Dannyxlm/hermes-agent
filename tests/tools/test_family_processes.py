@@ -50,3 +50,20 @@ def test_failed_popen_retains_failed_start_receipt(tmp_path, monkeypatch):
         registry.spawn_local('fixture command', cwd=str(tmp_path))
     with SessionDB(tmp_path / 'state.db') as db:
         assert db._read_one('SELECT terminal_cause FROM work_launches')[0] == 'failed_start'
+
+
+def test_kill_receipt_wins_over_reader_exit_during_signal(tmp_path, monkeypatch):
+    import tools.process_registry as module
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    registry = ProcessRegistry()
+    with scoped_current_session_id('parent'):
+        process = registry._new_session('fixture', 'task', 'task', 'route', str(tmp_path))
+    registry._running[process.id] = process
+    def signal(*a):
+        registry._finish_exited(process, -15)
+    monkeypatch.setattr(registry, '_signal_kill', signal)
+    result = registry.kill_process(process.id, source='process.kill')
+    assert result['status'] == 'killed'
+    with SessionDB(tmp_path / 'state.db') as db:
+        assert db._read_one('SELECT terminal_cause FROM work_launches')[0] == 'user_stop'
