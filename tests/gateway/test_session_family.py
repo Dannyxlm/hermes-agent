@@ -14,6 +14,7 @@ async def test_canonical_family_entrypoint(tmp_path, monkeypatch):
     from hermes_state_runtime import begin_runtime_epoch
     home = tmp_path / "home"
     home.mkdir()
+    monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
     with SessionDB(db_path=home / "state.db") as db:
         db.create_session("root", source="test")
         db._conn.executescript(LAUNCH_DDL)
