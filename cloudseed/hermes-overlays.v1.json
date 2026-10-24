@@ -47,6 +47,10 @@
       "summary": "Authenticated private iOS push and Live Activity projections for canonical Team and ordinary native sessions, least-privilege widget reads, and event-published reconnect cuts"
     },
     {
+      "id": "bundled-advanced-delegation",
+      "summary": "Pinned official model-map and profile-route delegation backends, available without runtime installation and inactive until selected"
+    },
+    {
       "id": "cloudseed-mobile-plugin",
       "summary": "Owner-authenticated mobile photos, reminders, account preferences and profile memory with retained integration stores"
     }

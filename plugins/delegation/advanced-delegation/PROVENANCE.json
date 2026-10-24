@@ -1,0 +1,94 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-official-plugins",
+  "revision": "b3825d097195b5748585b0491fab48c95d105c19",
+  "subdirectory": "advanced-delegation",
+  "adaptations": [
+    {
+      "file": "cli.py",
+      "reason": "Comment-only health annotations preserve upstream optional editor fallbacks.",
+      "vendored_sha256": "774eb33b2fc9441f4b1622e7f993f08c56993771f0ec0a77521df3eab39464b0"
+    },
+    {
+      "file": "plugin.yaml",
+      "reason": "Bundled backend auto-registration: managed-immutable refuses dependency sync even for bundled dependency-free plugins.",
+      "vendored_sha256": "15d267ea8342184f4e9cfd2547262c0055a9db6de24013b71382cc1e2ba7a839"
+    },
+    {
+      "file": "tests/test_cli.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "b9c81bc2b0647a7ce989ca6b39ffc7c4a5cfa0ee307264638a56ab8edf265b70"
+    },
+    {
+      "file": "tests/test_model_map.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "242ae9e8c4e84a1a1a16dbd05af505198749d4c7ca9c772b13a0537560dd7aec"
+    },
+    {
+      "file": "tests/test_profile_routes.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "34b6edd6451c5c744ec1738d95971f1fd946e5178b4eb1b964bc5f28dedca88d"
+    },
+    {
+      "file": "tests/test_real_discovery_model_map.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "3b1f8cc415a48b606bac6e462ecc90650c3c74303439cc606330e1a99a63f338"
+    },
+    {
+      "file": "tests/test_real_discovery_profile_routes.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "d44bc0851fbfe18ee39d6f25404e0c453d2d972b920ec1531e9370a7087ab6c2"
+    },
+    {
+      "file": "tests/test_register.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "994868838bbc163d5134617e5946c2d70aa3d4b667b7b6fff7e23b9442f29320"
+    },
+    {
+      "file": "tests/test_slash.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "2b240a57b096118b22d4bf9595238dc4d2b8049aead8b702857a2c528419e113"
+    },
+    {
+      "file": "tests/test_slash_core.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "9bca61fadd546fc0102ed0e8fcfb1370941eea8501b5db0368703ba73a8eea6e"
+    },
+    {
+      "file": "tests/test_slash_host.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "34b89f9a489e763fba25f75719466a2c8a47ac184a62017d71dc85b8025a262b"
+    },
+    {
+      "file": "tests/test_store.py",
+      "reason": "Mechanical test-only lint compatibility: explicit BOM-tolerant reads, fixture-writer annotations, remove unused noqa/variable, explicit check=False; assertions unchanged.",
+      "vendored_sha256": "f8f6a5b3dfa898e50f89421cb784b481fb5b4fa70b6149773d6faeeb94f0795a"
+    }
+  ],
+  "hash_scope": "sha256 maps all original upstream files; adaptations records each changed vendored digest. UPSTREAM.patch enumerates every adaptation.",
+  "sha256": {
+    ".gitignore": "350e7767e5d38b9202e44cfeabcb2fbb9d0a684c841f23e39c402154eb08b92a",
+    "LICENSE": "5f79d321c17de8ef6e5f34967dc5b484afebeeefd87180890d9741941f6b815f",
+    "README.md": "3cc6755de986f5d8a898614314f8890f737849a96c0b225bf8b5fcc4eda5b2c2",
+    "__init__.py": "02298ad647b86e34484d5bfd26aed89398f25ea23a9d85006e30c3db38b3326f",
+    "cli.py": "380b5a1caa12e7583c0b7a4c0ee02703ffe4e4d463b645dcb6d45324f6ae3a61",
+    "model_map.py": "bdc510f19ff1080ea14c0eda5303b60b31055bfa786c4795032b4d16071acfe9",
+    "plugin.yaml": "e8329fa882fe45e9604781196aac04fe600e918765f3436ddf6b81297cf3d9b2",
+    "profile_routes.py": "1871bbc8e0bbf037ea0e8757201208370650c80e8c310097e0a012dd34120066",
+    "pytest.ini": "94fdc2d545b2d4077a4d70229fd22ba3ccac21d49d1097d2873f76d04e9a3c7a",
+    "slash.py": "3ac665df619458e294a98eeb0922709fdb59fb606033e44bf5eea0fc4ceababc",
+    "store.py": "d1a6fc72f0b583da054837dcb8276b62a0fb15b4d5a8eb29ebc478b1f191ea1b",
+    "tests/conftest.py": "657e21fbb70fd40b628511752d261290e26773452b246aa314d98597e05e0864",
+    "tests/test_cli.py": "51543e23d9dd56555561910d0b54be26ab32872b1b8f575f4034e5465acdd582",
+    "tests/test_model_map.py": "badec659b046db1bf5bdb9ccc1f4e45e2d5bd49c518b6f11d96406f47fa78fe5",
+    "tests/test_old_core.py": "0d4db29427ca186c095aa640457e58b42509818edc5650fd876cd7c9d83a2cd1",
+    "tests/test_profile_routes.py": "64101ea7433c67e8b1fcf2bac2bc3416383a33e7174c8f48a6983dd9690f0d92",
+    "tests/test_real_discovery_model_map.py": "4483b14f098083315fe9adb70425318f0f6753531848af629fcfdc37867c684c",
+    "tests/test_real_discovery_profile_routes.py": "783ec78fadaec4e87e0354e0a4e981e08e4f2abb8a1e4167e90cb7747d1ab796",
+    "tests/test_register.py": "735c96d01a763caa3d0a2cb6062fe6dead28c3d5329d48df7eec9c851a4e8c69",
+    "tests/test_slash.py": "5880c6cfeb52d356b26efc17f52f6323455433a86101163fc13f24bc5c2c2bc8",
+    "tests/test_slash_core.py": "64c7f2f691be31b14b89176f003a73445be7471427e90cc6a01023fa0ed53786",
+    "tests/test_slash_host.py": "4d96f2114ce1af8ed12d65e71341ddbe88373db9e5a88a7bd15eea07ab5d4ec5",
+    "tests/test_store.py": "302a109f462a1a1079a4f8a5bc3531ecdf4977add0185f9131fe40e1d5e7d17d"
+  },
+  "adaptation_patch": "UPSTREAM.patch"
+}
