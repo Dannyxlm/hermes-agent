@@ -1,0 +1,262 @@
+--- a/dashboard/board.py
++++ b/dashboard/board.py
+@@ -117 +117 @@
+-    return Path.home() / ".hermes"
++    return Path.home() / ".hermes"  # health: allow HX001 -- Pinned standalone fallback; Hermes adapters inject the profile-aware resolver.
+@@ -128,2 +128,2 @@
+-        return json.loads(path.read_text(encoding="utf-8"))
+-    except Exception:
++        return json.loads(path.read_text(encoding="utf-8-sig"))
++    except Exception:  # health: allow BLE001 -- Pinned upstream optional JSON reader degrades to a bounded default.
+@@ -280 +280 @@
+-        except Exception:
++        except Exception:  # health: allow BLE001, S110 -- Pinned upstream display parser keeps malformed text as text.
+@@ -335 +335 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream display timestamp parser returns no timestamp on bad input.
+@@ -379 +379 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream optional origin parser discards malformed metadata.
+@@ -464 +464 @@
+-def _collect_conversations(
++def _collect_conversations(  # health: allow CC -- Keep the reviewed pinned collector intact; its state database is read-only.
+@@ -625 +625 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream optional task parser discards malformed metadata.
+@@ -632 +632 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream optional result parser discards malformed metadata.
+@@ -771 +771 @@
+-        except Exception:
++        except Exception:  # health: allow BLE001 -- Pinned upstream goal collector skips malformed JSON entries.
+--- a/dashboard/commands.py
++++ b/dashboard/commands.py
+@@ -92 +92 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream process-identity failure must refuse unbound gateway callers.
+@@ -153 +153 @@
+-    except Exception as exc:
++    except Exception as exc:  # health: allow BLE001 -- Pinned upstream command boundary delegates traceback logging to _error.
+@@ -156 +156 @@
+-        except Exception:
++        except Exception:  # health: allow BLE001 -- Pinned upstream last-resort refusal must not expose state after a broken error handler.
+@@ -181 +181 @@
+-    except Exception as exc:
++    except Exception as exc:  # health: allow BLE001 -- Pinned upstream CLI boundary delegates traceback logging to _error.
+@@ -184 +184 @@
+-        except Exception:
++        except Exception:  # health: allow BLE001 -- Pinned upstream last-resort CLI failure emits only the exception type.
+--- a/dashboard/manifest.json
++++ b/dashboard/manifest.json
+@@ -13 +13,2 @@
+-  "api": "plugin_api.py"
++  "api": "plugin_api.py",
++  "default_enabled": false
+--- a/dashboard/summary_text.py
++++ b/dashboard/summary_text.py
+@@ -70 +70 @@
+-    return json.loads((Path(__file__).parent / "i18n" / (locale_name(locale) + ".json")).read_text(encoding="utf-8"))
++    return json.loads((Path(__file__).parent / "i18n" / (locale_name(locale) + ".json")).read_text(encoding="utf-8-sig"))
+@@ -98 +98 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream scoped-language lookup fails closed to config or English.
+@@ -105 +105 @@
+-        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8").splitlines()
++        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8-sig").splitlines()
+@@ -129 +129 @@
+-    except Exception:
++    except Exception:  # health: allow BLE001 -- Pinned upstream display-only locale fallback does not change authorization.
+--- a/dev/README.md
++++ b/dev/README.md
+@@ -8,2 +8,2 @@
+-python tests/fixtures/make_home.py /tmp/duty-board-home
+-python dev/harness/serve.py --fixture /tmp/duty-board-home --port 9188
++python tests/fixtures/make_home.py $TMPDIR/duty-board-home
++python dev/harness/serve.py --fixture $TMPDIR/duty-board-home --port 9188
+--- a/dev/demo_home.py
++++ b/dev/demo_home.py
+@@ -151 +151,3 @@
+-    target = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/duty-board-demo")
++    from tempfile import gettempdir
++
++    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(gettempdir()) / "duty-board-demo"
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -11 +11 @@
+-from tests.fixtures.make_home import make_home
++from .fixtures.make_home import make_home
+@@ -25 +25 @@
+-    from tests.fixtures import offline as offline_guard
++    from .fixtures import offline as offline_guard
+@@ -31 +31 @@
+-    from tests.test_board import load_plugin
++    from .test_board import load_plugin
+--- a/tests/fixtures/make_home.py
++++ b/tests/fixtures/make_home.py
+@@ -76 +76 @@
+-    stamp = float(now if now is not None else float((home / "fixture-now").read_text()))
++    stamp = float(now if now is not None else float((home / "fixture-now").read_text(encoding="utf-8-sig")))
+@@ -103 +103 @@
+-    stamp = timestamp if timestamp is not None else float((home / "fixture-now").read_text())
++    stamp = timestamp if timestamp is not None else float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -118 +118 @@
+-    stamp = float(now if now is not None else float((home / "fixture-now").read_text()))
++    stamp = float(now if now is not None else float((home / "fixture-now").read_text(encoding="utf-8-sig")))
+--- a/tests/test_board.py
++++ b/tests/test_board.py
+@@ -8 +8 @@
+-from tests.fixtures.make_home import add_message, add_session
++from .fixtures.make_home import add_message, add_session
+@@ -22 +22 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -44 +44 @@
+-    assert board.build(float((home / "fixture-now").read_text()))["schema_version"] == 2
++    assert board.build(float((home / "fixture-now").read_text(encoding="utf-8-sig")))["schema_version"] == 2
+@@ -55 +55 @@
+-    api_module.board.build(float((home / "fixture-now").read_text()))
++    api_module.board.build(float((home / "fixture-now").read_text(encoding="utf-8-sig")))
+--- a/tests/test_chat_caller.py
++++ b/tests/test_chat_caller.py
+@@ -13,0 +14 @@
++from pathlib import Path
+@@ -18 +19 @@
+-from tests.fixtures.make_home import add_message, add_session
++from .fixtures.make_home import add_message, add_session
+@@ -31 +32 @@
+-        from tests.fixtures import fake_session_context as module
++        from .fixtures import fake_session_context as module
+@@ -65 +66 @@
+-    (home / "duty-board" / "settings.json").write_text(json.dumps(values))
++    (home / "duty-board" / "settings.json").write_text(json.dumps(values), encoding="utf-8")
+@@ -69 +70 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -185 +186 @@
+-    from tests.fixtures.make_home import make_home
++    from .fixtures.make_home import make_home
+@@ -190 +191 @@
+-    (routed / "duty-board" / "settings.json").write_text(json.dumps({"owner": "999"}))
++    (routed / "duty-board" / "settings.json").write_text(json.dumps({"owner": "999"}), encoding="utf-8")
+@@ -249,2 +250,2 @@
+-    for path in sorted(glob.glob("dashboard/i18n/*.json")):
+-        text = json.load(open(path, encoding="utf-8"))["chat"]["isolated"]
++    for path in sorted(glob.glob(str(Path(__file__).resolve().parents[1] / "dashboard/i18n/*.json"))):
++        text = json.load(open(path, encoding="utf-8-sig"))["chat"]["isolated"]
+@@ -258 +259 @@
+-    from tests.fixtures.make_home import make_home
++    from .fixtures.make_home import make_home
+@@ -262,2 +263,2 @@
+-    (routed / "duty-board" / "settings.json").write_text(json.dumps({"owner": "999"}))
+-    now = float((routed / "fixture-now").read_text())
++    (routed / "duty-board" / "settings.json").write_text(json.dumps({"owner": "999"}), encoding="utf-8")
++    now = float((routed / "fixture-now").read_text(encoding="utf-8-sig"))
+--- a/tests/test_chat_i18n.py
++++ b/tests/test_chat_i18n.py
+@@ -8 +8 @@
+-from tests.test_chat_summary import sample_board
++from .test_chat_summary import sample_board
+@@ -98 +98 @@
+-    from tests.test_chat_summary import settings, waiting
++    from .test_chat_summary import settings, waiting
+--- a/tests/test_chat_summary.py
++++ b/tests/test_chat_summary.py
+@@ -14 +14 @@
+-from tests.fixtures.make_home import add_lease, add_message, add_session, db
++from .fixtures.make_home import add_lease, add_message, add_session, db
+@@ -25 +25 @@
+-    (home / "duty-board" / "settings.json").write_text(json.dumps(values))
++    (home / "duty-board" / "settings.json").write_text(json.dumps(values), encoding="utf-8")
+@@ -36 +36 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -156 +156 @@
+-    add_message(home, "other", "assistant", "OTHERSECRET Continue?", timestamp=float((home / "fixture-now").read_text()) - 200)
++    add_message(home, "other", "assistant", "OTHERSECRET Continue?", timestamp=float((home / "fixture-now").read_text(encoding="utf-8-sig")) - 200)
+@@ -171 +171 @@
+-    add_message(home, "other", "assistant", "Continue?", timestamp=float((home / "fixture-now").read_text()) - 200)
++    add_message(home, "other", "assistant", "Continue?", timestamp=float((home / "fixture-now").read_text(encoding="utf-8-sig")) - 200)
+@@ -189 +189 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -276 +276 @@
+-    data = commands.board.build(float((home / "fixture-now").read_text()))
++    data = commands.board.build(float((home / "fixture-now").read_text(encoding="utf-8-sig")))
+@@ -470 +470 @@
+-    from tests.fixtures import offline
++    from .fixtures import offline
+--- a/tests/test_plugin_api.py
++++ b/tests/test_plugin_api.py
+@@ -8 +8 @@
+-from tests.fixtures.make_home import add_lease, add_message, add_session, db
++from .fixtures.make_home import add_lease, add_message, add_session, db
+@@ -18 +18 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -42 +42 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -64 +64 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -78 +78 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -88 +88 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -111 +111 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -128,2 +128,2 @@
+-    now = float((home / "fixture-now").read_text())
+-    (home / "duty-board" / "settings.json").write_text(json.dumps({"owner": "222222222222222222", "people": {"999": "Bob"}}))
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
++    (home / "duty-board" / "settings.json").write_text(json.dumps({"owner": "222222222222222222", "people": {"999": "Bob"}}), encoding="utf-8")
+@@ -148 +148 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -159 +159 @@
+-    path.write_text(json.dumps({"old": time.time() - 31 * 86400, "new": time.time()}))
++    path.write_text(json.dumps({"old": time.time() - 31 * 86400, "new": time.time()}), encoding="utf-8")
+@@ -161 +161 @@
+-    stored = json.loads(path.read_text())
++    stored = json.loads(path.read_text(encoding="utf-8-sig"))
+@@ -175 +175 @@
+-    stored = json.loads((home / "duty-board" / "dismissed.json").read_text())
++    stored = json.loads((home / "duty-board" / "dismissed.json").read_text(encoding="utf-8-sig"))
+@@ -181,2 +181,2 @@
+-    now = float((home / "fixture-now").read_text())
+-    (home / "duty-board" / "settings.json").write_text(json.dumps({"owner": "222222222222222222"}))
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
++    (home / "duty-board" / "settings.json").write_text(json.dumps({"owner": "222222222222222222"}), encoding="utf-8")
+@@ -204,2 +204,2 @@
+-    now = float((home / "fixture-now").read_text())
+-    (home / "duty-board" / "settings.json").write_text(json.dumps({"owner": "222222222222222222"}))
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
++    (home / "duty-board" / "settings.json").write_text(json.dumps({"owner": "222222222222222222"}), encoding="utf-8")
+@@ -222 +222 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -238 +238 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -250 +250 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -252 +252,2 @@
+-        json.dumps({"owner": "222222222222222222", "hide_other_people_content": "false"})
++        json.dumps({"owner": "222222222222222222", "hide_other_people_content": "false"}),
++        encoding="utf-8",
+@@ -260 +261 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -277 +278 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -307 +308 @@
+-    now = float((home / "fixture-now").read_text())
++    now = float((home / "fixture-now").read_text(encoding="utf-8-sig"))
+@@ -317 +318 @@
+-    (home / "cron" / "jobs.json").write_text(json.dumps(jobs))
++    (home / "cron" / "jobs.json").write_text(json.dumps(jobs), encoding="utf-8")

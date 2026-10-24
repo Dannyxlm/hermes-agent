@@ -12,6 +12,33 @@ from typing import Any, Mapping, Optional
 
 from agent.i18n import t
 
+STEP_KINDS = frozenset({"starting", "thinking", "writing", "tool", "waiting_helpers",
+                        "waiting_input", "compressing", "retrying", "finalizing", "idle"})
+
+
+def validate_step(step_kind, step_tool=None):
+    if step_kind is not None and step_kind not in STEP_KINDS:
+        raise ValueError("invalid step kind")
+    if step_tool is not None and not isinstance(step_tool, str):
+        raise ValueError("invalid step tool")
+    return step_kind, step_tool if step_kind == "tool" else None
+
+
+def touch_stale_kill_activity(agent, elapsed: float) -> None:
+    import logging
+    logger = logging.getLogger("agent.chat_completion_helpers")
+    try:
+        agent._touch_activity(f"stale non-streaming call killed after {int(elapsed)}s", step_kind="retrying")
+    except Exception:
+        logger.debug("stale activity touch failed", exc_info=True)
+
+
+def stream_chunk_step(chunk):
+    choices = getattr(chunk, "choices", None)
+    delta = getattr(choices[0], "delta", None) if choices else None
+    return "writing" if getattr(delta, "content", None) else "thinking"
+
+
 ACTIVITY_DESCRIPTION_MAX = 120
 
 # Durable SessionDB heartbeat cadence. Contract: MUST stay >= 30s — the SessionDB write path is contended and
@@ -99,6 +126,7 @@ def build_activity_snapshot(
     last_activity_at: Optional[float],
     last_activity_description: Optional[str],
     last_activity_provenance: Optional[ActivityProvenance | str] = None,
+    step_kind: Optional[str] = None, step_tool: Optional[str] = None,
     now: Optional[float] = None,
     extra: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -111,6 +139,7 @@ def build_activity_snapshot(
         "last_activity_at": when,
         "last_activity_description": desc,
         "last_activity_provenance": prov,
+        "step_kind": step_kind, "step_tool": step_tool,
         "seconds_since_activity": round(clock - when, 1) if when is not None else None,
         # Short aliases used by existing gateway/delegate readers.
         "last_activity_ts": when, "last_activity_desc": desc, "description": desc, "provenance": prov,
@@ -136,6 +165,11 @@ class AwakeIdleMeter:
         """Return *idle_s* minus the sleep observed since the agent's last activity."""
         wall, mono = time.time(), time.monotonic()
         slept_s = max(0.0, (wall - self._wall) - (mono - self._mono))
+        # Activity since the previous sample (it is younger than the sampling interval) makes all
+        # earlier credit predate it. A rarely sampled meter (stale-agent eviction samples only
+        # when a message arrives) would otherwise keep charging old sleep against new idle time.
+        if idle_s < wall - self._wall:
+            self._asleep_s = 0.0
         self._asleep_s += slept_s
         self._wall, self._mono = wall, mono
         # The idle sample may predate sleep observed by these clock reads. Keep that new

@@ -465,7 +465,13 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
             and item.get("type") in _CODEX_PROGRESS_ITEM_TYPES
         )
         if is_delta or is_item:
-            agent_cb("_touch_activity", "_touch_activity raised", args=(f"codex app-server: {method}",))
+            step = {"item/agentMessage/delta": "writing", "item/commandExecution/outputDelta": "tool",
+                    "item/fileChange/outputDelta": "tool"}.get(method, "thinking")
+            tool = None
+            if is_item and item.get("type") in _CODEX_TOOL_ITEM_TYPES:
+                step, tool = "tool", _codex_item_to_tool_name(item)
+            agent_cb("_touch_activity", "_touch_activity raised", args=(f"codex app-server: {method}",),
+                     kwargs={"step_kind": step, "step_tool": tool})
         handler = handlers.get(method)
         if handler is not None:
             handler(params)
@@ -731,7 +737,7 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
     # Defense in depth for compression.checkpoint_required: agent init refuses the combination, but
     # api_mode is mutable. Explicit-True check matches compress_context().
     if getattr(agent, "compression_checkpoint_required", False) is True:
-        from agent.conversation_compression import _checkpoint_blocked
+        from agent.conversation_compression_checkpoint import _checkpoint_blocked
         raise _checkpoint_blocked("codex_app_server owns the authoritative thread and compacts it "
                                   "without a truthful pre-compaction transcript boundary")
     _ensure_codex_session(agent, messages)
@@ -1224,7 +1230,7 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
         if first_progress:
             logger.info("Codex stream first substantive progress at %.3f (attempt=%s/%s, model=%s)",
                 now, attempt + 1, max_stream_retries + 1, model)
-        agent._touch_activity("receiving stream response")
+        agent._touch_activity("receiving stream response", step_kind="thinking")
 
     def _interrupt_or_superseded() -> bool:
         # A retired request must NOT break out of the consume loop (that returns a partial ``final`` with

@@ -12,9 +12,12 @@ from tui_gateway import server, server_requests
 
 @pytest.fixture
 def inbox(mobile_home, monkeypatch):
+    from hermes_cli import web_server
     from hermes_cli.web_routers import sessions
+    monkeypatch.setattr(web_server, "_SESSION_TOKEN", "inbox-token")
+    monkeypatch.setattr("hermes_state._default_db_path", lambda: mobile_home / "state.db")
     monkeypatch.setattr(server, "_resolve_model", lambda: "fixture")
-    monkeypatch.setattr(sessions, "_maybe_auto_archive_for_profile", lambda profile: None)
+    monkeypatch.setattr("hermes_cli.web_server_sessions._maybe_auto_archive_for_profile", lambda profile: None)
     for profile, home in [("default", mobile_home), ("ops", mobile_home / "profiles" / "ops")]:
         with SessionDB(db_path=home / "state.db") as db:
             db.create_session("same", "desktop")
@@ -22,13 +25,30 @@ def inbox(mobile_home, monkeypatch):
         server._sessions[profile] = {"session_key": "same", "profile_home": str(home) if profile != "default" else None,
                                     "history": [], "created_at": 100, "last_active": 200}
     app = FastAPI()
+    app.state.auth_required = False
     app.include_router(sessions.list_router)
     app.include_router(sessions.manage_router)
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": "Bearer inbox-token"})
+
+
+def patch_sidebar(client, session_id, *, request_id, profile="ops", **payload):
+    snapshot = client.get(f"/api/sessions/{session_id}/mutation-snapshot", params={"profile": profile})
+    assert snapshot.status_code == 200, snapshot.text
+    counters = snapshot.json()
+    return client.patch(f"/api/sessions/{session_id}", json={
+        "profile": profile, "request_id": request_id,
+        "expected_revision": counters["runtime_revision"],
+        "expected_generation": counters["runtime_generation"], **payload,
+    })
 
 
 def request(sid, method):
-    req = server_requests.ServerRequest(sid, method, {"private": "secret sentinel"})
+    params = {"private": "secret sentinel"}
+    if method == "approval":
+        params["choices"] = ["once", "deny"]
+    elif method == "clarify":
+        params["questions"] = [{"qid": "answer", "question": "Continue?"}]
+    req = server_requests.ServerRequest(sid, method, params)
     with server_requests._lock:
         server_requests._open[req.id] = req
     return req
@@ -54,11 +74,22 @@ def test_pending_summary_is_profile_scoped_and_clears(inbox, peer, method, kind)
     assert live["pending_revision"] == attention["revision"]
     assert live["status"] == "waiting"
     assert "secret sentinel" not in json.dumps(live) + json.dumps(attention)
-    assert server_requests.resolve_response({"id": req.id, "result": {"value": "yes"}})
+    result = {"approval": {"choice": "once"}, "clarify": {"answers": {"answer": "yes"}},
+              "sudo": {"value": "yes"}}[method]
+    assert server_requests.resolve_response({"id": req.id, "result": result})
     assert "attention" not in row(inbox, "ops")
     live = rpc("session.active_list", profile="ops")["result"]["sessions"][0]
     assert "pending_kind" not in live and "pending_count" not in live
     assert "attention" not in row(inbox, "default")
+
+
+@pytest.mark.parametrize("method", ["approval", "clarify"])
+def test_pending_summary_rejects_answer_of_wrong_shape(inbox, method):
+    req = request("ops", method)
+    before = row(inbox, "ops")["attention"]
+    with pytest.raises(ValueError, match="Invalid human input result"):
+        server_requests.resolve_response({"id": req.id, "result": {"value": "yes"}})
+    assert row(inbox, "ops")["attention"] == before
 
 
 def test_launch_profile_attention_with_implicit_home(inbox):
@@ -95,7 +126,7 @@ def test_final_reply_is_page_batched_and_profile_isolated(inbox, mobile_home, mo
     summaries = [r for r in response["sessions"] if "last_assistant_reply" in r]
     assert len(summaries) == 6
     assert next(r for r in summaries if r["id"] == "same")["last_assistant_reply"] == {"row_id": final_id, "at": 123, "preview": "final reply", "unread": False}
-    assert len([sql for sql in queries if "MAX(id)" in sql and "finish_reason" in sql]) == 1
+    assert len([sql for sql in queries if "finish_reason" in sql]) == 1
     assert "last_assistant_reply" not in row(inbox, "default")
 
 
@@ -139,8 +170,8 @@ def test_reply_read_watermark_roundtrip_is_profile_scoped(inbox, mobile_home):
         with SessionDB(db_path=home / "state.db") as db:
             db.append_message("same", "assistant", "reply", timestamp=100, finish_reason="stop")
     assert row(inbox, "ops")["last_assistant_reply"]["unread"] is False
-    for unread in [True, False, True]:
-        changed = inbox.patch("/api/sessions/same", json={"profile": "ops", "unread": unread})
+    for index, unread in enumerate([True, False, True]):
+        changed = patch_sidebar(inbox, "same", request_id=f"read-{index}", unread=unread)
         assert changed.status_code == 200, changed.text
         current = row(inbox, "ops")
         assert current["last_assistant_reply"]["unread"] is unread
@@ -157,8 +188,8 @@ def test_reply_read_marker_follows_compression_but_not_branch(inbox, mobile_home
         db.create_session("tip", "desktop", parent_session_id="same")
         db.create_session("branch", "desktop", parent_session_id="same", model_config={"_branched_from": "same"})
         db.append_message("branch", "assistant", "branch reply", timestamp=102, finish_reason="stop")
-    for unread in [True, False]:
-        changed = inbox.patch("/api/sessions/tip", json={"profile": "ops", "unread": unread})
+    for index, unread in enumerate([True, False]):
+        changed = patch_sidebar(inbox, "tip", request_id=f"read-{index}", unread=unread)
         assert changed.status_code == 200, changed.text
         rows = {r["id"]: r for r in inbox.get("/api/sessions", params={"profile": "ops"}).json()["sessions"]}
         assert rows["tip"]["last_assistant_reply"]["unread"] is unread

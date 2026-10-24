@@ -1,0 +1,187 @@
+{
+  "appTitle": "Diensbord",
+  "appSubtitle": "Intydse status van gesprekke, agtergrondwerk en geskeduleerde take",
+  "openIn": "Maak skakels oop in",
+  "discordApp": "Discord-toepassing",
+  "browser": "Blaaier",
+  "warnings": "Sommige data is nie beskikbaar nie",
+  "waiting": "Wag op jou antwoord",
+  "waitingHint": "Die laaste antwoord vra dat jy besluit; oudste gesprekke eerste",
+  "unanswered": "Jy het geskryf, maar geen antwoord ontvang nie",
+  "waitingEmpty": "Niks wag op jou antwoord nie",
+  "unansweredAge": "wag al {value}",
+  "waitingAge": "wag al {value}",
+  "causedBy": "Rede: {value}",
+  "you": "Jy: {value}",
+  "openInDiscord": "Maak oop in Discord",
+  "web": "Web",
+  "dismiss": "Versteek",
+  "seen": "Gesien",
+  "collapse": "Vou in",
+  "expandMore": {
+    "one": "Wys nog {count}",
+    "other": "Wys nog {count}"
+  },
+  "running": "Loop",
+  "runningHint": "’n Volle balk verteenwoordig een uur",
+  "allIdle": "Alles onaktief",
+  "runningFor": "loop al {value}",
+  "stalledFor": "geen aktiwiteit vir {value} nie",
+  "doing": "Besig",
+  "privateConversation": "Gesprek met {who}",
+  "someone": "iemand",
+  "privateContent": "Inhoud versteek",
+  "delegations": "Agtergrondtake",
+  "noDelegations": "Geen agtergrondtake loop nie",
+  "completedNotDelivered": "Voltooi, maar die resultaat is nie afgelewer nie",
+  "delegationHint": "Die resultaat is dalk in ’n nuwer gesprek; maak dit oop om te kontroleer en versteek dan die kaart",
+  "parallel": {
+    "one": "{count} subagent werk parallel",
+    "other": "{count} subagente werk parallel"
+  },
+  "completedAt": "voltooi: {value}",
+  "handled": "Afgehandel",
+  "cron": "Geskeduleerde take",
+  "cronPaused": {
+    "one": "{count} op pouse",
+    "other": "{count} op pouse"
+  },
+  "cronRunning": "Loop",
+  "cronScript": "skrip",
+  "cronUpcoming": "volgende: {time} · {name}",
+  "cronReason": {
+    "lastError": "Fout: {detail}",
+    "deliveryError": "Aflewering het misluk: {detail}",
+    "state": "Toestand: {detail}",
+    "overdue": "Agterstallig"
+  },
+  "recentDone": "Onlangs voltooi",
+  "recentDoneHint": "Binne die afgelope dag; die laaste antwoord was ’n verslag, nie ’n vraag nie",
+  "promised": "Opvolg belowe",
+  "none": "Geen",
+  "goals": "Langtermyndoelwitte",
+  "staleGoals": {
+    "one": "{count} ouer doelwit is versteek",
+    "other": "{count} ouer doelwitte is versteek"
+  },
+  "noGoals": "Geen langtermyndoelwitte in die terugkyktydperk nie",
+  "progress": {
+    "one": "{turns}/{count} beurt",
+    "other": "{turns}/{count} beurte"
+  },
+  "active": "Aktief",
+  "paused": "Op pouse",
+  "gateway": {
+    "connected": "gekoppel",
+    "retrying": "besig om te herkoppel",
+    "disconnected": "ontkoppel",
+    "error": "fout"
+  },
+  "refreshed": "{value} gelede opgedateer",
+  "justNow": "pas opgedateer",
+  "loading": "Besig om te laai…",
+  "loadFailed": "Kon nie laai nie: {error}",
+  "stale": "data is {value} oud",
+  "sectionUnavailable": "Afdeling nie beskikbaar nie",
+  "neverRan": "Nog nooit uitgevoer nie",
+  "ago": "{value} gelede",
+  "in": "oor {value}",
+  "soon": "binnekort",
+  "conversation": "Gesprek",
+  "activity": {
+    "output": "Uitset word gestroom",
+    "response": "Wag op modelantwoord",
+    "waiting": "Wag op {who} · {duration}",
+    "call": "Modeloproep #{n}",
+    "callDone": "Modeloproep voltooi",
+    "starting": "Pas begin",
+    "retry": "API-oproep word weer probeer ({a}/{b})",
+    "tool": "{tool} word uitgevoer",
+    "toolDone": "{tool} voltooi",
+    "toolError": "{tool} het misluk",
+    "terminal": "Terminaalopdrag loop ({duration})",
+    "script": "Skrip loop ({duration})",
+    "compressed": "Kontekskompressie voltooi",
+    "subtask": "Subtaak · {value}"
+  },
+  "section": {
+    "conversations": "Gesprekke",
+    "gateway": "Toegangspoortstatus",
+    "database": "Hermes-databasis"
+  },
+  "issue": {
+    "missingTable": "{section}: tabel {detail} nie gevind nie",
+    "missingColumn": "{section}: kolom {detail} nie gevind nie",
+    "collectorFailed": "{section}: kon nie gelees word nie ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "E-pos",
+    "sms": "Teksboodskappe"
+  },
+  "chat": {
+    "empty": "Niks het nou jou aandag nodig nie.",
+    "ownerOnly": "Hierdie opsomming is slegs vir die bord se eienaar beskikbaar.",
+    "configureOwner": "Stel owner in duty-board/settings.json voordat jy hierdie opdrag in klets gebruik.",
+    "oldHost": "Hierdie opdrag vereis Hermes 0.21.7 of nuwer in klets.",
+    "isolated": "Kletsopsommings is nie beskikbaar terwyl inproppe in ’n aparte proses loop nie (plugins.isolation: host): daar kan nie bevestig word wie roep nie. Gebruik die kontrolepaneel of stel plugins.isolation: in_process.",
+    "dmHint": "Stuur ’n privaatboodskap aan die bot of maak die kontrolepaneel oop vir besonderhede.",
+    "error": "Diensbord nie beskikbaar nie ({error}).",
+    "stalled": "{age} (vasgeval)",
+    "privatePlace": "Privaat gesprek",
+    "untitled": "Naamloos",
+    "localPlace": "Plaaslik",
+    "waitingHeading": "Wag op jou (insluitend onbeantwoorde boodskappe)",
+    "cronHeading": "Probleme met geskeduleerde take",
+    "units": {
+      "minute": "min",
+      "hour": "u",
+      "day": "d"
+    },
+    "headline": "Diensbord · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "Inhoud versteek",
+    "runningHeading": "Loop",
+    "droppedHeading": "Voltooi, maar die resultaat is nie afgelewer nie",
+    "goalsHeading": "Langtermyndoelwitte",
+    "waitingCount": {
+      "one": "{count} wag op jou",
+      "other": "{count} wag op jou"
+    },
+    "runningCount": {
+      "one": "{count} loop",
+      "other": "{count} loop"
+    },
+    "droppedCount": {
+      "one": "{count} onafgelewerde resultaat",
+      "other": "{count} onafgelewerde resultate"
+    },
+    "cronCount": {
+      "one": "{count} geskeduleerde taakprobleem",
+      "other": "{count} geskeduleerde taakprobleme"
+    },
+    "goalsCount": {
+      "one": "{count} deurlopende doelwit",
+      "other": "{count} deurlopende doelwitte"
+    },
+    "more": {
+      "one": "+{count} meer",
+      "other": "+{count} meer"
+    }
+  }
+}

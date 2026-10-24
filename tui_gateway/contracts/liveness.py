@@ -18,6 +18,14 @@ method("ping", params=PingParams, result=PingResult,
        doc="Cheapest liveness probe; answered on the WS reader thread even while every agent is mid-turn.")
 
 
+class GatewayPingResult(Result):
+    ok: bool
+
+
+method("gateway.ping", params=PingParams, result=GatewayPingResult,
+       doc="Hermex WebSocket heartbeat; answered directly by the reader without waiting for RPC dispatch.")
+
+
 class GatewayCapabilitiesResult(Result):
     per_session_exclusive_submit: bool
 
@@ -35,6 +43,11 @@ class ClientCapabilitiesParams(Params):
     #: ``changed``, ``tombstoned``) at most every 250 ms, and the payload-free frame is no longer
     #: sent to it. Send only when ``mobile.capabilities`` lists ``session_change_cursor``.
     session_change_cursor: bool = False
+    #: The client is the Desktop app connected to a backend on its own machine (its connection mode is
+    #: local). Counted only on a connection that redeemed a native ticket minted over this machine's
+    #: private control socket; it is what makes the welcome trial and first-run onboarding available
+    #: in a gateway that also serves the CLI, the TUI and bots.
+    desktop_local: bool = False
 
 
 class ClientCapabilitiesResult(Result):

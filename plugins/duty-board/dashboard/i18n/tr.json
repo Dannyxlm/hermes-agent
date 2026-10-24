@@ -1,0 +1,187 @@
+{
+  "appTitle": "İzleme panosu",
+  "appSubtitle": "Sohbetlerin, arka plan görevlerinin ve zamanlanmış görevlerin anlık durumu",
+  "openIn": "Bağlantıların açılacağı yer",
+  "discordApp": "Discord uygulaması",
+  "browser": "Tarayıcı",
+  "warnings": "Bazı verilere erişilemiyor",
+  "waiting": "Yanıtınız bekleniyor",
+  "waitingHint": "Son yanıt karar vermenizi bekliyor; en eski sohbetler önce gösterilir",
+  "unanswered": "Mesaj gönderdiniz ancak yanıt gelmedi",
+  "waitingEmpty": "Yanıtınızı bekleyen sohbet yok",
+  "unansweredAge": "{value} süredir yanıtsız",
+  "waitingAge": "{value} süredir bekliyor",
+  "causedBy": "Nedeni: {value}",
+  "you": "Siz: {value}",
+  "openInDiscord": "Discord'da aç",
+  "web": "Web",
+  "dismiss": "Gizle",
+  "seen": "Görüldü",
+  "collapse": "Daralt",
+  "expandMore": {
+    "one": "{count} öğe daha göster",
+    "other": "{count} öğe daha göster"
+  },
+  "running": "Çalışıyor",
+  "runningHint": "Dolu çubuk bir tam saati temsil eder",
+  "allIdle": "Hepsi boşta",
+  "runningFor": "{value} süredir çalışıyor",
+  "stalledFor": "{value} süredir etkinlik yok",
+  "doing": "İşleniyor",
+  "privateConversation": "Sohbet katılımcısı: {who}",
+  "someone": "biri",
+  "privateContent": "İçerik gizlendi",
+  "delegations": "Arka plan görevleri",
+  "noDelegations": "Çalışan arka plan görevi yok",
+  "completedNotDelivered": "Tamamlandı, ancak sonuç iletilmedi",
+  "delegationHint": "Sonuç daha yeni bir sohbette olabilir; sohbeti açıp kontrol edin, ardından kartı gizleyin",
+  "parallel": {
+    "one": "{count} alt aracı paralel çalışıyor",
+    "other": "{count} alt aracı paralel çalışıyor"
+  },
+  "completedAt": "tamamlandı: {value}",
+  "handled": "İşlendi",
+  "cron": "Zamanlanmış görevler",
+  "cronPaused": {
+    "one": "{count} duraklatılmış görev",
+    "other": "{count} duraklatılmış görev"
+  },
+  "cronRunning": "Çalışıyor",
+  "cronScript": "betik",
+  "cronUpcoming": "sonraki: {time} · {name}",
+  "cronReason": {
+    "lastError": "Hata: {detail}",
+    "deliveryError": "İletim başarısız: {detail}",
+    "state": "Durum: {detail}",
+    "overdue": "Gecikmiş"
+  },
+  "recentDone": "Son tamamlananlar",
+  "recentDoneHint": "Son bir gün içinde; son yanıt soru değil, rapordu",
+  "promised": "Daha sonra yanıt vereceğini belirtti",
+  "none": "Yok",
+  "goals": "Uzun vadeli hedefler",
+  "staleGoals": {
+    "one": "{count} eski hedef gizlendi",
+    "other": "{count} eski hedef gizlendi"
+  },
+  "noGoals": "İncelenen dönemde uzun vadeli hedef yok",
+  "progress": {
+    "one": "{turns}/{count} tur",
+    "other": "{turns}/{count} tur"
+  },
+  "active": "Aktif",
+  "paused": "Duraklatıldı",
+  "gateway": {
+    "connected": "bağlandı",
+    "retrying": "yeniden bağlanıyor",
+    "disconnected": "bağlantı kesildi",
+    "error": "hata"
+  },
+  "refreshed": "{value} önce güncellendi",
+  "justNow": "az önce güncellendi",
+  "loading": "Yükleniyor…",
+  "loadFailed": "Yükleme başarısız: {error}",
+  "stale": "veriler {value} süredir güncellenmedi",
+  "sectionUnavailable": "Bölüme erişilemiyor",
+  "neverRan": "Henüz çalışmadı",
+  "ago": "{value} önce",
+  "in": "{value} sonra",
+  "soon": "yakında",
+  "conversation": "Sohbet",
+  "activity": {
+    "output": "Yanıt oluşturuluyor…",
+    "response": "Model yanıtı bekleniyor",
+    "waiting": "Yanıt bekleniyor: {who} · {duration}",
+    "call": "Model çağrısı #{n}",
+    "callDone": "Model çağrısı tamamlandı",
+    "starting": "Yeni başladı",
+    "retry": "API çağrısı yeniden deneniyor {a}/{b}",
+    "tool": "Çalıştırılan araç: {tool}",
+    "toolDone": "Tamamlanan araç: {tool}",
+    "toolError": "Araç hatası: {tool}",
+    "terminal": "Terminal komutu çalışıyor ({duration})",
+    "script": "Betik çalışıyor ({duration})",
+    "compressed": "Bağlam sıkıştırma tamamlandı",
+    "subtask": "Alt görev · {value}"
+  },
+  "section": {
+    "conversations": "Sohbetler",
+    "gateway": "Ağ geçidi durumu",
+    "database": "Hermes veritabanı"
+  },
+  "issue": {
+    "missingTable": "{section}: tablo bulunamadı: {detail}",
+    "missingColumn": "{section}: sütun bulunamadı: {detail}",
+    "collectorFailed": "{section}: veriler okunamadı ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "E-posta",
+    "sms": "Kısa mesaj"
+  },
+  "chat": {
+    "empty": "Şu anda ilgilenmeniz gereken bir şey yok.",
+    "ownerOnly": "Bu özet yalnızca panonun sahibine açıktır.",
+    "configureOwner": "Bu komutu sohbette kullanmadan önce duty-board/settings.json içinde owner ayarlayın.",
+    "oldHost": "Bu komutu sohbette kullanmak için Hermes 0.21.7 veya üzeri gerekir.",
+    "isolated": "Eklentiler ayrı bir süreçte çalışırken (plugins.isolation: host) sohbet özetleri kullanılamaz: orada çağıranın kim olduğu doğrulanamaz. Gösterge panelini kullanın veya plugins.isolation: in_process olarak ayarlayın.",
+    "dmHint": "Ayrıntılar için bota özel mesaj gönderin veya gösterge panelini açın.",
+    "error": "İzleme panosu kullanılamıyor ({error}).",
+    "stalled": "{age} (takıldı)",
+    "privatePlace": "Özel sohbet",
+    "untitled": "Başlıksız",
+    "localPlace": "Yerel",
+    "waitingHeading": "Yanıtınız bekleniyor (yanıtsız mesajlar dahil)",
+    "cronHeading": "Zamanlanmış görev sorunları",
+    "units": {
+      "minute": "dk",
+      "hour": "sa",
+      "day": "g"
+    },
+    "headline": "İzleme panosu · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "İçerik gizlendi",
+    "runningHeading": "Çalışıyor",
+    "droppedHeading": "Tamamlandı, ancak sonuç iletilmedi",
+    "goalsHeading": "Uzun vadeli hedefler",
+    "waitingCount": {
+      "one": "{count} yanıtınızı bekliyor",
+      "other": "{count} yanıtınızı bekliyor"
+    },
+    "runningCount": {
+      "one": "{count} çalışıyor",
+      "other": "{count} çalışıyor"
+    },
+    "droppedCount": {
+      "one": "{count} teslim edilmemiş sonuç",
+      "other": "{count} teslim edilmemiş sonuç"
+    },
+    "cronCount": {
+      "one": "{count} zamanlanmış görev sorunu",
+      "other": "{count} zamanlanmış görev sorunu"
+    },
+    "goalsCount": {
+      "one": "{count} uzun vadeli hedef",
+      "other": "{count} uzun vadeli hedef"
+    },
+    "more": {
+      "one": "+{count} tane daha",
+      "other": "+{count} tane daha"
+    }
+  }
+}

@@ -10,7 +10,8 @@ Ids are ``srq-<12 hex>``: strings never collide with client-minted integer ids, 
 part keeps a compute-host child's requests distinct from the parent's when both reach one socket.
 A request that times out or is cancelled (interrupt, session close, shutdown) emits ONE
 ``request.cancel {id, method, reason}`` notification so every renderer tears the card down the
-same way. A response for an id that is no longer open is dropped — the wait already returned.
+same way. An answered request emits it once with reason ``resolved`` so other attached clients
+dismiss the card. A response for an id that is no longer open is dropped — the wait already returned.
 
 Reconnect: unanswered requests are returned as ``open_requests`` by ``session.resume`` /
 ``session.activate`` / ``session.events.since`` (:func:`open_requests`); the shared TypeScript
@@ -43,6 +44,8 @@ import time
 import uuid
 from typing import Any, Callable
 
+from tools.clarify_batch import settle_batch
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +68,8 @@ class ServerRequest:
         "revision",
         "sid",
         "timeout_seconds",
+        "withdrawn",
+        "writing",
     )
 
     def __init__(self, sid: str, method: str, params: dict, *, qids: list[str] | None = None,
@@ -93,6 +98,9 @@ class ServerRequest:
         self.on_result = on_result
         # Client transports that answered NOT_SHOWN_CODE (no window there shows this session).
         self.declined: set = set()
+        # Published but frame not yet written; a cancel in that gap parks its reason in ``withdrawn`` for _register.
+        self.writing = False
+        self.withdrawn: str | None = None
 
     def frame(self) -> dict:
         return {"jsonrpc": "2.0", "id": self.id, "method": self.method,
@@ -227,9 +235,18 @@ def _register(req: ServerRequest) -> None:
         # Producer input can contain secure values: never echo validation details.
         raise ValueError("Invalid server request params") from None
     with _lock:
+        req.writing = True
         _open[req.id] = req
     _attention_changed(req)
-    _write(req.frame())
+    try:
+        _write(req.frame())
+    finally:
+        with _lock:
+            req.writing = False
+            withdrawn = req.withdrawn
+    if withdrawn is not None:
+        # cancel() landed between publish and write: its request.cancel must follow the frame, not precede it.
+        _emit_cancel(req, withdrawn)
 
 
 def send(method: str, sid: str, params: dict, *, timeout: float | None,
@@ -273,7 +290,7 @@ def send(method: str, sid: str, params: dict, *, timeout: float | None,
         _attention_changed(req)
         _emit_cancel(req, "timeout")
         if req.qids is not None:
-            return {"answers": locked, "outcome": "timed_out"}
+            return settle_batch(locked, ended="timed_out")
     return None
 
 
@@ -350,7 +367,10 @@ def _remember_terminal(req: ServerRequest, status: str) -> None:
 def _consume(req: ServerRequest, result: dict | None, status: str) -> None:
     # Caller owns _lock. No callback or external IO under the registry lock.
     _open.pop(req.id, None)
-    req.result, req.answered = result, status == "accepted"
+    if req.qids is not None and status in ("expired", "cancelled"):
+        result = settle_batch(req.locked, ended="timed_out" if status == "expired" else "cancelled")
+    req.result = result
+    req.answered = status == "accepted" or (req.qids is not None and result is not None)
     _remember_terminal(req, "outcome_unknown" if status == "accepted" and req.on_result else status)
 
 
@@ -377,13 +397,8 @@ def _deliver(req: ServerRequest, status: str) -> str:
 def _answer_result(req: ServerRequest, result: dict) -> dict:
     from .human_input import validate_answer
     result = validate_answer(req.method, req.params, result)
-    if req.qids:
-        answers = result.get("answers")
-        # A lock accepted elsewhere must not be overwritten by a stale full reply.
-        if answers is not None:
-            result = {"answers": {**answers, **req.locked}, "outcome": "submitted"}
-        else:
-            result = {"answers": dict(req.locked), "outcome": "cancelled"}
+    if req.qids is not None:
+        result = settle_batch(req.locked, result)
     return result
 
 
@@ -432,7 +447,7 @@ def _lock_question(req: ServerRequest, question_id: str, answer: str | None) -> 
         req.revision += 1
     remaining = [qid for qid in req.qids if qid not in req.locked]
     if not remaining:
-        _consume(req, {"answers": dict(req.locked), "outcome": "submitted"}, "accepted")
+        _consume(req, settle_batch(req.locked, ended="submitted"), "accepted")
     return remaining
 
 
@@ -471,15 +486,19 @@ def cancel(sid: str | None = None, reason: str = "interrupted", *, method: str |
             _remember_terminal(req, "expired" if reason == "timeout" else "cancelled")
             _open.pop(req.id, None)
             if req.qids is not None:
-                req.result, req.answered = {"answers": dict(req.locked), "outcome": "cancelled"}, True
+                req.result, req.answered = settle_batch(req.locked, ended="cancelled"), True
             else:
                 req.result, req.answered = None, False
+            if req.writing:
+                req.withdrawn = reason
+        announced = {req.id for req in targets if not req.writing}
     for req in targets:
         _attention_changed(req)
         if req.on_result is not None:
             req.on_result(None)
         req.event.set()
-        _emit_cancel(req, reason)
+        if req.id in announced:
+            _emit_cancel(req, reason)
     return len(targets)
 
 

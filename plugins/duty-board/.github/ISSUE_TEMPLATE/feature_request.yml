@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest something the board should show or do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to keep track of?
+      description: Describe the situation in which you missed something or had to go hunting for it.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+    validations:
+      required: false

@@ -112,9 +112,13 @@ def _fetch(conn: sqlite3.Connection, execution_id: str) -> Optional[dict[str, An
 
 
 def _emit_execution_state(
-    record: Optional[dict[str, Any]], *, delivery_outcome: Optional[str] = None
+    record: Optional[dict[str, Any]], *, delivery_outcome: Optional[str] = None,
+    launch_create: bool = False, launcher=None, terminal_cause=None, job=None
 ) -> None:
-    """Project durable state to monitoring without affecting ledger behavior."""
+    """Record launch provenance, then publish the optional monitoring projection."""
+    if record is not None:
+        from cron.launches import record_run
+        record_run(record, creating=launch_create, launcher=launcher, terminal_cause=terminal_cause, job=job)
     try:
         from agent.monitoring.cron_health import emit_execution_state
 
@@ -210,8 +214,11 @@ def _prune_unlocked(conn: sqlite3.Connection) -> None:
     )
 
 
+_JOB_UNSET = object()
+
+
 def create_execution(
-    job_id: str, *, source: str, scheduled_instant: Optional[str] = None,
+    job_id: str, *, source: str, scheduled_instant: Optional[str] = None, launcher=None, job=_JOB_UNSET,
 ) -> dict[str, Any]:
     """Persist a claimed attempt before executor/provider dispatch."""
     from cron.occurrences import scheduled_instant as canonical_instant
@@ -229,7 +236,13 @@ def create_execution(
              _process_start_time(pid), now, canonical_instant(scheduled_instant)),
         )
         record = _fetch(conn, execution_id)
-    _emit_execution_state(record)
+    if job is _JOB_UNSET:
+        from cron.jobs import get_job
+        from hermes_state_optional_launch import optional_launch
+        job = None
+        with optional_launch("cron.execution.snapshot"):
+            job = get_job(job_id)
+    _emit_execution_state(record, launch_create=True, launcher=launcher, job=job)
     return record  # type: ignore[return-value]
 
 
@@ -311,28 +324,95 @@ def mark_execution_running(execution_id: str) -> Optional[dict[str, Any]]:
 
 def finish_execution(
     execution_id: str, *, success: bool, error: Optional[str] = None,
-    delivery_outcome: Optional[str] = None,
+    delivery_outcome: Optional[str] = None, terminal_cause=None,
 ) -> Optional[dict[str, Any]]:
-    """Write a terminal result once; terminal attempts cannot be rewritten."""
+    """Write a terminal result once; terminal attempts cannot be rewritten.
+
+    Only the owning process may finish its attempt; receipt recovery for a departed owner
+    settles through ``recover_receipted_execution``.
+    """
     now = _hermes_now().isoformat()
     status = "completed" if success else "failed"
     detail = None if success else (str(error) if error else "unknown failure")
     with _transaction() as conn:
+        owner = (_PROCESS_ID, os.getpid())
         cur = conn.execute(
             """UPDATE executions
                SET status=?, finished_at=?, error=?, handoff_pending=0,
                    handoff_started_at=NULL, delivery_outcome=?
                WHERE id=? AND status IN ('claimed','running')
                  AND process_id=? AND pid=?""",
-            (status, now, detail, delivery_outcome, execution_id, _PROCESS_ID, os.getpid()),
+            (status, now, detail, delivery_outcome, execution_id, *owner),
         )
         if cur.rowcount != 1:
             return None
         _prune_unlocked(conn)
         record = _fetch(conn, execution_id)
+    _emit_execution_state(record, delivery_outcome=delivery_outcome, terminal_cause=terminal_cause)
+    record_cron_finish(record, delivery_outcome)
+    return record
+
+
+def recover_receipted_execution(execution_id, job_id, *, success, error=None, delivery_outcome=None):
+    """Settle a verified canonical receipt after owner loss, including its unknown audit row.
+
+    Terminal verdicts stay immutable. A live firer still owns its bookkeeping
+    (``execution_owner_live``).
+    """
+    now = _hermes_now().isoformat()
+    with _transaction() as conn:
+        row = _recoverable_row(conn, execution_id, job_id)
+        if row is None or _row_owner_live(row):
+            return None
+        conn.execute(
+            """UPDATE executions SET status=?, finished_at=?, error=?, handoff_pending=0,
+               handoff_started_at=NULL, delivery_outcome=? WHERE id=?""",
+            ('completed' if success else 'failed', now, None if success else (str(error) if error else 'unknown failure'),
+             delivery_outcome, execution_id))
+        _prune_unlocked(conn)
+        record = _fetch(conn, execution_id)
     _emit_execution_state(record, delivery_outcome=delivery_outcome)
     record_cron_finish(record, delivery_outcome)
     return record
+
+
+def _recoverable_row(conn, execution_id, job_id):
+    return conn.execute(
+        """SELECT status, process_id, pid, process_started_at FROM executions
+           WHERE id=? AND job_id=? AND status IN ('claimed','running','unknown')""",
+        (str(execution_id), str(job_id))).fetchone()
+
+
+def _row_owner_live(row) -> bool:
+    if row['process_id'] == _PROCESS_ID:
+        # The in-gateway ticker fires on pool threads: a claimed/running row of THIS process is
+        # still in flight here. Only an unknown row was given up by its own firer.
+        return row['status'] != 'unknown'
+    return _owner_is_live(int(row['pid']), row['process_started_at'])
+
+
+def execution_owner_live(execution_id: str, job_id: str) -> bool:
+    """True while the attempt's own firer (this process included) can still finish it, so receipt
+    recovery must not act for it: no output re-save, no job mark, no ledger write."""
+    with _transaction() as conn:
+        row = _recoverable_row(conn, execution_id, job_id)
+    return row is not None and _row_owner_live(row)
+
+
+def settle_delivery_outcome(execution_id: str, outcome: str) -> bool:
+    """Replace a terminal attempt's ``queued`` delivery outcome with the drain's real one.
+
+    The only post-terminal rewrite the ledger allows: the attempt's status is untouched and
+    only a ``queued`` handoff can settle, so a replay or a late caller is a no-op.
+    """
+    with _transaction() as conn:
+        cur = conn.execute(
+            """UPDATE executions SET delivery_outcome=?
+               WHERE id=? AND delivery_outcome='queued'
+                 AND status IN ('completed','failed','unknown')""",
+            (outcome, execution_id),
+        )
+    return cur.rowcount == 1
 
 
 _OWNER_GONE_REASON = (
@@ -350,10 +430,10 @@ def settle_unstarted_execution(execution_id: str, job_id: str, error: str) -> No
     """Close the receipt of a run that never started: a ``claimed`` row never resolves. Best-effort
     so a ledger write cannot mask the failure the caller logs or re-raises."""
     try:
-        finish_execution(execution_id, success=False, error=error)
-    except (sqlite3.Error, OSError) as record_err:
+        finish_execution(execution_id, success=False, error=error, terminal_cause="failed_start")
+    except Exception as record_err:
         logger.error("Job '%s': failed to close execution receipt %s (%s): %s",
-                     job_id, execution_id, error, record_err)
+                     job_id, execution_id, error, record_err, exc_info=True)
 
 
 def recover_interrupted_executions() -> int:
@@ -406,15 +486,19 @@ def recover_interrupted_executions() -> int:
                 < HANDOFF_ADOPTION_GRACE_SECONDS
             ):
                 continue
+            # The SELECT ran outside a write transaction and the liveness probe takes time: the
+            # owner may have stamped progress since, so act only on the snapshot that was judged.
             cur = conn.execute(
                 """UPDATE executions
                    SET status='unknown', finished_at=?, error=?,
                        handoff_pending=0, handoff_started_at=NULL
                    WHERE id=? AND status=? AND process_id=? AND pid=?
                      AND handoff_pending=?
-                     AND handoff_started_at IS ?""",
+                     AND handoff_started_at IS ?
+                     AND claimed_at=? AND progress_at IS ?""",
                 (now, reason, row["id"], row["status"], row["process_id"], row["pid"],
-                 row["handoff_pending"], row["handoff_started_at"]),
+                 row["handoff_pending"], row["handoff_started_at"],
+                 row["claimed_at"], row["progress_at"]),
             )
             changed += cur.rowcount
             if cur.rowcount:
@@ -478,6 +562,26 @@ def terminalize_dead_owner(execution_id: str, *, reason: str) -> bool:
         if cur.rowcount != 1:
             return False
         record = _fetch(conn, execution_id)
+        _prune_unlocked(conn)
+    _emit_execution_state(record)
+    return True
+
+
+def give_up_execution(execution_id: str, *, reason: str) -> bool:
+    """The firer itself gave up on its in-flight attempt (``CronExecutionUnknown``): record it
+    ``unknown`` now, owner-fenced to this process, instead of leaving it ``running`` until a
+    restart's dead-owner sweep. Receipt recovery never acts for a same-process running row, so
+    the owner's later terminal receipt can settle it only once it is marked given up."""
+    now = _hermes_now().isoformat()
+    with _transaction() as conn:
+        cur = conn.execute(
+            """UPDATE executions SET status='unknown', finished_at=?, error=?,
+                   handoff_pending=0, handoff_started_at=NULL
+               WHERE id=? AND status IN ('claimed','running') AND process_id=? AND pid=?""",
+            (now, reason, str(execution_id), _PROCESS_ID, os.getpid()))
+        if cur.rowcount != 1:
+            return False
+        record = _fetch(conn, str(execution_id))
         _prune_unlocked(conn)
     _emit_execution_state(record)
     return True

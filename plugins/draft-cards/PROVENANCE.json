@@ -1,0 +1,77 @@
+{
+  "name": "draft-cards",
+  "repository": "https://github.com/arsiktech/hermes-draft-cards",
+  "revision": "6e6ca659ece59b0ce1c28b3b188393491ee5a415",
+  "subdirectory": "",
+  "tree_sha256": "8de09ee2dc83a85907e571278652ef63300ac3ff5e02f3f09770892daf0e0421",
+  "tree_hash_format": "SHA256 of UTF-8 JSON path-to-file-SHA256 map, sorted keys, compact separators",
+  "git_archive_sha256": "750763d0aae261cc9bb8651640054eccb5fb243577efa03e151f520fe557a1d7",
+  "sha256": {
+    ".gitignore": "900f63de880d9af8908aaf809d55f9b1082874d86e6f8ba2e69ed19cfcbc5f9c",
+    "LICENSE": "c7da4d4b075e803ecb264117afec43c18c6964b600b9a4d56d5631ed786117d4",
+    "README.md": "429b2aca9a7461ab4066a9b6e73f802ed6769588e5aee0598d101bc7eff19997",
+    "__init__.py": "73388811ddc4f7cfc336c2a278dad9c0c032b0b15e4183ce8a157e61ce13695b",
+    "dashboard/dist/index.js": "c128205667225c6e2a4099ed8758b1f3c08c0038d2a0c0ea1fcb791eb8cd7773",
+    "dashboard/manifest.json": "14e906a0e492669f0950e091f42d98ad607486dbea524b2a8e8691faa2139941",
+    "dashboard/plugin_api.py": "98e38f618c23ec266f1e171a958ffcf048339ea3c7876d1faa2d0b8910839336",
+    "desktop/plugin.js": "4da8a6adf54a06c46fec0f5a7d9a486867697e77a3dd1e5806a01d5f96c371b4",
+    "docs/draft-light.png": "d605a3fb1f1b586e1597f1f812e633c271f11199998519058d3039113019a16b",
+    "docs/edited-dark.png": "c28d822b282ca65216599dab9b798e2d649e44667ca9a05973c6dfdc077c81e9",
+    "docs/removed-dark.png": "4d91142fd2b7c748b91a996d3091a794f7f600f66e53e0215d94bfcd11a13d2f",
+    "docs/revised-dark.png": "4d223191b16b26a59688737895081e0c976a138c25d93e218ebcc54cb9b79c4a",
+    "docs/sent-light.png": "c5fed086b93f8a1527766a6ba7db1e758d7fe97614d66862b8f7059a4aa9ffd4",
+    "plugin.yaml": "e2a8a92847f4519f1636ec542ae2b1599050d9552fb9a61d9c6d6afaca83d6eb",
+    "skills/draft-cards/SKILL.md": "8a74db188f1e3a9286160223fffa4e064baff81b99ab1134a6b2a459fa62fb9f",
+    "store.py": "5815d4b106082b7f51d1b7e9d239fc655fa247a5e61ff7465e8c1865476eaaf6",
+    "tests/pytest.ini": "e226d427f4efe165e51631cefaf32f0397fe2b05c132d31d6ca37f976c76d3f9",
+    "tests/test_draft_cards.py": "0ea8aa4168ebc9b5b9fea0bea18ffcab780ed0ab7cab1ac914c41b11d6674961",
+    "tools.py": "29271409488efc39206a048dc2852effc156d9ca5d91721632e1219840f14db1"
+  },
+  "vendored": true,
+  "source_files": {
+    ".gitignore": ".gitignore",
+    "LICENSE": "LICENSE",
+    "README.md": "README.md",
+    "__init__.py": "__init__.py",
+    "dashboard/dist/index.js": "dashboard/dist/index.js",
+    "dashboard/manifest.json": "dashboard/manifest.json",
+    "dashboard/plugin_api.py": "dashboard/plugin_api.py",
+    "desktop/plugin.js": "desktop/plugin.js",
+    "docs/draft-light.png": "docs/draft-light.png",
+    "docs/edited-dark.png": "docs/edited-dark.png",
+    "docs/removed-dark.png": "docs/removed-dark.png",
+    "docs/revised-dark.png": "docs/revised-dark.png",
+    "docs/sent-light.png": "docs/sent-light.png",
+    "plugin.yaml": "plugin.yaml",
+    "skills/draft-cards/SKILL.md": "skills/draft-cards/SKILL.md",
+    "store.py": "store.py",
+    "tests/pytest.ini": "tests/pytest.ini",
+    "tests/test_draft_cards.py": "tests/test_draft_cards.py",
+    "tools.py": "tools.py"
+  },
+  "adaptations": [
+    {
+      "file": "dashboard/manifest.json",
+      "reason": "Explicit opt-in for bundled dashboard API and assets.",
+      "vendored_sha256": "0ae4f3c343003181b4dbc0c958c3151c41a504fc9dfd73c1b30380df14adb02c"
+    },
+    {
+      "file": "dashboard/plugin_api.py",
+      "reason": "Comment-only health annotations preserve upstream best-effort event boundaries; remove unused noqa comments.",
+      "vendored_sha256": "9daff5b6137e86c561366bdf6f35934ddf94f80e5b014a1f687d8498b710a2cc"
+    },
+    {
+      "file": "desktop/plugin.js",
+      "reason": "Explicit opt-in when an owner later materializes the Desktop half.",
+      "vendored_sha256": "df6b3fa1d81b3e3a0a7b8cf29907b21506d6c612aa976daf8575945e444ce57e"
+    },
+    {
+      "file": "tools.py",
+      "reason": "Comment-only health annotations preserve upstream best-effort event boundaries; remove unused noqa comments.",
+      "vendored_sha256": "cc9ae24f05ea9709b7db6729654709261c0acc905a597d2533427b4cca2f3e75"
+    }
+  ],
+  "adaptation_patch": "UPSTREAM.patch",
+  "hash_scope": "tree_sha256 hashes the complete fetched repository. sha256 hashes selected original files at their vendored paths. source_files maps them back to the pin.",
+  "adaptation_patch_format": "git apply --unidiff-zero -p1"
+}

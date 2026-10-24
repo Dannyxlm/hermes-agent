@@ -1,0 +1,42 @@
+{
+  "name": "profile-picker",
+  "repository": "https://github.com/weltmaister/hermes-profile-picker",
+  "revision": "9a38fa52616c8b1be5397c4d922e80a2c754613d",
+  "subdirectory": "",
+  "tree_sha256": "674e7db141bda56be694d99a701346be88b98c3a9fc04e1c2e4b6351778e41f6",
+  "tree_hash_format": "SHA256 of UTF-8 JSON path-to-file-SHA256 map, sorted keys, compact separators",
+  "git_archive_sha256": "d24f561c4d6f0c349415b2aa9a81038d12c8107e94c3d278b7e11c7a77f365df",
+  "sha256": {
+    ".gitignore": "60c9bdd905fcf45ac485c680d32e9773962cf061b6f041dcddd033911558a672",
+    "LICENSE": "4b602eeb815cf06f843b608436c07834166e5c4abeaf29d683a1e9a0afca37a3",
+    "README.md": "e3440027b6a30969f0bbca2c2645d82380157909cac23d6a94b5da77cb080c04",
+    "__init__.py": "7bc96428b4d22917e6da5e0f1860f9c61c86f10963a47f6f73252676bfd365ff",
+    "desktop/plugin.js": "7afa6d249acfb0950516b82ce1758fb8f014149d18bf2283e29a57c362347047",
+    "docs/chip-running-chat.png": "1f778315fd8ed8737d20b9f0d0703c915eee2cd3874f89483e2010857bb395a0",
+    "docs/picker-closed.png": "fa7fc3d28b40a201f52acb5444684578e098686ba01ca05b159fc19c5e40621a",
+    "docs/picker-open.png": "c03e4dfd60d626b29ed27b87fe6177b0c1c2aba7a2c77d2e25e31bed60195804",
+    "plugin.yaml": "a11f89de91c0903b5a836d70e4efc00832f77c38cc4af39953a1eb02112a7bd8"
+  },
+  "vendored": true,
+  "source_files": {
+    ".gitignore": ".gitignore",
+    "LICENSE": "LICENSE",
+    "README.md": "README.md",
+    "__init__.py": "__init__.py",
+    "desktop/plugin.js": "desktop/plugin.js",
+    "docs/chip-running-chat.png": "docs/chip-running-chat.png",
+    "docs/picker-closed.png": "docs/picker-closed.png",
+    "docs/picker-open.png": "docs/picker-open.png",
+    "plugin.yaml": "plugin.yaml"
+  },
+  "adaptations": [
+    {
+      "file": "desktop/plugin.js",
+      "reason": "Explicit opt-in when an owner later materializes the Desktop half.",
+      "vendored_sha256": "1f9887e020b052a527a0d5a31cc51068448f8c7d563beff32ac0e57f74ba78de"
+    }
+  ],
+  "adaptation_patch": "UPSTREAM.patch",
+  "hash_scope": "tree_sha256 hashes the complete fetched repository. sha256 hashes selected original files at their vendored paths. source_files maps them back to the pin.",
+  "adaptation_patch_format": "git apply --unidiff-zero -p1"
+}

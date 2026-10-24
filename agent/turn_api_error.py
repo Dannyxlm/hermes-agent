@@ -89,6 +89,19 @@ def handle_api_error(
     status_code = getattr(api_error, "status_code", None)
     error_context = agent._extract_api_error_context(api_error)
 
+    # A Nous 402/403 carries the same x-nous-credits-* headers as a success, and a usage-window plan's
+    # "ran out for this model" / "payment paused" state is only visible on the blocking response itself
+    # (the stream path captures headers after the stream opens, which a 402 never does). Fail-open.
+    # Usage-window responses only: every other account keeps main's behaviour (no capture here).
+    if status_code in (402, 403) and getattr(agent, "provider", "") == "nous":
+        try:
+            from agent.credits_tracker import response_is_usage_window
+            response = getattr(api_error, "response", None)
+            if response_is_usage_window(response):
+                agent._capture_credits(response, refused=True)
+        except Exception:
+            logger.debug("credits ▸ header capture on %s failed (fail-open)", status_code, exc_info=True)
+
     # Process is exiting mid-flight: retries/rotation/fallbacks are futile and the
     # retry trace spams the shell. One log line.
     from tools.interpreter_shutdown import interpreter_shutting_down
@@ -140,7 +153,7 @@ def handle_api_error(
     elapsed_time = time.time() - api_start_time
     # Liveness/watchdog label only (never shown in chat), so the classifier's
     # "not retryable" verdict is named on the logged attempt line below instead.
-    agent._touch_activity(f"API error recovery (attempt {retry_count}/{max_retries})")
+    agent._touch_activity(f"API error recovery (attempt {retry_count}/{max_retries})", step_kind="retrying")
 
     error_type, error_msg, _provider, _base, _model = log_api_error_attempt(
         agent, api_error, retry_count=retry_count, max_retries=max_retries, status_code=status_code,

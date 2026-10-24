@@ -5,6 +5,7 @@ rebound onto server.py's globals at install time (method_ctx.bind_module)."""
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -12,9 +13,15 @@ _registry = HandlerRegistry()
 
 
 def resolve_skin() -> dict:
+    return skin_payload(_load_cfg())
+
+
+def skin_payload(config: dict) -> dict:
+    """The ``skin.changed`` / ``gateway.ready`` skin for ``config``'s ``display.skin`` (``{}`` when the
+    skin engine fails). Pure of server state: the shared owner calls it under the profile's scope."""
     try:
         from hermes_cli.skin_engine import init_skin_from_config, get_active_skin
-        init_skin_from_config(_load_cfg())
+        init_skin_from_config(config)
         skin = get_active_skin()
         # light/dark are paired palettes: the TUI prefers the block matching terminal polarity.
         return {
@@ -25,7 +32,7 @@ def resolve_skin() -> dict:
             "help_header": (skin.branding or {}).get("help_header", ""),
             # Raw user CSS for the desktop GUI's <style> tag (32 KiB cap in the skin engine).
             "customCSS": skin.custom_css}
-    except Exception:
+    except Exception:  # health: allow BLE001 -- moved unchanged from resolve_skin (main keeps the same handler): a broken skin file boots the default theme
         return {}
 
 
@@ -65,6 +72,20 @@ def _newest_mtime_ns(paths) -> int | None:
     return max((m for m in map(_watcher_mtime_ns, paths) if m is not None), default=None)
 
 
+def _files_sig(paths) -> tuple:
+    """Sorted ``(path, mtime_ns, size)`` per stat-able file in ``paths``.
+
+    For multi-file signatures, unlike a newest-mtime max: a file added, removed or rewritten in
+    the same timestamp tick as the current newest one (coarse-mtime filesystems) still moves it.
+    """
+    entries = []
+    for path in paths:
+        with contextlib.suppress(OSError):
+            st = path.stat()
+            entries.append((str(path), st.st_mtime_ns, st.st_size))
+    return tuple(sorted(entries))
+
+
 def _skin_sig() -> tuple[str, float | None]:
     """(active skin name, its user-file mtime). Built-ins have no file, so only
     their name moves; a user skin's mtime lets an in-place color edit repaint too."""
@@ -75,23 +96,71 @@ def _skin_sig() -> tuple[str, float | None]:
         return name, None
 
 
+# A multiplexed gateway serves other profiles' TUIs from this one watcher thread (no profile
+# override): their baselines live here, keyed by home, and their repaints go to their own peers only
+# (main ran one gateway per profile, so a work TUI never saw the launch home's skin).
+_skin_sig_by_home: dict[str, tuple[str, float | None]] = {}
+
+
+def _skin_home_for(profile_id) -> str | None:
+    """The profile home a peer's skin follows, or None for the launch home (the ambient scope)."""
+    with contextlib.suppress(Exception):
+        home = Path(str(profile_id))
+        if home.is_absolute() and home.is_dir() and home.resolve() != Path(_hermes_home).resolve():
+            return str(home)
+    return None
+
+
+def _under_home(home: str, fn):
+    token = set_hermes_home_override(home)
+    try:
+        return fn()
+    finally:
+        reset_hermes_home_override(token)
+
+
 def _note_skin_broadcast() -> None:
     """Sync the baseline after the /skin RPC emits so the watcher doesn't re-broadcast it."""
     global _last_skin_sig
     with contextlib.suppress(Exception):
-        _last_skin_sig = _skin_sig()
+        if home := _skin_home_for(get_hermes_home_override()):
+            _skin_sig_by_home[home] = _skin_sig()
+        else:
+            _last_skin_sig = _skin_sig()
+
+
+def _skin_peers_by_home() -> dict[str, list]:
+    with _live_transports_lock:
+        targets = list(_live_transports)
+    peers: dict[str, list] = {}
+    for transport in targets:
+        if home := getattr(transport, "skin_home", None):
+            peers.setdefault(home, []).append(transport)
+    return peers
 
 
 def _broadcast_skin_if_changed() -> None:
     """Emit ``skin.changed`` when the active skin moved, via the SAME live path as
-    ``/skin`` so every surface repaints. The check is a dict lookup + one stat."""
+    ``/skin`` so every surface repaints. The check is a dict lookup + one stat per home."""
     global _last_skin_sig
+    by_home = _skin_peers_by_home()
     with contextlib.suppress(Exception):
         sig = _skin_sig()
-        if sig == _last_skin_sig:
-            return
-        _last_skin_sig = sig
-        _broadcast_global_event("skin.changed", resolve_skin())
+        if sig != _last_skin_sig:
+            _last_skin_sig = sig
+            _broadcast_global_event("skin.changed", resolve_skin(),
+                                    skip={peer for peers in by_home.values() for peer in peers})
+    for home, peers in by_home.items():
+        with contextlib.suppress(Exception):
+            sig = _under_home(home, _skin_sig)
+            seen = _skin_sig_by_home.get(home)
+            _skin_sig_by_home[home] = sig
+            if seen is None or sig == seen:
+                continue  # first sight seeds: the attach's runtime.describe already carried this skin
+            frame = _event_frame("skin.changed", "", _under_home(home, resolve_skin))
+            for peer in peers:
+                with contextlib.suppress(Exception):
+                    peer.write(frame)
 
 
 def _active_pet():
@@ -138,11 +207,22 @@ _SESSION_SIGNATURE_FIELDS = (
 )
 # path -> ((database/WAL mtime, db size, WAL size), session-table digest). The stat guard keeps the
 # normal 0.5 s watch pass stat-only; SQLite is read only after another process
-# actually commits.
-_sessions_db_sig_cache: dict[str, tuple[tuple, tuple | None]] = {}
+# actually commits (and for ``utils.RACY_MTIME_WINDOW_NS`` after it, see _settled_mtime).
+_sessions_db_sig_cache: dict[str, tuple[object, tuple | None]] = {}
+_session_observation_locks: dict[str, Any] = {}
+_session_observation_lock = threading.Lock()
 
 
 def _session_db_content_sig(db_path: Path):
+    """Share a store observation across overlapping watcher, push and list readers."""
+    key = os.path.realpath(db_path)
+    with _session_observation_lock:
+        lock = _session_observation_locks.setdefault(key, threading.Lock())
+    with lock:
+        return _read_session_db_content_sig(db_path)
+
+
+def _read_session_db_content_sig(db_path: Path):
     """Digest list/transcript-relevant session rows, excluding unrelated tables.
 
     ``gateway_heartbeats`` shares state.db and writes every minute. Using the
@@ -213,7 +293,7 @@ def _session_db_content_sig(db_path: Path):
         if conn is not None:
             conn.close()
 
-    _sessions_db_sig_cache[cache_key] = (stamp, signature)
+    _sessions_db_sig_cache[cache_key] = ((_settled_mtime(mtime), *stamp[1:]), signature)
 
     return signature
 
@@ -232,6 +312,20 @@ def _delegate_session_ids(conn, ids: list, available: set) -> set:
             f"AND {_delegate_from_json()} IS NOT NULL", chunk))
     return found
 
+# Filesystem timestamps come from a coarse clock (~4 ms ticks; whole seconds on some filesystems) and
+# SQLite commits in place, so a commit landing in the tick of a read leaves the DB/WAL mtime unchanged.
+# A digest read while the mtime is that fresh must not become a cache hit ("racily clean", as in git's
+# index): it is cached under a key no mtime equals, so the next tick re-reads the rows.
+_RACY_MTIME = object()
+
+
+def _settled_mtime(mtime):
+    """``mtime`` when it is old enough to trust as a cache key, else a never-matching sentinel."""
+    from utils import mtime_is_racy  # function-local: bodies are rebound onto server.py's globals
+    if mtime is None or mtime_is_racy(mtime):
+        return _RACY_MTIME
+    return mtime
+
 
 def _sessions_sig():
     """Session-table content across the active and served profile stores.
@@ -248,18 +342,18 @@ def _sessions_sig():
 
 
 def _projects_sig():
-    """Newest mtime across projects.db (+ WAL) for the watcher home and every served
+    """Per-file stat signature of projects.db (+ WAL) for the watcher home and every served
     sibling profile. The CLI and other windows write projects.db directly — nothing in
     their process touches this gateway's transports — so the file is the only shared
     signal, exactly like state.db (#53046, #56757)."""
-    return _newest_mtime_ns(
+    return _files_sig(
         root / name
         for root in (_watcher_home(), *_served_profile_homes)
         for name in ("projects.db", "projects.db-wal"))
 
 
 def _pairing_sig():
-    """Newest mtime across every profile's pairing ledgers (legacy ``pairing/`` and
+    """Per-file stat signature of every profile's pairing ledgers (legacy ``pairing/`` and
     ``platforms/pairing/``): the gateway process writes pending codes, so the files are the only
     shared signal (a pairing request moves nothing in gateway_state.json)."""
     entries = []
@@ -268,7 +362,7 @@ def _pairing_sig():
             # Only the ledgers: _rate_limits.json moves on every unauthorized DM.
             entries += [
                 e for e in root.iterdir() if e.name.endswith(("-pending.json", "-approved.json"))]
-    return _newest_mtime_ns(entries)
+    return _files_sig(entries)
 
 
 # Live-profile pairing roots, cached on (home, ``profiles/`` dir mtime) with a TTL. The liveness
@@ -319,6 +413,16 @@ def _bot_relay_outbox_sig():
     return _bot_relay_outbox_seen or None
 
 
+def _skills_sig():
+    """The skill roots' stat signature for every scope a session resolved commands in (each profile
+    home and session repo, not only the launch one: ``agent.skill_commands.published_scopes_signature``):
+    a skill installed or removed from another terminal (``hermes skills install``, a dropped SKILL.md,
+    nested under a category) moves it, and attached clients refetch ``commands.catalog`` from this
+    gateway instead of rescanning disk."""
+    from agent.skill_commands import published_scopes_signature
+    return published_scopes_signature()
+
+
 # event → (check interval, signature fn, payload fn). Signatures are stat-cheap; the interval
 # keeps pricier probes (pet resolves the sheet off disk) off the 0.5s tick. cron/jobs.json
 # moves on edits AND scheduler ticks; gateway_state.json is where the messaging gateway
@@ -333,6 +437,7 @@ _CHANGE_WATCHES: dict[str, tuple[float, Any, Any]] = {
     "platforms.changed": (2.0, lambda: _home_mtime_ns("gateway_state.json"), dict),
     "projects.changed": (2.0, _projects_sig, dict),
     "pairing.changed": (2.0, _pairing_sig, dict),
+    "skills.changed": (2.0, _skills_sig, dict),
     # 1s so a queued DM envelope reaches the Desktop's push-triggered drain fast.
     "bot_relay.outbox.pending": (1.0, _bot_relay_outbox_sig, dict)}
 
@@ -350,6 +455,13 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
     """One pass: recompute due signatures, broadcast events whose signature moved.
     First sighting seeds silently so a gateway boot never fires a refresh storm."""
     from tui_gateway import session_change_cursor
+    with _live_transports_lock:
+        live = list(_live_transports)
+    # Durable Inbox push owns its leased-store refresh in mobile_inbox_invalidation.process;
+    # this UI watcher has no work without a WebSocket or the stdio TUI.
+    if not live and not _stdio_is_rpc_channel:
+        session_change_cursor.pump(_send_session_cursor_frames, live, now)
+        return
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
         if event == "sessions.changed":

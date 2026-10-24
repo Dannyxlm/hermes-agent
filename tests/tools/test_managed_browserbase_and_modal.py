@@ -1,6 +1,5 @@
 import os
 import sys
-import tempfile
 import threading
 import types
 from importlib.util import module_from_spec, spec_from_file_location
@@ -113,6 +112,9 @@ def _install_fake_tools_package():
     )
     sys.modules["agent.secret_scope"] = types.SimpleNamespace(
         get_secret=lambda key, default=None: os.environ.get(key, default),
+        is_multiplex_active=lambda: False,
+        serves_routed_profile=lambda: False,
+        current_secret_scope=lambda: None,
     )
 
     # Stubs for the browser-provider plugin layer introduced in PR #25214.
@@ -207,10 +209,6 @@ def _install_fake_tools_package():
         EnvironmentConnectionError=_DummyConnectionError,
     )
     sys.modules["tools.environments.local"] = types.SimpleNamespace(LocalEnvironment=_DummyEnvironment)
-    sys.modules["tools.environments.singularity"] = types.SimpleNamespace(
-        _get_scratch_dir=lambda: Path(tempfile.gettempdir()),
-        SingularityEnvironment=_DummyEnvironment,
-    )
     sys.modules["tools.environments.ssh"] = types.SimpleNamespace(SSHEnvironment=_DummyEnvironment)
     sys.modules["tools.environments.docker"] = types.SimpleNamespace(DockerEnvironment=_DummyEnvironment)
     sys.modules["tools.environments.modal"] = types.SimpleNamespace(ModalEnvironment=_DummyEnvironment)

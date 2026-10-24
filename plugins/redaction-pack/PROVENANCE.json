@@ -1,0 +1,28 @@
+{
+  "name": "redaction-pack",
+  "repository": "https://github.com/pierrenode/hermes-redaction-pack",
+  "revision": "febd8bfe9971a3242d0ca18e8e7ca71d685d503b",
+  "subdirectory": "redaction-pack",
+  "tree_sha256": "9ac1a3da56b6b4a30bf078e47e0a27dfc7edf01ec0dadd0df5d21248f7b59a27",
+  "tree_hash_format": "SHA256 of UTF-8 JSON path-to-file-SHA256 map, sorted keys, compact separators",
+  "git_archive_sha256": "9fbab8245256fd8ee668c9d409c30b49f395c953ca3ae0a9bbe1e9ae21676a60",
+  "sha256": {
+    "LICENSE": "b5c77fcd983461dd02409a344f82345260bba0efac6fde4cf296d8fd5bdc0672",
+    "README.md": "d6d14a3626901d7c71f910f849f1ff0c7d1727f926b636a20250ab12cb8730c8",
+    "__init__.py": "6d4b9a7344f71bc0d07ee4e4a021e011b4ab3d347ab16b569df9bb1f983285f1",
+    "patterns.py": "086f41f9c574299c39c61caca3caed1840d54e884829ee3c1b911d59fce989d4",
+    "plugin.yaml": "18bba1f25b9870073c52077dad3827437529e310eb30451808f493cc1e60370d"
+  },
+  "vendored": true,
+  "source_files": {
+    "LICENSE": "LICENSE",
+    "README.md": "redaction-pack/README.md",
+    "__init__.py": "redaction-pack/__init__.py",
+    "patterns.py": "redaction-pack/patterns.py",
+    "plugin.yaml": "redaction-pack/plugin.yaml"
+  },
+  "adaptations": [],
+  "adaptation_patch": "UPSTREAM.patch",
+  "hash_scope": "tree_sha256 hashes the complete fetched repository. sha256 hashes selected original files at their vendored paths. source_files maps them back to the pin.",
+  "adaptation_patch_format": "git apply --unidiff-zero -p1"
+}

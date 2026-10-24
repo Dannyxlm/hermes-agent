@@ -1,0 +1,176 @@
+{
+  "appTitle": "当番ボード",
+  "appSubtitle": "会話、バックグラウンド処理、定期ジョブのライブ状態",
+  "openIn": "リンクを開く先",
+  "discordApp": "Discord アプリ",
+  "browser": "ブラウザ",
+  "warnings": "一部のデータを利用できません",
+  "waiting": "あなたの返信待ち",
+  "waitingHint": "最後の返信が判断を求めている会話（古い順）",
+  "unanswered": "あなたが送信しましたが返信がありません",
+  "waitingEmpty": "返信待ちの項目はありません",
+  "unansweredAge": "{value} 待機",
+  "waitingAge": "{value} 待機",
+  "causedBy": "きっかけ: {value}",
+  "you": "あなた: {value}",
+  "openInDiscord": "Discord で開く",
+  "web": "Web",
+  "dismiss": "閉じる",
+  "seen": "確認済み",
+  "collapse": "折りたたむ",
+  "expandMore": {
+    "other": "残り {count} 件を表示"
+  },
+  "running": "実行中",
+  "runningHint": "バー全体が 1 時間を表します",
+  "allIdle": "すべてアイドル",
+  "runningFor": "{value} 実行中",
+  "stalledFor": "{value} 動きなし",
+  "doing": "処理中",
+  "privateConversation": "{who}との会話",
+  "someone": "他のユーザー",
+  "privateContent": "内容は非表示です",
+  "delegations": "バックグラウンドジョブ",
+  "noDelegations": "実行中のバックグラウンドジョブはありません",
+  "completedNotDelivered": "完了しましたが、結果を元の会話に届けられませんでした",
+  "delegationHint": "新しい会話で処理済みかもしれません。開いて確認してから閉じてください",
+  "parallel": {
+    "other": "{count} 件並列"
+  },
+  "completedAt": "完了 {value}",
+  "handled": "処理済み",
+  "cron": "定期ジョブ",
+  "cronPaused": {
+    "other": "{count} 件一時停止"
+  },
+  "cronRunning": "実行中",
+  "cronScript": "スクリプト",
+  "cronUpcoming": "次: {time} · {name}",
+  "cronReason": {
+    "lastError": "エラー: {detail}",
+    "deliveryError": "配信エラー: {detail}",
+    "state": "状態: {detail}",
+    "overdue": "期限超過"
+  },
+  "recentDone": "最近完了",
+  "recentDoneHint": "24 時間以内。最後の返信は質問ではなく報告です",
+  "promised": "後で報告すると言っています",
+  "none": "なし",
+  "goals": "長期目標",
+  "staleGoals": {
+    "other": "さらに {count} 件の古い目標を非表示"
+  },
+  "noGoals": "対象期間に長期目標はありません",
+  "progress": {
+    "other": "{turns}/{count} ターン"
+  },
+  "active": "進行中",
+  "paused": "一時停止",
+  "gateway": {
+    "connected": "接続中",
+    "retrying": "再接続中",
+    "disconnected": "オフライン",
+    "error": "エラー"
+  },
+  "refreshed": "{value}前に更新",
+  "justNow": "たった今更新",
+  "loading": "読み込み中…",
+  "loadFailed": "読み込み失敗: {error}",
+  "stale": "{value}更新されていません",
+  "sectionUnavailable": "一部のセクションを利用できません",
+  "neverRan": "未実行",
+  "ago": "{value}前",
+  "in": "{value}後",
+  "soon": "まもなく実行",
+  "conversation": "会話",
+  "activity": {
+    "output": "出力中",
+    "response": "モデルの応答待ち",
+    "waiting": "{who}の応答待ち · {duration}",
+    "call": "モデル呼び出し #{n}",
+    "callDone": "モデル呼び出し完了",
+    "starting": "開始直後",
+    "retry": "API 呼び出しを再試行 {a}/{b}",
+    "tool": "{tool}を実行中",
+    "toolDone": "{tool}完了",
+    "toolError": "{tool}失敗",
+    "terminal": "ターミナルコマンド実行中（{duration}）",
+    "script": "スクリプト実行中（{duration}）",
+    "compressed": "コンテキスト圧縮完了",
+    "subtask": "サブタスク · {value}"
+  },
+  "section": {
+    "conversations": "会話",
+    "gateway": "ゲートウェイの状態",
+    "database": "Hermes データベース"
+  },
+  "issue": {
+    "missingTable": "{section}: テーブル {detail} が見つかりません",
+    "missingColumn": "{section}: カラム {detail} が見つかりません",
+    "collectorFailed": "{section}: 読み取りに失敗しました（{detail}）"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "メール",
+    "sms": "SMS"
+  },
+  "chat": {
+    "empty": "今は対応が必要なものはありません。",
+    "ownerOnly": "この概要は当番ボードの所有者だけが閲覧できます。",
+    "configureOwner": "チャットで使う前に duty-board/settings.json の owner を設定してください。",
+    "oldHost": "チャットでこのコマンドを使うには Hermes 0.21.7 以降が必要です。",
+    "isolated": "プラグインを別プロセスで実行している間（plugins.isolation: host）はチャット要約を使えません。そこでは呼び出し元を確認できないためです。ダッシュボードを使うか、plugins.isolation を in_process にしてください。",
+    "dmHint": "詳細はボットへのDMかダッシュボードで確認してください。",
+    "error": "当番ボードを利用できません（{error}）。",
+    "stalled": "{age}（停滞）",
+    "privatePlace": "非公開の会話",
+    "untitled": "無題",
+    "localPlace": "ローカル",
+    "waitingHeading": "あなたの返信待ち（未回答を含む）",
+    "cronHeading": "定期ジョブの問題",
+    "units": {
+      "minute": "分",
+      "hour": "時間",
+      "day": "日"
+    },
+    "headline": "当番ボード · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "内容は非表示です",
+    "runningHeading": "実行中",
+    "droppedHeading": "完了しましたが、結果を元の会話に届けられませんでした",
+    "goalsHeading": "長期目標",
+    "waitingCount": {
+      "other": "{count}件が返信待ち"
+    },
+    "runningCount": {
+      "other": "{count}件が実行中"
+    },
+    "droppedCount": {
+      "other": "{count}件の未配信結果"
+    },
+    "cronCount": {
+      "other": "定期ジョブの問題{count}件"
+    },
+    "goalsCount": {
+      "other": "{count}件の継続目標"
+    },
+    "more": {
+      "other": "ほか{count}件"
+    }
+  }
+}

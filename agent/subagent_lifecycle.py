@@ -356,6 +356,8 @@ class SubagentLifecycleService:
         accepted = False
         if agent is not None:
             with contextlib.suppress(Exception):
+                from hermes_state_launch_causes import stamp_stop
+                stamp_stop(agent, "user_stop")
                 accepted = request_hard_interrupt(
                     agent, f"Lifecycle cancellation requested: {reason[:500]}", tool_reason="subagent cancellation requested",
                 )

@@ -300,7 +300,10 @@ def test_older_window_partial_page_never_overlaps(live_home):
 def test_legacy_catalog_is_opt_in_and_keeps_the_skill_memo(live_home, monkeypatch):
     from agent import skill_commands
     first = result("commands.catalog")
-    assert set(first) == {"pairs", "sub", "canon", "commands", "categories", "skills", "skill_count", "warning"}
+    assert set(first) == {"pairs", "sub", "canon", "commands", "categories", "skills", "skill_count", "warning",
+                          "plugin_commands", "plugin_discovery_error"}
+    assert first["plugin_discovery_error"] == ""
+    assert isinstance(first["plugin_commands"], dict)
     def unexpected_scan():
         raise AssertionError("warm legacy catalog rescanned skill commands")
     monkeypatch.setattr(skill_commands, "scan_skill_commands", unexpected_scan)
