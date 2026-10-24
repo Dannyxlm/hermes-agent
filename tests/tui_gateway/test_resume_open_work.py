@@ -65,14 +65,24 @@ def test_deferred_open_restores_display_only_when_consumed(resume_store, monkeyp
         assert session["display_history_prefix"]
 
 
-def test_warm_info_does_not_hold_up_another_sessions_resume(resume_store, monkeypatch, tmp_path):
+@pytest.mark.parametrize("eager_race", [False, True])
+def test_warm_info_does_not_hold_up_another_sessions_resume(resume_store, monkeypatch, tmp_path, eager_race):
     entered, release, second_done = threading.Event(), threading.Event(), threading.Event()
     results = {}
+    records = {}
     for key in ("first", "second"):
         resume_store.create_session(key, source="tui")
         record = server._deferred_session_record(key, cols=80, cwd=str(tmp_path), history=[], lease=None)
         record["agent"] = SimpleNamespace(session_id=key)
-        server._sessions[key + "-runtime"] = record
+        records[key] = record
+        if key != "first" or not eager_race:
+            server._sessions[key + "-runtime"] = record
+
+    def concurrent_winner(*args, **kwargs):
+        server._sessions["first-runtime"] = records["first"]
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(server, "_make_agent_in_context", concurrent_winner)
 
     def slow_info(agent, session=None):
         if agent.session_id == "first":
@@ -83,7 +93,7 @@ def test_warm_info_does_not_hold_up_another_sessions_resume(resume_store, monkey
     monkeypatch.setattr(server, "_session_info", slow_info)
 
     def run(key):
-        results[key] = resume(key, omit_messages=True, defer_history=True)
+        results[key] = resume(key, omit_messages=True, defer_history=True, eager_build=eager_race and key == "first")
         if key == "second":
             second_done.set()
 

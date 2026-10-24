@@ -2,9 +2,9 @@
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_mobile_session_parity import ordinary
-from tests.tui_gateway.test_methods_mobile_push import push_service
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
+from tests.tui_gateway.test_mobile_session_parity import ordinary as ordinary  # noqa: PLC0414 - pytest fixture
+from tests.tui_gateway.test_methods_mobile_push import push_service as push_service  # noqa: PLC0414 - pytest fixture
+from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc  # noqa: PLC0414 - pytest fixtures
 from tui_gateway import server
 
 
