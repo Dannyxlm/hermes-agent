@@ -32,7 +32,7 @@
     },
     {
       "id": "runtime-review-hardening",
-      "summary": "CloudSeed runtime safety and integration review fixes"
+      "summary": "CloudSeed runtime safety and integration review fixes, including selector-only rollback deletion of terminal runtime-ledger history while refusing unresolved work"
     },
     {
       "id": "hermex-shared-state",
