@@ -66,13 +66,12 @@ def indexed_lineage_page(db, conn, session_ids, *, active_clause, stored, limit,
     conn.create_function('lineage_display_identity', len(names), identity, deterministic=True)
     computed = f"lineage_display_identity({', '.join(names)})"
     direction = 'DESC' if latest else 'ASC'
-    return conn.execute(f"""
-        WITH eligible AS MATERIALIZED (
-            SELECT id, active, message_uid, _compressed_summary,
-                   COALESCE({stored}, {computed}) AS identity
-            FROM messages WHERE session_id IN ({','.join('?' for _ in session_ids)})
-                {active_clause}{visible_sql}
-        ), first_uids AS (
+    has_carrier = conn.execute(
+        f"SELECT 1 FROM messages WHERE session_id IN ({','.join('?' for _ in session_ids)}) "
+        f"AND _compressed_summary != 0{active_clause}{visible_sql} LIMIT 1", session_ids).fetchone()
+    # Most historical lineages predate summary carriers. Avoid building a UID join for every
+    # row when there is no carrier to fold; the representative query is then the original one.
+    carrier_fold = """, first_uids AS (
             SELECT message_uid, MIN(id) AS id FROM eligible
             WHERE COALESCE(_compressed_summary, 0) = 0 AND message_uid IS NOT NULL AND message_uid != ''
             GROUP BY message_uid
@@ -82,10 +81,17 @@ def indexed_lineage_page(db, conn, session_ids, *, active_clause, stored, limit,
                      THEN original.identity ELSE candidate.identity END AS identity
             FROM eligible candidate LEFT JOIN first_uids first ON first.message_uid = candidate.message_uid
                 LEFT JOIN eligible original ON original.id = first.id
-        ), page AS (
+        )""" if has_carrier else ""
+    return conn.execute(f"""
+        WITH eligible AS {'MATERIALIZED' if has_carrier else ''} (
+            SELECT id, active, message_uid, _compressed_summary,
+                   COALESCE({stored}, {computed}) AS identity
+            FROM messages WHERE session_id IN ({','.join('?' for _ in session_ids)})
+                {active_clause}{visible_sql}
+        ){carrier_fold}, page AS (
             SELECT COALESCE(MAX(CASE WHEN active = 1 THEN id END), MAX(id)) AS id,
                 MIN(id) AS logical_id
-            FROM folded GROUP BY identity
+            FROM {'folded' if has_carrier else 'eligible'} GROUP BY identity
             ORDER BY logical_id {direction} LIMIT ? OFFSET ?
         )
         SELECT chosen.* FROM page JOIN messages chosen ON chosen.id = page.id
