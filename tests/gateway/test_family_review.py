@@ -135,3 +135,30 @@ async def test_overview_loads_only_live_and_recent_launch_rows(reader, monkeypat
         assert sum(loaded) <= 4, loaded
     finally:
         await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_unreached_sibling_does_not_open_a_metadata_snapshot(reader, tmp_path, monkeypatch):
+    import gateway.session_family as module
+    _, _, connection = reader
+    home = tmp_path / "iris"
+    home.mkdir()
+    with SessionDB(db_path=home / "state.db") as foreign:
+        foreign._conn.executescript(LAUNCH_DDL)
+        foreign.create_session("unrelated", source="test")
+        launch(foreign._conn, "unrelated", profile="iris", launcher="different-chat")
+        foreign._conn.commit()
+        sibling = SimpleNamespace(authority=SimpleNamespace(db=foreign, profile_id=str(home), sessions={}), actor=connection.actor)
+        monkeypatch.setattr(module, "_connections", lambda _: ({"default": connection, "iris": sibling}, []))
+        original, loaded = module.read_profile, []
+        def counted(profile, *args, **kwargs):
+            loaded.append(profile)
+            return original(profile, *args, **kwargs)
+        monkeypatch.setattr(module, "read_profile", counted)
+        try:
+            result = await family(connection)
+            assert "result" in result, result
+            assert result["result"]["nodes"] == []
+            assert loaded == ["default"], loaded
+        finally:
+            await connection.close()
