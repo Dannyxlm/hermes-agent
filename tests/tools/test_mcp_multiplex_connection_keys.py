@@ -337,6 +337,24 @@ def test_meta_exclude_is_the_calling_profiles_own_on_a_shared_connection(two_pro
     assert srv_a.session.call_tool.await_count == 2
 
 
+def test_meta_exclude_follows_the_launch_profile_when_multiplexing_starts(two_profiles, tmp_path, monkeypatch):
+    """A single-profile process records ``meta_exclude`` under the bare name. Once it starts
+    multiplexing (``rekey_unscoped_connections``) the launch profile's calls resolve
+    ``(scope, name)``, so its list must move with the connection or excluded keys reach the model."""
+    import tools.mcp_tool as core
+    from tools import mcp_tool_discovery as disc, mcp_tool_handlers as handlers
+    from tools.mcp_tool_scope import rekey_unscoped_connections
+
+    monkeypatch.setattr("agent.secret_scope.is_multiplex_active", lambda: False)
+    disc._select_new_servers({"x": {"url": "https://mcp.example/x", "meta_exclude": ["ambient"]}})
+    assert core._server_meta_exclude == {"x": frozenset({"ambient"})}
+
+    rekey_unscoped_connections(hermes_home_key(tmp_path / "profiles" / "a"))
+    monkeypatch.setattr("agent.secret_scope.is_multiplex_active", lambda: True)
+    two_profiles("a")
+    assert handlers._calling_meta_exclude("x") == frozenset({"ambient"})
+
+
 def test_served_profile_without_multiplex_flag_gets_its_own_connection(two_profiles, monkeypatch):
     """A dashboard/desktop backend serves profiles through the HERMES_HOME override with
     ``gateway.multiplex_profiles`` off; a same-named server with other credentials must still be a
