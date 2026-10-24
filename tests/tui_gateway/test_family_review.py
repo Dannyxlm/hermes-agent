@@ -38,3 +38,22 @@ def test_unavailable_live_profile_is_reported(family_home, monkeypatch):
     assert "result" in result, result
     assert result["result"]["complete"] is False
     assert result["result"]["unavailable_profiles"] == ["ops"]
+
+
+@pytest.mark.parametrize("requested", ["root", "tip"])
+def test_legacy_compressed_root_keeps_family_and_transport_ownership(family_home, requested):
+    from hermes_state import SessionDB
+    from tui_gateway import server
+    from tests.test_hermes_family import launch
+    with SessionDB(db_path=family_home / "state.db") as db:
+        db._conn.execute("UPDATE sessions SET ended_at=1,end_reason='compression' WHERE id='root'")
+        db.create_session("tip", source="test", parent_session_id="root")
+        db.create_session("late", source="subagent", parent_session_id="tip")
+        launch(db._conn, "late", launcher="tip")
+        db._conn.commit()
+    server._sessions["default"].update(session_key="tip", agent_running=True)
+    result = rpc("session.family", profile="default", session_id=requested, since=0)
+    assert "result" in result, result
+    assert result["result"]["root"]["session_id"] == "tip"
+    assert result["result"]["root"]["status"] == "working"
+    assert {n["session_id"] for n in result["result"]["nodes"]} == {"ops-root", "helper", "late"}
