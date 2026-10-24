@@ -726,7 +726,8 @@ def _cron_list_revision(profile: str) -> str | None:
                 return None
             files.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
         stamps.append((canonical, str(home.resolve()), files))
-    digest = hashlib.blake2b(repr((int(time.time() // 30), stamps)).encode(), digest_size=16).hexdigest()
+    digest = hashlib.blake2b(
+        repr((requested.lower() == "all", int(time.time() // 30), stamps)).encode(), digest_size=16).hexdigest()
     return f'W/"{digest}"'
 
 
