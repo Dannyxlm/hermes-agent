@@ -460,6 +460,7 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
     # Durable Inbox push owns its leased-store refresh in mobile_inbox_invalidation.process;
     # this UI watcher has no work without a WebSocket or the stdio TUI.
     if not live and not _stdio_is_rpc_channel:
+        session_change_cursor.pump(_send_session_cursor_frames, live, now)
         return
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
