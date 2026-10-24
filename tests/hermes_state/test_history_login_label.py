@@ -37,13 +37,15 @@ def test_the_login_label_maps_for_an_issuer_less_login():
     assert _login_label(LOGIN) == "basic:e2e"
 
 
-def test_a_desktop_labelled_row_takes_its_login(db):
-    db.create_session("desktop-row", source="desktop", user_id="basic:e2e")
+@pytest.mark.parametrize("source", ["desktop", "mobile"])
+def test_a_desktop_labelled_row_takes_its_login(db, source):
+    db.create_session("desktop-row", source=source, user_id="basic:e2e")
     assert _auth(db, LOGIN, "desktop-row") is True
 
 
-def test_a_foreign_account_still_refused(db):
-    db.create_session("mallory-row", source="desktop", user_id="basic:mallory")
+@pytest.mark.parametrize("source", ["desktop", "mobile"])
+def test_a_foreign_account_still_refused(db, source):
+    db.create_session("mallory-row", source=source, user_id="basic:mallory")
     with pytest.raises(Exception) as raised:
         _auth(db, LOGIN, "mallory-row")
     assert getattr(raised.value, "reason", None) == "permission_denied"
@@ -68,8 +70,9 @@ def test_labels_that_must_not_map(subject):
     assert _login_label(subject) is None
 
 
-def test_an_issuer_bearing_login_cannot_touch_the_labelled_row(db):
-    db.create_session("desktop-row", source="desktop", user_id="basic:e2e")
+@pytest.mark.parametrize("source", ["desktop", "mobile"])
+def test_an_issuer_bearing_login_cannot_touch_the_labelled_row(db, source):
+    db.create_session("desktop-row", source=source, user_id="basic:e2e")
     with pytest.raises(Exception) as raised:
         _auth(db, 'auth:v1:["basic","https://idp.example","e2e"]', "desktop-row")
     assert getattr(raised.value, "reason", None) == "permission_denied"
@@ -96,11 +99,12 @@ def test_one_parser_reads_the_login_subject_for_every_caller():
     assert _structured_login_subject(subject) is True
 
 
-def test_a_forwarded_bob_cannot_mutate_a_row_bound_to_alice(db):
+@pytest.mark.parametrize("source", ["desktop", "mobile"])
+def test_a_forwarded_bob_cannot_mutate_a_row_bound_to_alice(db, source):
     """F1 guard: a dashboard login ``bob`` (forwarded ``auth:v1:["basic","",bob]``) is refused on
     a Desktop row stamped ``basic:alice``, cannot claim it, and alice still owns it afterwards."""
     alice, bob = 'auth:v1:["basic","","alice"]', 'auth:v1:["basic","","bob"]'
-    db.create_session("alice-row", source="desktop", user_id="basic:alice")
+    db.create_session("alice-row", source=source, user_id="basic:alice")
     with db._read_ctx() as conn:
         with pytest.raises(Exception) as raised:
             authorize_history(conn, _actor(bob, db.db_path.parent), "alice-row", claim=True)
