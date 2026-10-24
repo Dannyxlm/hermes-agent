@@ -1200,9 +1200,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
     def _reconcile_display_orders(self, conn, session_id: str) -> None:
         """Re-fold split display generations by the recomputed display key.
 
-        A compaction generation that computed the display identity differently (or cloned
-        without inheriting it) leaves one logical message in two ``display_order`` groups,
-        and ``GROUP BY display_order`` then projects it twice (#122167). Folding by the same
+        A generation with a changed or missing identity leaves one message in two
+        ``display_order`` groups, projecting it twice (#122167). Folding by the same
         recomputed key :meth:`_dedupe_display_generations` uses keeps every display projection
         on one definition of a logical message; the live copy wins its group via the read
         path's ``ORDER BY candidate.active DESC, candidate.id DESC``. Writes only on drift."""
@@ -1221,10 +1220,11 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
             updates = []
             for row in rows:
                 last_id = row["id"]
-                identity = self._fold_summary_carrier(
-                    row, self._display_identity(self._display_dedupe_key(row)), uid_identity)
-                # A row already holding this identity keeps its stored slot (an in-place prune changes a
-                # row's content, not its place); otherwise the slot is the identity's first row.
+                identity = self._display_identity(self._display_dedupe_key(row))
+                # Display reads exclude model-only rows before choosing a carrier's uid original.
+                if not self._is_model_only_row(row):
+                    identity = self._fold_summary_carrier(row, identity, uid_identity)
+                # Keep a matching stored slot: an in-place prune changes content, not position.
                 kept = row["display_order"] if row["display_identity"] == identity else None
                 order = first_id.setdefault(identity, last_id if kept is None else kept)
                 if order != row["display_order"] or identity != row["display_identity"]:

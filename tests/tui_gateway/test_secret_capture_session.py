@@ -101,8 +101,15 @@ def test_secret_prompt_goes_to_active_turn_not_last_wired_session(monkeypatch):
                 server._sessions.pop(sid, None)
         server_requests.reset_for_tests()
 
-    assert [frame["method"] for frame in frames] == ["secret"]
+    # Other attached clients need the resolved event to dismiss a prompt answered elsewhere.
+    assert [frame["method"] for frame in frames] == ["secret", "event"]
     assert frames[0]["params"]["session_id"] == "session-A"
+    settled = frames[1]["params"]
+    assert settled["type"] == "request.cancel"
+    assert settled["session_id"] == "session-A"
+    assert {key: settled["payload"][key] for key in ("id", "method", "reason")} == {
+        "id": frames[0]["id"], "method": "secret", "reason": "resolved",
+    }
     assert stored == [("DEMO_TOKEN", "owner-secret")]
     assert result == {"missing_names": [], "setup_skipped": False, "gateway_setup_hint": None}
     assert server_requests.open_requests("session-A") == []
