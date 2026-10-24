@@ -78,16 +78,12 @@ def _stop_context(connection, target, live, registry):
     return agent, (str(Path(authority.profile_id).resolve()), {live.route, target}, owners)
 
 
-def _live_signals(connections, profiles):
-    import sys
-    stop_parents, process_owners, session_signals = [], [], {}
-    registry = sys.modules.get("tools.delegate_tool_registry")
+def _resident_sessions(connections):
+    """Authorize resident handles atomically on the loop, without a cold restore path."""
+    residents = {}
     for profile, connection in connections.items():
-        if profile not in profiles:
-            continue
-        authority, snapshot = connection.authority, profiles[profile]
-        from hermes_family_storage import compression_tips
-        tips = compression_tips(snapshot.sessions)
+        authority = connection.authority
+        allowed = []
         for sid, live in tuple(authority.sessions.items()):
             if live.superseded:
                 continue
@@ -95,13 +91,32 @@ def _live_signals(connections, profiles):
                 authority.authorize(connection.actor, SessionRef(authority.profile_id, sid), "session:read")
             except RuntimeStoreError:
                 continue
+            allowed.append((sid, live))
+        residents[profile] = allowed
+    return residents
+
+
+def _live_signals(connections, profiles, residents):
+    import sys
+    stop_parents, process_owners, session_signals = [], [], {}
+    registry = sys.modules.get("tools.delegate_tool_registry")
+    for profile, connection in connections.items():
+        if profile not in profiles:
+            continue
+        authority, snapshot = connection.authority, profiles[profile]
+        from hermes_family_storage import compression_owners, compression_tips
+        tips = compression_tips(snapshot.sessions)
+        owners = compression_owners(snapshot.sessions)
+        for sid, live in residents[profile]:
+            if authority.sessions.get(sid) is not live or live.superseded:
+                continue
             target = snapshot.aliases.get(sid, sid)
             tip = tips.get(target, target)
-            pending = _pending(live, snapshot.sessions.get(tip, {}).get("runtime_generation"))
+            stored = snapshot.sessions.get(sid) or snapshot.sessions.get(owners.get(target, target), {})
+            pending = _pending(live, stored.get("runtime_generation"))
             active_task = live.task is not None and not live.task.done()
-            stored = snapshot.sessions.get(tip, {})
             running = True if active_task else False if stored.get("turn_unresolved") == 0 and not pending else None
-            session_signals[(profile, target)] = {"running": running, "pending_kind": pending,
+            session_signals[(profile, target)] = {"running": running, "pending_kind": pending, "control_session_id": sid,
                 "can_answer": ("session:respond" if pending == "clarify" else "session:approve") in connection.actor.capabilities}
             session_signals[(profile, tip)] = dict(session_signals[(profile, target)])
             context = _stop_context(connection, target, live, registry)
@@ -175,7 +190,8 @@ async def read(connection, ref, params, *, overview=False):
         logical = next((key for key, target in profiles[profile].aliases.items() if target == sid), sid)
         if logical in connection.authority.sessions:
             connection.authority.authorize(connection.actor, SessionRef(connection.authority.profile_id, logical), "session:read")
-    signals = await asyncio.to_thread(_live_signals, connections, profiles)
+    residents = _resident_sessions(connections)
+    signals = await asyncio.to_thread(_live_signals, connections, profiles, residents)
     def project():
         family = Family(profiles, live=signals, unavailable_profiles=unavailable)
         if overview:

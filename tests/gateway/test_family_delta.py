@@ -1,12 +1,15 @@
 """Family keeps logical control ownership when compression advances the transcript."""
+import asyncio
 import threading
 from types import SimpleNamespace
 
 import pytest
 
 from gateway.session_authority import LiveSession
-from tests.gateway.test_family_review import reader, family
+from tests.gateway.test_family_review import family
 from tests.test_hermes_family import launch, NOW
+
+pytest_plugins = ["tests.gateway.test_family_review"]
 
 
 @pytest.mark.asyncio
@@ -26,7 +29,8 @@ async def test_compressed_pending_uses_logical_claim(reader, requested, kind):
     assert db.get_session("tip")["runtime_generation"] == 4
     live = LiveSession(None, "route")
     authority.sessions["root"] = live
-    live.controls.pending["question"] = (SimpleNamespace(event=threading.Event()),
+    route = SimpleNamespace(event=threading.Event()) if kind == "clarify" else "approval-route"
+    live.controls.pending["question"] = (route,
         {"kind": kind, "prompt_id": "question", "execution_generation": 5})
     live.controls.remote_responders["question"] = object()
     try:
@@ -42,6 +46,25 @@ async def test_compressed_pending_uses_logical_claim(reader, requested, kind):
         live.controls.pending["question"][1]["execution_generation"] = 4
         stale = await family(connection, requested)
         assert stale["result"]["root"]["needs_you"] is None
+    finally:
+        await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_compressed_display_tip_can_be_opened_by_native_client(reader):
+    db, authority, connection = reader
+    db._conn.execute("UPDATE sessions SET source='telegram',session_key='route',ended_at=1,end_reason='compression' WHERE id='root'")
+    db.create_session("tip", source="telegram", parent_session_id="root")
+    db._conn.execute("UPDATE sessions SET session_key='route' WHERE id='tip'")
+    db._conn.commit()
+    authority.sessions["root"] = LiveSession(None, "route")
+    try:
+        result = await family(connection, "root")
+        root = result["result"]["root"]
+        opened = await connection.dispatch({"id": 3, "method": "session.resume", "params": {"session_id": root["session_id"]}})
+        assert "result" in opened, opened
+        assert opened["result"]["session_id"] == "root"
+        assert set(authority.sessions) == {"root"}
     finally:
         await connection.close()
 
@@ -67,6 +90,36 @@ async def test_compressed_failed_helper_uses_logical_admission(reader, status, v
         response = await connection.dispatch({"id": 2, "method": "family.overview", "params": {"since": 0}})
         assert "result" in response, response
         assert bool(response["result"]["failed"]) is visible
+    finally:
+        await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_eviction_during_family_poll_never_restores(reader, monkeypatch):
+    import gateway.session_family as module
+    _, authority, connection = reader
+    authority.sessions["root"] = LiveSession(None, "route")
+    loop = asyncio.get_running_loop()
+    original = module._live_signals
+    def evicted(*args):
+        ready = threading.Event()
+        def evict():
+            authority.sessions.pop("root", None)
+            ready.set()
+        loop.call_soon_threadsafe(evict)
+        assert ready.wait(5), "loop could not evict resident"
+        return original(*args)
+    def forbidden(*args):
+        raise AssertionError("Family restored an evicted session")
+    monkeypatch.setattr(module, "_live_signals", evicted)
+    monkeypatch.setattr("gateway.session_route_recovery.restore_routed_session", forbidden)
+    monkeypatch.setattr("gateway.session_local_recovery.restore_local_session", forbidden)
+    monkeypatch.setattr("gateway.session_api.restore_api_session", forbidden)
+    try:
+        result = await family(connection)
+        assert "result" in result, result
+        assert result["result"]["root"]["status"] == "unknown"
+        assert not authority.sessions
     finally:
         await connection.close()
 

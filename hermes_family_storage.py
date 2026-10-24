@@ -21,7 +21,8 @@ def selection(name, columns, has_launches, seeds, since, walk):
     if seeds is None and since is None:
         return "", (), None
     if seeds is None and has_launches:
-        initial = "SELECT child_profile,child_session_id,launch_id FROM work_launches WHERE finished_at IS NULL OR finished_at>=?"
+        initial = ("SELECT child_profile,child_session_id,launch_id FROM work_launches "
+                   "WHERE finished_at IS NULL OR finished_at>=? OR terminal_cause='owner_restart'")
         params = (since,)
     else:
         initial = "SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]'),NULL FROM json_each(?)"
@@ -221,6 +222,12 @@ def compression_parent(row, sessions):
     if isinstance(config, dict) and any(config.get(k) == parent["id"] for k in ("_branched_from", "_delegate_from", "_reset_from")):
         return None
     return parent["id"]
+
+
+def compression_owners(sessions):
+    """The logical claim owner stays at the root while compression advances the display tip."""
+    return resolve_paths({sid: parent for sid, row in sessions.items()
+                          if (parent := compression_parent(row, sessions))})
 
 
 def compression_tips(sessions):
