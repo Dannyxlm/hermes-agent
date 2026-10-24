@@ -69,6 +69,23 @@ def test_unchanged_unconditional_cron_list_reuses_payload(cron_client):
     assert len(loads) == before, "Legacy Desktop sends unconditional reads; reuse their unchanged payload too"
 
 
+def test_aggregate_and_named_profile_cache_do_not_alias(cron_client, monkeypatch):
+    from hermes_cli import web_server_cron
+
+    client, paths, _loads = cron_client
+    monkeypatch.setattr(web_server_cron, "_cron_profile_dicts", lambda: [{"name": "default"}])
+    paths["default"].write_text(json.dumps({"jobs": [
+        {"id": "duplicate", "prompt": "first"}, {"id": "duplicate", "prompt": "second"}]}))
+    os.utime(paths["default"], (10, 10))
+    aggregate = client.get("/api/cron/jobs?profile=all")
+    assert aggregate.status_code == 200 and len(aggregate.json()) == 1
+    named = client.get("/api/cron/jobs?profile=default")
+    assert named.status_code == 200 and len(named.json()) == 2
+    conditional = client.get("/api/cron/jobs?profile=default", headers={
+        "If-None-Match": aggregate.headers.get("etag", 'W/"no-base-validator"')})
+    assert conditional.status_code == 200 and len(conditional.json()) == 2
+
+
 def test_unconditional_cron_cache_expires_on_job_changes(cron_client):
     client, paths, _loads = cron_client
     first = client.get("/api/cron/jobs?profile=default")
