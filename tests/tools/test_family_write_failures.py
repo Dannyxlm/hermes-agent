@@ -140,7 +140,8 @@ def test_profile_not_inferred_from_child_home(tmp_path, monkeypatch):
     assert 'started_by_session' not in lp.take_launch()
 
 
-def test_multiturn_launch_stays_open_after_turn(tmp_path):
+@pytest.mark.parametrize(('end_reason', 'expected'), [('user_stop', 'user_stop'), ('cli_close', 'success')])
+def test_multiturn_launch_stays_open_after_turn(tmp_path, end_reason, expected):
     from hermes_state_runtime import (admit_session_input, begin_runtime_epoch, claim_session_input,
                                       settle_session_input)
     with SessionDB(tmp_path / 'state.db') as db:
@@ -154,8 +155,8 @@ def test_multiturn_launch_stays_open_after_turn(tmp_path):
         settle_session_input(db, epoch=epoch, admission_id=admission['admission_id'],
                              generation=admission['generation'], outcome='completed', result={'completed': True})
         assert db._read_one('SELECT finished_at FROM work_launches')[0] is None
-        db.end_session('child', 'user_stop')
-        assert db._read_one('SELECT terminal_cause FROM work_launches')[0] == 'user_stop'
+        db.end_session('child', end_reason)
+        assert db._read_one('SELECT terminal_cause FROM work_launches')[0] == expected
 
 
 def test_cron_only_updates_changed_launches_in_one_transaction(tmp_path, monkeypatch):
@@ -311,7 +312,7 @@ def test_worker_process_launch_uses_compression_lineage(tmp_path):
 
 @pytest.mark.asyncio
 async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp_path, monkeypatch):
-    import subprocess
+    import asyncio
     import sys
     from dataclasses import replace
     import psutil
@@ -323,8 +324,8 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
     from tests.gateway.test_local_source_labels import _authority
     authority, _ = await _authority(tmp_path, monkeypatch)
     connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
-    worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
-                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    worker = await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(60)',
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     try:
         created = await connection.dispatch({'id': 1, 'method': 'session.create',
             'params': dict(request_id='worker-fixture', source='cli', cwd=str(tmp_path))})
@@ -359,6 +360,6 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
         assert 'error' in denied, denied
     finally:
         worker.terminate()
-        worker.wait(timeout=5)
+        await asyncio.wait_for(worker.wait(), timeout=5)
         await connection.close()
         authority.db.close()
