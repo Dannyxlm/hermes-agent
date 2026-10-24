@@ -69,6 +69,15 @@ def test_unchanged_unconditional_cron_list_reuses_payload(cron_client):
     assert len(loads) == before, "Legacy Desktop sends unconditional reads; reuse their unchanged payload too"
 
 
+def test_unconditional_cron_cache_expires_on_job_changes(cron_client):
+    client, paths, _loads = cron_client
+    first = client.get("/api/cron/jobs?profile=default")
+    assert first.status_code == 200 and len(first.json()) == 1
+    paths["default"].write_text('{"jobs": []}')
+    updated = client.get("/api/cron/jobs?profile=default")
+    assert updated.status_code == 200 and updated.json() == []
+
+
 def test_cron_validator_cannot_hide_file_or_profile_changes(cron_client):
     client, paths, _loads = cron_client
     first = client.get("/api/cron/jobs?profile=default")

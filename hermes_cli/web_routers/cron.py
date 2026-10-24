@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
 from hermes_cli.web_deps import late
@@ -729,29 +730,41 @@ def _cron_list_revision(profile: str) -> str | None:
     return f'W/"{digest}"'
 
 
+# One immutable payload, at most 4 MiB. The revision includes the resolved profile
+# homes, so neither concurrent requests nor profile switches can cross scopes.
+_cron_list_body_cache: tuple[str, bytes] | None = None
+
+
 def _conditional_cron_jobs_sync(profile: str, if_none_match: str):
+    global _cron_list_body_cache
     revision = _cron_list_revision(profile)
     if revision and any(tag.strip() == "*" or tag.strip().removeprefix("W/") == revision[2:]
                         for tag in if_none_match.split(",")):
         return None, revision
-    jobs = _list_cron_jobs_sync(profile)
+    cached = _cron_list_body_cache
+    if revision and cached is not None and cached[0] == revision:
+        return cached[1], revision
+    body = bytes(JSONResponse(content=jsonable_encoder(_list_cron_jobs_sync(profile))).body)
     # A writer during the list must not label mixed rows as a stable cut.
-    return jobs, revision if revision == _cron_list_revision(profile) else None
+    if revision and revision == _cron_list_revision(profile):
+        if len(body) <= 4 * 1024 * 1024:
+            _cron_list_body_cache = revision, body
+        return body, revision
+    return body, None
 
 
 @router.get("/api/cron/jobs")
-async def list_cron_jobs(profile: str = "all", request: Request = None, response: Response = None):
+async def list_cron_jobs(profile: str = "all", request: Request = None):
     if request is None:  # in-process callers retain the list contract
         return await _run_cron_dashboard_io(_list_cron_jobs_sync, profile)
-    jobs, revision = await _run_cron_dashboard_io(
+    body, revision = await _run_cron_dashboard_io(
         _conditional_cron_jobs_sync, profile, request.headers.get("if-none-match", ""))
     headers = {"Cache-Control": "private, no-cache"}
     if revision:
         headers["ETag"] = revision
-    if jobs is None:
+    if body is None:
         return Response(status_code=304, headers=headers)
-    response.headers.update(headers)
-    return jobs
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @router.get("/api/cron/jobs/{job_id}")
