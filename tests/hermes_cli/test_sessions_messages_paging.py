@@ -105,9 +105,20 @@ def test_compact_detail_omits_blobs_and_preserves_metadata(lineage, monkeypatch)
     assert client.get('/api/sessions/tip?compact=1').json() == compact
 
 
-def test_lineage_only_materializes_page_payloads(lineage, monkeypatch):
+@pytest.mark.parametrize('rewound', [False, True])
+def test_lineage_only_materializes_page_payloads(lineage, monkeypatch, rewound):
     from contextlib import contextmanager
     db, expected = lineage
+    # Indexed rows can carry arbitrarily large tool arguments or presentation data.
+    # Logical copies stay equivalent after payload enrichment and reindexing below.
+    db._write_sql('UPDATE messages SET tool_calls=?, display_metadata=?',
+                  (json.dumps([{'id': 'call', 'function': {'arguments': 'x' * 8192}}]),
+                   json.dumps({'presentation': 'x' * 8192})))
+    for sid in ('root', 'middle', 'tip'):
+        assert db._ensure_display_order(sid)
+    if rewound:
+        removed = db.append_message('tip', 'user', 'rewound input', timestamp=3000)
+        db._write_sql('UPDATE messages SET active=0, compacted=0 WHERE id=?', (removed,))
     payloads = []
     read_ctx = db._read_ctx
     @contextmanager
@@ -115,7 +126,11 @@ def test_lineage_only_materializes_page_payloads(lineage, monkeypatch):
         with read_ctx() as conn:
             factory = conn.row_factory
             def count_payloads(cursor, row):
-                if 'content' in [col[0] for col in cursor.description]:
+                columns = [col[0] for col in cursor.description]
+                # A CASE-projected NULL is not a hydrated body. Count any real payload field,
+                # including tool arguments and presentation metadata, not just named columns.
+                if any(row[i] is not None for i, name in enumerate(columns)
+                       if name in {'content', 'tool_calls', 'display_metadata'}):
                     payloads.append(1)
                 return factory(cursor, row)
             conn.row_factory = count_payloads

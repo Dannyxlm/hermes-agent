@@ -29,7 +29,8 @@ from . import (
     tools_mcp_plugins,
     usage,
 )
+from . import canonical
 from .base import JsonValue, Params, Payload, Result, WireEnum
-from .registry import EVENTS, METHODS, SERVER_REQUESTS
+from .registry import CANONICAL_METHODS, EVENTS, METHODS, SERVER_REQUESTS
 
-__all__ = ["EVENTS", "METHODS", "SERVER_REQUESTS", "JsonValue", "Params", "Payload", "Result", "WireEnum"]
+__all__ = ["CANONICAL_METHODS", "EVENTS", "METHODS", "SERVER_REQUESTS", "JsonValue", "Params", "Payload", "Result", "WireEnum"]

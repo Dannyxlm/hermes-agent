@@ -53,9 +53,9 @@ def cursor_decode(token, scope):
 
 
 def refresh_skill_commands(sc):
-    from tools.skills_tool import _skill_search_dirs, _get_disabled_skill_names
+    from tools.skills_tool import skill_search_dirs, _get_disabled_skill_names
     from tools.skill_ledger import TRANSIENT_DIRS
-    roots, _ = _skill_search_dirs()
+    roots, _ = skill_search_dirs()
     records = []
     for _priority, root in roots:
         for directory, dirs, files in os.walk(root):

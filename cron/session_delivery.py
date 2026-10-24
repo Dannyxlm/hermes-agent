@@ -5,9 +5,6 @@ import hashlib
 import json
 import logging
 import re
-import subprocess
-import sys
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -53,36 +50,99 @@ def validate_delivery(value):
     return value
 
 
-def _resume_session(home: Path, session_id: str, message: str) -> str | None:
-    from agent.delegation_context import delegated_child_subprocess_env
-    from cron.scheduler_delivery import _format_failure_streams, _get_bot_chat_delivery_timeout, _run_bot_chat_turn
-    from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
-    from hermes_cli.quiet_single_query import TURN_REPORT_FILE_ENV
-    from tools.environments.local import served_profile_child_env
-    import os
+def wake_message(job: dict, content: str) -> str:
+    from cron.scheduler_delivery import _redact_cron_payload
+    run_id = job.get("execution_id") or job.get("_session_run_id") or "?"
+    return _redact_cron_payload(
+        f'[Scheduled wake from cron job "{job.get("name", job.get("id", "?"))}" '
+        f'({run_id}), not the user.]\n\n{content}', "session wake")
 
-    env = served_profile_child_env(
-        delegated_child_subprocess_env(os.environ), target_home=home, inherit_credentials=True)
-    pin_hermes_tree_on_pythonpath(env, Path(__file__).resolve().parents[1])
-    # Exact resume reloads saved history and enforces the normal active-session writer lease.
-    with tempfile.TemporaryDirectory(prefix="hermes-cron-session-") as scratch:
-        query = Path(scratch) / "wake.txt"
-        query.write_text(message, encoding="utf-8")
-        report = str(Path(scratch) / "turn.json")
-        env[TURN_REPORT_FILE_ENV] = report
-        argv = [sys.executable, "-m", "hermes_cli.main"]
-        # Named profile homes already pin startup; custom roots need to bypass sticky selection.
-        if home.parent.name != "profiles":
-            argv += ["-p", "default"]
-        argv += ["chat", "--in", "~", "--resume", session_id, "-Q", "--query-file", str(query)]
+
+def _admission_status(receipt: dict) -> str:
+    status = receipt["status"]
+    if status == "terminal":
+        return "settled" if receipt.get("outcome") == "completed" else "failed"
+    return {"queued": "queued", "started": "claimed", "unknown": "ambiguous"}[status]
+
+
+async def _wake_rpc(home: Path, record: dict, save) -> dict | None:
+    """Use only a discovered owner; attaching and closing this viewer never starts inference itself."""
+    from hermes_cli.gateway_client import connect_gateway
+    from hermes_cli.gateway_runtime import discover_gateway_endpoint
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    import asyncio
+
+    discovery = await asyncio.to_thread(discover_gateway_endpoint, home, timeout=5)
+    if discovery.state != "ready" or discovery.endpoint is None:
+        return None
+    target_session = record.get("target_session_id") or await asyncio.to_thread(resolve_session, record["session_id"], home)
+    token = set_hermes_home_override(home)
+    try:
+        async with connect_gateway(endpoint=discovery.endpoint) as client:
+            snapshot = await client.rpc("session.resume",
+                session_id=target_session,
+                omit_messages=True, defer_history=True)
+            target = snapshot["session_id"]
+            if record.get("target_session_id") not in (None, target):
+                raise ValueError("scheduled wake authority target changed")
+            if record.get("admission_id"):
+                return await client.rpc("prompt.receipt", session_id=target,
+                                        admission_id=record["admission_id"])
+            # Persist before the only inference-admitting RPC. A lost answer is never permission
+            # to try another turn; old claimed records and this claim survive process crashes.
+            record.update(status="claimed", target_session_id=target)
+            await asyncio.to_thread(save)
+            return await client.rpc("prompt.submit", session_id=target,
+                submission_id="cron-session:" + record["id"], queued=True, finite=True,
+                text=wake_message(record.get("job") or {}, record["content"]))
+    finally:
+        reset_hermes_home_override(token)
+
+
+def transfer_pending(path: Path, record: dict) -> bool:
+    """Admit or observe an exact-session wake under the pending-record lock, never a CLI writer."""
+    from cron.scheduler_delivery import BOT_CHAT_POLICY_PLATFORM
+    from gateway.warning_notifications import warning_notifications_enabled
+    from hermes_cli.config_effective import load_user_config_effective
+    from utils import atomic_json_write
+    import asyncio
+
+    home = Path(record["home"]).resolve()
+    if not record.get("admission_id"):
         try:
-            result = _run_bot_chat_turn(argv, env, report, _get_bot_chat_delivery_timeout())
-        except subprocess.TimeoutExpired:
-            return "scheduled wake timed out; outcome ambiguous, inspect the session before rearming"
-        if result.returncode:
-            return (f"scheduled wake failed ({_format_failure_streams(result)}); "
-                    "inspect `hermes cron runs` and the session before rearming")
-    return None
+            resolve_session(record["session_id"], home)
+        except ValueError:
+            record.update(status="ambiguous", error="scheduled wake target no longer exists in its profile")
+            return True
+    if not record.get("admission_id") and record.get("for_failure") and not warning_notifications_enabled(
+            BOT_CHAT_POLICY_PLATFORM, load_user_config_effective(home / "config.yaml")):
+        record.update(status="suppressed", error=None)
+        return True
+    def save():
+        atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+    try:
+        # The synchronous scheduler runs off-loop; never block its owning authority loop.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("scheduled wake drain must run off the owner event loop")
+        receipt = asyncio.run(_wake_rpc(home, record, save))
+        if receipt is None:
+            return False
+        if receipt["ref"]["session_id"] != record["target_session_id"]:
+            raise ValueError("scheduled wake receipt belongs to a different session")
+        status = _admission_status(receipt)
+        record.update(admission_id=receipt["admission_id"], receipt_status=status,
+                      status="transferred" if status in {"queued", "claimed"} else status, error=None)
+        return True
+    except Exception:
+        if record.get("status") == "claimed":
+            record.update(status="ambiguous", error="scheduled wake admission unverified; inspect before rearming")
+            save()
+        logger.warning("Scheduled wake %s not verified; retained %s", record.get("id"), record.get("status"), exc_info=True)
+        return False
 
 
 def _receipt(job: dict, session_id: str, key: str, status: str, error: str = "") -> str | None:
@@ -97,51 +157,40 @@ def _receipt(job: dict, session_id: str, key: str, status: str, error: str = "")
 
 
 def deliver_to_session(job: dict, content: str, session_id: str, *,
-                       deferred: dict | None = None, for_failure: bool = False) -> str | None:
-    """Queue while busy; only a durable deferred claim can start an unowned CLI turn."""
-    from cron.bot_chat_delivery import defer, read_pending
+                       for_failure: bool = False) -> str | None:
+    """Queue exact-session output through the canonical owner, retaining every uncertain receipt."""
+    from cron.bot_chat_legacy import defer, drain_pending
     from cron.scheduler_delivery import BOT_CHAT_POLICY_PLATFORM, _redact_cron_payload
     from gateway.warning_notifications import warning_notifications_enabled
     from hermes_cli.config_effective import load_user_config_effective
-    from tools import bot_live_delivery as mailbox
+    from tools.bot_live_delivery import read_delivery_result
 
-    home = Path(deferred["home"]).resolve() if deferred is not None else get_hermes_home().resolve()
+    home = get_hermes_home().resolve()
     try:
-        tip = resolve_session(session_id, home)
+        resolve_session(session_id, home)
         run_id = job.get("execution_id") or job.setdefault("_session_run_id", uuid.uuid4().hex)
-        key = (deferred["id"] if deferred else hashlib.sha256(json.dumps(
+        key = hashlib.sha256(json.dumps(
             [str(home), job.get("id"), str(run_id), session_id, for_failure],
-            separators=(",", ":")).encode()).hexdigest())
+            separators=(",", ":")).encode()).hexdigest()
         content = _redact_cron_payload(content, "session wake")
-        message = _redact_cron_payload(
-            f'[Scheduled wake from cron job "{job.get("name", job.get("id", "?"))}" '
-            f'({run_id}), not the user.]\n\n{content}', "session wake")
-        receipt = mailbox.read_delivery_result(home, key)
-        if receipt is not None:
-            if receipt["message"] != message:
+        message = wake_message(job, content)
+        # A pre-cutover live mailbox claim remains authoritative; never start another turn.
+        legacy = read_delivery_result(home, key)
+        if legacy is not None:
+            if legacy["message"] != message:
                 raise ValueError("delivery id already belongs to a different payload")
-            return _receipt(job, session_id, key, receipt["status"], receipt.get("error", ""))
-        if deferred is None:
-            pending = read_pending(key)
-            suppressed = for_failure and not warning_notifications_enabled(
-                BOT_CHAT_POLICY_PLATFORM, load_user_config_effective(home / "config.yaml"))
-            if pending is not None or suppressed:
-                pending = defer(key, dict(job), content, "", home, session_id=session_id,
-                                for_failure=for_failure, suppressed=suppressed)
-            if pending is not None:
-                return _receipt(job, session_id, key, pending["status"], pending.get("error") or "")
-        owner = mailbox.find_session_live_owner(home, tip)
-        if owner is not None:
-            receipt = mailbox.deliver_to_live_owner(home, owner, message, delivery_id=key,
-                **({"notification_category": "diagnostic"} if for_failure else {}))
-            return _receipt(job, session_id, key, receipt["status"])
-        if deferred is None:
-            pending = defer(key, dict(job), content, "", home, session_id=session_id, for_failure=for_failure)
-            return _receipt(job, session_id, key, pending["status"])
-        logger.info("Scheduled wake: job=%s target=session:%s receipt=%s status=claimed", job.get("id"), tip, key)
-        return _resume_session(home, tip, message)
+            return _receipt(job, session_id, key, legacy["status"], legacy.get("error") or "")
+        suppressed = for_failure and not warning_notifications_enabled(
+            BOT_CHAT_POLICY_PLATFORM, load_user_config_effective(home / "config.yaml"))
+        pending = defer(key, job, content, home, session_id=session_id,
+                        for_failure=for_failure, suppressed=suppressed)
+        if wake_message(pending.get("job") or {}, pending["content"]) != message:
+            raise ValueError("delivery id already belongs to a different payload")
+        pending = drain_pending(key) or pending
+        status = (pending.get("receipt_status") or "ambiguous") if pending["status"] == "transferred" else pending["status"]
+        return _receipt(job, session_id, key, status, pending.get("error") or "")
     except Exception as exc:
-        logger.exception("Scheduled wake for session %s failed", session_id)
+        logger.warning("Scheduled wake for session %s unverified", session_id, exc_info=True)
         return f"session:{session_id} scheduled wake unverified: {exc}; inspect before rearming"
 
 

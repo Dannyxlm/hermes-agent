@@ -386,6 +386,8 @@ def test_client_capabilities_opt_in(mobile_home, monkeypatch):
     assert result["session_change_cursor"] == 1
     assert session_change_cursor.is_subscribed(peer)
     rpc("client.capabilities", server_requests=True)
+    assert session_change_cursor.is_subscribed(peer)  # omitted fields retain prior advertisements
+    rpc("client.capabilities", session_change_cursor=False)
     assert not session_change_cursor.is_subscribed(peer)
     features = rpc("mobile.capabilities")["result"]
     assert "session_change_cursor" in features["features"]

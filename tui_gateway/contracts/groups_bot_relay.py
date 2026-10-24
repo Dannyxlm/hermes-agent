@@ -159,6 +159,10 @@ class GroupsCapabilitiesResult(Result):
     methods: list[str]
     max_log_limit: int
     feature_versions: dict[str, int] | None = None
+    #: Local profiles THIS caller may seat in a new group (``gateway/session_hosted_members``): served
+    #: bots, minus retiring/unaddressable ones, plus usable ``hosted_rooms.profiles`` entries; only a
+    #: host-scoped caller gets served siblings. Absent on gateways that predate it.
+    seatable_profiles: list[str] | None = None
 
 
 method("groups.capabilities", params=GroupsCapabilitiesParams, result=GroupsCapabilitiesResult,
@@ -217,15 +221,24 @@ class RoomStoppableTask(Result):
     member_id: str
 
 
+class RoomMemberActivity(Result):
+    """One live room task: ``status`` is ``queued``, ``running`` or ``stopping``."""
+
+    member_id: str
+    status: str
+
+
 class RoomDriverStatus(Result):
     """``HostedRoomService.status(room_id)``; ``pending_actions`` rows are ``{kind: retry, task_id}``
-    or the driver's approval action (``kind: approval`` + run/session/approval context)."""
+    or the driver's approval action (``kind: approval`` + run/session/approval context).
+    ``member_activity`` lists live tasks in admission order (absent from older gateways)."""
 
     running: bool
     working: bool
     blocked: bool
     counts: dict[str, int]
     pending_actions: list[dict[str, JsonValue]]
+    member_activity: list[RoomMemberActivity] = Field(default_factory=list)
     peer_routes: list[PeerRouteStatus]
     stoppable_tasks: list[RoomStoppableTask] = []
 

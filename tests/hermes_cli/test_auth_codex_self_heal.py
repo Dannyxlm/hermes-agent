@@ -134,8 +134,9 @@ def test_opt_out_never_adopts_codex_cli_login(tmp_path, monkeypatch):
         refresh_calls.append((access_token, refresh_token, timeout_seconds))
         raise rejected
 
-    # The transaction late-imports refresh from the facade, not auth_codex.
+    # Both runtime refresh and direct provider calls must remain offline.
     monkeypatch.setattr(auth, "refresh_codex_oauth_pure", _rejected)
+    monkeypatch.setattr(auth_codex, "refresh_codex_oauth_pure", _rejected)
     with pytest.raises(AuthError) as info:
         _refresh_codex_auth_tokens(dict(STALE), 5.0)
     assert info.value.relogin_required  # surfaced, not papered over with the CLI pair

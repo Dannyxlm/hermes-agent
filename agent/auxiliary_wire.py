@@ -22,3 +22,13 @@ def prepare_chat_messages(client, kwargs: dict) -> dict:
         model=kwargs.get("model"), base_url=base_url,
     )
     return {**kwargs, "messages": messages}
+
+
+def relay_chat_metadata(metadata: dict) -> dict:
+    """Relay metadata for an auxiliary attempt.
+
+    Relay intercepts ``client.chat.completions.create``, so it decodes a chat-completions
+    request even when the adapter speaks Responses or Messages to its provider.
+    """
+    # Codec selection is distinct from the native provider's attribution mode.
+    return {**metadata, "request_api_mode": "chat_completions"}

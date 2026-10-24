@@ -336,7 +336,7 @@ function resolveInstalledIdentity({
   }
 }
 
-function firstLine(text: string): string {
+export function firstLine(text: string): string {
   return (text || '').split('\n').find(Boolean) || ''
 }
 
