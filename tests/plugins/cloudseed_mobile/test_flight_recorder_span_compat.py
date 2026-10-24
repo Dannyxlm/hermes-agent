@@ -26,9 +26,10 @@ def test_new_app_span_is_stored_with_co_batched_events(client, name):
     assert json.loads(day.read_text())['events'] == evs
 
 
-def test_future_span_drops_only_itself_and_counts_without_content(client, caplog):
+@pytest.mark.parametrize('name', ['future.private_name', 'future span free text', 'x' * 100])
+def test_future_span_drops_only_itself_and_counts_without_content(client, caplog, name):
     c, root = client
-    future = span('future.private_name')
+    future = span(name) | {'future_attribute': 'private dropped value'}
     known = [events()[0], events()[3], span('ChatOpenContent')]
     body = batch(evs=[known[0], future, *known[1:]])
     first = c.post(P + '/batch', json=body)
@@ -75,7 +76,7 @@ def test_flag_event_bundle_has_same_unknown_span_isolation(client):
 
 @pytest.mark.parametrize('change', [
     {'outcome': 'future'}, {'attrs': {'not_allowed': 'true'}},
-    {'name': 'arbitrary free text'}, {'name': {'unhashable': True}},
+    {'name': None}, {'name': {'unhashable': True}},
 ])
 def test_known_schema_validation_is_not_relaxed(client, change):
     c, _ = client
