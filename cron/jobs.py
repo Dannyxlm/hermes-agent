@@ -31,6 +31,7 @@ from pathlib import Path
 from hermes_constants import get_hermes_home
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM, FIRE_CLAIM_SKEW_SECONDS, FIRE_CLAIM_TTL_SECONDS
 from cron.env_settings import cron_env_setting
+from cron.jobs_invariants import _validate_job_mode_invariants
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import store_health
 from cron.session_delivery import validate_delivery
@@ -305,6 +306,9 @@ def _jobs_lock():
 
     with _jobs_file_lock:
         _jobs_lock_state.depth = 1
+        _jobs_lock_state.launch_before = None
+        _jobs_lock_state.launch_changed = {}
+        _jobs_lock_state.launch_removed = set()
         # jobs.json stamp as of this section's load_jobs(): lets _save_jobs_unlocked skip the
         # shrink-merge parse when the file provably hasn't changed. Reset on entry/exit so stale
         # stamps from unlocked loads or prior sections can never suppress a needed merge.
@@ -338,6 +342,8 @@ def _jobs_lock():
         finally:
             _jobs_lock_state.depth = 0
             _jobs_lock_state.load_stamp = None
+    from cron.launches import sync_jobs
+    sync_jobs(list(_jobs_lock_state.launch_changed.values()), _jobs_lock_state.launch_removed)
 
 
 @contextlib.contextmanager
@@ -421,7 +427,7 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 
 # Fields that must never change after creation: ``id`` is a path component under OUTPUT_DIR, so an
 # update could leak ``../escape``/absolute/nested values into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "creator_profile", "creator_session_id", "launch_title"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -472,11 +478,6 @@ _PAYLOAD_FIELDS = frozenset({"prompt", "script", "skill", "skills", "no_agent"})
 EMPTY_PAYLOAD_ERROR = (
     "Cron job has nothing to run: the prompt is blank and no script or "
     "skill(s) are set. Provide a prompt, a script, or at least one skill."
-)
-
-NO_AGENT_WITHOUT_SCRIPT_ERROR = (
-    "no_agent=True requires a script — with no agent and no script "
-    "there is nothing for the job to run."
 )
 
 
@@ -1354,6 +1355,10 @@ def _parse_jobs_file(jobs_file: Path) -> tuple[Any, bool]:
         return json.loads(raw, strict=False), True
 
 
+from cron.launches import remember_jobs
+
+
+@remember_jobs
 def load_jobs() -> list[dict[str, Any]]:
     """Load all jobs from storage."""
     jobs_file = _current_cron_store().jobs_file
@@ -1561,6 +1566,8 @@ def _save_jobs_unlocked(
     rewrite for tests, disaster recovery and load_jobs' auto-repair of unmergeable shapes)."""
     jobs_file = _current_cron_store().jobs_file
     ensure_dirs()
+    from cron.launches import capture_before_save
+    capture_before_save()
     # Owner snapshot BEFORE replace so a root writer can hand the file back to the gateway user.
     _stat_before = None
     for probe in (jobs_file, jobs_file.parent):
@@ -1594,6 +1601,8 @@ def _save_jobs_unlocked(
             # against an OUTER caller's stale payload. Later saves take the full merge (fail-safe).
             _record_load_stamp(None)
             store_health.note_writable(jobs_file.parent)
+            from cron.launches import queue_jobs
+            queue_jobs(jobs, removed_ids)
             return
     except BaseException:
         _unlink_quiet(tmp_path)
@@ -1772,27 +1781,6 @@ _UPDATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
 }
 
 
-def _validate_job_mode_invariants(
-    monitor_script: Optional[str],
-    monitor_url: Optional[str],
-    no_agent: bool,
-    script: Optional[str],
-) -> None:
-    """Execution-mode invariants shared by create_job and update_job (no bypass via the update
-    door)."""
-    if monitor_script and monitor_url:
-        raise ValueError(
-            "monitor_script and monitor_url are mutually exclusive — a job "
-            "can only have one monitor source.")
-    if (monitor_script or monitor_url) and no_agent:
-        raise ValueError(
-            "monitor_script/monitor_url cannot be combined with no_agent=True — "
-            "the whole point of a monitor job is to suppress or wake the AGENT "
-            "based on source changes. Use a plain no_agent script job instead.")
-    if no_agent and not script:
-        raise ValueError(NO_AGENT_WITHOUT_SCRIPT_ERROR)
-
-
 def _oneshot_past_grace_error(run_at: Any) -> ValueError:
     return ValueError(
         f"Requested one-shot time {run_at} is more than "
@@ -1894,6 +1882,7 @@ def create_job(
         f["provider"], f["model"] = _main_model_pin()
     next_run_at = _next_run_or_reject_past_oneshot(parsed_schedule, name, schedule, "")
 
+    from cron.launches import capture_creator
     job = {
         "id": job_id,
         "name": name,
@@ -1929,6 +1918,8 @@ def create_job(
         "failure_streak": 0,
         "deliver": f["deliver"],
         "origin": origin,  # Tracks where job was created for "origin" delivery
+        **capture_creator(),
+        "launch_title": name[:39] + "…" if len(name) > 40 else name,
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
     }
@@ -2220,6 +2211,7 @@ def trigger_job(job_id: str, extra_prompt: Optional[str] = None) -> Optional[dic
             f"Create a new occurrence with 'hermes cron resume {name} "
             "--run-now' or '--at <ISO-8601>'.")
     manual_run_at = _hermes_now().isoformat()
+    from cron.launches import capture_creator
     return update_job(job["id"], {
         "enabled": True,
         "state": "scheduled",
@@ -2229,6 +2221,7 @@ def trigger_job(job_id: str, extra_prompt: Optional[str] = None) -> Optional[dic
         # Run-now intent, so cron expression/TZ repair guards don't treat it as stale state.
         "manual_run_at": manual_run_at,
         "manual_run_prompt": (extra_prompt or None),
+        "manual_launch": capture_creator(),
     })
 
 
@@ -2372,6 +2365,7 @@ def _record_run_outcome(
     job.pop("manual_run_at", None)
     # The transient manual-run context is single-fire: the run that just completed consumed it.
     job.pop("manual_run_prompt", None)
+    job.pop("manual_launch", None)
     delivery_failed = isinstance(delivery_error, str) and bool(delivery_error.strip())
     job["last_status"] = status or (
         "error" if not success else ("delivery_failed" if delivery_failed else "ok"))
@@ -2459,6 +2453,7 @@ def mark_job_run(
     status: Optional[str] = None,
     *,
     expected_fire_owner: Optional[str] = None,
+    execution_id: Optional[str] = None,
     model_unreachable: bool = False,
     ladder_rung: bool = False,
     quota_hold_seconds: Optional[float] = None,
@@ -2486,6 +2481,8 @@ def mark_job_run(
     (cron/quota_hold.py, #89376).
     """
     def apply(jobs, _i, job):
+        if execution_id is not None and execution_id in job.get("canonical_completions", []):
+            return True
         if expected_fire_owner is not None:
             claim = job.get("fire_claim")
             if not isinstance(claim, dict) or claim.get("by") != expected_fire_owner:
@@ -2495,6 +2492,9 @@ def mark_job_run(
                 return False
         now = _hermes_now().isoformat()
         _record_run_outcome(job, success, error, delivery_error, status, now)
+        if execution_id is not None:  # retire ids recovery can no longer replay; latest stays last
+            from cron.scheduler_authority import replayable_completions as live
+            job["canonical_completions"] = [*live(job_id, job.get("canonical_completions")), execution_id]
         _advance_after_run(job, now, ladder_rung=ladder_rung)
         from cron import quota_hold
         from cron.unreachable_retry import clear_state, plan_retry

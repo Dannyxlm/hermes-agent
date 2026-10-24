@@ -4,10 +4,8 @@ Unlock: ``op signin --raw`` with the master password on stdin (desktop-app
 integration or account-level auth) mints an ``OP_SESSION_<account>`` token.
 A configured service-account token skips the prompt entirely (headless).
 List: ``op item list --categories Login --format json`` → title, urls,
-username. Resolve: ``op item get <id> --vault <vault> --fields label=password --reveal``.
-
-Service accounts refuse ``op item get`` without a vault query, so the vault id
-seen at list time is remembered per item and passed on every read.
+username, vault. Resolve: ``op item get <id> --vault <vault-id> ...`` (service
+accounts reject an item read without a vault query).
 
 With ``vault.onepassword.payment_cards: true`` Credit Card items are listed as
 ``payment`` handles. 1Password cards carry no website, so they are unbound
@@ -50,7 +48,7 @@ class OnePasswordLoginBackend(LoginBackend):
         from agent.secret_scope import get_secret
         env_name = str(self.cfg.get("service_account_token_env") or "OP_SERVICE_ACCOUNT_TOKEN")
         self._service_token = get_secret(env_name, "") or ""
-        self._vaults: dict[str, str] = {}  # item id → vault id, filled by list_items
+        self._item_vaults: dict[str, str] = {}  # item id -> vault id from the latest ``item list``
 
     @property
     def payment_cards(self) -> bool:
@@ -109,7 +107,9 @@ class OnePasswordLoginBackend(LoginBackend):
                        timeout_message="op timed out", stdin=subprocess.DEVNULL)
         if proc.returncode != 0:
             err = _scrub(proc.stderr or "")
-            if "session" in err.lower() or "sign in" in err.lower() or "not signed in" in err.lower():
+            # A service account never holds a session, so an auth failure there is not a lock to undo:
+            # surface op's own error instead of an unlock prompt that reports "already unlocked".
+            if not self._service_token and any(w in err.lower() for w in ("session", "sign in", "not signed in")):
                 _unlock.lock(self.name)
                 raise UnlockRequired(self)
             raise RuntimeError(f"op failed: {err[:200]}")
@@ -123,11 +123,7 @@ class OnePasswordLoginBackend(LoginBackend):
 
     def _item_get(self, handle: str, *args: str) -> str:
         """``op item get`` scoped to the item's vault: service accounts refuse it without a vault query."""
-        item_id = handle[len(self.prefix):]
-        if item_id not in self._vaults:
-            self.list_items()
-        vault = self._vaults.get(item_id)
-        return self._run("item", "get", item_id, *(("--vault", vault) if vault else ()), *args)
+        return self._run("item", "get", *self._item_selector(handle), *args)
 
     # ── backend contract ───────────────────────────────────────────────────
     def list_items(self) -> list[VaultItemMeta]:
@@ -136,11 +132,12 @@ class OnePasswordLoginBackend(LoginBackend):
         categories = "Login,Credit Card" if self.payment_cards else "Login"
         raw = json.loads(self._run("item", "list", "--categories", categories, "--format", "json") or "[]")
         out: list[VaultItemMeta] = []
+        self._item_vaults = {}
         for item in raw if isinstance(raw, list) else []:
             item_id = str(item.get("id") or "")
-            vault = item.get("vault")
-            if isinstance(vault, dict) and vault.get("id"):
-                self._vaults[item_id] = str(vault["id"])
+            vault = item.get("vault") or {}
+            if item_id:
+                self._item_vaults[item_id] = str(vault.get("id") or "") if isinstance(vault, dict) else ""
             if str(item.get("category") or "").upper() == "CREDIT_CARD":
                 if self.payment_cards:
                     out.append(VaultItemMeta(
@@ -162,6 +159,17 @@ class OnePasswordLoginBackend(LoginBackend):
 
     def get_meta(self, handle: str) -> Optional[VaultItemMeta]:
         return next((m for m in self.list_items() if m.id == handle), None)
+
+    def _item_selector(self, handle: str) -> list[str]:
+        """Target a listed login or opted-in card in its reported vault; unknown handles
+        are refused before any secret read, including on a fresh backend instance."""
+        item_id = handle[len(self.prefix):]
+        if item_id not in self._item_vaults:
+            self.list_items()
+        if item_id not in self._item_vaults:
+            raise RuntimeError("1Password login or card not found; list items again")
+        vault_id = self._item_vaults[item_id]
+        return [item_id, "--vault", vault_id] if vault_id else [item_id]
 
     def resolve_password(self, handle: str) -> str:
         return self._item_get(handle, "--fields", "label=password", "--reveal").rstrip("\r\n")

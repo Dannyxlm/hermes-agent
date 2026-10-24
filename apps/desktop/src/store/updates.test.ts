@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setApiRequestConnection, setApiRequestProfile } from '@/api/client'
 import type { DesktopUpdateStatus, DesktopUpstreamTracking, DesktopVersionInfo } from '@/global'
 import { en } from '@/i18n/en'
+import { registryOf, status } from './updates-test-fixtures'
 
 const storage = new Map<string, string>()
 
@@ -112,22 +113,8 @@ const {
   BACKGROUND_UPDATE_CHECK_MS
 } = await import('./updates')
 
+const { CANONICAL_GATEWAY_PROTOCOL } = await import('@/api/canonical-protocol')
 const { setConnection } = await import('./session')
-
-const registryOf = (ids: string[]) => ({
-  version: 2,
-  primary: ids[0] ?? 'local',
-  secureTokenStorage: true,
-  connections: ids.map(id => ({ id, kind: id === 'local' ? 'local' : 'remote', label: id }))
-})
-
-const status = (over: Partial<DesktopUpdateStatus> = {}): DesktopUpdateStatus => ({
-  supported: true,
-  behind: 3,
-  targetSha: 'sha-a',
-  fetchedAt: 0,
-  ...over
-})
 
 const lastToast = () => notifySpy.mock.calls.at(-1)?.[0] as { action: { onClick: () => void }; onDismiss: () => void }
 
@@ -318,6 +305,18 @@ describe('reportBackendContract', () => {
     reportBackendContract(REQUIRED_BACKEND_CONTRACT)
     expect(dismissSpy).toHaveBeenCalledWith('backend-contract-skew')
     expect(notifySpy).not.toHaveBeenCalled()
+  })
+
+  it('accepts only the matching canonical gateway protocol without claiming the legacy contract', () => {
+    reportBackendContract(undefined, CANONICAL_GATEWAY_PROTOCOL)
+    expect(dismissSpy).toHaveBeenCalledWith('backend-contract-skew')
+    expect(notifySpy).not.toHaveBeenCalled()
+
+    reportBackendContract(undefined, 'hermes-gateway-v0')
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+
+    reportBackendContract(Number.MAX_SAFE_INTEGER, 'hermes-gateway-v0')
+    expect(notifySpy).toHaveBeenCalledTimes(2)
   })
 
   it('warns when the backend is behind (or reports no contract)', () => {

@@ -1,6 +1,13 @@
 {
   "schema_version": "cloudseed-hermes-overlays.v1",
   "description": "CloudSeed-owned Hermes behaviors. This semantic ledger, not Git commit topology, defines the maintained overlay count.",
+  "known_differences": [
+    {
+      "id": "lineage-stored-identity-order",
+      "summary": "Stored display identities can disagree with the body-recomputed fold when a summary carrier's first uid row is model-only and a visible copy exists. Upstream v0.22.5 shares this inconsistency between its stored and recomputed paths. The rare case affects order only; no rows are lost or leaked. This is offered upstream for a shared fix rather than maintained as a fork-only reconciliation change.",
+      "review": "https://github.com/Dannyxlm/hermes-agent/pull/97#delta-review-row-c"
+    }
+  ],
   "overlays": [
     {
       "id": "codex-ephemeral-context",
@@ -32,7 +39,7 @@
     },
     {
       "id": "runtime-review-hardening",
-      "summary": "CloudSeed runtime safety and integration review fixes"
+      "summary": "CloudSeed runtime safety and integration review fixes, including selector-only rollback deletion of terminal runtime-ledger history while refusing unresolved work"
     },
     {
       "id": "hermex-shared-state",
@@ -45,6 +52,14 @@
     {
       "id": "private-mobile-delivery",
       "summary": "Authenticated private iOS push and Live Activity projections for canonical Team and ordinary native sessions, least-privilege widget reads, and event-published reconnect cuts"
+    },
+    {
+      "id": "bundled-advanced-delegation",
+      "summary": "Pinned official model-map and profile-route delegation backends, available without runtime installation and inactive until selected"
+    },
+    {
+      "id": "bundled-plugin-batch",
+      "summary": "Pinned reviewed draft cards, redaction patterns, profile picker and duty board with explicit owner opt-in"
     },
     {
       "id": "cloudseed-mobile-plugin",

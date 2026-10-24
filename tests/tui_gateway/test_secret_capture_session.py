@@ -101,8 +101,16 @@ def test_secret_prompt_goes_to_active_turn_not_last_wired_session(monkeypatch):
                 server._sessions.pop(sid, None)
         server_requests.reset_for_tests()
 
-    assert [frame["method"] for frame in frames] == ["secret"]
+    # Other attached clients need the resolved event to dismiss a prompt answered elsewhere.
+    assert [frame["method"] for frame in frames] == ["secret", "event"]
     assert frames[0]["params"]["session_id"] == "session-A"
+    settled = frames[1]["params"]
+    assert settled["type"] == "request.cancel"
+    assert settled["session_id"] == "session-A"
+    assert settled["payload"] == {
+        "id": frames[0]["id"], "method": "secret", "reason": "resolved",
+    }
+    assert "owner-secret" not in json.dumps(frames[1])
     assert stored == [("DEMO_TOKEN", "owner-secret")]
     assert result == {"missing_names": [], "setup_skipped": False, "gateway_setup_hint": None}
     assert server_requests.open_requests("session-A") == []
@@ -182,7 +190,6 @@ def test_background_prompt_secret_reaches_its_own_session_and_profile(two_profil
             return {"final_response": view.get("readiness_status") or view.get("error")}
 
     monkeypatch.setattr("run_agent.AIAgent", ModelBoundary)
-    monkeypatch.setattr(server, "_background_agent_kwargs", lambda _agent, _task_id: {})
     sessions = {
         sid: {"agent": object(), "session_key": f"key-{sid}", "profile_home": str(home), "cwd": str(home)}
         for sid, home in (("session-A", home_a), ("session-B", home_b))
@@ -246,7 +253,6 @@ def test_closed_runtime_secret_request_is_refused(two_profiles, monkeypatch):
             return {"final_response": view.get("readiness_status") or view.get("error")}
 
     monkeypatch.setattr("run_agent.AIAgent", ModelBoundary)
-    monkeypatch.setattr(server, "_background_agent_kwargs", lambda _agent, _task_id: {})
     frames, completed = _client(server, server_requests, monkeypatch, {"session-A": "a-secret"})
     with server._sessions_lock:
         server._sessions["session-A"] = session_a

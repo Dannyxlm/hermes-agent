@@ -14,8 +14,8 @@ def _request():
     request = _NonStreamRequest.__new__(_NonStreamRequest)
     notices, touches = [], []
     request.agent = SimpleNamespace(
-        _emit_wait_notice=notices.append,
-        _touch_activity=touches.append,
+        _emit_wait_notice=lambda text, **kwargs: notices.append(text),
+        _touch_activity=lambda text, **kwargs: touches.append(text),
         _interrupt_requested=False,
         _codex_stream_last_event_ts=9999.0,  # Another request cannot hide this one's stall.
     )

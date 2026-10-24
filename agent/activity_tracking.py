@@ -40,7 +40,7 @@ class ActivityTrackingMixin:
 
     def _touch_activity(
         self, desc: str, *, provenance: Optional[ActivityProvenance] = None,
-        force_persist: bool = False,
+        force_persist: bool = False, step_kind: Optional[str] = None, step_tool: Optional[str] = None,
     ) -> None:
         """Update the last-activity timestamp and description (thread-safe).
 
@@ -60,6 +60,8 @@ class ActivityTrackingMixin:
             normalize_activity_provenance, reset_session_activity_persist_window,
         )
 
+        from agent.session_activity import validate_step
+        step_kind, step_tool = validate_step(step_kind, step_tool)
         resolved_provenance = normalize_activity_provenance(provenance)
         with _activity_lock(self):
             self._turn_liveness_activity_generation = (
@@ -68,6 +70,10 @@ class ActivityTrackingMixin:
             self._last_activity_ts = time.time()
             self._last_activity_desc = bound_activity_description(desc)
             self._last_activity_provenance = resolved_provenance
+            self._last_activity_kind, self._last_activity_tool = step_kind, step_tool
+            identity = getattr(self, "_progress_identity_ref", None)
+            if isinstance(identity, dict):
+                identity.update(step_kind=step_kind, step_tool=step_tool)
             # Real progress invalidates a reserved abort claim; an in-flight watchdog interrupt must abandon
             # itself at the final mutation edge.
             self._turn_liveness_abort_claim = None
@@ -107,14 +113,20 @@ class ActivityTrackingMixin:
 
         now_mono = time.monotonic()
         last_mono = getattr(self, "_session_activity_last_persist_mono", 0.0)
-        if (now_mono - last_mono) < SESSION_ACTIVITY_HEARTBEAT_MIN_INTERVAL_SECONDS:
+        # 0.0 is the never-persisted / reset sentinel and always writes through: CLOCK_MONOTONIC is
+        # roughly host uptime, so on a freshly booted VM ``now_mono`` itself can be under the interval.
+        if last_mono and (now_mono - last_mono) < SESSION_ACTIVITY_HEARTBEAT_MIN_INTERVAL_SECONDS:
             return
         self._session_activity_last_persist_mono = now_mono
+        from agent.runtime_session_store import call_off_event_loop  # Relay callbacks run on a loop (#139029)
         try:
-            touch(
+            call_off_event_loop(
+                touch,
                 session_id,
                 getattr(self, "_last_activity_ts", None),
                 description=getattr(self, "_last_activity_desc", None),
+                **({"step_kind": self._last_activity_kind, "step_tool": self._last_activity_tool}
+                   if getattr(self, "_last_activity_kind", None) is not None else {}),
                 provenance=normalize_activity_provenance(
                     getattr(self, "_last_activity_provenance", None)
                 ),
@@ -131,6 +143,7 @@ class ActivityTrackingMixin:
 
         See #15654, #72039.
         """
+        self._last_activity_kind, self._last_activity_tool = "idle", None
         self._last_activity_desc = ""
         self._last_activity_provenance = ActivityProvenance.UNKNOWN
         session_id = getattr(self, "session_id", None)
@@ -140,5 +153,6 @@ class ActivityTrackingMixin:
         clear = getattr(session_db, "clear_session_activity_labels", None)
         if not callable(clear):
             return
+        from agent.runtime_session_store import call_off_event_loop
         with suppress(Exception):  # never let durable cleanup I/O break turn teardown
-            clear(session_id)
+            call_off_event_loop(clear, session_id)

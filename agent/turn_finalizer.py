@@ -339,7 +339,7 @@ def _log_turn_exit(agent, messages, final_response, api_call_count, _turn_exit_r
         # aborted — from when the loop actually finished, not from the last provider
         # response. Never raises into the finalizer.
         try:
-            _touch("turn end logged")
+            _touch("turn end logged", step_kind="finalizing")
         except Exception:
             logger.debug("turn-end activity stamp failed", exc_info=True)
     _last_msg_role = messages[-1].get("role") if messages else None
@@ -743,8 +743,9 @@ def finalize_turn(
     if _cleanup_errors:
         result["cleanup_errors"] = _cleanup_errors
     # A /steer landing after the final assistant turn has no tool batch to drain into;
-    # hand it back so it becomes the next user turn instead of being lost.
-    _leftover_steer = agent._drain_pending_steer()
+    # hand it back so it becomes the next user turn instead of being lost. A gateway transfer
+    # (ticketed) stays buffered: the claim's settlement returns it to its own queue place.
+    _leftover_steer = (getattr(agent, "_drain_leftover_steer", None) or agent._drain_pending_steer)()
     if _leftover_steer:
         result["pending_steer"] = _leftover_steer
     agent._response_was_previewed = False
@@ -808,4 +809,6 @@ def finalize_turn(
 
     agent._turn_preflight_display_snapshot = None
     agent._turn_received_provider_response = False
+    from hermes_state_launch_causes import result_cause
+    result["terminal_cause"] = result_cause(result, stop_cause=getattr(agent, "_launch_stop_cause", None))
     return result

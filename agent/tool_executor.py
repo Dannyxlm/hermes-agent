@@ -36,6 +36,7 @@ from agent.interrupt_control import _REASON_USER_INTERRUPT, interrupt_skip_wordi
 from agent.message_sanitization import coalesce_tool_call_id
 from agent.onboarding import observe_tool_result as observe_onboarding_result
 from agent import plugin_live_notes
+from agent.lsp import deferred as lsp_deferred
 from agent.inline_tool_executors import (
     INLINE_TOOL_EXECUTORS,
     InlineToolContext,
@@ -43,6 +44,7 @@ from agent.inline_tool_executors import (
     emit_terminal_post_tool_call,
     tool_hook_ids,
 )
+from agent.message_metadata import stamp_data_use
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
     _is_destructive_command,
@@ -423,10 +425,7 @@ def _unwrap_tool_search_call(
         if underlying not in _tool_search_scoped_names(agent):
             # Session-gated GUI tools name their missing surface (#120413);
             # anything else keeps the generic block.
-            return function_name, function_args, (
-                _ts.out_of_scope_reason(underlying)
-                or f"'{underlying}' is not available in this session. Use tool_search to find tools you can call."
-            )
+            return function_name, function_args, _ts.scope_block_reason(underlying)
         # Validate before unwrapping: the generic bridge hides the concrete
         # parameter schema from provider-native tool-call validation.
         scope_block = _ts.validate_deferred_call_args(underlying, underlying_args)
@@ -475,6 +474,7 @@ class _ManagedToolResult:
     middleware_trace: list[dict[str, Any]]
     blocked: bool
     dispatched: bool
+    data_use: frozenset[str] = frozenset()
 
 
 class _ToolTimeoutResult(str):
@@ -586,12 +586,13 @@ def _interrupt_worker_tids(agent, tids, *, reason=_NO_REASON) -> None:
             _ra()._set_interrupt(True, tid, **kwargs)
 
 
-def _set_worker_activity_callback(agent) -> None:
+def _set_worker_activity_callback(agent, function_name=None) -> None:
     """The activity callback is thread-local: bind it on THIS thread so tool-layer heartbeats fire."""
     with contextlib.suppress(Exception):
         from tools.environments.base import set_activity_callback
 
-        set_activity_callback(agent._touch_activity)
+        from functools import partial
+        set_activity_callback(partial(agent._touch_activity, step_kind="tool", step_tool=function_name))
 
 
 # Must stay far below the gateway turn-inactivity timeout (default 1800s) so a silent tool never looks idle.
@@ -603,7 +604,7 @@ def _run_tool_activity_heartbeat(
     stop_event: threading.Event,
     label: str,
     interval: float = _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S,
-    worker_tid: int | None = None,
+    worker_tid: int | None = None, step_tool: str | None = None,
 ) -> None:
     """Daemon thread stamping ``agent._touch_activity`` every ``interval`` seconds until
     ``stop_event`` is set, so the gateway inactivity watchdog never abandons a turn whose
@@ -619,7 +620,8 @@ def _run_tool_activity_heartbeat(
         while not stop_event.wait(interval):
             if is_thread_interrupted(worker_tid):
                 return
-            agent._touch_activity(label)
+            agent._touch_activity(label, step_kind="waiting_helpers" if step_tool == "delegate_task" else "tool",
+                                  step_tool=step_tool)
     except Exception:
         pass  # a heartbeat must never break the agent loop
 
@@ -634,7 +636,8 @@ def _run_with_activity_heartbeat(agent, function_name: str, fn):
         # here, so a single heartbeat covers every tool.
         target=_run_tool_activity_heartbeat,
         args=(agent, stop, f"tool running: {function_name}"),
-        kwargs={"interval": _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S, "worker_tid": threading.current_thread().ident},
+        kwargs={"interval": _TOOL_ACTIVITY_HEARTBEAT_INTERVAL_S, "worker_tid": threading.current_thread().ident,
+                "step_tool": function_name},
         daemon=True,
         name=f"tool-activity-hb-{function_name[:24]}",
     )
@@ -752,7 +755,13 @@ def _dispatch_authorized_once(
     from agent.terminal_approval_batch import prepare_current_terminal
     prepare_current_terminal(ref)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
-    return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
+    from agent.tool_progress_relay import bound_tool_progress
+    from tools.connectors.data_use import collect_data_use
+    with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
+        try:
+            return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
+        finally:
+            state.data_use = frozenset(data_use)
 
 
 def _run_agent_tool_execution_middleware(
@@ -892,7 +901,9 @@ def _poll_sequential_future(agent, future, function_name: str, deadline: float |
             elapsed = int(time.monotonic() - started)
             if elapsed - _last_heartbeat >= 30:
                 _last_heartbeat = elapsed
-                agent._touch_activity(f"sequential tool running ({elapsed}s): {function_name}")
+                agent._touch_activity(f"sequential tool running ({elapsed}s): {function_name}",
+                                      step_kind="waiting_helpers" if function_name == "delegate_task" else "tool",
+                                      step_tool=function_name)
 
 
 def _run_sequential_tool_execution_middleware(
@@ -912,7 +923,10 @@ def _run_sequential_tool_execution_middleware(
     generic deadline would report ``tool_timeout`` while the prompt is still live. They
     are ``_NEVER_PARALLEL_TOOLS`` and run inline below, before any deadline is armed, so
     they need no ``_SEQUENTIAL_DEADLINE_EXEMPT_TOOLS`` entry."""
+    from agent.tool_dispatch_helpers import _extend_tool_timeout
+
     timeout_s = None if function_name in _SEQUENTIAL_DEADLINE_EXEMPT_TOOLS else _resolve_sequential_tool_timeout()
+    timeout_s = _extend_tool_timeout(function_name, timeout_s)
     ref = _ToolCallRef(function_name, function_args, effective_task_id, tool_call_id, middleware_trace)
     kwargs = dict(ref.middleware_kwargs(), execute=execute, scope_block=scope_block, display_index=display_index)
     from agent.terminal_approval_batch import take_prepared_call
@@ -1018,8 +1032,10 @@ def _begin_tool_execution(agent, ref: _ToolCallRef, display_index: int | None) -
             print(f"  📞 {prefix}: {function_name}({list(function_args.keys())}) - {_preview(json.dumps(display_args, ensure_ascii=False), agent.log_prefix_chars)}")
 
     agent._current_tool = function_name
-    agent._touch_activity(f"executing tool: {function_name}")
-    _set_worker_activity_callback(agent)
+    agent._touch_activity(f"executing tool: {function_name}", step_kind=(
+        "waiting_helpers" if function_name == "delegate_task" else "waiting_input" if function_name == "clarify" else "tool"),
+                          step_tool=function_name)
+    _set_worker_activity_callback(agent, function_name)
 
     if agent.tool_progress_callback:
         try:
@@ -1073,6 +1089,7 @@ def _commit_tool_result(
     blocked: bool,
     effect_disposition,
     observed: bool = False,
+    data_use: frozenset[str] = frozenset(),
     error_preview: Callable[[Any], Any] = lambda result: result,
     success_log_chars: Optional[int] = None,
     verbose_text: Callable[[Any], Any] = lambda result: result,
@@ -1114,7 +1131,7 @@ def _commit_tool_result(
 
     agent._current_tool = None
     _status_suffix = " (error)" if is_error else ""
-    agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}")
+    agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}", step_kind="thinking")
 
     persisted_result = function_result
     if _is_multimodal_tool_result(persisted_result):
@@ -1144,7 +1161,9 @@ def _commit_tool_result(
     # string-safe fallback so a rejected image result never poisons history.
     _tool_content = agent._tool_result_content_for_active_model(function_name, persisted_result)
     tool_message = make_tool_result_message(function_name, _tool_content, tool_call_id, effect_disposition=effect_disposition)
-    # A plugin that went live during this turn is told on this new row (outside any untrusted-data wrapper).
+    # A plugin that went live during this turn, and late LSP verdicts on this session's earlier edits,
+    # are told on this new row (outside any untrusted-data wrapper).
+    lsp_deferred.forward_to_agent(agent)
     plugin_live_notes.attach_to_tool_message(agent, tool_message)
     # Prepare presentation data before the append. The emitting completion callback
     # stays below the durability fence; raw tool/model content remains unchanged.
@@ -1157,6 +1176,7 @@ def _commit_tool_result(
                 tool_message["display_metadata"] = metadata
         except Exception as callback_error:
             logging.debug("Tool result metadata callback error: %s", callback_error)
+    stamp_data_use(tool_message, sorted(data_use))
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None
@@ -1246,6 +1266,7 @@ class _ToolOutcome:
     duration: float
     is_error: bool
     blocked: bool
+    data_use: frozenset[str] = frozenset()
 
 
 def _start_order_gate_timeout(batch_timeout: float | None) -> float:
@@ -1338,6 +1359,7 @@ class _ConcurrentBatch:
         # propagate_context_to_thread() at the submit site below (GHSA-qg5c-hvr5-hjgr, #13617).
         start = time.time()
         blocked = dispatched = False
+        data_use: frozenset[str] = frozenset()
         try:
             managed = _run_agent_tool_execution_middleware(
                 agent,
@@ -1356,7 +1378,7 @@ class _ConcurrentBatch:
                 authorization_gate=self.authorization_gate,
             )
             result, ref.args, ref.trace = managed.result, managed.args, managed.middleware_trace
-            blocked, dispatched = managed.blocked, managed.dispatched
+            blocked, dispatched, data_use = managed.blocked, managed.dispatched, managed.data_use
         except _BatchAbandoned:
             logger.info("tool %s abandoned at start-order gate; skipping dispatch", ref.name)
             return None
@@ -1381,7 +1403,7 @@ class _ConcurrentBatch:
             logger.info(
                 "tool %s completed (%.2fs, %d chars)", ref.name, duration, result_chars
             )
-        return _ToolOutcome(ref, result, duration, is_error, blocked)
+        return _ToolOutcome(ref, result, duration, is_error, blocked, data_use)
 
     def run_worker(self, index: int, start_order: int) -> None:
         """Worker function executed in a thread."""
@@ -1390,7 +1412,7 @@ class _ConcurrentBatch:
             # An interrupt may have fanned out before our registration; apply it to our tid.
             if agent._interrupt_requested:
                 _interrupt_worker_tids(agent, [_worker_tid], reason=getattr(agent, "_tool_interrupt_reason", None))
-            _set_worker_activity_callback(agent)
+            _set_worker_activity_callback(agent, pc.name)
             start_gate = _WorkerStartOnce(self.gate, start_order, pc.name)
             try:
                 outcome = self._dispatch_worker(index, pc.ref(self.effective_task_id), pc.scope_block, start_gate)
@@ -1470,7 +1492,7 @@ class _ConcurrentBatch:
                     _still_running = self._running_names(not_done, future_to_index)
                     agent._touch_activity(
                         f"concurrent tools running ({_conc_elapsed}s, "
-                        f"{len(not_done)} remaining: {', '.join(_still_running[:3])})"
+                        f"{len(not_done)} remaining: {', '.join(_still_running[:3])})", step_kind="tool"
                     )
                 continue
             for f in not_done:
@@ -1551,7 +1573,7 @@ def _append_batch_results(agent, messages: list, effective_task_id: str, batch: 
         committed = _commit_tool_result(
             agent, messages, ref, function_result,
             budget=budget, tool_duration=tool_duration, is_error=is_error, blocked=blocked,
-            effect_disposition=effect_disposition, observed=r is not None,
+            effect_disposition=effect_disposition, observed=r is not None, data_use=r.data_use if r else frozenset(),
             error_preview=lambda res: _multimodal_text_summary(res)[:200],
         )
         if committed is None:
@@ -1597,7 +1619,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     timeout_s = _resolve_concurrent_tool_timeout()
     batch = _ConcurrentBatch(agent, messages, effective_task_id, parsed_calls, timeout_s)
     agent._current_tool = tool_names_str
-    agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}")
+    agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}", step_kind="tool")
 
     spinner = _start_quiet_tool_spinner(agent, "", {}, label=f"⚡ running {num_tools} tools concurrently")
     try:
@@ -1690,7 +1712,10 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
     if memory_provider_owns_tool(agent, function_name):
         # Memory-provider tools (hindsight_retain, honcho_search, ...) are not in the registry.
         return _SequentialDispatch(
-            execute=lambda next_args: agent._memory_manager.handle_tool_call(function_name, next_args),
+            execute=lambda next_args: agent._memory_manager.handle_tool_call(
+                function_name, next_args,
+                caller_gsk=(getattr(agent, "_gateway_session_key", "") or ""),
+            ),
             spinner=_start_quiet_tool_spinner(agent, function_name, function_args),
             error_result=lambda e: json.dumps({"error": f"Memory tool '{function_name}' failed: {e}"}),
             error_log="memory_manager.handle_tool_call raised for %s: %s",
@@ -1823,7 +1848,7 @@ def _publish_sequential_result(agent, messages: list, ref: _ToolCallRef, managed
     committed = _commit_tool_result(
         agent, messages, ref, function_result,
         budget=budget, tool_duration=tool_duration, is_error=_is_error_result, blocked=managed.blocked,
-        effect_disposition="unknown" if _execution_timed_out else None, observed=True,
+        effect_disposition="unknown" if _execution_timed_out else None, observed=True, data_use=managed.data_use,
         error_preview=lambda res: res[:200] if isinstance(res, str) and not agent.verbose_logging else res,
         success_log_chars=_result_len,
         verbose_text=_multimodal_text_summary,

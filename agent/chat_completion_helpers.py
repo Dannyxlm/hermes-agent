@@ -32,6 +32,7 @@ from agent.error_classifier import (
 from agent.sdk_transform_bypass import bypass_chat_sdk_request_transform
 from agent.errors import EmptyStreamError
 from agent.chat_completion_local import _streams_llamacpp, stale_giveup
+from agent.chat_completion_headers import _chat_completion_capturing_headers
 from agent.chat_completion_stream_monitor import StreamingWaitMonitor
 from agent.transports.chat_completions import is_router_timeout_shim, router_timeout_shim_may_follow
 from agent.fast_mode import effective_request_overrides
@@ -42,15 +43,14 @@ from agent.gemini_native_adapter import is_native_gemini_base_url
 # misidentify and, without an api_key, return 401 on every leg (issue #89863).
 from agent.model_metadata import is_local_endpoint
 from agent.message_content import flatten_message_text
-from agent.message_metadata import PERSISTENCE_ONLY_MESSAGE_FIELDS, append_message, stamp_message_timestamp
+from agent.session_activity import stream_chunk_step, touch_stale_kill_activity
+from agent.message_metadata import PERSISTENCE_ONLY_MESSAGE_FIELDS, append_message, data_use_requirement, stamp_message_timestamp
 from agent.message_sanitization import (
     _sanitize_messages_surrogates, _sanitize_surrogates, _repair_tool_call_arguments,
     normalize_finish_reason as _normalize_finish_reason, sanitize_outbound_kwargs, strip_images_for_rejecting_model,
 )
 from agent.reasoning_summaries import (
-    append_streamed_reasoning_detail, separate_glued_reasoning_blocks,
-    streamed_reasoning_detail_text,
-)
+    append_streamed_reasoning_detail, separate_glued_reasoning_blocks, streamed_reasoning_detail_text)
 from agent.local_prompt_progress import prompt_progress, with_prompt_progress
 from agent.repetition_guard import RunawayStreamWatch, is_repetition_dominated
 from agent.stream_single_writer import claim_stream_writer, stream_writer_is_current
@@ -499,18 +499,17 @@ def _prompt_cache_scope_for_agent(agent) -> str | None:
         return None
 
 
-def _merge_nous_portal_messages_extra_body(agent, anthropic_kwargs: dict) -> dict:
-    """Merge Portal ``tags`` / ``session_id`` onto an Anthropic Messages kwargs dict.
-    The Nous profile is only consulted by the OpenAI-wire transport; ``session_id``
-    only — never ``provider_preferences`` (an OpenAI-wire routing object)."""
+def _merge_nous_portal_messages_extra_body(agent, anthropic_kwargs: dict, api_messages: list) -> dict:
+    """The Nous profile body on the Messages wire, which the profile hook never reaches; never
+    ``provider_preferences`` (OpenAI-wire routing the Portal 400s on)."""
     if getattr(agent, "provider", None) not in {"nous", "nous-portal", "nousresearch"}:
         return anthropic_kwargs
     try:
         from providers import get_provider_profile
         nous_profile = get_provider_profile("nous")
         if nous_profile is not None:
-            anthropic_kwargs.setdefault("extra_body", {}).update(
-                nous_profile.build_extra_body(session_id=getattr(agent, "session_id", None)))
+            anthropic_kwargs.setdefault("extra_body", {}).update(nous_profile.build_extra_body(
+                session_id=getattr(agent, "session_id", None), data_use=data_use_requirement(api_messages)))
     except Exception as exc:
         logger.debug("Nous Portal extra_body merge failed: %s", exc)
     return anthropic_kwargs
@@ -600,11 +599,6 @@ def _report_stale_nonstream_kill(agent, api_kwargs: dict, elapsed: float, stale_
         logger.debug("stale status buffering failed", exc_info=True)
 
 
-def _touch_stale_kill_activity(agent, elapsed: float) -> None:
-    try:
-        agent._touch_activity(f"stale non-streaming call killed after {int(elapsed)}s")
-    except Exception:
-        logger.debug("stale activity touch failed", exc_info=True)
 
 
 def _check_stale_giveup(agent) -> None:
@@ -731,15 +725,14 @@ def _bedrock_reasoning_stale_floor(model_id: object) -> float | None:
 
 
 def _bedrock_converse_call(api_kwargs: dict, *, stream: bool, on_stream_denied=None):
-    """Pop the Hermes routing keys and call ``converse`` / ``converse_stream`` (boto3
-    directly) with the shared recovery: a cachePoint rejection (Nova: toolConfig.tools,
-    #97281) drops the marker and resends once inside the same attempt; a streaming IAM
-    denial hands off to ``on_stream_denied(client, kwargs, exc)``; a stale connection
-    evicts the cached client so the outer retry builds a fresh pool. Streaming returns the
-    event stream; non-streaming an OpenAI-shaped SimpleNamespace."""
+    """Pop the Hermes routing keys and call ``converse`` / ``converse_stream`` (boto3 directly) with the
+    adapter's shared recovery: a cachePoint rejection (Nova: toolConfig.tools, #97281) or a replayed sealed
+    reasoning rejection resends once without the offending blocks inside the same attempt; a streaming IAM
+    denial hands off to ``on_stream_denied(client, kwargs, exc)``; a stale connection evicts the cached
+    client so the outer retry builds a fresh pool. Streaming returns the event stream; else a SimpleNamespace."""
     from agent.bedrock_adapter import (_get_bedrock_runtime_client, invalidate_runtime_client,
         is_stale_connection_error, is_streaming_access_denied_error, normalize_converse_response,
-        recover_from_cache_point_rejection)
+        recover_from_cache_point_rejection, recover_from_redacted_reasoning_rejection)
     region = api_kwargs.pop("__bedrock_region__", "us-east-1")
     api_kwargs.pop("__bedrock_converse__", None)
     client = _get_bedrock_runtime_client(region)
@@ -748,7 +741,8 @@ def _bedrock_converse_call(api_kwargs: dict, *, stream: bool, on_stream_denied=N
     try:
         raw_response = method(**api_kwargs)
     except Exception as exc:
-        retry_kwargs = recover_from_cache_point_rejection(exc, api_kwargs)
+        retry_kwargs = (recover_from_cache_point_rejection(exc, api_kwargs)
+                        or recover_from_redacted_reasoning_rejection(exc, api_kwargs))
         if retry_kwargs is not None:
             return finish(method(**retry_kwargs))
         if on_stream_denied is not None and is_streaming_access_denied_error(exc):
@@ -792,7 +786,8 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
     # request transform. No-op unless this really is the OpenAI SDK, so the
     # MoA facade above and the suite's stand-in clients are unaffected.
     api_kwargs = bypass_chat_sdk_request_transform(api_kwargs, request_client)
-    return request_client.chat.completions.create(**api_kwargs)
+    return _chat_completion_capturing_headers(agent, request_client, api_kwargs)
+
 
 
 def should_use_direct_api_call(agent) -> bool:
@@ -890,7 +885,7 @@ class _InlineRequest:
         # deadlock this path exists to avoid (#60203). This ticker only refreshes the clock.
         while not self._hb_stop.wait(_DIRECT_API_ACTIVITY_HEARTBEAT_SECONDS):
             with contextlib.suppress(Exception):
-                self.agent._touch_activity("waiting for non-streaming API response")
+                self.agent._touch_activity("waiting for non-streaming API response", step_kind="thinking")
 
     def _on_stale(self) -> None:
         # Timer thread: aborts sockets only, never issues a request (keeps the no-worker
@@ -899,7 +894,7 @@ class _InlineRequest:
             return
         elapsed = time.time() - self.call_start
         _report_stale_nonstream_kill(self.agent, self.api_kwargs, elapsed, self.stale_timeout, inline=True)
-        _touch_stale_kill_activity(self.agent, elapsed)
+        touch_stale_kill_activity(self.agent, elapsed)
 
     def start_watchdogs(self) -> None:
         """Start the activity heartbeat and (for a finite budget) the stale timer."""
@@ -989,7 +984,7 @@ def direct_api_call(agent, api_kwargs: dict):
     equal to the stale budget is the backstop when the abort finds nothing (#85252).
     Both surface a retryable ``TimeoutError`` for the outer retry loop."""
     _check_stale_giveup(agent)
-    agent._touch_activity("waiting for non-streaming API response")
+    agent._touch_activity("waiting for non-streaming API response", step_kind="thinking")
     # Resolve the budget BEFORE the heartbeat starts: the resolver may raise
     # (fail-closed), and a leaked heartbeat thread would mask real stalls forever.
     call_start = time.time()
@@ -1390,7 +1385,7 @@ def _build_anthropic_kwargs(agent, api_messages, tools_for_api, reasoning_config
         drop_context_1m_beta=bool(getattr(agent, "_oauth_1m_beta_disabled", False)))
     # Portal reads ``tags`` / ``session_id`` on its Messages route too, but the profile hook
     # is only consulted by the OpenAI-wire transport — merge here to keep sticky routing.
-    return _merge_nous_portal_messages_extra_body(agent, anthropic_kwargs)
+    return _merge_nous_portal_messages_extra_body(agent, anthropic_kwargs, api_messages)
 
 
 def _build_bedrock_kwargs(agent, api_messages, tools_for_api, reasoning_config):
@@ -2179,8 +2174,8 @@ def _iteration_summary_api_messages(agent, messages: list) -> list:
     # Compression/resume can orphan a tool result whose parent tool_call was summarized away.
     api_messages = agent._sanitize_api_messages(api_messages)
     # Same send-path vision eviction as the main loop (#89296).
-    from agent.context_compressor import evict_stale_outbound_tool_images
-    evict_stale_outbound_tool_images(api_messages)
+    from agent.context_compressor import evict_stale_outbound_tool_images, outbound_retired_image_ids
+    evict_stale_outbound_tool_images(api_messages, outbound_retired_image_ids(agent))
     # Same per-model image strip as turn_api_request.build_api_request: this path builds
     # api_messages by hand and calls _build_api_kwargs directly, so a model recorded in
     # agent._image_rejecting_models would otherwise get images here → 4xx → no summary.
@@ -2254,7 +2249,7 @@ def _anthropic_summary_attempt(agent, api_messages: list, api_request_id: str):
             model=agent.model, messages=api_messages, tools=None, max_tokens=agent.max_tokens,
             reasoning_config=agent.reasoning_config, is_oauth=agent._is_anthropic_oauth,
             preserve_dots=agent._anthropic_preserve_dots(), base_url=getattr(agent, "_anthropic_base_url", None))
-        ant_kw = _merge_nous_portal_messages_extra_body(agent, ant_kw)
+        ant_kw = _merge_nous_portal_messages_extra_body(agent, ant_kw, api_messages)
         response = _managed_summary_call(
             agent, api_request_id, ant_kw, agent._interruptible_api_call, retry_count=retry_count)
         return _summary_text(agent, response, strip_tool_prefix=agent._is_anthropic_oauth)
@@ -2270,6 +2265,9 @@ def _chat_summary_attempt(agent, api_messages: list, api_request_id: str):
     # The summary now carries ``tools``; on cache-planned routes the main loop scrubbed a deep
     # copy, so ``agent.tools`` may still hold bytes the provider 400s on.
     sanitize_outbound_kwargs(agent, summary_kwargs)
+    from agent.conversation_loop import _moa_client_consumes_prepared_request
+    if agent.provider == "moa" and _moa_client_consumes_prepared_request(agent.client):  # transport strips data_use
+        summary_kwargs["_moa_prepared_request"] = agent.client.chat.completions.prepare(api_messages)
 
     def _attempt(retry_count: int) -> str:
         # Use the ordinary request-local lifecycle: a summary can be interrupted
@@ -2289,9 +2287,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
     if getattr(agent, "suppress_status_output", False):
         # Strict machine-readable mode (-Q, oneshot): keep diagnostics off stdout. quiet_mode is
-        # NOT the gate — the interactive CLI runs quiet_mode=True by default and must see this.
-        # Strict machine-readable mode (hermes chat -Q, oneshot, background review): keep diagnostics out of
-        # stdout so wrappers receive only the final assistant content (#93220 class).
+        # NOT the gate — the interactive CLI runs quiet_mode=True by default and must see this (#93220 class).
         logger.warning(warning)
     else:
         agent._safe_print(warning, diagnostic=True)
@@ -2867,7 +2863,7 @@ class _StreamingCall(StreamingWaitMonitor):
     def _count_chunk(self, diag, chunk) -> None:
         """Stamp liveness for a real chunk; diagnostics are best-effort."""
         self.last_chunk_time["t"] = time.time()
-        self.agent._touch_activity("receiving stream response")
+        self.agent._touch_activity("receiving stream response", step_kind=stream_chunk_step(chunk))
         with contextlib.suppress(Exception):
             diag["chunks"] = int(diag.get("chunks", 0)) + 1
             if diag.get("first_chunk_at") is None:
@@ -2883,7 +2879,7 @@ class _StreamingCall(StreamingWaitMonitor):
             return False
         self.last_chunk_time["t"] = now = time.time()
         self.prompt_progress["progress"], self.prompt_progress["t"] = progress, now
-        self.agent._touch_activity("model reading the prompt")
+        self.agent._touch_activity("model reading the prompt", step_kind="thinking")
         return True
 
     @staticmethod
@@ -2961,7 +2957,7 @@ class _StreamingCall(StreamingWaitMonitor):
         request_client = self._attempt_request_client = self.clients.set_client(
             self.agent._create_request_openai_client(reason="chat_completion_stream_request", api_kwargs=stream_kwargs))
         self.last_chunk_time["t"] = time.time()
-        self.agent._touch_activity("waiting for provider response (streaming)")
+        self.agent._touch_activity("waiting for provider response (streaming)", step_kind="thinking")
         # #93650: as above — the streaming path carries the same bulk
         # messages/tools payload and pays the same client-side walk.
         stream_kwargs = bypass_chat_sdk_request_transform(stream_kwargs, request_client)
@@ -3855,7 +3851,7 @@ class _StreamingCall(StreamingWaitMonitor):
         # Reset the timer so we don't kill repeatedly while the worker unwinds.
         self.last_chunk_time["t"] = time.time()
         self.agent._emit_diagnostic_wait(f"⚠ no output from provider for {int(elapsed)}s — reconnecting...")
-        self.agent._touch_activity(f"stale stream detected after {int(elapsed)}s, reconnecting")
+        self.agent._touch_activity(f"stale stream detected after {int(elapsed)}s, reconnecting", step_kind="retrying")
 
     def _abort_for_interrupt(self, stale_elapsed: float) -> None:
         """/stop seen by the monitor: mark cancelled, abort the request-local

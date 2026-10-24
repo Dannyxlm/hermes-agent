@@ -42,7 +42,7 @@ def test_multiple_pending_requests_revision_and_precedence(inbox):
     second = row(inbox, "ops")["attention"]
     assert second["count"] == 2 and second["kind"] == "approval"
     assert second["revision"] != first["revision"]
-    assert server_requests.resolve_response({"id": approval.id, "result": {}})
+    assert server_requests.resolve_response({"id": approval.id, "result": {"choice": "once"}})
     assert row(inbox, "ops")["attention"] == first
     assert server_requests.cancel("ops") == 1
     assert "attention" not in row(inbox, "ops")

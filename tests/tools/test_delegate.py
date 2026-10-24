@@ -1307,7 +1307,7 @@ class TestDelegateHeartbeat(unittest.TestCase):
         touch_calls = []
         first_touch = threading.Event()
 
-        def record(desc):
+        def record(desc, **_kwargs):
             touch_calls.append(desc)
             first_touch.set()
 
@@ -1351,7 +1351,7 @@ class TestDelegateHeartbeat(unittest.TestCase):
 
         parent = _make_mock_parent()
         touch_calls = []
-        parent._touch_activity = lambda desc: touch_calls.append(desc)
+        parent._touch_activity = lambda desc, **_kwargs: touch_calls.append(desc)
 
         child = MagicMock()
         child.get_activity_summary.return_value = {
@@ -1396,7 +1396,7 @@ class TestDelegateHeartbeat(unittest.TestCase):
         touch_calls = []
         kept_going = threading.Event()
 
-        def record(desc):
+        def record(desc, **_kwargs):
             touch_calls.append(desc)
             if len(touch_calls) > 2:
                 kept_going.set()
@@ -1461,7 +1461,7 @@ class TestDelegateHeartbeat(unittest.TestCase):
         touch_calls = []
         kept_going = threading.Event()
 
-        def record(desc):
+        def record(desc, **_kwargs):
             touch_calls.append(desc)
             if len(touch_calls) > 2:
                 kept_going.set()

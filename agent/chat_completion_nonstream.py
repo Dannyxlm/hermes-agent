@@ -146,7 +146,7 @@ class _NonStreamRequest:
             # clear/reset this notice. Real progress changes phase and clears it.
             if (self.wait_notice_started_ts is not None and activity_ts is not None
                     and activity_ts > self.wait_notice_started_ts):
-                self.agent._emit_wait_notice("")
+                self.agent._emit_wait_notice("", step_kind="thinking")
                 self.wait_notice_started_ts = None
                 self.wait_notice.reset()
             if not heartbeat:
@@ -156,7 +156,7 @@ class _NonStreamRequest:
             if silence < 60.0:
                 self.agent._touch_activity(
                     "waiting for first stream event after reconnect"
-                    if retry_started_ts is not None else "waiting for provider response")
+                    if retry_started_ts is not None else "waiting for provider response", step_kind="thinking")
                 return
             phase = "first_event"
             if pre_progress:
@@ -175,10 +175,10 @@ class _NonStreamRequest:
             # One neutral notice per silence; repeating it every heartbeat made
             # healthy long calls read as provider trouble (#92550).
             if not self.wait_notice.should_emit(phase, watchdog):
-                self.agent._touch_activity(f"waiting for provider response ({int(silence)}s, {phase})")
+                self.agent._touch_activity(f"waiting for provider response ({int(silence)}s, {phase})", step_kind="thinking")
                 return
             self.agent._emit_wait_notice(wn.wait_notice_text(
-                self.api_kwargs.get('model', 'the provider'), silence, phase, watchdog))
+                self.api_kwargs.get('model', 'the provider'), silence, phase, watchdog), step_kind="thinking")
             self.wait_notice_started_ts = self.call_start + elapsed
         except Exception:
             h.logger.debug("wait-notice construction failed", exc_info=True)
@@ -197,7 +197,7 @@ class _NonStreamRequest:
             f"Reconnecting." + (f" {silent_hint}" if silent_hint else ""))
         self._abort_request("codex_ttfb_kill")
         agent._emit_diagnostic_wait(f"⚠ no response from provider in {int(elapsed)}s — reconnecting...")
-        agent._touch_activity(f"codex stream killed after {int(elapsed)}s with no first stream event")
+        agent._touch_activity(f"codex stream killed after {int(elapsed)}s with no first stream event", step_kind="retrying")
         self._await_worker_after_kill(
             f"Codex stream produced no parsed stream event within {int(elapsed)}s "
             f"(TTFB threshold: {int(wd.ttfb_timeout)}s)"
@@ -213,7 +213,7 @@ class _NonStreamRequest:
             f"⚠️ Codex stream opened but made no model progress for {int(elapsed)}s "
             f"(model: {self._model()}). Reconnecting.")
         self._abort_request("codex_progress_kill")
-        agent._touch_activity(f"codex stream killed after {int(elapsed)}s without model progress")
+        agent._touch_activity(f"codex stream killed after {int(elapsed)}s without model progress", step_kind="retrying")
         self._await_worker_after_kill(
             f"Codex stream produced no substantive model progress for {int(elapsed)}s "
             f"(progress threshold: {int(wd.progress_timeout)}s)")
@@ -235,7 +235,7 @@ class _NonStreamRequest:
             f"⚠️ Codex stream sent no events for {int(event_stale_elapsed)}s after {arm_point} "
             f"(model: {self._model()}). Reconnecting.")
         self._abort_request("codex_stream_idle_kill")
-        agent._touch_activity(f"codex stream killed after {int(event_stale_elapsed)}s with no SSE events")
+        agent._touch_activity(f"codex stream killed after {int(event_stale_elapsed)}s with no SSE events", step_kind="retrying")
         self._await_worker_after_kill(
             f"Codex stream produced no SSE events for {int(event_stale_elapsed)}s "
             f"after {arm_point} (threshold: {int(wd.idle_timeout)}s)")
@@ -248,7 +248,8 @@ class _NonStreamRequest:
         h._report_stale_nonstream_kill(agent, self.api_kwargs, elapsed, wd.stale_timeout, hint=silent_hint)
         self._abort_request("stale_call_kill")
         h._bump_stale_streak(agent)
-        h._touch_stale_kill_activity(agent, elapsed)
+        from agent.session_activity import touch_stale_kill_activity
+        touch_stale_kill_activity(agent, elapsed)
         self._await_worker_after_kill(
             f"Non-streaming API call timed out after {int(elapsed)}s with no response (threshold: {int(wd.stale_timeout)}s)"
             + (f". {silent_hint}" if silent_hint else ""))
@@ -278,7 +279,7 @@ class _NonStreamRequest:
                 self.codex_watchdog_state.last_event_ts = None
                 self.codex_watchdog_state.last_progress_ts = None
                 self.codex_watchdog_state.retry_started_ts = None
-        agent._touch_activity("waiting for non-streaming API response")
+        agent._touch_activity("waiting for non-streaming API response", step_kind="thinking")
 
         self.thread = t = h.threading.Thread(target=h._context_thread_target(self._call), daemon=True)
         t.start()

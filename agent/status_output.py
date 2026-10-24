@@ -146,7 +146,7 @@ class StatusOutputMixin:
 
         # cooldown + anti-thrash (ineffective) are both "compression blocked".
         if _warn_kind in ("cooldown", "ineffective"):
-            self._touch_activity(f"compression blocked ({reason})", provenance=ActivityProvenance.AGENT_COMPRESSION_COOLDOWN)
+            self._touch_activity(f"compression blocked ({reason})", provenance=ActivityProvenance.AGENT_COMPRESSION_COOLDOWN, step_kind="retrying")
         self._emit_warning(CONTEXT_OVERFLOW_BLOCKED_WARNING_TEMPLATE.format(
             tokens=preflight_tokens, threshold=threshold_tokens, reason=reason,
         ))
@@ -176,15 +176,15 @@ class StatusOutputMixin:
         """Clear a previously-fired sticky notice by ``key`` (e.g. on recovery)."""
         self._call_callback("notice_clear_callback", key, origin="_emit_notice_clear")
 
-    def _emit_wait_notice(self, text: str) -> None:
+    def _emit_wait_notice(self, text: str, *, step_kind: str | None = None) -> None:
         """Rewrite the live status line (CLI spinner, TUI ``thinking.delta``, gateway activity)
         so long provider waits are not an anonymous spinner."""
-        self._touch_activity(text)
+        self._touch_activity(text, step_kind=step_kind)
         self._call_callback("thinking_callback", text, origin="_emit_wait_notice")
 
     def _emit_diagnostic_wait(self, text: str) -> None:
         from gateway.warning_notifications import DiagnosticText
-        self._emit_wait_notice(DiagnosticText(text))
+        self._emit_wait_notice(DiagnosticText(text), step_kind="retrying")
 
     # ── Buffered retry/fallback status: shown only when every retry/fallback is exhausted, dropped on
     # success. Backend logs are unaffected (every site still logs). ──

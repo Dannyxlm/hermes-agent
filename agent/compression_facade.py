@@ -65,7 +65,7 @@ def _report_compression_timeout(
     touch = getattr(agent, "_touch_activity", None)
     if callable(touch):
         try:
-            touch("context compression timed out", provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT)
+            touch("context compression timed out", provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT, step_kind="retrying")
         except Exception:
             logger.debug("compress_context timeout activity touch failed", exc_info=True)
     # Same timeout cooldown ladder as summary-LLM timeouts: avoid re-burning the full idle budget every turn.
@@ -198,6 +198,12 @@ def _mirror_result_onto_live_lists(agent, result, messages, *, direct_path: bool
     if isinstance(session_messages, list) and session_messages is not messages:
         # Durable-parent adoption can leave `_session_messages` on the pre-adoption list.
         _sync_persisted_markers(session_messages, result_messages)
+    if result_messages is not messages:
+        # The token-estimate memo pins message strings; bodies the summary replaced can never hit again,
+        # and close() only sees the compressed history.
+        from agent.model_metadata_token_memo import forget_message_token_memo
+        with contextlib.suppress(Exception):
+            forget_message_token_memo(messages, keep=result_messages)
 
 
 def _rebind_caller_session_context(agent) -> None:

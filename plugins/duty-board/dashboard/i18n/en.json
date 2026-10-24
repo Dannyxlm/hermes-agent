@@ -1,0 +1,187 @@
+{
+  "appTitle": "Duty Board",
+  "appSubtitle": "Live status of conversations, background work, and scheduled jobs",
+  "openIn": "Open links in",
+  "discordApp": "Discord app",
+  "browser": "Browser",
+  "warnings": "Some data is unavailable",
+  "waiting": "Waiting on you",
+  "waitingHint": "The last reply asks for your decision, oldest first",
+  "unanswered": "You wrote, but no reply arrived",
+  "waitingEmpty": "Nothing is waiting on you",
+  "unansweredAge": "waiting {value}",
+  "waitingAge": "waiting {value}",
+  "causedBy": "Because: {value}",
+  "you": "You: {value}",
+  "openInDiscord": "Open in Discord",
+  "web": "Web",
+  "dismiss": "Dismiss",
+  "seen": "Seen",
+  "collapse": "Collapse",
+  "expandMore": {
+    "one": "Show {count} more",
+    "other": "Show {count} more"
+  },
+  "running": "Running",
+  "runningHint": "A full bar represents one hour",
+  "allIdle": "All idle",
+  "runningFor": "running {value}",
+  "stalledFor": "quiet for {value}",
+  "doing": "Working",
+  "privateConversation": "Conversation with {who}",
+  "someone": "someone",
+  "privateContent": "Content hidden",
+  "delegations": "Background jobs",
+  "noDelegations": "No background jobs running",
+  "completedNotDelivered": "Finished, but not delivered",
+  "delegationHint": "The result may be in a newer conversation; open it to check, then dismiss",
+  "parallel": {
+    "one": "{count} parallel",
+    "other": "{count} parallel"
+  },
+  "completedAt": "completed {value}",
+  "handled": "Handled",
+  "cron": "Scheduled jobs",
+  "cronPaused": {
+    "one": "{count} paused",
+    "other": "{count} paused"
+  },
+  "cronRunning": "Running",
+  "cronScript": "script",
+  "cronUpcoming": "next {time} · {name}",
+  "cronReason": {
+    "lastError": "Error: {detail}",
+    "deliveryError": "Delivery failed: {detail}",
+    "state": "State: {detail}",
+    "overdue": "Overdue"
+  },
+  "recentDone": "Recently completed",
+  "recentDoneHint": "Within the last day; the last reply was a report, not a question",
+  "promised": "Said it would follow up",
+  "none": "None",
+  "goals": "Standing goals",
+  "staleGoals": {
+    "one": "{count} older goal is hidden",
+    "other": "{count} older goals are hidden"
+  },
+  "noGoals": "No standing goals in the lookback window",
+  "progress": {
+    "one": "{turns}/{count} turn",
+    "other": "{turns}/{count} turns"
+  },
+  "active": "Active",
+  "paused": "Paused",
+  "gateway": {
+    "connected": "online",
+    "retrying": "reconnecting",
+    "disconnected": "offline",
+    "error": "error"
+  },
+  "refreshed": "updated {value} ago",
+  "justNow": "updated just now",
+  "loading": "Loading…",
+  "loadFailed": "Load failed: {error}",
+  "stale": "data is {value} old",
+  "sectionUnavailable": "Section unavailable",
+  "neverRan": "Never ran",
+  "ago": "{value} ago",
+  "in": "in {value}",
+  "soon": "soon",
+  "conversation": "Conversation",
+  "activity": {
+    "output": "Streaming",
+    "response": "Waiting for model response",
+    "waiting": "Waiting for {who} · {duration}",
+    "call": "Model call #{n}",
+    "callDone": "Model call complete",
+    "starting": "Just started",
+    "retry": "Retrying API call {a}/{b}",
+    "tool": "Running {tool}",
+    "toolDone": "{tool} complete",
+    "toolError": "{tool} failed",
+    "terminal": "Terminal command running ({duration})",
+    "script": "Script running ({duration})",
+    "compressed": "Context compression complete",
+    "subtask": "Subtask · {value}"
+  },
+  "section": {
+    "conversations": "Conversations",
+    "gateway": "Gateway status",
+    "database": "Hermes database"
+  },
+  "issue": {
+    "missingTable": "{section}: table {detail} not found",
+    "missingColumn": "{section}: column {detail} not found",
+    "collectorFailed": "{section}: could not be read ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "Email",
+    "sms": "SMS"
+  },
+  "chat": {
+    "headline": "Duty Board · {waiting} · {running} · {cron}",
+    "empty": "Nothing needs you right now.",
+    "ownerOnly": "This summary is only available to the board’s owner.",
+    "configureOwner": "Set owner in duty-board/settings.json before using this command in chat.",
+    "oldHost": "This command needs Hermes 0.21.7 or newer in chat.",
+    "isolated": "Chat summaries are unavailable while plugins run in a separate process (plugins.isolation: host): the caller cannot be verified there. Use the dashboard, or set plugins.isolation: in_process.",
+    "dmHint": "DM the bot or open the dashboard for details.",
+    "error": "Duty Board unavailable ({error}).",
+    "item": "{title} · {place} · {age}",
+    "stalled": "{age} (stalled)",
+    "hidden": "Content hidden",
+    "privatePlace": "Private conversation",
+    "untitled": "Untitled",
+    "localPlace": "Local",
+    "units": {
+      "minute": "m",
+      "hour": "h",
+      "day": "d"
+    },
+    "waitingHeading": "Waiting on you (including unanswered)",
+    "runningHeading": "Running",
+    "droppedHeading": "Finished, but not delivered",
+    "cronHeading": "Cron problems",
+    "goalsHeading": "Standing goals",
+    "waitingCount": {
+      "one": "{count} waiting on you",
+      "other": "{count} waiting on you"
+    },
+    "runningCount": {
+      "one": "{count} running",
+      "other": "{count} running"
+    },
+    "droppedCount": {
+      "one": "{count} undelivered result",
+      "other": "{count} undelivered results"
+    },
+    "cronCount": {
+      "one": "{count} cron problem",
+      "other": "{count} cron problems"
+    },
+    "goalsCount": {
+      "one": "{count} standing goal",
+      "other": "{count} standing goals"
+    },
+    "more": {
+      "one": "+{count} more",
+      "other": "+{count} more"
+    }
+  }
+}

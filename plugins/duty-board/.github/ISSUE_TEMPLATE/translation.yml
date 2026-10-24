@@ -1,0 +1,29 @@
+name: Translation fix
+description: A wrong, awkward or missing translation in the tab
+labels: ["i18n"]
+body:
+  - type: dropdown
+    id: locale
+    attributes:
+      label: Language
+      options: [English, 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Español, Français, Italiano, Português, Русский, Українська, Türkçe, Magyar, Afrikaans, Gaeilge, العربية]
+    validations:
+      required: true
+  - type: input
+    id: current
+    attributes:
+      label: Text shown now
+      placeholder: e.g. the label on the "Waiting on you" section
+    validations:
+      required: true
+  - type: input
+    id: suggested
+    attributes:
+      label: Suggested text
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context (optional)
+      description: Where it appears, and why the suggestion reads better. A screenshot helps. A pull request against dashboard/i18n/<locale>.json is just as welcome.

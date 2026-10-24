@@ -4,7 +4,8 @@ The phone sends batches of typed events (screens, named taps, RPC/REST timing,
 errors, smoothness spans, MetricKit payloads) and, only when Danny taps Send,
 bug flags with a screenshot and a note. Everything is validated against a closed
 allowlist that mirrors the Swift `FlightRecorderEvent` enum, so free text cannot
-ride along in an event. Stores are root-scoped (like the photo catalog), private
+ride along in a stored event. Unknown span events are omitted and counted, not
+allowed to discard their co-batched telemetry. Stores are root-scoped (like the photo catalog), private
 (0700/0600), never in Git, and pruned after RETENTION_DAYS.
 
 Layout under ``<Hermes root>/mobile/flight-recorder/``:
@@ -61,7 +62,8 @@ SCREENS = frozenset({'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview
                      'flag', 'unknown'})
 ERROR_DOMAINS = frozenset({'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'})
 SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent', 'ComposerFocusToSettled',
-                        'TabFirstContent', 'ScrollInteraction'})
+                        'TabFirstContent', 'ScrollInteraction', 'app.foreground_fresh',
+                        'chat.history_complete', 'chat.send_first_delta'})
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
 SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
@@ -260,13 +262,26 @@ def _envelope(body, keys):
     }
 
 
+def _validated_events(events):
+    kept, dropped = [], 0
+    for event in events:
+        if (isinstance(event, dict) and event.get('kind') == 'span'
+                and isinstance(event.get('name'), str) and event['name'] not in SPAN_NAMES):
+            dropped += 1
+        else:
+            kept.append(validate_event(event))
+    # Preserve normal batch digests across upgrades. Unknown names and payloads
+    # are never stored, hashed, logged or echoed; only this aggregate survives.
+    return {'events': kept} | ({'dropped_unknown_spans': dropped} if dropped else {})
+
+
 def validate_batch(body):
     meta = _envelope(body, {'batch_seq'})
     meta['batch_seq'] = _int(body.get('batch_seq'), 0, 2**53)
     events = body.get('events')
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_BATCH_EVENTS:
         _fail('events must be a non-empty bounded list')
-    meta['events'] = [validate_event(e) for e in events]
+    meta.update(_validated_events(events))
     return meta
 
 
@@ -282,7 +297,7 @@ def validate_flag(body):
     events = body.get('events', [])
     if not isinstance(events, list) or len(events) > MAX_FLAG_EVENTS:
         _fail('flag events must be a bounded list')
-    meta['events'] = [validate_event(e) for e in events]
+    meta.update(_validated_events(events))
     shot = body.get('screenshot_jpeg_b64')
     meta['screenshot'] = None
     if shot is not None:
@@ -373,7 +388,8 @@ class FlightRecorderStore:
                 db.execute('ROLLBACK')
                 if row[0] != digest:
                     raise FlightRecorderConflict()
-                return {'ok': True, 'receipt_id': receipt, 'accepted': 0, 'duplicate': True}
+                return {'ok': True, 'receipt_id': receipt, 'accepted': 0, 'duplicate': True,
+                        'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
             path = self.root / 'events' / f'{day}.jsonl'
             try:
                 size = os.lstat(path).st_size
@@ -393,7 +409,8 @@ class FlightRecorderStore:
         finally:
             db.close()
         self.maybe_prune()
-        return {'ok': True, 'receipt_id': receipt, 'accepted': len(meta['events']), 'duplicate': False}
+        return {'ok': True, 'receipt_id': receipt, 'accepted': len(meta['events']), 'duplicate': False,
+                'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
 
     def put_flag(self, profile, meta):
         now = self._now()
@@ -411,7 +428,8 @@ class FlightRecorderStore:
                 db.execute('ROLLBACK')
                 if row[0] != digest:
                     raise FlightRecorderConflict()
-                return {'ok': True, 'receipt_id': receipt, 'duplicate': True}
+                return {'ok': True, 'receipt_id': receipt, 'duplicate': True,
+                        'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
             folder = _private_dir(_private_dir(self.root / 'flags' / day) / meta['flag_id'])
             if shot is not None:
                 _write_private(folder / 'screenshot.jpg', shot)
@@ -426,7 +444,8 @@ class FlightRecorderStore:
         finally:
             db.close()
         self.maybe_prune()
-        return {'ok': True, 'receipt_id': receipt, 'duplicate': False}
+        return {'ok': True, 'receipt_id': receipt, 'duplicate': False,
+                'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
 
     # Deletion and retention -------------------------------------------------
     def delete_install(self, install_id):
