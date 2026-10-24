@@ -66,7 +66,7 @@ class RuntimeSessionCompressionMixin:
 
     def archive_and_compact(self, session_id, compacted_messages, model_config_patch=None,
                             watermark=None, lock_holder=None, tail_count=0, carried_messages=None,
-                            covered_ids=None, unresolved_held=None, held_for_cas=None):
+                            covered_ids=None, unresolved_held=None, held_for_cas=None, turn_lease_holder=None):
         self._session(session_id)
         # A carried message names an exact durable original (its _row_id) to rewind rather than
         # archive (#118900); the owner resolves identities against its own store. Held-row
@@ -84,7 +84,7 @@ class RuntimeSessionCompressionMixin:
         result = self._apply('compression.archive', dict(messages=_handoff_rows(compacted_messages),
             model_config_patch=model_config_patch, watermark=watermark, lock_holder=lock_holder,
             tail_count=tail_count, carried_messages=carried, covered_ids=covered_ids,
-            unresolved_held=unresolved, held_for_cas=cas))
+            unresolved_held=unresolved, held_for_cas=cas, turn_lease_holder=turn_lease_holder))
         from agent.runtime_session_store import apply_row_annotations
         apply_row_annotations(compacted_messages, result['annotations'])
         return result['value']
@@ -92,13 +92,14 @@ class RuntimeSessionCompressionMixin:
     def publish_compression_child(self, *, parent_session_id, child_session_id, source, messages,
             model=None, model_config=None, system_prompt=None, cwd=None, profile_name=None,
             compression_lock_holder=None, require_compression_lease=True, require_lease_refresh=False,
-            lease_ttl_seconds=300.0, watermark=None, watermark_ceiling=None):
+            lease_ttl_seconds=300.0, watermark=None, watermark_ceiling=None, turn_lease_holder=None):
         self._session(parent_session_id)
         result = self._apply('compression.publish', dict(child_session_id=child_session_id, source=source,
             messages=_handoff_rows(messages), model=model, model_config=model_config, system_prompt=system_prompt,
             cwd=cwd, profile_name=profile_name, compression_lock_holder=compression_lock_holder,
             require_compression_lease=require_compression_lease, require_lease_refresh=require_lease_refresh,
-            lease_ttl_seconds=lease_ttl_seconds, watermark=watermark, watermark_ceiling=watermark_ceiling))
+            lease_ttl_seconds=lease_ttl_seconds, watermark=watermark, watermark_ceiling=watermark_ceiling,
+            turn_lease_holder=turn_lease_holder))
         from agent.runtime_session_store import apply_row_annotations
         apply_row_annotations(messages, result['annotations'])
 

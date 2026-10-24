@@ -206,15 +206,15 @@ def worker_history(db, conn, sid, payload):
 
 
 
-def archive_on_connection(db, conn, session_id: str, compacted_messages: list[dict[str, Any]], model_config_patch: Optional[dict[str, Any]]=None, watermark: Optional[int]=None, lock_holder: Optional[str]=None, tail_count: int=0, carried_messages: Optional[list[dict[str, Any]]]=None, covered_ids: Optional[list[int]]=None, unresolved_held: Optional[list[dict[str, Any]]]=None, held_for_cas: Optional[list[dict[str, Any]]]=None):
+def archive_on_connection(db, conn, session_id: str, compacted_messages: list[dict[str, Any]], model_config_patch: Optional[dict[str, Any]]=None, watermark: Optional[int]=None, lock_holder: Optional[str]=None, tail_count: int=0, carried_messages: Optional[list[dict[str, Any]]]=None, covered_ids: Optional[list[int]]=None, unresolved_held: Optional[list[dict[str, Any]]]=None, held_for_cas: Optional[list[dict[str, Any]]]=None, turn_lease_holder: Optional[str]=None):
     # The owner's in-place compaction body, on this receipt's connection: one implementation, so
     # main's coverage/merge/timestamp/display-order fixes reach worker and mutation verbs too.
     return db._archive_and_compact_on_conn(conn, session_id, compacted_messages,
         model_config_patch=model_config_patch, watermark=watermark, lock_holder=lock_holder,
         tail_count=tail_count, carried_messages=carried_messages, covered_ids=covered_ids,
-        unresolved_held=unresolved_held, held_for_cas=held_for_cas)
+        unresolved_held=unresolved_held, held_for_cas=held_for_cas, turn_lease_holder=turn_lease_holder)
 
-def publish_on_connection(db, conn, *, parent_session_id: str, child_session_id: str, source: str, messages: list[dict[str, Any]], model: str | None=None, model_config: dict[str, Any] | None=None, system_prompt: str | None=None, cwd: str | None=None, profile_name: str | None=None, compression_lock_holder: str | None=None, require_compression_lease: bool=True, require_lease_refresh: bool=False, lease_ttl_seconds: float=300.0, watermark: Optional[int]=None, watermark_ceiling: Optional[int]=None):
+def publish_on_connection(db, conn, *, parent_session_id: str, child_session_id: str, source: str, messages: list[dict[str, Any]], model: str | None=None, model_config: dict[str, Any] | None=None, system_prompt: str | None=None, cwd: str | None=None, profile_name: str | None=None, compression_lock_holder: str | None=None, require_compression_lease: bool=True, require_lease_refresh: bool=False, lease_ttl_seconds: float=300.0, watermark: Optional[int]=None, watermark_ceiling: Optional[int]=None, turn_lease_holder: Optional[str]=None):
     # The owner's rotation body (lease, closure, child row, timestamps, tail clone, local target,
     # auto-archive lift) on this receipt's connection, so the two paths cannot drift.
     db._publish_compression_child_on_conn(conn, parent_session_id=parent_session_id,
@@ -222,7 +222,7 @@ def publish_on_connection(db, conn, *, parent_session_id: str, child_session_id:
         model_config=model_config, system_prompt=system_prompt, cwd=cwd, profile_name=profile_name,
         compression_lock_holder=compression_lock_holder, require_compression_lease=require_compression_lease,
         require_lease_refresh=require_lease_refresh, lease_ttl_seconds=lease_ttl_seconds,
-        watermark=watermark, watermark_ceiling=watermark_ceiling)
+        watermark=watermark, watermark_ceiling=watermark_ceiling, turn_lease_holder=turn_lease_holder)
 
 def worker_watermark(db, conn, sid, payload):
     _fields(payload, ())
@@ -252,7 +252,9 @@ def _watermarks(payload):
 def worker_archive(db, conn, sid, payload):
     from hermes_state_worker_context import SIDECAR_KEYS
     _fields(payload, ('messages', 'model_config_patch', 'watermark', 'lock_holder', 'tail_count'),
-            optional=('carried_messages', 'covered_ids', 'unresolved_held', 'held_for_cas'))
+            optional=('carried_messages', 'covered_ids', 'unresolved_held', 'held_for_cas', 'turn_lease_holder'))
+    if payload.get('turn_lease_holder') is not None:
+        _text(payload['turn_lease_holder'])
     _handoff_messages(conn, sid, payload['messages'])
     carried = payload.get('carried_messages') or []
     if not isinstance(carried, list) or any(not isinstance(m, dict) for m in carried):
@@ -282,7 +284,8 @@ def worker_archive(db, conn, sid, payload):
         raise RuntimeStoreError('invalid_params')
     value = archive_on_connection(db, conn, sid, payload['messages'], model_config_patch=patch,
         watermark=payload['watermark'], lock_holder=payload['lock_holder'], tail_count=payload['tail_count'],
-        carried_messages=carried, covered_ids=covered, unresolved_held=unresolved, held_for_cas=cas)
+        carried_messages=carried, covered_ids=covered, unresolved_held=unresolved, held_for_cas=cas,
+        turn_lease_holder=payload.get('turn_lease_holder'))
     from hermes_state_runtime import row_annotations
     return {'value': value, 'annotations': row_annotations(payload['messages'])}
 
@@ -311,7 +314,10 @@ def worker_publish(db, conn, sid, payload):
     from hermes_state_sessions import _parse_model_config
     _fields(payload, ('child_session_id', 'source', 'messages', 'model', 'model_config', 'system_prompt',
                       'cwd', 'profile_name', 'compression_lock_holder', 'require_compression_lease',
-                      'require_lease_refresh', 'lease_ttl_seconds', 'watermark', 'watermark_ceiling'))
+                      'require_lease_refresh', 'lease_ttl_seconds', 'watermark', 'watermark_ceiling'),
+            optional=('turn_lease_holder',))
+    if payload.get('turn_lease_holder') is not None:
+        _text(payload['turn_lease_holder'])
     child = _text(payload['child_session_id'])
     _text(payload['compression_lock_holder'])
     _watermarks(payload)
