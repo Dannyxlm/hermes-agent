@@ -170,3 +170,24 @@ async def test_unreached_sibling_does_not_open_a_metadata_snapshot(reader, tmp_p
             assert loaded == ["default"], loaded
         finally:
             await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_overview_keeps_root_routing_through_an_old_finished_parent(reader):
+    db, _, connection = reader
+    for sid in ("old-parent", "recent-child"):
+        db.create_session(sid, source="test")
+    launch(db._conn, "old-parent", kind="lane", cause="success", finished=NOW - 7200)
+    launch(db._conn, "recent-child", launcher="old-parent", kind="lane", cause="error", finished=NOW)
+    db._conn.commit()
+    try:
+        result = await connection.dispatch({"id": 1, "method": "family.overview", "params": {"since": NOW - 3600}})
+        assert "result" in result, result
+        failed = result["result"]["failed"]
+        assert len(failed) == 1
+        assert failed[0]["root_session_id"] == "root", failed
+        assert failed[0]["root_profile"] == "default"
+        assert result["result"]["earlier"][0]["root"]["session_id"] == "root"
+        assert result["result"]["earlier"][0]["total_count"] == 2
+    finally:
+        await connection.close()
