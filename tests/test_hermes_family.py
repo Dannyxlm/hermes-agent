@@ -119,6 +119,9 @@ def test_28_node_night(night):
     assert result["root"]["status"] == "unknown"
     assert sorted(b["size"] for b in result["batches"]) == [5, 6]
     assert "unlinked" not in {n["session_id"] for n in result["nodes"]}
+    for node in [result["root"], *result["nodes"]]:
+        assert node.get("root_session_id") == "root"
+        assert node.get("root_profile") == "default"
     overview = family.overview(since=0)
     assert len(overview["roots"]) == 1
     assert overview["roots"][0]["total_count"] == 28
@@ -390,3 +393,65 @@ def test_limit_drops_oldest_finished_parent_before_newer_finished_child(tmp_path
     assert [n["session_id"] for n in result["nodes"]] == ["new-child"]
     assert result["nodes"][0]["parent_node_id"] == node_id("default", "old-parent")
     assert result["truncated"] is True
+
+
+@pytest.mark.parametrize("kind,expected", [("helper", "exact-target"), ("process", "exact-target"),
+    ("check_in", "exact-target"), ("lane", None), ("teammate", None),
+    ("check_in_run", None), ("background", None)])
+def test_node_backend_target_is_recorded_and_kind_specific(tmp_path, kind, expected):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "targets.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        if kind not in {"process", "check_in"}:
+            session(db, "child")
+        launch(db, "child", kind=kind, backend="exact-target")
+    result = Family({"default": read_profile("default", path)}, now=NOW).session_family("default", "root")
+    node = result["nodes"][0]
+    assert "backend_ref" in node
+    assert node["backend_ref"] == expected
+    assert (node.get("root_profile"), node.get("root_session_id")) == ("default", "root")
+    assert "backend_ref" in result["root"] and result["root"]["backend_ref"] is None
+
+
+def test_overview_routes_each_list_to_its_recorded_cross_profile_root(night):
+    from hermes_family import Family
+    family, _, live = night
+    other = family.profiles["iris"]
+    failed = next(r for r in other.launches if r["child_session_id"] == "thread")
+    failed.update(terminal_cause="error", finished_at=NOW)
+    overview = Family(family.profiles, live=live, now=NOW).overview(since=0)
+    groups = [overview["needs_you"], overview["failed"], overview["coming_up"],
+              overview["roots"][0]["live_leaves"]]
+    assert all(groups)
+    assert any(n["profile"] == "iris" for n in overview["failed"])
+    for group in groups:
+        for node in group:
+            assert (node.get("root_profile"), node.get("root_session_id")) == ("default", "root")
+    requested = family.session_family("iris", "thread", since=0)
+    for node in [requested["root"], *requested["nodes"]]:
+        assert (node.get("root_profile"), node.get("root_session_id")) == ("iris", "thread")
+
+
+def test_legacy_helper_target_comes_from_delegation_not_session_id(tmp_path, monkeypatch):
+    import sys
+    import threading
+    from types import SimpleNamespace
+    from hermes_family import read_profile, Family
+    from hermes_family_runtime import resident_signals
+    path = tmp_path / "state.db"
+    with fixture_db(path, old=True) as db:
+        session(db, "root", source="desktop")
+        session(db, "stored-child", source="subagent", parent="root")
+    agent = SimpleNamespace(session_id="stored-child", _session_db=SimpleNamespace(db_path=path))
+    registry = SimpleNamespace(_active_subagents_lock=threading.Lock(), _active_subagents={
+        "delegate-key": {"subagent_id": "sa-exact", "agent": agent, "status": "running"}})
+    monkeypatch.setitem(sys.modules, "tools.delegate_tool_registry", registry)
+    monkeypatch.delitem(sys.modules, "tools.process_registry", raising=False)
+    profiles = {"default": read_profile("default", path)}
+    live = resident_signals({"default": tmp_path}, can_stop_helper=lambda agent: True)
+    node = Family(profiles, live=live, now=NOW).session_family("default", "root")["nodes"][0]
+    assert node.get("backend_ref") == "sa-exact"
+    assert "stop" in node["actions"]
+    cold = Family(profiles, now=NOW).session_family("default", "root")["nodes"][0]
+    assert "backend_ref" in cold and cold["backend_ref"] is None

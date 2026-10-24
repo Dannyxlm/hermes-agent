@@ -8,7 +8,9 @@ from tests.test_hermes_family import LAUNCH_DDL, launch, session, NOW
 
 
 @pytest.mark.asyncio
-async def test_canonical_family_entrypoint(tmp_path, monkeypatch):
+@pytest.mark.parametrize("field,expected", [("backend_ref", "delegate-target"),
+    ("root_session_id", "root"), ("root_profile", "default")])
+async def test_canonical_family_entrypoint(tmp_path, monkeypatch, field, expected):
     from gateway.session_authority import LiveSession, SessionAuthority
     from gateway.session_controls import AuthorityConnection
     from hermes_state_runtime import begin_runtime_epoch
@@ -19,7 +21,7 @@ async def test_canonical_family_entrypoint(tmp_path, monkeypatch):
         db.create_session("root", source="test")
         db._conn.executescript(LAUNCH_DDL)
         session(db._conn, "child", source="subagent", parent="root")
-        launch(db._conn, "child", cause="success", finished=NOW - 1)
+        launch(db._conn, "child", backend="delegate-target", cause="success", finished=NOW - 1)
         db._conn.commit()
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home),
                                      instance_id="family", db=db, epoch=begin_runtime_epoch(db, instance_id="family"))
@@ -31,6 +33,13 @@ async def test_canonical_family_entrypoint(tmp_path, monkeypatch):
                                                "params": {"profile": "default", "session_id": "root", "since": 0}})
         assert "result" in response, response
         assert response["result"]["nodes"][0]["session_id"] == "child"
+        node = response["result"]["nodes"][0]
+        assert field in node, node
+        assert node[field] == expected
+        assert response["result"]["root"].get("root_session_id") == "root"
+        assert response["result"]["root"].get("root_profile") == "default"
+        assert "backend_ref" in response["result"]["root"]
+        assert response["result"]["root"]["backend_ref"] is None
         overview = await connection.dispatch({"id": 2, "method": "family.overview", "params": {"since": 0}})
         assert "result" in overview, overview
         missing = await connection.dispatch({"id": 3, "method": "session.family",

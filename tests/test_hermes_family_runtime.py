@@ -25,6 +25,7 @@ def test_process_receipts_do_not_infer_restart_or_stop(tmp_path, monkeypatch, re
     assert status_for({"kind": "process"}, signal, 100) == expected
     assert signal["command"] == "fixture command" and signal["exit_code"] == code
     assert signal["can_stop"] is False
+    assert signal.get("backend_ref") == "process"
 
 
 def test_resident_children_match_store_not_same_session_id(tmp_path, monkeypatch):

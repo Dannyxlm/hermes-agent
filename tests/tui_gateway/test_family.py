@@ -38,6 +38,11 @@ def test_legacy_family_uses_stored_id_and_cross_profile_db(family_home):
     overview = rpc("family.overview", since=0)["result"]
     assert overview["roots"][0]["root"]["session_id"] == "root"
     assert len(server._sessions) == 2
+    for node in [family["root"], *family["nodes"], overview["roots"][0]["root"],
+                 *overview["roots"][0]["live_leaves"]]:
+        assert node.get("root_session_id") == "root"
+        assert node.get("root_profile") == "default"
+        assert "backend_ref" in node and node["backend_ref"] is None
 
 
 def test_legacy_not_found_matches_subagents(family_home, peer):
