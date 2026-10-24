@@ -1,7 +1,9 @@
 """Reserve a detached background conversation without changing compression/branch lineage."""
+from hermes_state_optional_launch import best_effort
 from hermes_state_launches import record_launch, bind_launch
 
 
+@best_effort
 def reserve_background(db, parent_session_id, child_session_id, title, source='cli'):
     from hermes_state import SessionDB
     from hermes_state_worker_lifecycle import insert_session_row_in_transaction
@@ -16,10 +18,11 @@ def reserve_background(db, parent_session_id, child_session_id, title, source='c
                       backend_ref=child_session_id)
         insert_session_row_in_transaction(db, conn, child_session_id, source, profile_name=profile)
         bind_launch(conn, lid, child_session_id=child_session_id, backend_ref=child_session_id)
-    db._execute_write(write)
+    db._execute_write(write, patience_s=0)
     return lid
 
 
+@best_effort
 def finish_background(db, launch_id, result=None, *, cause=None):
     if launch_id:
         if cause is None:

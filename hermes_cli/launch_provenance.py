@@ -1,6 +1,6 @@
 """Consume one process launch's provenance before profile switching or tool environment capture."""
+from hermes_state_optional_launch import best_effort
 import os
-from pathlib import Path
 from uuid import uuid4
 
 ENV_FIELDS = {'HERMES_STARTED_BY_SESSION_ID': 'started_by_session',
@@ -13,9 +13,6 @@ _pending = {}
 def capture_startup():
     global _pending
     values = {field: os.environ.pop(env) for env, field in ENV_FIELDS.items() if env in os.environ}
-    if values.get('started_by_session') and not values.get('started_by_profile'):
-        home = Path(os.environ.get('HERMES_HOME', ''))
-        values['started_by_profile'] = home.name if home.parent.name == 'profiles' else 'default'
     _pending.update(values)
 
 
@@ -35,19 +32,23 @@ def take_launch(args=None):
 
 
 def validate_intake(fields):
-    from hermes_state_launches import KINDS
-    if any(not isinstance(v, str) or not v for k, v in fields.items() if k in FIELDS):
-        raise ValueError('launch provenance must contain non-empty strings')
+    from hermes_state_optional_launch import warn
+    invalid = {k for k, v in fields.items() if k in FIELDS and (not isinstance(v, str) or not v.strip())}
+    if fields.get('launch_kind') is not None and fields['launch_kind'] not in {'lane', 'teammate'}:
+        invalid.add('launch_kind')
+    for key in invalid:
+        fields.pop(key, None)
     if fields.get('started_by_session') and not fields.get('started_by_profile'):
-        raise ValueError('started_by_profile is required with started_by_session')
-    if fields.get('launch_kind') is not None and fields['launch_kind'] not in KINDS:
-        raise ValueError('invalid launch_kind')
-
+        fields.pop('started_by_session')
+        invalid.add('started_by_session')
+    if invalid:
+        warn('invalid provenance', ValueError())
 
 def launch_record(fields, child_profile, *, launch_id=None):
+    fields = dict(fields)
+    validate_intake(fields)
     if not fields.get('started_by_session'):
         return None
-    validate_intake(fields)
     launcher = fields['started_by_profile']
     return dict(launch_id=fields.get('launch_id') or launch_id or str(uuid4()),
                 kind=fields.get('launch_kind') or ('teammate' if launcher != child_profile else 'lane'),
@@ -55,6 +56,7 @@ def launch_record(fields, child_profile, *, launch_id=None):
                 child_profile=child_profile, title=fields.get('launch_title'))
 
 
+@best_effort
 def record_for_db(db, fields):
     if db is None:
         return None

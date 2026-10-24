@@ -19,14 +19,12 @@ def new_process_session(command, task_id, owner_task_id, session_key, cwd, **ext
         wsl_chain=_is_wsl_launcher_command(command), started_at=time.time(), **extra)
     from pathlib import Path
     from hermes_state_launches import short_title
-    from tools.process_launches import record_process_launch
     home = Path(session.owner_profile_home)
     session.launch_id = "process:" + session.id
     session.launcher_session_id = stored_session_id
     session.launcher_profile = home.name if home.parent.name == "profiles" else "default"
     from agent.redact import redact_sensitive_text
     session.title = short_title(redact_sensitive_text(command, code_file=True, force=True))
-    record_process_launch(session)
     return session
 
 

@@ -24,6 +24,15 @@ def validate_step(step_kind, step_tool=None):
     return step_kind, step_tool if step_kind == "tool" else None
 
 
+def touch_stale_kill_activity(agent, elapsed: float) -> None:
+    import logging
+    logger = logging.getLogger("agent.chat_completion_helpers")
+    try:
+        agent._touch_activity(f"stale non-streaming call killed after {int(elapsed)}s", step_kind="retrying")
+    except Exception:
+        logger.debug("stale activity touch failed", exc_info=True)
+
+
 def stream_chunk_step(chunk):
     choices = getattr(chunk, "choices", None)
     delta = getattr(choices[0], "delta", None) if choices else None

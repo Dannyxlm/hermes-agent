@@ -101,6 +101,22 @@ def _probe(module: str, name: str, default, *args):
 
 
 class CLICommandsSessionToolsMixin:
+    def _start_background_worker(self, task_id, task_num, preview, produce):
+        """The /bg result panel's daemon thread (``produce()`` returns the answer text)."""
+        def done():
+            self._background_tasks.pop(task_id, None)
+            if not self._agent_running:  # clear spinner only if no foreground agent owns it
+                self._spinner_text = ""
+
+        thread = self._side_worker(
+            produce, name=f"bg-task-{task_id}", fail_label=_t("background.label", number=task_num),
+            header_lines=[f"  {_t('background.complete', number=task_num)}",
+                          f"  {_t('background.prompt', preview=preview)}"],
+            title_suffix=_t("background.title_suffix", number=task_num),
+            empty_note=f"  {_t('background.no_response')}", bell=True, on_done=done)
+        self._background_tasks[task_id] = thread
+        thread.start()
+
     """``/stop``, ``/agents``, ``/journey``, ``/paste``, ``/copy``, ``/image``, ``/tools``,
     ``/profile`` handlers (moved from ``CLICommandsMixin``)."""
 

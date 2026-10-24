@@ -669,8 +669,7 @@ if __name__ == "__main__" and getattr(sys.modules.get("__main__"), "__file__", N
 from hermes_cli.launch_provenance import capture_startup as _capture_launch_startup
 _capture_launch_startup()
 _apply_profile_override()
-# ``-p``/active_profile re-homed the process after hermes_bootstrap ran: re-point the temp vars
-# at THIS home's scratch dir (a user-set TMPDIR is still left alone).
+# Re-point bootstrap temp vars at the selected home; leave a user-set TMPDIR alone.
 try:
     from hermes_constants import export_scratch_tmp_env as _export_scratch_tmp_env
 
@@ -3024,12 +3023,7 @@ def _set_chat_arg_defaults(args) -> None:
 
 
 def _run_oneshot_from_args(args) -> None:
-    """Top-level --oneshot / -z: single-shot mode, stdout = final response only.
-
-    Bypasses cli.py entirely; the transport launcher never returns.
-    """
-    from hermes_cli.launch_provenance import prepare_launch
-    prepare_launch(args)
+    """Top-level --oneshot / -z: final response only; bypass cli.py and never return."""
     from hermes_cli.gateway_chat_startup import launch_gateway_chat
     sys.exit(launch_gateway_chat(args))
 

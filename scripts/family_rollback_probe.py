@@ -36,7 +36,7 @@ def main():
     for index, (tree, snippet) in enumerate(snippets, 1):
         code = ("from pathlib import Path\nfrom hermes_state import SessionDB\n"
                 f"with SessionDB(Path({str(path)!r})) as db:\n    {snippet}\n")
-        subprocess.run([sys.executable, '-c', code], cwd=tree, env=env, check=True)
+        subprocess.run([sys.executable, '-c', code], cwd=tree, env=env, check=True, timeout=60)
         print(json.dumps({'stage': index, 'binary': 'head' if tree == head else 'predecessor', 'ok': True}), flush=True)
 
 

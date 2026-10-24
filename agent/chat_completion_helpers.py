@@ -43,6 +43,7 @@ from agent.gemini_native_adapter import is_native_gemini_base_url
 # misidentify and, without an api_key, return 401 on every leg (issue #89863).
 from agent.model_metadata import is_local_endpoint
 from agent.message_content import flatten_message_text
+from agent.session_activity import stream_chunk_step, touch_stale_kill_activity
 from agent.message_metadata import PERSISTENCE_ONLY_MESSAGE_FIELDS, append_message, data_use_requirement, stamp_message_timestamp
 from agent.message_sanitization import (
     _sanitize_messages_surrogates, _sanitize_surrogates, _repair_tool_call_arguments,
@@ -598,11 +599,6 @@ def _report_stale_nonstream_kill(agent, api_kwargs: dict, elapsed: float, stale_
         logger.debug("stale status buffering failed", exc_info=True)
 
 
-def _touch_stale_kill_activity(agent, elapsed: float) -> None:
-    try:
-        agent._touch_activity(f"stale non-streaming call killed after {int(elapsed)}s", step_kind="retrying")
-    except Exception:
-        logger.debug("stale activity touch failed", exc_info=True)
 
 
 def _check_stale_giveup(agent) -> None:
@@ -898,7 +894,7 @@ class _InlineRequest:
             return
         elapsed = time.time() - self.call_start
         _report_stale_nonstream_kill(self.agent, self.api_kwargs, elapsed, self.stale_timeout, inline=True)
-        _touch_stale_kill_activity(self.agent, elapsed)
+        touch_stale_kill_activity(self.agent, elapsed)
 
     def start_watchdogs(self) -> None:
         """Start the activity heartbeat and (for a finite budget) the stale timer."""
@@ -2866,7 +2862,6 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _count_chunk(self, diag, chunk) -> None:
         """Stamp liveness for a real chunk; diagnostics are best-effort."""
-        from agent.session_activity import stream_chunk_step
         self.last_chunk_time["t"] = time.time()
         self.agent._touch_activity("receiving stream response", step_kind=stream_chunk_step(chunk))
         with contextlib.suppress(Exception):
@@ -2961,7 +2956,6 @@ class _StreamingCall(StreamingWaitMonitor):
             stream_kwargs["stream_options"] = {"include_usage": True}
         request_client = self._attempt_request_client = self.clients.set_client(
             self.agent._create_request_openai_client(reason="chat_completion_stream_request", api_kwargs=stream_kwargs))
-        from agent.session_activity import stream_chunk_step
         self.last_chunk_time["t"] = time.time()
         self.agent._touch_activity("waiting for provider response (streaming)", step_kind="thinking")
         # #93650: as above — the streaming path carries the same bulk

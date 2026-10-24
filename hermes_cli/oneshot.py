@@ -503,6 +503,7 @@ def _apply_stored_session_runtime(
 def _run_agent(prompt, model=None, provider=None, toolsets=None, use_config_toolsets=True,
                skills=None, resume=None, reasoning=None, ledger=False):
     from hermes_cli.launch_provenance import take_launch, record_for_db
+    from hermes_state_optional_launch import optional_launch
     fields = take_launch()
     db = _create_session_db_for_oneshot()
     launch_id = record_for_db(db, fields)
@@ -513,11 +514,13 @@ def _run_agent(prompt, model=None, provider=None, toolsets=None, use_config_tool
                                            family_launch=launch_id, launch_started=started)
         if launch_id:
             from hermes_state_launch_causes import result_cause
-            db.finish_launch(launch_id, result_cause(result))
+            with optional_launch("oneshot.finish"):
+                db.finish_launch(launch_id, result_cause(result))
         return response, result
     except BaseException:
         if launch_id:
-            db.finish_launch(launch_id, 'error' if started[0] else 'failed_start')
+            with optional_launch('oneshot.failed_start'):
+                db.finish_launch(launch_id, 'error' if started[0] else 'failed_start')
         raise
     finally:
         if db is not None:
@@ -621,9 +624,11 @@ def _run_agent_impl(
             clarify_callback=_oneshot_clarify_callback,
         )
         if family_launch:
-            agent._ensure_db_session()
-            session_db.bind_launch(family_launch, child_session_id=agent.session_id)
-            launch_started[0] = True
+            from hermes_state_optional_launch import optional_launch
+            with optional_launch("oneshot.bind"):
+                agent._ensure_db_session()
+                session_db.bind_launch(family_launch, child_session_id=agent.session_id)
+                launch_started[0] = True
         # Belt-and-braces: no streaming display callbacks may bypass our stdout capture.
         agent.suppress_status_output = True
         agent.stream_delta_callback = None
@@ -637,14 +642,7 @@ def _run_agent_impl(
         if ledger:
             _attach_auxiliary_usage(result, session_db, aux_before,
                                     fallback_session_id=agent.session_id or resume_sid)
-        if family_launch:
-            from hermes_state_launch_causes import result_cause
-            session_db.finish_launch(family_launch, result_cause(result))
         return (result.get("final_response") or "", result)
-    except BaseException:
-        if family_launch:
-            session_db.finish_launch(family_launch, "error" if launch_started[0] else "failed_start")
-        raise
     finally:
         _close_agent(agent, None, relay_session_id)
 

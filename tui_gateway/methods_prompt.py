@@ -1421,9 +1421,9 @@ def _(rid, params: dict) -> dict:
 
     from hermes_state_background import reserve_background, finish_background
     parent_db = getattr(session["agent"], "_session_db", None) or _get_db()
-    launch_id = reserve_background(parent_db, session["session_key"], task_id, text, "tui")
 
     def body():
+        launch_id = reserve_background(parent_db, session["session_key"], task_id, text, "tui")
         from run_agent import AIAgent
         kwargs = _background_agent_kwargs(session["agent"], task_id)
         with _side_agent_session_db(kwargs.get("session_db")) as session_db:
@@ -1443,8 +1443,7 @@ def _(rid, params: dict) -> dict:
                     agent.close()
         return _final_response_text(result)
 
-    return _spawn_side_agent(rid, session, task_id, parent, "background.complete", body,
-                             failed_start=lambda: finish_background(parent_db, launch_id, cause="failed_start"))
+    return _spawn_side_agent(rid, session, task_id, parent, "background.complete", body)
 
 
 @method("prompt.btw")

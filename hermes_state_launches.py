@@ -29,6 +29,7 @@ def record_launch(conn, **payload):
     validate_record(payload)
     payload = {key: payload.get(key) for key in sorted(RECORD_FIELDS)}
     payload['title'] = short_title(payload['title'])
+    payload['batch_name'] = short_title(payload['batch_name'])
     row = conn.execute('SELECT * FROM work_launches WHERE launch_id=?', (payload['launch_id'],)).fetchone()
     if row is not None:
         if any(row[k] != v for k, v in payload.items() if k != 'next_run_at'):
@@ -64,7 +65,27 @@ def finish_launch(conn, launch_id, terminal_cause):
                  (time.time(), terminal_cause, launch_id, terminal_cause))
 
 
+def sync_job_launches(conn, jobs, removed_ids):
+    from datetime import datetime
+    schedules = []
+    for job in jobs:
+        lid = 'cron-job:' + job['id']
+        if not conn.execute('SELECT 1 FROM work_launches WHERE launch_id=?', (lid,)).fetchone():
+            record_launch(conn, launch_id=lid, kind='check_in', launcher_profile=job['creator_profile'],
+                          launcher_session_id=job.get('creator_session_id') or '', child_profile=job['creator_profile'],
+                          title=job.get('launch_title'), backend_ref=job['id'])
+        schedules.append((datetime.fromisoformat(job['next_run_at']).timestamp() if job.get('next_run_at') else None, lid))
+        if job.get('state') == 'completed':
+            finish_launch(conn, lid, 'success')
+    conn.executemany('UPDATE work_launches SET next_run_at=? WHERE launch_id=?', schedules)
+    for jid in removed_ids:
+        finish_launch(conn, 'cron-job:' + jid, 'user_stop')
+
+
 class SessionLaunchesMixin:
+    def sync_launch_jobs(self, jobs, removed_ids):
+        return self._execute_write(lambda conn: sync_job_launches(conn, jobs, removed_ids), patience_s=0)
+
     def record_launch(self, launch_id, *, kind, launcher_profile, launcher_session_id, child_profile,
                       parent_launch_id=None, batch_id=None, batch_name=None, title=None, backend_ref=None,
                       next_run_at=None):
@@ -72,19 +93,19 @@ class SessionLaunchesMixin:
                        launcher_session_id=launcher_session_id, child_profile=child_profile,
                        parent_launch_id=parent_launch_id, batch_id=batch_id, batch_name=batch_name,
                        title=title, backend_ref=backend_ref, next_run_at=next_run_at)
-        return self._execute_write(lambda conn: record_launch(conn, **payload))
+        return self._execute_write(lambda conn: record_launch(conn, **payload), patience_s=0)
 
     def bind_launch(self, launch_id, *, child_session_id=None, backend_ref=None):
         return self._execute_write(lambda conn: bind_launch(conn, launch_id,
-                                  child_session_id=child_session_id, backend_ref=backend_ref))
+                                  child_session_id=child_session_id, backend_ref=backend_ref), patience_s=0)
 
     def finish_launch(self, launch_id, terminal_cause):
-        return self._execute_write(lambda conn: finish_launch(conn, launch_id, terminal_cause))
+        return self._execute_write(lambda conn: finish_launch(conn, launch_id, terminal_cause), patience_s=0)
 
     def schedule_launch(self, launch_id, next_run_at):
         if next_run_at is not None and (type(next_run_at) not in (float, int) or not math.isfinite(next_run_at)):
             raise ValueError('invalid next_run_at')
-        self._write_sql('UPDATE work_launches SET next_run_at=? WHERE launch_id=?', (next_run_at, launch_id))
+        self._write_sql('UPDATE work_launches SET next_run_at=? WHERE launch_id=?', (next_run_at, launch_id), patience_s=0)
 
 
 def worker_launch(db, conn, session_id, payload, *, operation):
@@ -92,13 +113,15 @@ def worker_launch(db, conn, session_id, payload, *, operation):
     try:
         profile = conn.execute('SELECT profile_name FROM sessions WHERE id=?', (session_id,)).fetchone()[0]
         profile = profile or db._own_profile_name() or 'default'
+        from hermes_state_runtime_workers import runtime_lineage
+        scope = runtime_lineage(conn, session_id)
         if operation == 'record':
             validate_record(payload)
             shared_job = payload['kind'] == 'check_in' and conn.execute(
                 "SELECT 1 FROM work_launches WHERE launch_id=? AND kind='check_in' AND child_profile=?",
                 (payload['launch_id'], profile)).fetchone()
             if (payload['child_profile'] != profile or (not shared_job and (
-                    payload['launcher_session_id'] != session_id or payload['launcher_profile'] != profile))):
+                    payload['launcher_session_id'] not in scope or payload['launcher_profile'] != profile))):
                 raise RuntimeStoreError('permission_denied')
             return {'value': record_launch(conn, **payload)}
         fields = {'bind': {'launch_id', 'child_session_id', 'backend_ref'},
@@ -106,8 +129,6 @@ def worker_launch(db, conn, session_id, payload, *, operation):
         if set(payload) != fields or not isinstance(payload['launch_id'], str):
             raise ValueError('invalid launch fields')
         row = conn.execute('SELECT * FROM work_launches WHERE launch_id=?', (payload['launch_id'],)).fetchone()
-        from hermes_state_runtime_workers import runtime_lineage
-        scope = runtime_lineage(conn, session_id)
         if row is None and operation == 'finish':
             finish_launch(conn, **payload)
             return {'value': None}
@@ -132,3 +153,28 @@ def worker_launch(db, conn, session_id, payload, *, operation):
         raise
     except (ValueError, TypeError) as exc:
         raise RuntimeStoreError('invalid_params') from exc
+
+
+
+def mutate_optional_worker_launch(db, *, epoch, execution_id, session_id, generation, operation, payload):
+    from hermes_state_runtime import _epoch, _worker_assignment, RuntimeStoreError
+    def write(conn):
+        _epoch(conn, epoch)
+        row = _worker_assignment(conn, execution_id, session_id, generation)
+        if row['owner_epoch'] != epoch or row['status'] not in ('registered', 'running'):
+            raise RuntimeStoreError('stale_generation')
+        if operation == 'launch.sync':
+            if set(payload) != {'jobs', 'removed_ids'}:
+                raise RuntimeStoreError('invalid_params')
+            for job in payload['jobs']:
+                worker_launch(db, conn, session_id, dict(launch_id='cron-job:' + job['id'], kind='check_in',
+                    launcher_profile=job['creator_profile'], launcher_session_id=job.get('creator_session_id') or '',
+                    child_profile=job['creator_profile'], title=job.get('launch_title'), backend_ref=job['id']), operation='record')
+            for jid in payload['removed_ids']:
+                worker_launch(db, conn, session_id, dict(launch_id='cron-job:' + jid, terminal_cause='user_stop'), operation='finish')
+            sync_job_launches(conn, payload['jobs'], [])
+            return {'value': None}
+        if operation not in {'launch.record', 'launch.bind', 'launch.finish', 'launch.schedule'}:
+            raise RuntimeStoreError('invalid_params')
+        return worker_launch(db, conn, session_id, payload, operation=operation.split('.')[1])
+    return db._execute_write(write, patience_s=0)

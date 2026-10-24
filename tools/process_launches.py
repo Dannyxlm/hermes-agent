@@ -1,4 +1,5 @@
 """Launch persistence for terminal process producers and their retained completion receipts."""
+from hermes_state_optional_launch import best_effort
 from pathlib import Path
 
 
@@ -6,6 +7,7 @@ def fields(session):
     return {k: getattr(session, k) for k in ('batch_id', 'batch_name', 'title')}
 
 
+@best_effort
 def record_process_launch(session):
     from hermes_state_launch_context import launch_writer
     with launch_writer() as db:
@@ -14,8 +16,11 @@ def record_process_launch(session):
                          title=session.title, batch_id=session.batch_id, batch_name=session.batch_name,
                          backend_ref=session.id)
         db.bind_launch(session.launch_id, backend_ref=session.id)
+        if session.exited:
+            finish_process_launch(session)
 
 
+@best_effort
 def finish_process_launch(session, cause=None):
     if not session.launch_id:
         return

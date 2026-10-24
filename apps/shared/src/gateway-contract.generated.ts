@@ -4922,12 +4922,11 @@ export interface ProcessListParams {
 export interface ProcessListResult {
   processes?: ProcessEntry[]
 }
+/** ``tools/process_registry.py::list_sessions`` row plus the gateway's ``output_tail``. */
 export interface ProcessEntry {
   batch_id?: string | null
   batch_name?: string | null
   title?: string | null
-  step_kind?: string | null
-  step_tool?: string | null
   session_id: string
   command?: string
   cwd?: string | null

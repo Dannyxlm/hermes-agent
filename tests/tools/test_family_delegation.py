@@ -64,7 +64,7 @@ def test_fanout_titles_and_batch_survive_missing_transcripts(family_parent, monk
 
 
 def test_call_level_batch_name_on_single_child(family_parent):
-    parent, db, events, observed = family_parent
+    parent, _db, events, observed = family_parent
     result = json.loads(dt.delegate_task(tasks=[{'goal': 'only'}], batch_name='one batch', parent_agent=parent))
     assert len(observed) == 1, result
     assert observed[0]['batch_name'] == 'one batch'

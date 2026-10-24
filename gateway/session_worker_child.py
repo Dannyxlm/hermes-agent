@@ -70,9 +70,11 @@ def reserve_child_execution(db, conn, session_id, payload, *, epoch, execution_i
                                       parent_session_id=session_id, profile_name=parent['profile_name'])
     from hermes_state_launches import record_launch, bind_launch
     profile = parent['profile_name'] or db._own_profile_name() or 'default'
-    record_launch(conn, **launch, kind='helper', launcher_profile=profile, launcher_session_id=session_id,
-                  child_profile=profile)
-    bind_launch(conn, launch['launch_id'], child_session_id=child_sid, backend_ref=child_eid)
+    from hermes_state_optional_launch import optional_launch
+    with optional_launch('child.reserve.launch'):
+        record_launch(conn, **launch, kind='helper', launcher_profile=profile, launcher_session_id=session_id,
+                      child_profile=profile)
+        bind_launch(conn, launch['launch_id'], child_session_id=child_sid, backend_ref=child_eid)
     scope = dict(identity, session_id=child_sid, execution_id=child_eid, generation=0, secret=secret)
     claim = admission_fingerprint(canonical_target=child_sid, payload=scope | {'principal': principal})
     conn.execute("INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest) "

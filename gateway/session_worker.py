@@ -93,6 +93,10 @@ async def worker_request(connection, ref, params, *, operation):
     if operation == 'adopt':
         return await asyncio.to_thread(adopt_worker_execution, authority.db, epoch=authority.epoch,
                                        **scope, adoption_secret=claim)
+    if type(params['sequence']) is int and params['sequence'] == 0 and isinstance(params['operation'], str) and params['operation'].startswith('launch.'):
+        from hermes_state_launches import mutate_optional_worker_launch
+        return await asyncio.to_thread(mutate_optional_worker_launch, authority.db, epoch=params['epoch'],
+            **scope, operation=params['operation'], payload=params['payload'])
     result = await asyncio.to_thread(mutate_worker_execution, authority.db, epoch=params['epoch'],
         **scope, sequence=params['sequence'], operation=params['operation'], payload=params['payload'])
     if params['operation'] == 'execution.finish':
