@@ -15,7 +15,8 @@ def short_title(title):
 def validate_record(payload):
     required = {'launch_id', 'kind', 'launcher_profile', 'launcher_session_id', 'child_profile'}
     if (set(payload) - RECORD_FIELDS or not required <= set(payload)
-            or any(not isinstance(payload[k], str) or not payload[k] for k in required)
+            or any(not isinstance(payload[k], str) or (not payload[k] and not (
+                k == 'launcher_session_id' and payload['kind'] in {'check_in', 'check_in_run'})) for k in required)
             or payload['kind'] not in KINDS
             or any(v is not None and not isinstance(v, str) for k, v in payload.items() if k != 'next_run_at')):
         raise ValueError('invalid launch')
@@ -91,13 +92,19 @@ def worker_launch(db, conn, session_id, payload, *, operation):
                     or payload['child_profile'] != profile):
                 raise RuntimeStoreError('permission_denied')
             return {'value': record_launch(conn, **payload)}
-        fields = {'launch_id', 'child_session_id', 'backend_ref'} if operation == 'bind' else {'launch_id', 'terminal_cause'}
+        fields = {'bind': {'launch_id', 'child_session_id', 'backend_ref'},
+                  'finish': {'launch_id', 'terminal_cause'}, 'schedule': {'launch_id', 'next_run_at'}}[operation]
         if set(payload) != fields or not isinstance(payload['launch_id'], str):
             raise ValueError('invalid launch fields')
         row = conn.execute('SELECT * FROM work_launches WHERE launch_id=?', (payload['launch_id'],)).fetchone()
         if row is None or session_id not in (row['launcher_session_id'], row['child_session_id']):
             raise RuntimeStoreError('permission_denied')
-        if operation == 'bind':
+        if operation == 'schedule':
+            when = payload['next_run_at']
+            if when is not None and (type(when) not in (float, int) or not math.isfinite(when)):
+                raise ValueError('invalid next_run_at')
+            conn.execute('UPDATE work_launches SET next_run_at=? WHERE launch_id=?', (when, payload['launch_id']))
+        elif operation == 'bind':
             # Child reservation, not provenance, is the authority to bind another session.
             if payload['child_session_id'] not in (None, session_id, row['child_session_id']):
                 raise RuntimeStoreError('permission_denied')

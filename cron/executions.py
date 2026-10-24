@@ -114,7 +114,10 @@ def _fetch(conn: sqlite3.Connection, execution_id: str) -> Optional[dict[str, An
 def _emit_execution_state(
     record: Optional[dict[str, Any]], *, delivery_outcome: Optional[str] = None
 ) -> None:
-    """Project durable state to monitoring without affecting ledger behavior."""
+    """Record launch provenance, then publish the optional monitoring projection."""
+    if record is not None:
+        from cron.launches import record_run
+        record_run(record)
     try:
         from agent.monitoring.cron_health import emit_execution_state
 

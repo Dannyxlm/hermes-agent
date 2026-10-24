@@ -1590,6 +1590,8 @@ def _save_jobs_unlocked(
             # against an OUTER caller's stale payload. Later saves take the full merge (fail-safe).
             _record_load_stamp(None)
             store_health.note_writable(jobs_file.parent)
+            from cron.launches import sync_jobs
+            sync_jobs(jobs, removed_ids)
             return
     except BaseException:
         _unlink_quiet(tmp_path)
@@ -1869,6 +1871,7 @@ def create_job(
         f["provider"], f["model"] = _main_model_pin()
     next_run_at = _next_run_or_reject_past_oneshot(parsed_schedule, name, schedule, "")
 
+    from cron.launches import capture_creator
     job = {
         "id": job_id,
         "name": name,
@@ -1904,6 +1907,8 @@ def create_job(
         "failure_streak": 0,
         "deliver": f["deliver"],
         "origin": origin,  # Tracks where job was created for "origin" delivery
+        **capture_creator(),
+        "launch_title": name[:39] + "…" if len(name) > 40 else name,
         "enabled_toolsets": f["enabled_toolsets"],
         "workdir": f["workdir"],
     }

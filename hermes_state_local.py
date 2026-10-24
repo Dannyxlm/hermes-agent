@@ -78,6 +78,8 @@ def commit_local_session(db, *, epoch, receipt):
              _json(entry['origin']), started))
         if launch:
             bind_launch(conn, launch['launch_id'], child_session_id=sid)
+        from cron.launches import bind_run_session
+        bind_run_session(conn, json.loads(policy['request_json']), sid)
         conn.execute("INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES('',?,?,?)",
                      (route, _json(entry), started))
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (key, encoded))

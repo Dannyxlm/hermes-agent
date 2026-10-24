@@ -16,6 +16,9 @@ class RuntimeSessionLifecycleMixin:
     def finish_launch(self, launch_id, terminal_cause):
         return self._apply('launch.finish', dict(launch_id=launch_id, terminal_cause=terminal_cause))['value']
 
+    def schedule_launch(self, launch_id, next_run_at):
+        return self._apply('launch.schedule', dict(launch_id=launch_id, next_run_at=next_run_at))['value']
+
     def create_session(self, session_id, source, *, model=None, model_config=None,
                        system_prompt=None, user_id=None, session_key=None, chat_id=None,
                        chat_type=None, thread_id=None, parent_session_id=None, cwd=None,

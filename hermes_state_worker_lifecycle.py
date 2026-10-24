@@ -191,6 +191,7 @@ WORKER_LIFECYCLE_HANDLERS = {
     'launch.record': partial(worker_launch, operation='record'),
     'launch.bind': partial(worker_launch, operation='bind'),
     'launch.finish': partial(worker_launch, operation='finish'),
+    'launch.schedule': partial(worker_launch, operation='schedule'),
     'session.title': worker_title,
     'session.title_source': worker_title_source,
     'session.next_title': worker_next_title,
