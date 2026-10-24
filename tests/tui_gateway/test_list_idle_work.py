@@ -52,7 +52,7 @@ def test_listener_refresh_survives_no_ui(tmp_path, monkeypatch):
     assert len(changes) == 1
 
 
-def test_latest_reply_seeks_stop_before_old_transcript(tmp_path):
+def test_latest_reply_seeks_stop_before_old_transcript(tmp_path, monkeypatch):
     with SessionDB(db_path=tmp_path / "state.db") as db:
         db.create_session("root", "desktop")
         old = db.append_message("root", "assistant", "compacted reply", timestamp=100)
@@ -67,15 +67,20 @@ def test_latest_reply_seeks_stop_before_old_transcript(tmp_path):
         db.append_message("tip", "assistant", " \t\r\n", timestamp=105)
         db._conn.commit()
         steps = []
-        db._conn.set_progress_handler(lambda: steps.append(1) or 0, 100)
-        try:
-            result = page_replies(db, [
-                {"id": "root", "_lineage_ids": ["root"], "last_read_at": 99},
-                {"id": "tip", "_lineage_ids": ["root", "tip"], "last_read_at": 103},
-                {"id": "missing"},
-            ])
-        finally:
-            db._conn.set_progress_handler(None, 0)
+        get_read_conn = db._get_read_conn
+
+        def monitored_reader():
+            conn = get_read_conn()
+            assert conn is not None
+            conn.set_progress_handler(lambda: steps.append(1) or 0, 100)
+            return conn
+
+        monkeypatch.setattr(db, "_get_read_conn", monitored_reader)
+        result = page_replies(db, [
+            {"id": "root", "_lineage_ids": ["root"], "last_read_at": 99},
+            {"id": "tip", "_lineage_ids": ["root", "tip"], "last_read_at": 103},
+            {"id": "missing"},
+        ])
         assert result == {
             "root": {"row_id": old, "at": 100, "unread": True, "preview": "compacted reply"},
             "tip": {"row_id": final, "at": 103, "unread": False, "preview": "latest reply"},
