@@ -113,7 +113,12 @@ def _live_signals(connections, profiles):
     signals = resident_signals({p: c.authority.profile_id for p, c in connections.items() if p in profiles},
                               can_stop_helper=can_stop_helper, can_stop_process=can_stop_process)
     for key, signal in session_signals.items():
-        signals.setdefault(key, {}).update(signal)
+        resident = signals.setdefault(key, {})
+        if signal["running"] is None:
+            signal.pop("running")
+        elif resident.get("running") is True:
+            signal["running"] = True
+        resident.update(signal)
     return signals
 
 
