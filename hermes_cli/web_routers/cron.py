@@ -713,7 +713,7 @@ def _cron_list_revision(profile: str) -> str | None:
     for name in sorted(names):
         canonical, home = _cron_profile_home(name)
         files = []
-        for filename in ("jobs.json", "ticker_heartbeat"):
+        for filename in ("jobs.json", "ticker_heartbeat", "executions.db", "executions.db-wal"):
             try:
                 stat = (home / "cron" / filename).stat()
             except FileNotFoundError:
