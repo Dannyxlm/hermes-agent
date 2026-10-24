@@ -141,7 +141,7 @@ def test_profile_not_inferred_from_child_home(tmp_path, monkeypatch):
 
 
 def test_multiturn_launch_stays_open_after_turn(tmp_path):
-    from hermes_state_runtime import (admit_session_input, begin_runtime_epoch, claim_next_session_input,
+    from hermes_state_runtime import (admit_session_input, begin_runtime_epoch, claim_session_input,
                                       settle_session_input)
     with SessionDB(tmp_path / 'state.db') as db:
         db.create_session('child', 'cli')
@@ -149,8 +149,8 @@ def test_multiturn_launch_stays_open_after_turn(tmp_path):
                          child_profile='default')
         db.bind_launch('launch', child_session_id='child')
         epoch = begin_runtime_epoch(db, instance_id='fixture')
-        admit_session_input(db, epoch=epoch, session_id='child', request_id='turn', payload={'text': 'fixture'})
-        admission = claim_next_session_input(db, epoch=epoch, session_id='child')
+        admit_session_input(db, epoch=epoch, principal_id='fixture', session_id='child', request_id='turn', payload={'text': 'fixture'})
+        admission = claim_session_input(db, epoch=epoch, session_id='child')
         settle_session_input(db, epoch=epoch, admission_id=admission['admission_id'],
                              generation=admission['generation'], outcome='completed', result={'completed': True})
         assert db._read_one('SELECT finished_at FROM work_launches')[0] is None
