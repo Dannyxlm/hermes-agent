@@ -71,6 +71,16 @@ def test_manual_run_keeps_trigger_and_finishes_after_job_removal(tmp_path, monke
         assert db._read_one('SELECT COUNT(*) FROM work_launches')[0] == 2
 
 
+def test_job_creator_cannot_change_during_update(tmp_path, monkeypatch):
+    from cron import jobs
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    with scoped_current_session_id('creator'):
+        job = jobs.create_job('Immutable fixture', 'every 2h')
+    with pytest.raises(ValueError):
+        jobs.update_job(job['id'], {'creator_session_id': 'replacement'})
+    assert jobs.get_job(job['id'])['creator_session_id'] == 'creator'
+
+
 def test_unstarted_cron_attempt_has_failed_start_receipt(tmp_path, monkeypatch):
     from cron import jobs, executions
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
