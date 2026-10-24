@@ -12,6 +12,22 @@ def test_malformed_profile_uses_subagent_not_found_shape(family_home):
     assert family["error"]["code"] == subagent["error"]["code"] == 4001
 
 
+@pytest.mark.parametrize("stage", ["ownership", "storage", "projection"])
+def test_internal_value_error_is_not_hidden_as_not_found(family_home, monkeypatch, stage):
+    from hermes_family import Family
+    from tui_gateway import server
+
+    def broken(*args, **kwargs):
+        raise ValueError("broken Family projection")
+
+    if stage == "projection":
+        monkeypatch.setattr(Family, "session_family", broken)
+    else:
+        monkeypatch.setattr(server, "_family_root_owned" if stage == "ownership" else "_family_profiles", broken)
+    with pytest.raises(ValueError, match="broken Family projection"):
+        rpc("session.family", profile="default", session_id="root", since=0)
+
+
 def test_family_reads_do_not_activate_profile_watchers(family_home, monkeypatch):
     from tui_gateway import server
     def forbidden(*args):

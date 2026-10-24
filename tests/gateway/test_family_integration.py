@@ -3,12 +3,15 @@ import asyncio
 from contextlib import ExitStack, closing
 import http.server
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import threading
 from types import SimpleNamespace
+
+import pytest
 
 from hermes_state import SessionDB
 from tests.hermes_cli.test_finite_chat_delegation import (
@@ -111,6 +114,27 @@ async def _assert_recorded_fanout(home, root):
             await connection.close()
 
 
+@pytest.mark.platforms("posix")
+def test_teammate_child_has_its_own_process_group(tmp_path, monkeypatch):
+    home = tmp_path / "iris"
+    home.mkdir()
+    run = subprocess.run
+    groups = []
+
+    def observed(command, **kwargs):
+        command = list(command)
+        command[2] = "import os; print('TEAMMATE_PGID=' + str(os.getpgrp()), flush=True); " + command[2]
+        result = run(command, **kwargs)
+        groups.extend(int(line.split("=", 1)[1]) for line in result.stdout.splitlines()
+                      if line.startswith("TEAMMATE_PGID="))
+        return result
+
+    monkeypatch.setattr(subprocess, "run", observed)
+    _teammate(tmp_path, home, "integration-root")
+    assert len(groups) == 1
+    assert groups[0] != os.getpgrp(), "teammate inherited the test worker's teardown group"
+
+
 def _teammate(tmp_path, home, root):
     peer = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
     peer.requests = []
@@ -133,10 +157,13 @@ def _teammate(tmp_path, home, root):
                "--provider", "custom", "--model", "test-model", "--base-url", url,
                "--ignore-rules", "-q", "TEAMMATE_PROOF", "--max-turns", "2"]
     try:
-        with daemon(REPO, home, env, barrier=False):
+        with daemon(REPO, home, env, barrier=False) as (owner, _):
             result = subprocess.run(command, cwd=tmp_path, env=env, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=75, check=False)
-        assert result.returncode == 0, (result.stdout, result.stderr)
+                                    capture_output=True, text=True, timeout=75, check=False,
+                                    start_new_session=True)
+            assert result.returncode == 0, {"returncode": result.returncode,
+                "stdout": result.stdout, "stderr": result.stderr, "owner_returncode": owner.poll()}
+            assert owner.poll() is None, "teammate's runtime owner exited before its viewer"
         assert "RECOVERY_ACK_TEAMMATE_PROOF" in result.stdout
         assert peer.requests
     finally:

@@ -178,10 +178,10 @@ def test_quiet_requires_positive_liveness(kind, threshold):
 @pytest.mark.parametrize("cause,status", [("success", "done"), ("error", "failed"), ("failed_start", "failed"),
                                           ("user_stop", "stopped"), ("parent_stop", "stopped"),
                                           ("owner_restart", "paused_by_restart"), ("unknown", "needs_you")])
-def test_terminal_precedence(cause, status):
+def test_terminal_and_unresumed_restart_precedence(cause, status):
     from hermes_family import status_for
-    assert status_for({"kind": "helper", "terminal_cause": cause},
-                      {"pending_kind": "approval", "running": True}, NOW) == status
+    live = {} if cause == "owner_restart" else {"pending_kind": "approval", "running": True}
+    assert status_for({"kind": "helper", "terminal_cause": cause}, live, NOW) == status
 
 
 def test_read_only_constant_query_count(night):

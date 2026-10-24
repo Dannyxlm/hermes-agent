@@ -67,7 +67,7 @@ def activity_at(row: dict, live: dict):
 
 def status_for(row: dict, live: dict, now: float) -> str:
     cause = terminal_cause_for(row, live)
-    if cause in TERMINAL:
+    if cause in TERMINAL and cause != "owner_restart":
         return TERMINAL[cause]
     if live.get("pending_kind") in {"approval", "clarify"}:
         return "needs_you"
@@ -75,7 +75,7 @@ def status_for(row: dict, live: dict, now: float) -> str:
         threshold = 1200 if row["kind"] in {"lane", "teammate"} else 600
         activity = activity_at(row, live)
         return "quiet" if activity is not None and now - activity >= threshold else "working"
-    return "unknown"
+    return "paused_by_restart" if cause == "owner_restart" else "unknown"
 
 
 def retained(node, since):

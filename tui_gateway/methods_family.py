@@ -107,6 +107,7 @@ def _family_root_owned(profile, stored_id):
 @method("session.family")
 def _family_read_rpc(rid, params):
     from hermes_family import Family
+    from hermes_cli.profiles import profile_exists
     from pydantic import ValidationError
     from tui_gateway.contracts.family import FamilySessionParams
     try:
@@ -114,6 +115,8 @@ def _family_read_rpc(rid, params):
     except ValidationError:
         return _err(rid, 4000, "invalid family parameters")
     profile, sid = params["profile"], params["session_id"]
+    if not profile_exists(profile):
+        return _err(rid, 4001, "session not found or not owned by this transport")
     try:
         if not _family_root_owned(profile, sid):
             return _err(rid, 4001, "session not found or not owned by this transport")
@@ -125,7 +128,7 @@ def _family_read_rpc(rid, params):
         family = Family({p: s for p, s in profiles.items() if p not in unavailable},
                         live=signals, unavailable_profiles=unavailable)
         return _ok(rid, family.session_family(profile, sid, since=params.get("since"), limit=params.get("limit")))
-    except (ProfileUnavailableError, KeyError, ValueError):
+    except (ProfileUnavailableError, KeyError):
         return _err(rid, 4001, "session not found or not owned by this transport")
 
 
