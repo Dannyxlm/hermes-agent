@@ -100,21 +100,9 @@ def _session_filter_where(
     """Shared ``sessions s`` WHERE builder so counts line up with listed rows. ``exclude_children``
     hides sub-agent runs and compression continuations but keeps branch/reset children
     (``_LISTABLE_CHILD_SQL``); ``include_subagents`` re-admits the sub-agent runs only
-    (``sessions.show_subagents``). Clause order is part of the SQL text contract."""
+    (``sessions.show_subagents``). Cheap filters precede JSON checks to avoid parsing discarded rows."""
     where: list[str] = []
     params: list[Any] = []
-    if exclude_children and include_subagents:
-        where.append(f"({_LISTABLE_CHILD_SQL} OR {_delegate_from_json('s.model_config')} IS NOT NULL)")
-    elif exclude_children:
-        where += [_LISTABLE_CHILD_SQL, f"{_delegate_from_json('s.model_config')} IS NULL"]
-    # Show roots and user-visible branch/reset sessions, while still hiding sub-agent runs and compression
-    # continuations. All four carry parent_session_id, so the shared predicate classifies the edge from
-    # stable markers plus legacy-compatible parent metadata. Branch sessions are identified two ways, OR'd
-    # for robustness: 1. A stable ``_branched_from`` marker in model_config, written by /branch at creation
-    # time. This survives the parent being reopened and re-ended with a different end_reason (e.g.
-    # tui_shutdown overwriting 'branched'), which otherwise hides the branch — see issue #20856. 2. The
-    # legacy heuristic (parent ended with 'branched' before the child started), covering branch sessions
-    # created before the marker existed.
     include_sources = [source] if source else list(sources or [])
     source_clause, source_params = _source_match_clause(include_sources, local_created_sources)
     for clause, values in (
@@ -131,6 +119,18 @@ def _session_filter_where(
         where.append("s.archived = 1")
     elif not include_archived:
         where.append("s.archived = 0")
+    # Show roots and user-visible branch/reset sessions, while still hiding sub-agent runs and compression
+    # continuations. All four carry parent_session_id, so the shared predicate classifies the edge from
+    # stable markers plus legacy-compatible parent metadata. Branch sessions are identified two ways, OR'd
+    # for robustness: 1. A stable ``_branched_from`` marker in model_config, written by /branch at creation
+    # time. This survives the parent being reopened and re-ended with a different end_reason (e.g.
+    # tui_shutdown overwriting 'branched'), which otherwise hides the branch — see issue #20856. 2. The
+    # legacy heuristic (parent ended with 'branched' before the child started), covering branch sessions
+    # created before the marker existed.
+    if exclude_children and include_subagents:
+        where.append(f"({_LISTABLE_CHILD_SQL} OR {_delegate_from_json('s.model_config')} IS NOT NULL)")
+    elif exclude_children:
+        where += [_LISTABLE_CHILD_SQL, f"{_delegate_from_json('s.model_config')} IS NULL"]
     return where, params
 
 
