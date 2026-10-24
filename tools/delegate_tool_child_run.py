@@ -373,7 +373,7 @@ class _Heartbeat:
         except Exception:
             pass
         with _quiet(None):
-            touch(desc)
+            touch(desc, step_kind="waiting_helpers")
         return None
 
 

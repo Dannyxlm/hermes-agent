@@ -215,7 +215,7 @@ def check_api_response(
     from agent import relay_llm
 
     relay_llm.complete_logical_call(api_request_id, outcome="success")
-    agent._touch_activity(f"API call #{api_call_count} completed")
+    agent._touch_activity(f"API call #{api_call_count} completed", step_kind="thinking")
     return _verdict("break")
 
 

@@ -15,8 +15,8 @@ def test_resumed_chunks_clear_wait_without_erasing_local_load(monkeypatch, local
     call.agent = SimpleNamespace(
         base_url="http://localhost:1234" if local_loading else "https://example.com",
         _interrupt_requested=False,
-        _emit_wait_notice=lambda text: notices.append((now[0], text)),
-        _touch_activity=lambda text: touches.append((now[0], text)),
+        _emit_wait_notice=lambda text, **kwargs: notices.append((now[0], text)),
+        _touch_activity=lambda text, **kwargs: touches.append((now[0], text)),
     )
     call.api_kwargs = {"model": "test-model"}
     call.last_chunk_time = {"t": now[0]}

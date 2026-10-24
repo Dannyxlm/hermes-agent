@@ -1022,7 +1022,8 @@ def _stamp_hygiene_compression_provenance(
     agent: Any, desc: str, provenance: ActivityProvenance, debug_label: str) -> None:
     """Best-effort activity provenance stamp for hygiene compression transitions."""
     try:
-        agent._touch_activity(desc, provenance=provenance)
+        agent._touch_activity(desc, provenance=provenance, step_kind=(
+            "retrying" if provenance == ActivityProvenance.AGENT_COMPRESSION_TIMEOUT else "compressing"))
     except Exception:
         logger.debug(debug_label, exc_info=True)
 
@@ -4162,6 +4163,7 @@ class GatewayRunner(
         if interrupt_depth == 0:
             agent._last_activity_ts = time.time()
             agent._last_activity_desc = "starting new turn (cached)"
+            agent._last_activity_kind, agent._last_activity_tool = "starting", None
             agent._last_activity_provenance = ActivityProvenance.UNKNOWN
             # Reset the SessionDB flush cursor so the new turn's messages are fully persisted — a stale
             # value from the previous turn makes `_flush_messages_to_session_db` skip new rows.

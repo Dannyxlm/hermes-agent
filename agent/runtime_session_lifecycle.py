@@ -60,9 +60,11 @@ class RuntimeSessionLifecycleMixin:
     def get_next_title_in_lineage(self, base_title):
         return self._apply('session.next_title', {'base_title': base_title})['value']
 
-    def touch_session_activity(self, session_id, ts=None, *, description=None, provenance=None):
+    def touch_session_activity(self, session_id, ts=None, *, description=None, provenance=None,
+                               step_kind=None, step_tool=None):
         self._session(session_id)
-        self._apply('session.activity', {'ts': ts, 'description': description, 'provenance': provenance})
+        self._apply('session.activity', {'ts': ts, 'description': description, 'provenance': provenance,
+                                         'step_kind': step_kind, 'step_tool': step_tool})
 
     def clear_session_activity_labels(self, session_id):
         self._session(session_id)

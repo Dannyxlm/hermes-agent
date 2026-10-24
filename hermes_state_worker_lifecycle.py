@@ -110,18 +110,25 @@ def worker_next_title(db, conn, session_id, payload):
 def worker_activity(db, conn, session_id, payload):
     import math
     from agent.session_activity import bound_activity_description, normalize_activity_provenance
-    if (set(payload) != {'ts', 'description', 'provenance'}
+    if (set(payload) - {'ts', 'description', 'provenance', 'step_kind', 'step_tool'}
+            or not {'ts', 'description', 'provenance'} <= set(payload)
             or any(payload[k] is not None and not isinstance(payload[k], str)
                    for k in ('description', 'provenance'))):
         raise RuntimeStoreError('invalid_params')
+    from agent.session_activity import validate_step
+    try:
+        step_kind, step_tool = validate_step(payload.get('step_kind'), payload.get('step_tool'))
+    except (ValueError, TypeError) as exc:
+        raise RuntimeStoreError('invalid_params') from exc
     when = payload['ts']
     if when is not None and (type(when) not in (float, int) or not math.isfinite(when)):
         raise RuntimeStoreError('invalid_params')
     when = time.time() if when is None else float(when)
-    conn.execute('UPDATE sessions SET last_activity_at=?,last_activity_description=?,last_activity_provenance=? '
+    conn.execute('UPDATE sessions SET last_activity_at=?,last_activity_description=?,last_activity_provenance=?, '
+                 'last_activity_kind=?,last_activity_tool=? '
                  'WHERE id=? AND (last_activity_at IS NULL OR last_activity_at<?)',
                  (when, bound_activity_description(payload['description']),
-                  normalize_activity_provenance(payload['provenance']).value, session_id, when))
+                  normalize_activity_provenance(payload['provenance']).value, step_kind, step_tool, session_id, when))
     return {'value': None}
 
 
@@ -129,7 +136,8 @@ def worker_activity_clear(db, conn, session_id, payload):
     from agent.session_activity import ActivityProvenance
     if payload:
         raise RuntimeStoreError('invalid_params')
-    conn.execute('UPDATE sessions SET last_activity_description=?,last_activity_provenance=? WHERE id=?',
+    conn.execute("UPDATE sessions SET last_activity_description=?,last_activity_provenance=?, "
+                 "last_activity_kind='idle',last_activity_tool=NULL WHERE id=?",
                  ('', ActivityProvenance.UNKNOWN.value, session_id))
     return {'value': None}
 

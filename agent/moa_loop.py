@@ -318,18 +318,18 @@ def _reference_liveness_hook(agent: Any, label: str) -> Any:
 
     def _touch_on_progress() -> None:
         if callable(touch):
-            touch(f"MoA reference {label}: stream progress")
+            touch(f"MoA reference {label}: stream progress", step_kind="waiting_helpers")
 
     return _touch_on_progress
 
 
-def _touch_fanout_progress(agent: Any, description: str) -> None:
+def _touch_fanout_progress(agent: Any, description: str, *, step_kind="waiting_helpers") -> None:
     """Best-effort activity stamp for fan-out milestones; never raises (display of
     progress must not decide turn liveness on its own, it only supports it)."""
     touch = getattr(agent, "_touch_activity", None)
     if callable(touch):
         with contextlib.suppress(Exception):
-            touch(description)
+            touch(description, step_kind=step_kind)
 
 
 def _maybe_apply_moa_cache_control(
@@ -951,7 +951,7 @@ def aggregate_moa_context(
     agg_label = _slot_label(aggregator)
     agg_runtime = _slot_runtime(aggregator)
     _touch_fanout_progress(
-        agent, f"MoA: synthesizing aggregator guidance ({agg_label})"
+        agent, f"MoA: synthesizing aggregator guidance ({agg_label})", step_kind="thinking"
     )
     try:
         # Undecorated: the prompt embeds this call's reference outputs, so no later call

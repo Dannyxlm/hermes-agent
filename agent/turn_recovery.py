@@ -1425,7 +1425,7 @@ def interruptible_backoff_sleep(
         time.sleep(0.2)
         _touch_counter += 1
         if _touch_counter % 150 == 0:  # 150 × 0.2s = 30s
-            agent._touch_activity(f"{activity_label}, {int(sleep_end - time.time())}s remaining")
+            agent._touch_activity(f"{activity_label}, {int(sleep_end - time.time())}s remaining", step_kind="retrying")
     # A long wait can outlive a short-lived credential (the free tier's JWT lives 15 minutes), and
     # the per-iteration pre-expiry adoption does not run between retries.
     agent._adopt_nous_key_before_expiry()

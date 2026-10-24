@@ -325,11 +325,17 @@ class _ChildProgressRelay:
         for src, dst in (("session_id", "child_session_id"), ("delegation_id", "delegation_id")):
             if self.session_ref.get(src):
                 kw[dst] = str(self.session_ref[src])
-        kw.update({k: self.session_ref[k] for k in ("batch_id", "batch_name", "title") if k in self.session_ref})
+        kw.update({k: self.session_ref[k] for k in ("batch_id", "batch_name", "title", "step_kind", "step_tool") if k in self.session_ref})
         kw["tool_count"] = self.tool_count
         return kw
 
     def _relay(self, event_type: str, tool_name: str | None = None, preview: str | None = None, args=None, **kwargs):
+        steps = {"subagent.spawn_requested": "starting", "subagent.start": "starting",
+                 "subagent.thinking": "thinking", "subagent.text": "writing",
+                 "subagent.tool": "tool", "subagent.complete": "idle"}
+        if event_type in steps:
+            self.session_ref.update(step_kind=steps[event_type],
+                                    step_tool=tool_name if event_type == "subagent.tool" else None)
         if self.parent_cb:
             # kwargs override identity (e.g. status, duration_seconds).
             with _quiet("Parent callback failed: %s"):

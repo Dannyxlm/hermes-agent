@@ -861,6 +861,7 @@ class AIAgent(
             last_activity_at=getattr(self, "_last_activity_ts", None),
             last_activity_description=getattr(self, "_last_activity_desc", None) or "",
             last_activity_provenance=provenance if provenance is not None else ActivityProvenance.UNKNOWN,
+            step_kind=getattr(self, "_last_activity_kind", None), step_tool=getattr(self, "_last_activity_tool", None),
             extra={
                 "current_tool": self._current_tool, "api_call_count": self._api_call_count,
                 "max_iterations": self.max_iterations, "budget_used": self.iteration_budget.used,
