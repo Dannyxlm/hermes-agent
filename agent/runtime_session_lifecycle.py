@@ -6,6 +6,16 @@ separate from ending its session and settling execution (including deferred work
 
 
 class RuntimeSessionLifecycleMixin:
+    def record_launch(self, launch_id, **fields):
+        return self._apply('launch.record', dict(fields, launch_id=launch_id))['value']
+
+    def bind_launch(self, launch_id, *, child_session_id=None, backend_ref=None):
+        return self._apply('launch.bind', dict(launch_id=launch_id, child_session_id=child_session_id,
+                                              backend_ref=backend_ref))['value']
+
+    def finish_launch(self, launch_id, terminal_cause):
+        return self._apply('launch.finish', dict(launch_id=launch_id, terminal_cause=terminal_cause))['value']
+
     def create_session(self, session_id, source, *, model=None, model_config=None,
                        system_prompt=None, user_id=None, session_key=None, chat_id=None,
                        chat_type=None, thread_id=None, parent_session_id=None, cwd=None,

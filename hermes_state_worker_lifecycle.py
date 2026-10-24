@@ -183,7 +183,14 @@ def worker_user_content(db, conn, session_id, payload):
         (db._encode_content(payload['content']), _row_id(payload), session_id)).rowcount}
 
 
+from functools import partial
+from hermes_state_launches import worker_launch
+
+
 WORKER_LIFECYCLE_HANDLERS = {
+    'launch.record': partial(worker_launch, operation='record'),
+    'launch.bind': partial(worker_launch, operation='bind'),
+    'launch.finish': partial(worker_launch, operation='finish'),
     'session.title': worker_title,
     'session.title_source': worker_title_source,
     'session.next_title': worker_next_title,

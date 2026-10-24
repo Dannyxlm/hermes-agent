@@ -503,6 +503,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title_source TEXT,
     last_activity_at REAL,
     last_activity_description TEXT,
+    last_activity_kind TEXT,
+    last_activity_tool TEXT,
     last_activity_provenance TEXT,
     api_call_count INTEGER DEFAULT 0,
     handoff_state TEXT,
@@ -527,6 +529,28 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id),
     FOREIGN KEY (system_prompt_hash) REFERENCES system_prompts(hash)
 );
+
+CREATE TABLE IF NOT EXISTS work_launches (
+    launch_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    launcher_profile TEXT NOT NULL,
+    launcher_session_id TEXT NOT NULL,
+    parent_launch_id TEXT,
+    child_profile TEXT NOT NULL,
+    child_session_id TEXT,
+    backend_ref TEXT,
+    batch_id TEXT,
+    batch_name TEXT,
+    title TEXT,
+    created_at REAL NOT NULL,
+    bound_at REAL,
+    finished_at REAL,
+    terminal_cause TEXT,
+    next_run_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_work_launches_launcher ON work_launches(launcher_profile, launcher_session_id);
+CREATE INDEX IF NOT EXISTS idx_work_launches_child ON work_launches(child_session_id);
+CREATE INDEX IF NOT EXISTS idx_work_launches_batch ON work_launches(batch_id);
 
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -52,8 +52,14 @@ def test_launch_survives_early_record_retries_binding_and_first_terminal_receipt
 
 def test_reconcile_legacy_session_table_before_indexes(tmp_path):
     path = tmp_path / 'state.db'
+    with SessionDB(path):
+        pass
     conn = sqlite3.connect(path)
-    conn.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL)')
+    columns = {r[1] for r in conn.execute('PRAGMA table_info(sessions)')}
+    for column in ('last_activity_kind', 'last_activity_tool'):
+        if column in columns:
+            conn.execute(f'ALTER TABLE sessions DROP COLUMN {column}')
+    conn.execute('DROP TABLE IF EXISTS work_launches')
     conn.commit()
     conn.close()
     with SessionDB(path) as db:
