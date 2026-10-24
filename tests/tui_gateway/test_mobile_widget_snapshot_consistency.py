@@ -19,7 +19,7 @@ def inbox_reader(push_service, mobile_home, peer, monkeypatch):
     path = mobile_home / "profiles" / "ops" / "state.db"
     with SessionDB(db_path=path) as db:
         for n in range(105):
-            db.create_session(f"chat-{n:03}", "desktop", title=f"Chat {n}")
+            db.create_session(f"chat-{n:03}", "desktop")
             db.append_message(f"chat-{n:03}", "assistant", "fixture reply", timestamp=100 + n)
         db.create_session("unrelated", "desktop")
         db._conn.execute("UPDATE sessions SET hidden=1 WHERE id='unrelated'")
