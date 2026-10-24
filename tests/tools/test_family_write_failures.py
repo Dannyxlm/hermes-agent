@@ -132,6 +132,21 @@ def test_invalid_cli_provenance_is_ignored(monkeypatch, values):
     assert result == {}, 'optional provenance aborted CLI startup'
 
 
+def test_legacy_background_defers_database_acquisition(monkeypatch):
+    from tests.tui_gateway.test_secret_capture_session import _gateway
+    server, _requests, _skills = _gateway(monkeypatch)
+    session = {'agent': SimpleNamespace(_session_db=None), 'session_key': 'parent'}
+    monkeypatch.setattr(server, '_side_agent_args', lambda *a: (session, 'fixture', 'parent', 'bg-fixture', None))
+    monkeypatch.setattr(server, '_get_db', unavailable)
+    monkeypatch.setattr(server, '_spawn_side_agent', lambda *a, **kw: {'result': {'task_id': 'bg-fixture'}})
+    result = None
+    try:
+        result = server._methods['prompt.background']('fixture', {})
+    except Exception:
+        pass
+    assert result == {'result': {'task_id': 'bg-fixture'}}
+
+
 def test_nonstring_cli_provenance_is_ignored():
     from hermes_cli import launch_provenance as lp
     lp._pending.clear()
