@@ -11,6 +11,7 @@ from . import (
     display,
     events,
     files,
+    family,
     groups_bot_relay,
     human_input,
     hermex_live,
