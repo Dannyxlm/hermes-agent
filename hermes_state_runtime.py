@@ -227,6 +227,8 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
         changed = conn.execute("UPDATE session_admissions SET status='started',owner_epoch=?,generation=? WHERE admission_id=? AND status='queued'", (epoch, generation, row['admission_id']))
         if changed.rowcount != 1:
             raise RuntimeStoreError('stale_generation')
+        from hermes_state_launch_causes import resume_for_session
+        resume_for_session(conn, session_id)
         claimed = _row(_admission(conn, row['admission_id']))
         # The transcript high-water mark at the claim (``messages.id`` is AUTOINCREMENT across every
         # session): a row above it on this conversation was written by this turn, so settlement can

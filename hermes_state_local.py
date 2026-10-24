@@ -87,7 +87,7 @@ def commit_local_session(db, *, epoch, receipt):
              entry['origin']['chat_id'], policy['model'], _row_cwd(policy), db._own_profile_name(),
              _json(entry['origin']), started))
         from hermes_state_optional_launch import optional_launch
-        with optional_launch('session.create.launch'):
+        with optional_launch('session.create.launch', conn=conn):
             from hermes_cli.launch_provenance import launch_record
             from hermes_state_launches import record_launch, bind_launch
             launch = launch_record(json.loads(policy['request_json']), db._own_profile_name() or 'default',

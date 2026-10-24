@@ -71,7 +71,7 @@ def reserve_child_execution(db, conn, session_id, payload, *, epoch, execution_i
     from hermes_state_launches import record_launch, bind_launch
     profile = parent['profile_name'] or db._own_profile_name() or 'default'
     from hermes_state_optional_launch import optional_launch
-    with optional_launch('child.reserve.launch'):
+    with optional_launch('child.reserve.launch', conn=conn):
         record_launch(conn, **launch, kind='helper', launcher_profile=profile, launcher_session_id=session_id,
                       child_profile=profile)
         bind_launch(conn, launch['launch_id'], child_session_id=child_sid, backend_ref=child_eid)
