@@ -25,12 +25,20 @@ def identity(profile, value, category="session"):
     return json.dumps([profile, category, value], separators=(",", ":"))
 
 
+def native_identity(authority, subject):
+    return {"user_id": subject, "provider": "local", "profile_id": authority.profile_id,
+            "instance_id": authority.instance_id, "profile_scope": "host",
+            "capabilities": ["session:read", "session:submit", "session:control", "session:create",
+                             "session:approve", "session:respond"]}
+
+
 def test_parent_launch_index_reconciles_existing_store(tmp_path):
     path = tmp_path / "state.db"
     with SessionDB(path) as db:
         db._conn.execute("DROP INDEX IF EXISTS idx_work_launches_parent")
         db._conn.commit()
     with SessionDB(path) as db:
+        assert "idx_work_launches_parent" in {row[1] for row in db._conn.execute("PRAGMA index_list(work_launches)")}
         plan = db._conn.execute(
             "EXPLAIN QUERY PLAN SELECT * FROM work_launches WHERE parent_launch_id=?", ("job",)
         ).fetchall()
@@ -38,16 +46,27 @@ def test_parent_launch_index_reconciles_existing_store(tmp_path):
 
 
 def test_real_producers_agree_with_family_dispatchers(tmp_path, monkeypatch):
-    original_dumps = json.dumps
+    original_dumps, original_loads = json.dumps, json.loads
+    offered_metadata = set()
+
+    def read_request(value, *args, **kwargs):
+        request = original_loads(value, *args, **kwargs)
+        if isinstance(request, dict):
+            for tool in request.get("tools", []):
+                function = tool.get("function", {})
+                if function.get("name") == "delegate_task":
+                    offered_metadata.update(function.get("parameters", {}).get("properties", {}))
+        return request
 
     def named_fanout(value, *args, **kwargs):
-        if isinstance(value, dict) and "tasks" in value and len(value["tasks"]) == 2:
+        if isinstance(value, dict) and "tasks" in value and len(value["tasks"]) == 2 and "batch_name" in offered_metadata:
             value = {**value, "batch_name": "Release proof", "tasks": [
                 {**task, "title": title} for task, title in zip(value["tasks"], ("Alpha proof", "Beta proof"))
             ]}
         return original_dumps(value, *args, **kwargs)
 
     with monkeypatch.context() as patch:
+        patch.setattr(json, "loads", read_request)
         patch.setattr(json, "dumps", named_fanout)
         finite_chat(tmp_path, "quiet")
     home = tmp_path / "profile"
@@ -59,6 +78,7 @@ def test_real_producers_agree_with_family_dispatchers(tmp_path, monkeypatch):
         roots = db._conn.execute("SELECT id FROM sessions WHERE source != 'subagent'").fetchall()
         assert len(roots) == 1, roots
         root = roots[0][0]
+    asyncio.run(_assert_recorded_fanout(home, root))
     _teammate(tmp_path, other, root)
     from cron import jobs, executions
     from gateway.session_context import scoped_current_session_id
@@ -69,6 +89,26 @@ def test_real_producers_agree_with_family_dispatchers(tmp_path, monkeypatch):
         executions.finish_execution(run["id"], success=True)
         process = _process(tmp_path, monkeypatch, root)
     asyncio.run(_assert_rpc(home, other, root, job, run, process))
+
+
+async def _assert_recorded_fanout(home, root):
+    from gateway.session_authority import SessionAuthority
+    from gateway.session_controls import AuthorityConnection
+    from hermes_state_runtime import begin_runtime_epoch
+    with SessionDB(home / "state.db") as db:
+        authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home),
+            instance_id="fanout", db=db, epoch=begin_runtime_epoch(db, instance_id="fanout"))
+        connection = AuthorityConnection(authority, object(), native_identity(authority, db.get_session(root)["user_id"]))
+        try:
+            response = await connection.dispatch({"id": 1, "method": "session.family", "params": {
+                "session_id": root, "profile": "default", "since": 0}})
+            assert "result" in response, response
+            nodes = response["result"]["nodes"]
+            assert {node["title"] for node in nodes} == {"Alpha proof", "Beta proof"}, nodes
+            assert all(node["kind"] == "helper" and node["status"] == "done" for node in nodes)
+            assert response["result"]["batches"][0]["batch_name"] == "Release proof"
+        finally:
+            await connection.close()
 
 
 def _teammate(tmp_path, home, root):
@@ -138,7 +178,7 @@ async def _assert_rpc(home, other, root, job, run, process):
                                          epoch=begin_runtime_epoch(db, instance_id=name))
             registry.add(path, authority, name=None if name == "default" else name)
             if name == "default":
-                connection = AuthorityConnection(authority, object(), {"user_id": "owner", "profile_scope": "host"})
+                connection = AuthorityConnection(authority, object(), native_identity(authority, db.get_session(root)["user_id"]))
         try:
             response = await connection.dispatch({"id": 1, "method": "session.family", "params": {
                 "session_id": root, "profile": "default", "since": 0}})
