@@ -12,7 +12,7 @@ from pathlib import Path
 import sqlite3
 import time
 
-from hermes_family_storage import compression_tips, read_metadata
+from hermes_family_storage import compression_owners, compression_tips, read_metadata
 
 
 LIVE = frozenset({"working", "quiet", "needs_you"})
@@ -78,6 +78,11 @@ def status_for(row: dict, live: dict, now: float) -> str:
     return "unknown"
 
 
+def retained(node, since):
+    return (node["status"] in LIVE | {"paused_by_restart"}
+            or node["ended_at"] is None or node["ended_at"] >= since)
+
+
 def node_id(profile: str, key: str, *, launch=False) -> str:
     return json.dumps([profile, "launch" if launch else "session", key], separators=(",", ":"), ensure_ascii=False)
 
@@ -96,6 +101,7 @@ class Family:
         self.children = defaultdict(list)
         self.root_chats = {}
         self.tips = {p: compression_tips(s.sessions) for p, s in profiles.items()}
+        self.owners = {p: compression_owners(s.sessions) for p, s in profiles.items()}
         self.live = dict(self.live)
         for (profile, sid), signal in list(self.live.items()):
             tip = self.tips.get(profile, {}).get(sid, sid)
@@ -176,7 +182,7 @@ class Family:
         root_profile, root_session_id = (profile, sid) if root else root_ref or self._root_chat(key)
         backend_ref = (row.get("backend_ref") or live.get("backend_ref")) if kind in {"helper", "process", "check_in"} else None
         actions = ["open"] if sid or row.get("launch_id") else []
-        needs = {"kind": pending, "session_id": sid, "profile": profile} if pending and sid else None
+        needs = {"kind": pending, "session_id": live.get("control_session_id", sid), "profile": profile} if pending and sid else None
         if needs and live.get("can_answer"):
             actions.append("answer")
         if status == "paused_by_restart" and kind in {"lane", "helper", "teammate"}:
@@ -189,7 +195,8 @@ class Family:
                 "step_kind": step, "step_tool": (row.get("last_activity_tool") or live.get("step_tool")) if step == "tool" else None,
                 "activity_text": row.get("last_activity_description"),
                 "started_at": row.get("created_at", row.get("started_at")),
-                "ended_at": next((value for value in (row.get("finished_at"), row.get("ended_at"), live.get("ended_at"))
+                "ended_at": next((value for value in (row.get("finished_at"), live.get("ended_at"),
+                                                       None if row.get("launch_id") else row.get("ended_at"))
                                   if value is not None), None),
                 "last_activity_at": activity_at(row, live),
                 "model": row.get("model"), "terminal_cause": terminal_cause_for(row, live),
@@ -222,9 +229,8 @@ class Family:
         since = self.now - 43200 if since is None else since
         limit = 200 if limit is None else limit
         nodes, truncated = self._walk(root)
-        selected = {n["node_id"] for n in nodes if n["ended_at"] is None or n["ended_at"] >= since}
-        nodes = sorted((n for n in nodes if n["node_id"] in selected), key=lambda n: (n["started_at"] or 0, n["node_id"]))
-        removable = sorted((n for n in nodes if n["ended_at"] is not None and n["status"] not in LIVE),
+        nodes = sorted((n for n in nodes if retained(n, since)), key=lambda n: (n["started_at"] or 0, n["node_id"]))
+        removable = sorted((n for n in nodes if n["ended_at"] is not None and n["status"] not in LIVE | {"paused_by_restart"}),
                            key=lambda n: (n["ended_at"] or 0, n["started_at"] or 0, n["node_id"]))
         drop = {n["node_id"] for n in removable[:max(0, len(nodes) - limit)]}
         truncated |= len(nodes) > limit
@@ -254,7 +260,7 @@ class Family:
         if parent and status_for(self.rows[parent], signal, self.now) in FINISHED | {"paused_by_restart"}:
             return True
         snapshot = self.profiles.get(profile)
-        sid = self.tips.get(profile, {}).get(sid, sid)
+        sid = self.owners.get(profile, {}).get(sid, sid)
         session = snapshot.sessions.get(sid, {}) if snapshot else {}
         return session.get("turn_terminal") == 1 and session.get("turn_unresolved") == 0
 
@@ -285,7 +291,7 @@ class Family:
             if not row.get("launch_id") or key in all_nodes:
                 continue
             node = self._node(key)
-            if node["ended_at"] is None or node["ended_at"] >= since:
+            if retained(node, since):
                 all_nodes[key] = node
         needs = {key: node for key, node in all_nodes.items() if node["status"] == "needs_you"}
         coming = {key: node for key, node in all_nodes.items() if node["kind"] == "check_in"

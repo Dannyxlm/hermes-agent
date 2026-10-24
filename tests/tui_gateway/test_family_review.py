@@ -6,6 +6,12 @@ from tests.tui_gateway.test_methods_mobile import rpc
 pytest_plugins = ["tests.tui_gateway.test_methods_mobile", "tests.tui_gateway.test_family"]
 
 
+def test_malformed_profile_uses_subagent_not_found_shape(family_home):
+    family = rpc("session.family", profile="Bad Name", session_id="root")
+    subagent = rpc("subagent.list", profile="Bad Name", session_id="root")
+    assert family["error"]["code"] == subagent["error"]["code"] == 4001
+
+
 def test_family_reads_do_not_activate_profile_watchers(family_home, monkeypatch):
     from tui_gateway import server
     def forbidden(*args):

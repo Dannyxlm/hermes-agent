@@ -125,7 +125,7 @@ def _family_read_rpc(rid, params):
         family = Family({p: s for p, s in profiles.items() if p not in unavailable},
                         live=signals, unavailable_profiles=unavailable)
         return _ok(rid, family.session_family(profile, sid, since=params.get("since"), limit=params.get("limit")))
-    except (ProfileUnavailableError, KeyError):
+    except (ProfileUnavailableError, KeyError, ValueError):
         return _err(rid, 4001, "session not found or not owned by this transport")
 
 

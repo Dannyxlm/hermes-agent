@@ -107,8 +107,8 @@ def test_compressed_teammate_keeps_recorded_kind_and_descendants(tmp_path):
     assert nodes["helper"]["parent_node_id"] == nodes["tip"]["node_id"]
 
 
-@pytest.mark.parametrize("tip_status,visible", [("started", False), ("terminal", True)])
-def test_failed_helper_uses_compression_tip_turn_evidence(tmp_path, tip_status, visible):
+@pytest.mark.parametrize("owner_status,visible", [("started", False), ("terminal", True)])
+def test_failed_helper_uses_compression_owner_turn_evidence(tmp_path, owner_status, visible):
     path = tmp_path / "state.db"
     with fixture_db(path) as db:
         session(db, "A", source="desktop", ended=NOW - 100)
@@ -117,7 +117,6 @@ def test_failed_helper_uses_compression_tip_turn_evidence(tmp_path, tip_status, 
         session(db, "helper", source="subagent", parent="A")
         launch(db, "helper", launcher="A", cause="error", finished=NOW)
         db.execute("CREATE TABLE session_admissions(target_session_id TEXT,status TEXT)")
-        db.execute("INSERT INTO session_admissions VALUES('A','terminal')")
-        db.execute("INSERT INTO session_admissions VALUES('B',?)", (tip_status,))
+        db.execute("INSERT INTO session_admissions VALUES('A',?)", (owner_status,))
     result = Family({"default": read_profile("default", path)}, now=NOW).overview(since=0)
     assert bool(result["failed"]) is visible
