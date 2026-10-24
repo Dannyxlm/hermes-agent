@@ -53,13 +53,14 @@ def test_unknown_recorded_ends_obey_window_and_limit(tmp_path):
     assert result["truncated"] is True
 
 
-@pytest.mark.parametrize("requested", ["A", "B"])
+@pytest.mark.parametrize("requested", ["A", "B", "stale"])
 def test_compressed_root_keeps_both_physical_launchers(tmp_path, requested):
     path = tmp_path / "state.db"
     with fixture_db(path) as db:
         session(db, "A", source="desktop", ended=NOW - 3600)
         db.execute("UPDATE sessions SET end_reason='compression' WHERE id='A'")
         session(db, "B", source="desktop", parent="A")
+        session(db, "stale", source="desktop", parent="A", ended=NOW - 100)
         for sid, parent in (("lane", "A"), ("helper", "B")):
             session(db, sid)
             launch(db, sid, launcher=parent, kind="lane" if sid == "lane" else "helper",
