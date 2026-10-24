@@ -320,3 +320,23 @@ def test_query_bound_with_real_schema_and_hundreds_of_launches(tmp_path):
     result = Family({"default": snapshot}, now=NOW).session_family("default", "root", limit=500)
     assert len(result["nodes"]) == 300 and not result["truncated"]
     assert all(n["status"] == "unknown" for n in result["nodes"])
+
+
+
+def test_failed_inbox_waits_for_helper_parent_turn_but_not_other_work(tmp_path):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "failed-inbox.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        for i, kind in enumerate(("helper", "lane", "teammate", "check_in_run", "process", "background")):
+            if kind != "process":
+                session(db, kind)
+            launch(db, kind, kind=kind, cause="error", finished=NOW - 10 + i)
+    profiles = {"default": read_profile("default", path)}
+    running = Family(profiles, live={("default", "root"): {"running": True}}, now=NOW).overview(since=0)
+    assert [n["kind"] for n in running["failed"]] == ["background", "process", "check_in_run", "teammate", "lane"]
+    idle = Family(profiles, live={("default", "root"): {"running": False}}, now=NOW).overview(since=0)
+    assert [n["kind"] for n in idle["failed"]] == ["background", "process", "check_in_run", "teammate", "lane", "helper"]
+    unknown = Family(profiles, now=NOW).overview(since=0)
+    assert "helper" not in {n["kind"] for n in unknown["failed"]}
+    assert Family(profiles, now=NOW).overview(since=NOW)["failed"] == []
