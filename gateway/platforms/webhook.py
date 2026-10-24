@@ -621,10 +621,10 @@ class WebhookAdapter(BasePlatformAdapter):
         async def _fire_cron_job() -> None:
             try:
                 from tools.cronjob_tools import execute_job_for_event
-                # The job store (cron/jobs.json) and the run belong to the ROUTED profile, not the gateway's
-                # default home; to_thread copies contextvars so the scope follows. A cron job is a full agent
-                # run (minutes) — keep it off the gateway event loop.
-                with self._profile_scope(profile):
+                # The job store (cron/jobs.json) and the run belong to the route's owner (``_ingress_scope``),
+                # not a named launcher's home; to_thread copies contextvars so the scope follows. A cron job
+                # is a full agent run (minutes) — keep it off the gateway event loop.
+                with self._ingress_scope(profile):
                     result = await asyncio.to_thread(execute_job_for_event, job_ref, event_context)
                 if not result.get("success"):
                     logger.warning("[webhook] cron-trigger job=%s route=%s did not complete cleanly: %s", job_ref,

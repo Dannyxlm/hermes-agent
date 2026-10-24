@@ -18,6 +18,7 @@ where an unbound read raised ``UnscopedSecretError`` and the event was dropped a
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -85,18 +86,33 @@ def multiplex_guard():
     set_multiplex_active(False)
 
 
+@pytest.fixture(autouse=True)
+def admissions(monkeypatch):
+    """Stand in for the durable producer every agent-run route admits through (the HTTP ack waits
+    for it); each admitted event lands on its adapter's ``captured``. Finalizing is a no-op."""
+    from gateway.platforms import webhook_ingress
+
+    async def _admit(adapter, event):
+        adapter.captured.append(event)
+        return SimpleNamespace(admission_id=f"adm-{len(adapter.captured)}",
+                               ref=SimpleNamespace(profile_id="default"))
+
+    async def _finalize(self, event, authority, receipt):
+        return None
+
+    monkeypatch.setattr(webhook_ingress, "admit_producer", _admit)
+    monkeypatch.setattr(WebhookAdapter, "_finalize_delivery", _finalize)
+    monkeypatch.setattr("gateway.session_authorities.authority_for_profile_id", lambda runner, pid: object())
+
+
 def _adapter(routes, *, multiplex_profiles):
     adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={
         "host": "127.0.0.1", "port": 0, "routes": routes, "rate_limit": 100}))
     runner = MagicMock()
     runner.config.multiplex_profiles = multiplex_profiles
     adapter.gateway_runner = runner
+    adapter._message_handler = SimpleNamespace(__self__=runner)
     adapter.captured = []
-
-    async def _capture(event):
-        adapter.captured.append(event)
-
-    adapter.handle_message = _capture
     return adapter
 
 
@@ -256,3 +272,26 @@ async def test_single_profile_gateway_enters_no_scope(tmp_path, monkeypatch, see
     await async_wait_until(lambda: adapter.captured, what="single-profile dispatch")
     assert overrides == [None]
     assert seen == [(home.resolve(), "process-env-value")]
+
+
+@pytest.mark.asyncio
+async def test_bare_cron_job_route_runs_in_the_default_root(homes, multiplex_guard, monkeypatch):
+    """A bare ``cron_job`` route fires default's job: its job store and secrets are the default root's,
+    never the named launcher's."""
+    from agent.secret_scope import get_secret
+    from hermes_constants import get_hermes_home
+
+    fired = []
+
+    def _execute(job_ref, extra_prompt=None):
+        fired.append((job_ref, get_hermes_home().resolve(), get_secret(_KEY)))
+        return {"claimed": True, "success": True, "error": None}
+
+    monkeypatch.setattr("tools.cronjob_tools.execute_job_for_event", _execute)
+    adapter = _adapter({"nightly": {"secret": _INSECURE_NO_AUTH, "cron_job": "nightly-report",
+                                    "prompt": "Event: {note}"}}, multiplex_profiles=True)
+    async with TestClient(TestServer(_app(adapter))) as cli:
+        resp = await _post(cli, "/webhooks/nightly", "cron-1")
+        assert resp.status == 202, await resp.text()
+    await async_wait_until(lambda: fired, what="the cron job run")
+    assert fired == [("nightly-report", homes["root"].resolve(), "default-owner")]

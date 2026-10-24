@@ -521,10 +521,11 @@ class TestPayloadFilters:
 
         monkeypatch.setattr(local_env, "build_subprocess_env", _build_reading_a_secret)
         adapter.handle_message = _capture
-        set_multiplex_active(True)
         try:
             app = _create_app(adapter)
             async with TestClient(TestServer(app)) as cli:
+                # After startup: the mounted route authority's GatewayRunner sets it from its config (off).
+                set_multiplex_active(True)
                 resp = await cli.post("/webhooks/probe", json={"note": "hi"},
                                       headers={"X-GitHub-Delivery": "bare-multiplex-1"})
                 assert resp.status == 202, await resp.text()
