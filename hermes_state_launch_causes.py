@@ -37,8 +37,7 @@ def finish_for_session(conn, session_id, terminal_cause, *, turn_only=False):
     conn.execute("UPDATE work_launches SET finished_at=COALESCE(finished_at,?),terminal_cause=? WHERE "
                  "(finished_at IS NULL OR (terminal_cause='unknown' AND ? != 'unknown')) "
                  'AND child_session_id IN (SELECT value FROM json_each(?)) '
-                 "AND (?=0 OR kind NOT IN ('lane','teammate') OR child_session_id IN "
-                 "(SELECT id FROM sessions WHERE source='oneshot'))",
+                 "AND (?=0 OR kind NOT IN ('lane','teammate'))",
                  (time.time(), terminal_cause, terminal_cause, json.dumps(sorted(ids)), int(turn_only)))
 
 
