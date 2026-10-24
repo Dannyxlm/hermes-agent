@@ -1,0 +1,176 @@
+{
+  "appTitle": "업무 현황판",
+  "appSubtitle": "대화, 백그라운드 작업 및 예약 작업의 실시간 상태",
+  "openIn": "링크를 열 위치",
+  "discordApp": "Discord 앱",
+  "browser": "브라우저",
+  "warnings": "일부 데이터를 사용할 수 없습니다",
+  "waiting": "내 답변 대기",
+  "waitingHint": "마지막 답변에서 결정을 요청한 대화가 오래된 순으로 표시됩니다",
+  "unanswered": "메시지를 보냈지만 답변이 없음",
+  "waitingEmpty": "내 답변을 기다리는 대화가 없습니다",
+  "unansweredAge": "{value} 동안 대기 중",
+  "waitingAge": "{value} 동안 대기 중",
+  "causedBy": "이유: {value}",
+  "you": "나: {value}",
+  "openInDiscord": "Discord에서 열기",
+  "web": "웹",
+  "dismiss": "숨기기",
+  "seen": "확인 완료",
+  "collapse": "접기",
+  "expandMore": {
+    "other": "{count}개 더 보기"
+  },
+  "running": "실행 중",
+  "runningHint": "전체 막대는 1시간을 나타냅니다",
+  "allIdle": "모두 유휴 상태",
+  "runningFor": "{value} 동안 실행 중",
+  "stalledFor": "{value} 동안 활동 없음",
+  "doing": "처리 중",
+  "privateConversation": "대화 상대: {who}",
+  "someone": "누군가",
+  "privateContent": "내용 숨김",
+  "delegations": "백그라운드 작업",
+  "noDelegations": "실행 중인 백그라운드 작업이 없습니다",
+  "completedNotDelivered": "완료됐지만 결과가 전달되지 않음",
+  "delegationHint": "결과가 더 최근 대화에 있을 수 있습니다. 대화를 열어 확인한 뒤 카드를 숨기세요",
+  "parallel": {
+    "other": "하위 에이전트 {count}개 병렬 실행 중"
+  },
+  "completedAt": "{value} 완료",
+  "handled": "처리 완료",
+  "cron": "예약 작업",
+  "cronPaused": {
+    "other": "{count}개 일시 정지"
+  },
+  "cronRunning": "실행 중",
+  "cronScript": "스크립트",
+  "cronUpcoming": "다음 실행: {time} · {name}",
+  "cronReason": {
+    "lastError": "오류: {detail}",
+    "deliveryError": "결과 전달 실패: {detail}",
+    "state": "상태: {detail}",
+    "overdue": "예정 시간 초과"
+  },
+  "recentDone": "최근 완료",
+  "recentDoneHint": "지난 하루 이내에 완료됐으며, 마지막 답변이 질문이 아닌 보고입니다",
+  "promised": "추후 답변을 약속함",
+  "none": "없음",
+  "goals": "장기 목표",
+  "staleGoals": {
+    "other": "이전 목표 {count}개 숨김"
+  },
+  "noGoals": "조회 기간 내 장기 목표가 없습니다",
+  "progress": {
+    "other": "{turns}/{count}턴"
+  },
+  "active": "활성",
+  "paused": "일시 정지",
+  "gateway": {
+    "connected": "연결됨",
+    "retrying": "다시 연결 중",
+    "disconnected": "연결 끊김",
+    "error": "오류"
+  },
+  "refreshed": "{value} 전 업데이트",
+  "justNow": "방금 업데이트",
+  "loading": "불러오는 중…",
+  "loadFailed": "불러오기 실패: {error}",
+  "stale": "{value} 동안 데이터가 업데이트되지 않음",
+  "sectionUnavailable": "섹션을 사용할 수 없음",
+  "neverRan": "실행 이력 없음",
+  "ago": "{value} 전",
+  "in": "{value} 후",
+  "soon": "곧",
+  "conversation": "대화",
+  "activity": {
+    "output": "응답 출력 중",
+    "response": "모델 응답 대기",
+    "waiting": "{who} 응답 대기 · {duration}",
+    "call": "모델 호출 #{n}",
+    "callDone": "모델 호출 완료",
+    "starting": "방금 시작됨",
+    "retry": "API 호출 재시도 중 {a}/{b}",
+    "tool": "도구 실행 중: {tool}",
+    "toolDone": "도구 실행 완료: {tool}",
+    "toolError": "도구 실행 실패: {tool}",
+    "terminal": "터미널 명령 실행 중 ({duration})",
+    "script": "스크립트 실행 중 ({duration})",
+    "compressed": "컨텍스트 압축 완료",
+    "subtask": "하위 작업 · {value}"
+  },
+  "section": {
+    "conversations": "대화",
+    "gateway": "게이트웨이 상태",
+    "database": "Hermes 데이터베이스"
+  },
+  "issue": {
+    "missingTable": "{section}: {detail} 테이블을 찾을 수 없음",
+    "missingColumn": "{section}: {detail} 열을 찾을 수 없음",
+    "collectorFailed": "{section}: 데이터를 읽을 수 없음 ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "이메일",
+    "sms": "문자 메시지"
+  },
+  "chat": {
+    "empty": "지금은 처리할 일이 없습니다.",
+    "ownerOnly": "이 요약은 당번 보드 소유자만 볼 수 있습니다.",
+    "configureOwner": "채팅에서 사용하기 전에 duty-board/settings.json에서 owner를 설정하세요.",
+    "oldHost": "채팅에서 이 명령을 사용하려면 Hermes 0.21.7 이상이 필요합니다.",
+    "isolated": "플러그인이 별도 프로세스에서 실행되는 동안(plugins.isolation: host)에는 채팅 요약을 쓸 수 없습니다. 그곳에서는 호출한 사람을 확인할 수 없기 때문입니다. 대시보드를 사용하거나 plugins.isolation을 in_process로 설정하세요.",
+    "dmHint": "자세한 내용은 봇에게 DM을 보내거나 대시보드를 여세요.",
+    "error": "당번 보드를 사용할 수 없습니다({error}).",
+    "stalled": "{age} (정체됨)",
+    "privatePlace": "비공개 대화",
+    "untitled": "제목 없음",
+    "localPlace": "로컬",
+    "waitingHeading": "답변 대기 (미응답 포함)",
+    "cronHeading": "예약 작업 문제",
+    "units": {
+      "minute": "분",
+      "hour": "시간",
+      "day": "일"
+    },
+    "headline": "업무 현황판 · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "내용 숨김",
+    "runningHeading": "실행 중",
+    "droppedHeading": "완료됐지만 결과가 전달되지 않음",
+    "goalsHeading": "장기 목표",
+    "waitingCount": {
+      "other": "답변 대기 {count}건"
+    },
+    "runningCount": {
+      "other": "실행 중 {count}건"
+    },
+    "droppedCount": {
+      "other": "미전달 결과 {count}건"
+    },
+    "cronCount": {
+      "other": "예약 작업 문제 {count}건"
+    },
+    "goalsCount": {
+      "other": "지속 목표 {count}개"
+    },
+    "more": {
+      "other": "추가 {count}건"
+    }
+  }
+}

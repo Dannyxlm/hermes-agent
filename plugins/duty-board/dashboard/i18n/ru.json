@@ -1,0 +1,209 @@
+{
+  "appTitle": "Панель дежурного",
+  "appSubtitle": "Текущее состояние диалогов, фоновых задач и задач по расписанию",
+  "openIn": "Где открывать ссылки",
+  "discordApp": "Приложение Discord",
+  "browser": "Браузер",
+  "warnings": "Некоторые данные недоступны",
+  "waiting": "Ждут вашего ответа",
+  "waitingHint": "В последнем ответе запрошено ваше решение; сначала самые давние диалоги",
+  "unanswered": "Вы написали, но ответа нет",
+  "waitingEmpty": "Ничего не ждёт вашего ответа",
+  "unansweredAge": "ожидание: {value}",
+  "waitingAge": "ожидание: {value}",
+  "causedBy": "Причина: {value}",
+  "you": "Вы: {value}",
+  "openInDiscord": "Открыть в Discord",
+  "web": "Веб",
+  "dismiss": "Скрыть",
+  "seen": "Просмотрено",
+  "collapse": "Свернуть",
+  "expandMore": {
+    "one": "Показать ещё {count} элемент",
+    "few": "Показать ещё {count} элемента",
+    "many": "Показать ещё {count} элементов",
+    "other": "Показать ещё {count} элемента"
+  },
+  "running": "Выполняются",
+  "runningHint": "Полная шкала соответствует одному часу",
+  "allIdle": "Нет активности",
+  "runningFor": "выполняется {value}",
+  "stalledFor": "без активности {value}",
+  "doing": "В работе",
+  "privateConversation": "Собеседник: {who}",
+  "someone": "кто-то",
+  "privateContent": "Содержимое скрыто",
+  "delegations": "Фоновые задачи",
+  "noDelegations": "Нет выполняющихся фоновых задач",
+  "completedNotDelivered": "Завершено, но результат не доставлен",
+  "delegationHint": "Результат может быть в более новом диалоге; откройте его, проверьте и скройте карточку",
+  "parallel": {
+    "one": "Параллельно: {count} субагент",
+    "few": "Параллельно: {count} субагента",
+    "many": "Параллельно: {count} субагентов",
+    "other": "Параллельно: {count} субагента"
+  },
+  "completedAt": "завершено: {value}",
+  "handled": "Обработано",
+  "cron": "Задачи по расписанию",
+  "cronPaused": {
+    "one": "{count} задача на паузе",
+    "few": "{count} задачи на паузе",
+    "many": "{count} задач на паузе",
+    "other": "{count} задачи на паузе"
+  },
+  "cronRunning": "Выполняется",
+  "cronScript": "скрипт",
+  "cronUpcoming": "далее: {time} · {name}",
+  "cronReason": {
+    "lastError": "Ошибка: {detail}",
+    "deliveryError": "Не удалось доставить результат: {detail}",
+    "state": "Состояние: {detail}",
+    "overdue": "Просрочено"
+  },
+  "recentDone": "Недавно завершённые",
+  "recentDoneHint": "За последние сутки; последний ответ — отчёт, а не вопрос",
+  "promised": "Обещано вернуться с ответом",
+  "none": "Нет",
+  "goals": "Долгосрочные цели",
+  "staleGoals": {
+    "one": "Скрыта {count} более ранняя цель",
+    "few": "Скрыты {count} более ранние цели",
+    "many": "Скрыто {count} более ранних целей",
+    "other": "Скрыто {count} более ранней цели"
+  },
+  "noGoals": "За рассматриваемый период нет долгосрочных целей",
+  "progress": {
+    "one": "{turns}/{count} ход",
+    "few": "{turns}/{count} хода",
+    "many": "{turns}/{count} ходов",
+    "other": "{turns}/{count} хода"
+  },
+  "active": "Активно",
+  "paused": "На паузе",
+  "gateway": {
+    "connected": "подключено",
+    "retrying": "переподключение",
+    "disconnected": "отключено",
+    "error": "ошибка"
+  },
+  "refreshed": "обновлено {value} назад",
+  "justNow": "только что обновлено",
+  "loading": "Загрузка…",
+  "loadFailed": "Не удалось загрузить: {error}",
+  "stale": "данные не обновлялись {value}",
+  "sectionUnavailable": "Раздел недоступен",
+  "neverRan": "Ещё не запускалось",
+  "ago": "{value} назад",
+  "in": "через {value}",
+  "soon": "скоро",
+  "conversation": "Диалог",
+  "activity": {
+    "output": "Потоковый вывод",
+    "response": "Ожидание ответа модели",
+    "waiting": "Ожидание ответа: {who} · {duration}",
+    "call": "Вызов модели №{n}",
+    "callDone": "Вызов модели завершён",
+    "starting": "Только что запущено",
+    "retry": "Повторный вызов API {a}/{b}",
+    "tool": "Выполняется: {tool}",
+    "toolDone": "Завершено: {tool}",
+    "toolError": "Ошибка: {tool}",
+    "terminal": "Выполняется команда терминала ({duration})",
+    "script": "Выполняется скрипт ({duration})",
+    "compressed": "Сжатие контекста завершено",
+    "subtask": "Подзадача · {value}"
+  },
+  "section": {
+    "conversations": "Диалоги",
+    "gateway": "Статус шлюза",
+    "database": "База данных Hermes"
+  },
+  "issue": {
+    "missingTable": "{section}: таблица {detail} не найдена",
+    "missingColumn": "{section}: столбец {detail} не найден",
+    "collectorFailed": "{section}: не удалось прочитать данные ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "Электронная почта",
+    "sms": "СМС"
+  },
+  "chat": {
+    "empty": "Сейчас ничто не требует вашего внимания.",
+    "ownerOnly": "Эта сводка доступна только владельцу панели.",
+    "configureOwner": "Задайте owner в duty-board/settings.json перед использованием команды в чате.",
+    "oldHost": "Для этой команды в чате нужен Hermes 0.21.7 или новее.",
+    "isolated": "Сводки в чате недоступны, пока плагины работают в отдельном процессе (plugins.isolation: host): там нельзя проверить, кто вызывает команду. Используйте панель или задайте plugins.isolation: in_process.",
+    "dmHint": "Напишите боту в личные сообщения или откройте панель для подробностей.",
+    "error": "Панель недоступна ({error}).",
+    "stalled": "{age} (застряло)",
+    "privatePlace": "Личная беседа",
+    "untitled": "Без названия",
+    "localPlace": "Локально",
+    "waitingHeading": "Ждут вас (включая сообщения без ответа)",
+    "cronHeading": "Проблемы заданий по расписанию",
+    "units": {
+      "minute": "мин",
+      "hour": "ч",
+      "day": "д"
+    },
+    "headline": "Панель дежурного · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "Содержимое скрыто",
+    "runningHeading": "Выполняются",
+    "droppedHeading": "Завершено, но результат не доставлен",
+    "goalsHeading": "Долгосрочные цели",
+    "waitingCount": {
+      "one": "{count} ждёт вас",
+      "few": "{count} ждут вас",
+      "many": "{count} ждут вас",
+      "other": "{count} ждут вас"
+    },
+    "runningCount": {
+      "one": "{count} выполняется",
+      "few": "{count} выполняются",
+      "many": "{count} выполняются",
+      "other": "{count} выполняются"
+    },
+    "droppedCount": {
+      "one": "{count} недоставленный результат",
+      "few": "{count} недоставленных результата",
+      "many": "{count} недоставленных результатов",
+      "other": "{count} недоставленных результатов"
+    },
+    "cronCount": {
+      "one": "{count} проблема задания по расписанию",
+      "few": "{count} проблемы заданий по расписанию",
+      "many": "{count} проблем заданий по расписанию",
+      "other": "{count} проблем заданий по расписанию"
+    },
+    "goalsCount": {
+      "one": "{count} постоянная цель",
+      "few": "{count} постоянные цели",
+      "many": "{count} постоянных целей",
+      "other": "{count} постоянных целей"
+    },
+    "more": {
+      "one": "Ещё {count}",
+      "few": "Ещё {count}",
+      "many": "Ещё {count}",
+      "other": "Ещё {count}"
+    }
+  }
+}

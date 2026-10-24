@@ -483,6 +483,7 @@ None of them are required; include only the layers you need.
 | `entry` | Yes | Path to the JS bundle relative to `dashboard/`. Defaults to `dist/index.js`. |
 | `css` | No | Path to a CSS file to inject as a `<link>` tag. |
 | `api` | No | Path to a Python file with FastAPI routes. Mounted at `/api/plugins/<name>/`. |
+| `default_enabled` | No | Bundled dashboards default to `true`. Set `false` to require the plugin name in `plugins.enabled` before its API, assets, or tab are available. `plugins.disabled` always wins. User plugins always require explicit enablement. |
 
 #### Available icons
 

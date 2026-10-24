@@ -1,0 +1,198 @@
+{
+  "appTitle": "Quadro de atividade",
+  "appSubtitle": "Estado em tempo real das conversas, das tarefas em segundo plano e das tarefas agendadas",
+  "openIn": "Abrir ligações em",
+  "discordApp": "Aplicação Discord",
+  "browser": "Navegador",
+  "warnings": "Alguns dados não estão disponíveis",
+  "waiting": "À espera da sua resposta",
+  "waitingHint": "A última resposta pede uma decisão sua; conversas mais antigas primeiro",
+  "unanswered": "Enviou uma mensagem, mas não recebeu resposta",
+  "waitingEmpty": "Nada está à espera da sua resposta",
+  "unansweredAge": "à espera há {value}",
+  "waitingAge": "à espera há {value}",
+  "causedBy": "Motivo: {value}",
+  "you": "A sua mensagem: {value}",
+  "openInDiscord": "Abrir no Discord",
+  "web": "Web",
+  "dismiss": "Ocultar",
+  "seen": "Visto",
+  "collapse": "Recolher",
+  "expandMore": {
+    "one": "Mostrar mais {count} elemento",
+    "many": "Mostrar mais {count} elementos",
+    "other": "Mostrar mais {count} elementos"
+  },
+  "running": "A executar",
+  "runningHint": "Uma barra cheia representa uma hora",
+  "allIdle": "Todos inativos",
+  "runningFor": "a executar há {value}",
+  "stalledFor": "sem atividade há {value}",
+  "doing": "A trabalhar",
+  "privateConversation": "Conversa com {who}",
+  "someone": "alguém",
+  "privateContent": "Conteúdo oculto",
+  "delegations": "Tarefas em segundo plano",
+  "noDelegations": "Sem tarefas em segundo plano a executar",
+  "completedNotDelivered": "Concluída, resultado não entregue",
+  "delegationHint": "O resultado pode estar numa conversa mais recente; abra-a para verificar e depois oculte o cartão",
+  "parallel": {
+    "one": "{count} subagente em paralelo",
+    "many": "{count} subagentes em paralelo",
+    "other": "{count} subagentes em paralelo"
+  },
+  "completedAt": "concluída: {value}",
+  "handled": "Tratada",
+  "cron": "Tarefas agendadas",
+  "cronPaused": {
+    "one": "{count} em pausa",
+    "many": "{count} em pausa",
+    "other": "{count} em pausa"
+  },
+  "cronRunning": "A executar",
+  "cronScript": "ficheiro de comandos",
+  "cronUpcoming": "próxima execução {time} · {name}",
+  "cronReason": {
+    "lastError": "Erro: {detail}",
+    "deliveryError": "Falha na entrega: {detail}",
+    "state": "Estado: {detail}",
+    "overdue": "Em atraso"
+  },
+  "recentDone": "Concluídas recentemente",
+  "recentDoneHint": "Nas últimas 24 horas; a última resposta foi um relatório, não uma pergunta",
+  "promised": "Prometeu responder mais tarde",
+  "none": "Nenhuma",
+  "goals": "Objetivos a longo prazo",
+  "staleGoals": {
+    "one": "{count} objetivo mais antigo oculto",
+    "many": "{count} objetivos mais antigos ocultos",
+    "other": "{count} objetivos mais antigos ocultos"
+  },
+  "noGoals": "Sem objetivos a longo prazo no período consultado",
+  "progress": {
+    "one": "{turns}/{count} turno",
+    "many": "{turns}/{count} turnos",
+    "other": "{turns}/{count} turnos"
+  },
+  "active": "Ativo",
+  "paused": "Em pausa",
+  "gateway": {
+    "connected": "ligado",
+    "retrying": "a restabelecer ligação",
+    "disconnected": "desligado",
+    "error": "erro"
+  },
+  "refreshed": "atualizado há {value}",
+  "justNow": "atualizado agora mesmo",
+  "loading": "A carregar…",
+  "loadFailed": "Falha ao carregar: {error}",
+  "stale": "dados sem atualização há {value}",
+  "sectionUnavailable": "Secção indisponível",
+  "neverRan": "Nunca foi executada",
+  "ago": "há {value}",
+  "in": "daqui a {value}",
+  "soon": "em breve",
+  "conversation": "Conversa",
+  "activity": {
+    "output": "A transmitir resposta",
+    "response": "À espera da resposta do modelo",
+    "waiting": "À espera de {who} · {duration}",
+    "call": "Chamada ao modelo n.º {n}",
+    "callDone": "Chamada ao modelo concluída",
+    "starting": "Acabou de começar",
+    "retry": "A repetir chamada à API {a}/{b}",
+    "tool": "A executar {tool}",
+    "toolDone": "{tool} concluído",
+    "toolError": "{tool} falhou",
+    "terminal": "Comando do terminal a executar ({duration})",
+    "script": "Ficheiro de comandos a executar ({duration})",
+    "compressed": "Compressão do contexto concluída",
+    "subtask": "Subtarefa · {value}"
+  },
+  "section": {
+    "conversations": "Conversas",
+    "gateway": "Estado do gateway",
+    "database": "Base de dados Hermes"
+  },
+  "issue": {
+    "missingTable": "{section}: tabela {detail} não encontrada",
+    "missingColumn": "{section}: coluna {detail} não encontrada",
+    "collectorFailed": "{section}: não foi possível ler ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "Correio eletrónico",
+    "sms": "SMS"
+  },
+  "chat": {
+    "empty": "Nada precisa da sua atenção agora.",
+    "ownerOnly": "Este resumo está disponível apenas para o proprietário do painel.",
+    "configureOwner": "Defina owner em duty-board/settings.json antes de usar este comando no chat.",
+    "oldHost": "Este comando precisa do Hermes 0.21.7 ou mais recente no chat.",
+    "isolated": "Os resumos no chat ficam indisponíveis enquanto os plugins rodam em um processo separado (plugins.isolation: host): ali não é possível verificar quem chama. Use o painel ou defina plugins.isolation: in_process.",
+    "dmHint": "Envie uma mensagem privada ao bot ou abra o painel para ver os detalhes.",
+    "error": "Painel indisponível ({error}).",
+    "stalled": "{age} (parado)",
+    "privatePlace": "Conversa privada",
+    "untitled": "Sem título",
+    "localPlace": "Localmente",
+    "waitingHeading": "Aguardando você (inclui mensagens sem resposta)",
+    "cronHeading": "Problemas de tarefas agendadas",
+    "units": {
+      "minute": "min",
+      "hour": "h",
+      "day": "d"
+    },
+    "headline": "Quadro de atividade · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "Conteúdo oculto",
+    "runningHeading": "A executar",
+    "droppedHeading": "Concluída, resultado não entregue",
+    "goalsHeading": "Objetivos a longo prazo",
+    "waitingCount": {
+      "one": "{count} aguardando você",
+      "many": "{count} aguardando você",
+      "other": "{count} aguardando você"
+    },
+    "runningCount": {
+      "one": "{count} em execução",
+      "many": "{count} em execução",
+      "other": "{count} em execução"
+    },
+    "droppedCount": {
+      "one": "{count} resultado não entregue",
+      "many": "{count} resultados não entregues",
+      "other": "{count} resultados não entregues"
+    },
+    "cronCount": {
+      "one": "{count} problema de tarefa agendada",
+      "many": "{count} problemas de tarefas agendadas",
+      "other": "{count} problemas de tarefas agendadas"
+    },
+    "goalsCount": {
+      "one": "{count} objetivo permanente",
+      "many": "{count} objetivos permanentes",
+      "other": "{count} objetivos permanentes"
+    },
+    "more": {
+      "one": "+{count} mais",
+      "many": "+{count} mais",
+      "other": "+{count} mais"
+    }
+  }
+}
