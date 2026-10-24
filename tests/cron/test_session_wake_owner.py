@@ -29,10 +29,12 @@ def wake_owner(request, tmp_path, monkeypatch):
     from hermes_constants import get_hermes_home
 
     user = tmp_path / 'user'
-    home = user / '.hermes'
+    home = tmp_path / 'state'
+    home.mkdir(mode=0o700)
+    (home / 'config.yaml').write_text('model: {default: fixture}\n')
     if request.param != 'default':
         home = home / 'profiles' / request.param
-    home.mkdir(parents=True, mode=0o700)
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
     monkeypatch.setattr(Path, 'home', lambda: user)
     monkeypatch.setenv('HOME', str(user))
     monkeypatch.setenv('HERMES_HOME', str(home))
