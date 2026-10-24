@@ -19,6 +19,10 @@ def cron_client(isolated_profiles, monkeypatch):
         path.write_text(json.dumps({"jobs": [{"id": profile, "prompt": "a large job " * 30000}]}))
         os.utime(path, (10, 10))
         paths[profile] = path
+        # Initialize the independent execution ledger before taking a settled validator.
+        from hermes_cli.web_server_cron import _call_cron_for_profile
+        _call_cron_for_profile(profile, "list_jobs", True)
+        os.utime(home / "cron" / "executions.db", (10, 10))
     app = FastAPI()
     app.include_router(cron.router)
     loads = []

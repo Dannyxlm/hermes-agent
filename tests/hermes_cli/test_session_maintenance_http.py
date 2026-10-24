@@ -17,6 +17,9 @@ async def test_maintenance_routes_refuse_live_owner_without_changing_rows(tmp_pa
     with SessionDB(db_path=tmp_path / 'state.db') as db:
         db.create_session('ended-empty', source='cli')
         db.end_session('ended-empty', 'complete')
+        # Owner backfill is maintenance only while there are legacy unowned rows.
+        db._conn.execute("UPDATE sessions SET profile_name=NULL WHERE id='ended-empty'")
+        db._conn.commit()
         before = db.get_session('ended-empty')
         owner = ProfileOwnership()
         owner.reserve([tmp_path])
