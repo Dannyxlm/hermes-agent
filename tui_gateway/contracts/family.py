@@ -101,6 +101,7 @@ class FamilyOverviewResult(Result):
     protocol_version: Literal[1]
     team: list[FamilyTeamMember]
     needs_you: list[FamilyNode]
+    failed: list[FamilyNode]
     roots: list[FamilyRoot]
     coming_up: list[FamilyNode]
     earlier: list[FamilyEarlier]

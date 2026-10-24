@@ -61,7 +61,7 @@ def _family_live(profiles):
         signal = signals.setdefault((profile, sid), {})
         pending = next((r["method"] for r in server_requests.open_requests(runtime_id) if r["method"] in {"approval", "clarify"}), None)
         _, owner = _current_session_steer_authority(runtime_id)
-        signal.update(running=session.get("agent_running") is True, pending_kind=pending, can_answer=owner is session)
+        signal.update(running=session.get("agent_running"), pending_kind=pending, can_answer=owner is session)
     return signals
 
 

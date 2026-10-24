@@ -55,40 +55,33 @@ def _pending(live, generation):
     return None
 
 
+def _stop_context(connection, target, live, registry):
+    if "session:control" not in connection.actor.capabilities:
+        return None
+    authority = connection.authority
+    store = getattr(authority.runner, "session_store", None)
+    if store is None:
+        return None
+    with store._lock:
+        entry = store._entries.get(live.route)
+        if entry is None or entry.session_id != target:
+            return None
+    lookup = getattr(authority.runner, "_resident_agent_for", None)
+    agent = lookup(live.route) if lookup else None
+    if agent is None:
+        return None
+    owners = {target, agent.session_id}
+    if registry is not None:
+        with registry._active_subagents_lock:
+            owners.update(r["subagent_id"] for r in registry._active_subagents.values()
+                          if registry._is_descendant_of(r.get("agent"), agent))
+    return agent, (str(Path(authority.profile_id).resolve()), {live.route, target}, owners)
+
+
 def _live_signals(connections, profiles):
     import sys
-    stop_parents, process_owners = [], []
+    stop_parents, process_owners, session_signals = [], [], {}
     registry = sys.modules.get("tools.delegate_tool_registry")
-    for profile, connection in connections.items():
-        if profile not in profiles or "session:control" not in connection.actor.capabilities:
-            continue
-        authority = connection.authority
-        lookup = getattr(authority.runner, "_resident_agent_for", None)
-        for sid, live in tuple(authority.sessions.items()):
-            if live.superseded:
-                continue
-            try:
-                authority.authorize(connection.actor, SessionRef(authority.profile_id, sid), "session:read")
-            except RuntimeStoreError:
-                continue
-            agent = lookup(live.route) if lookup else None
-            target = profiles[profile].aliases.get(sid, sid)
-            owners = {target}
-            if agent is not None:
-                stop_parents.append(agent)
-                owners.add(agent.session_id)
-                if registry is not None:
-                    with registry._active_subagents_lock:
-                        owners.update(r["subagent_id"] for r in registry._active_subagents.values()
-                                      if registry._is_descendant_of(r.get("agent"), agent))
-            process_owners.append((str(Path(authority.profile_id).resolve()), {live.route, target}, owners))
-    def can_stop_helper(agent):
-        return registry is not None and any(registry._is_descendant_of(agent, parent) for parent in stop_parents)
-    def can_stop_process(process):
-        return any(str(Path(process.owner_profile_home).resolve()) == home and process.session_key in keys
-                   and (process.owner_task_id or process.task_id) in owners for home, keys, owners in process_owners)
-    signals = resident_signals({p: c.authority.profile_id for p, c in connections.items() if p in profiles},
-                              can_stop_helper=can_stop_helper, can_stop_process=can_stop_process)
     for profile, connection in connections.items():
         if profile not in profiles:
             continue
@@ -101,11 +94,26 @@ def _live_signals(connections, profiles):
             except RuntimeStoreError:
                 continue
             target = snapshot.aliases.get(sid, sid)
-            signal = signals.setdefault((profile, target), {})
             pending = _pending(live, snapshot.sessions.get(sid, {}).get("runtime_generation"))
-            signal.update(running=live.task is not None and not live.task.done(), pending_kind=pending,
-                          can_answer=("session:respond" if pending == "clarify" else "session:approve")
-                          in connection.actor.capabilities)
+            active_task = live.task is not None and not live.task.done()
+            stored = snapshot.sessions.get(sid, {})
+            running = True if active_task else False if stored.get("turn_unresolved") == 0 and not pending else None
+            session_signals[(profile, target)] = {"running": running, "pending_kind": pending,
+                "can_answer": ("session:respond" if pending == "clarify" else "session:approve") in connection.actor.capabilities}
+            context = _stop_context(connection, target, live, registry)
+            if context:
+                parent, owners = context
+                stop_parents.append(parent)
+                process_owners.append(owners)
+    def can_stop_helper(agent):
+        return registry is not None and any(registry._is_descendant_of(agent, parent) for parent in stop_parents)
+    def can_stop_process(process):
+        return any(str(Path(process.owner_profile_home).resolve()) == home and process.session_key in keys
+                   and (process.owner_task_id or process.task_id) in owners for home, keys, owners in process_owners)
+    signals = resident_signals({p: c.authority.profile_id for p, c in connections.items() if p in profiles},
+                              can_stop_helper=can_stop_helper, can_stop_process=can_stop_process)
+    for key, signal in session_signals.items():
+        signals.setdefault(key, {}).update(signal)
     return signals
 
 

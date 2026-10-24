@@ -41,10 +41,14 @@ def read_profile(name: str, path: Path, *, trace=None) -> Profile:
             conn.set_trace_callback(trace)
         conn.execute("PRAGMA query_only=1")
         conn.execute("BEGIN")
-        columns = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
-        fields = ",".join(f'"{field}"' if field in columns else f'NULL AS "{field}"' for field in SESSION_FIELDS)
-        sessions = {r["id"]: dict(r) for r in conn.execute(f"SELECT {fields} FROM sessions")}
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        fields = ",".join(f's."{field}"' if field in columns else f'NULL AS "{field}"' for field in SESSION_FIELDS)
+        inflight = ("LEFT JOIN (SELECT target_session_id, MAX(status IN ('started','unknown')) AS unresolved, "
+                    "MAX(status='terminal') AS terminal FROM session_admissions GROUP BY target_session_id) a "
+                    "ON a.target_session_id=s.id") if "session_admissions" in tables else ""
+        turn = ",a.unresolved AS turn_unresolved,a.terminal AS turn_terminal" if inflight else ",NULL AS turn_unresolved,NULL AS turn_terminal"
+        sessions = {r["id"]: dict(r) for r in conn.execute(f"SELECT {fields}{turn} FROM sessions s {inflight}")}
         launches = [dict(r) for r in conn.execute("SELECT * FROM work_launches")] if "work_launches" in tables else []
         aliases, owners = {}, {}
         if "state_meta" in tables:
@@ -226,6 +230,21 @@ class Family:
                 "batches": list(batches.values()), "complete": not self.unavailable_profiles,
                 "unavailable_profiles": self.unavailable_profiles, "truncated": truncated, "generated_at": self.now}
 
+    def _helper_parent_idle(self, row):
+        profile = row.get("launcher_profile", row["profile"])
+        sid = row.get("launcher_session_id", row.get("parent_session_id"))
+        signal = self.live.get((profile, sid), {})
+        if signal.get("running") is True or signal.get("pending_kind") in {"approval", "clarify"}:
+            return False
+        if signal.get("running") is False:
+            return True
+        parent = self.by_session.get((profile, sid))
+        if parent and status_for(self.rows[parent], signal, self.now) in FINISHED | {"paused_by_restart"}:
+            return True
+        snapshot = self.profiles.get(profile)
+        session = snapshot.sessions.get(sid, {}) if snapshot else {}
+        return session.get("turn_terminal") == 1 and session.get("turn_unresolved") == 0
+
     def overview(self, *, since=None, coming_up_within=None):
         since = self.now - 43200 if since is None else since
         within = 7200 if coming_up_within is None else coming_up_within
@@ -262,7 +281,13 @@ class Family:
                          else "working" if live else "resting", "live_count": len(live)})
         roots.sort(key=lambda r: max((n["last_activity_at"] or n["started_at"] or 0 for n in r["live_leaves"]), default=0), reverse=True)
         earlier.sort(key=lambda r: r["ended_at"], reverse=True)
+        failed = [node for key, node in all_nodes.items() if node["status"] == "failed"
+                  and node["ended_at"] is not None and node["ended_at"] >= since
+                  and (node["kind"] in {"lane", "teammate", "check_in_run", "process", "background"}
+                       or node["kind"] == "helper" and self._helper_parent_idle(self.rows[key]))]
+        failed.sort(key=lambda node: (node["ended_at"], node["node_id"]), reverse=True)
         return {"protocol_version": 1, "team": team, "needs_you": list(needs.values()), "roots": roots,
                 "coming_up": sorted(coming.values(), key=lambda n: n["next_run_at"]), "earlier": earlier,
+                "failed": failed,
                 "complete": not self.unavailable_profiles, "unavailable_profiles": self.unavailable_profiles,
                 "generated_at": self.now}

@@ -1760,6 +1760,7 @@ export interface FamilyOverviewResult {
   protocol_version: 1
   team: FamilyTeamMember[]
   needs_you: FamilyNode[]
+  failed: FamilyNode[]
   roots: FamilyRoot[]
   coming_up: FamilyNode[]
   earlier: FamilyEarlier[]

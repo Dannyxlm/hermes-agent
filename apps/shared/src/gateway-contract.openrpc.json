@@ -23138,6 +23138,13 @@
             "title": "Needs You",
             "type": "array"
           },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyNode"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
           "roots": {
             "items": {
               "$ref": "#/components/schemas/FamilyRoot"
@@ -23179,6 +23186,7 @@
           "protocol_version",
           "team",
           "needs_you",
+          "failed",
           "roots",
           "coming_up",
           "earlier",
