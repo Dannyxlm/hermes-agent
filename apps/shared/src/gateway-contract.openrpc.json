@@ -1177,6 +1177,24 @@
       }
     },
     {
+      "name": "family.overview",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FamilyOverviewParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FamilyOverviewResult"
+        }
+      }
+    },
+    {
       "name": "file.attach",
       "summary": "Stage a non-image file into the session workspace and hand back its @file: ref.",
       "params": [
@@ -4251,6 +4269,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionEventsStatsResult"
+        }
+      }
+    },
+    {
+      "name": "session.family",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FamilySessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FamilySessionResult"
         }
       }
     },
@@ -22665,6 +22701,667 @@
         "title": "FailedDelegation",
         "type": "object"
       },
+      "FamilyBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "batch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Name"
+          },
+          "parent_node_id": {
+            "title": "Parent Node Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "batch_name",
+          "parent_node_id",
+          "created_at",
+          "size"
+        ],
+        "title": "FamilyBatch",
+        "type": "object"
+      },
+      "FamilyCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          }
+        },
+        "title": "FamilyCapability",
+        "type": "object"
+      },
+      "FamilyEarlier": {
+        "additionalProperties": false,
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/FamilyNode"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "failed_count": {
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "ended_at": {
+            "title": "Ended At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "root",
+          "total_count",
+          "failed_count",
+          "ended_at"
+        ],
+        "title": "FamilyEarlier",
+        "type": "object"
+      },
+      "FamilyNeedsYou": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "approval",
+              "clarify"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "session_id",
+          "profile"
+        ],
+        "title": "FamilyNeedsYou",
+        "type": "object"
+      },
+      "FamilyNode": {
+        "additionalProperties": false,
+        "properties": {
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "parent_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Node Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "full_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Title"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "status": {
+            "enum": [
+              "working",
+              "needs_you",
+              "failed",
+              "done",
+              "paused_by_restart",
+              "stopped",
+              "quiet",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Kind"
+          },
+          "step_tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Tool"
+          },
+          "activity_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Text"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "terminal_cause": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Cause"
+          },
+          "needs_you": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FamilyNeedsYou"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "report_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Hint"
+          },
+          "child_count": {
+            "title": "Child Count",
+            "type": "integer"
+          },
+          "actions": {
+            "items": {
+              "enum": [
+                "open",
+                "answer",
+                "resume",
+                "stop"
+              ],
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "parent_node_id",
+          "kind",
+          "profile",
+          "session_id",
+          "title",
+          "full_title",
+          "batch_id",
+          "status",
+          "step_kind",
+          "step_tool",
+          "activity_text",
+          "started_at",
+          "ended_at",
+          "last_activity_at",
+          "model",
+          "terminal_cause",
+          "needs_you",
+          "next_run_at",
+          "exit_code",
+          "command",
+          "report_hint",
+          "child_count",
+          "actions"
+        ],
+        "title": "FamilyNode",
+        "type": "object"
+      },
+      "FamilyOverviewParams": {
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "coming_up_within": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coming Up Within"
+          }
+        },
+        "title": "FamilyOverviewParams",
+        "type": "object"
+      },
+      "FamilyOverviewResult": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "const": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "team": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyTeamMember"
+            },
+            "title": "Team",
+            "type": "array"
+          },
+          "needs_you": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyNode"
+            },
+            "title": "Needs You",
+            "type": "array"
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyRoot"
+            },
+            "title": "Roots",
+            "type": "array"
+          },
+          "coming_up": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyNode"
+            },
+            "title": "Coming Up",
+            "type": "array"
+          },
+          "earlier": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyEarlier"
+            },
+            "title": "Earlier",
+            "type": "array"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "unavailable_profiles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable Profiles",
+            "type": "array"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "team",
+          "needs_you",
+          "roots",
+          "coming_up",
+          "earlier",
+          "complete",
+          "unavailable_profiles",
+          "generated_at"
+        ],
+        "title": "FamilyOverviewResult",
+        "type": "object"
+      },
+      "FamilyRoot": {
+        "additionalProperties": false,
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/FamilyNode"
+          },
+          "live_leaves": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyNode"
+            },
+            "title": "Live Leaves",
+            "type": "array"
+          },
+          "live_count": {
+            "title": "Live Count",
+            "type": "integer"
+          },
+          "total_count": {
+            "title": "Total Count",
+            "type": "integer"
+          },
+          "needs_you_count": {
+            "title": "Needs You Count",
+            "type": "integer"
+          },
+          "failed_count": {
+            "title": "Failed Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "live_leaves",
+          "live_count",
+          "total_count",
+          "needs_you_count",
+          "failed_count"
+        ],
+        "title": "FamilyRoot",
+        "type": "object"
+      },
+      "FamilySessionParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "required": [
+          "session_id",
+          "profile"
+        ],
+        "title": "FamilySessionParams",
+        "type": "object"
+      },
+      "FamilySessionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "const": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "root": {
+            "$ref": "#/components/schemas/FamilyNode"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/FamilyBatch"
+            },
+            "title": "Batches",
+            "type": "array"
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "unavailable_profiles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable Profiles",
+            "type": "array"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "root",
+          "nodes",
+          "batches",
+          "complete",
+          "unavailable_profiles",
+          "truncated",
+          "generated_at"
+        ],
+        "title": "FamilySessionResult",
+        "type": "object"
+      },
+      "FamilyTeamMember": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "title": "Profile",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "working",
+              "needs_you",
+              "resting"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "live_count": {
+            "title": "Live Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile",
+          "state",
+          "live_count"
+        ],
+        "title": "FamilyTeamMember",
+        "type": "object"
+      },
       "FileAttachParams": {
         "additionalProperties": false,
         "description": "``path`` when the file is gateway-visible, else ``data_url`` carries the bytes; ``name`` labels\nan uploaded file.",
@@ -31187,6 +31884,17 @@
       "MobileCapabilitiesResult": {
         "additionalProperties": false,
         "properties": {
+          "family": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FamilyCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "protocol_version": {
             "title": "Protocol Version",
             "type": "integer"
@@ -60989,6 +61697,24 @@
       }
     },
     {
+      "name": "family.overview",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FamilyOverviewParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FamilyOverviewResult"
+        }
+      }
+    },
+    {
       "name": "groups.approve",
       "summary": "",
       "params": [
@@ -61381,6 +62107,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionExportResult"
+        }
+      }
+    },
+    {
+      "name": "session.family",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/FamilySessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/FamilySessionResult"
         }
       }
     },

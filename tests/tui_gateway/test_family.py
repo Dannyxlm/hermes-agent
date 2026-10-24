@@ -1,11 +1,11 @@
 """Legacy Family dispatcher parity, capability and transport ownership."""
-from pathlib import Path
-
 import pytest
 
 from hermes_state import SessionDB
-from tests.test_hermes_family import LAUNCH_DDL, NOW, launch
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
+from tests.test_hermes_family import LAUNCH_DDL, launch
+from tests.tui_gateway.test_methods_mobile import rpc
+
+pytest_plugins = ["tests.tui_gateway.test_methods_mobile"]
 from tui_gateway import server
 
 

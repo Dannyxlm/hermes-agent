@@ -8,6 +8,7 @@ from pydantic import Field
 from .base import Params, Payload, Result
 from .common import PendingApproval, TranscriptMessage
 from .media import VideoUploadLimits
+from .family import FamilyCapability
 from .prompt_voice import PromptOrigin, PromptSubmitResult
 from .registry import event, method
 from .server_requests import ClarifyQuestion
@@ -40,6 +41,7 @@ class MobileHumanInputCapability(Result):
 
 
 class MobileCapabilitiesResult(Result):
+    family: FamilyCapability | None = None
     protocol_version: int
     methods: list[str]
     features: list[str]
