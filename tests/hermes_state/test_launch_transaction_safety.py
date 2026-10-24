@@ -18,15 +18,15 @@ def local_receipt(tmp_path, *, cron=False):
     from gateway.session_policy import build_policy
     request = dict(source='cli', cwd=str(tmp_path), model='fixture', toolsets=[],
                    started_by_session='parent', started_by_profile='default', launch_kind='lane', launch_id='launch')
-    if cron:
-        request.update(request_id='run', cron_job=dict(id='job', creator_profile='default',
-                                                      creator_session_id='parent', launch_title='fixture'))
-        request.pop('started_by_session')
     source = SessionSource(platform=Platform.LOCAL, chat_id='child', user_id='human', chat_type='dm')
     entry = SessionEntry('local:child', 'child', _now(), _now(), origin=source, platform=Platform.LOCAL)
-    policy = build_policy(request, {'platform_toolsets': {'cli': []}}, private_secrets={})
+    policy = asdict(build_policy(request, {'platform_toolsets': {'cli': []}}, private_secrets={}))
+    if cron:
+        policy['request_json'] = json.dumps(dict(request, request_id='run', cron_job=dict(
+            id='job', creator_profile='default', creator_session_id='parent', launch_title='fixture'),
+            started_by_session=None))
     return dict(profile_id='profile', principal_id='human', request_id='create', session_id='child',
-                route=entry.session_key, entry=entry.to_dict(), policy=asdict(policy))
+                route=entry.session_key, entry=entry.to_dict(), policy=policy)
 
 
 def snapshot(db):
