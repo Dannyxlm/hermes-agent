@@ -68,3 +68,18 @@ def test_legacy_profile_bound_read_omits_foreign(family_home):
     {"profile": "default", "session_id": "root", "since": "bad"}])
 def test_invalid_family_params_are_refused(family_home, params):
     assert "error" in rpc("session.family", **params)
+
+
+
+def test_legacy_idle_viewer_does_not_erase_resident_work(family_home, monkeypatch):
+    import sys
+    import threading
+    from types import SimpleNamespace
+    agent = SimpleNamespace(session_id="ops-root", _session_db=SimpleNamespace(db_path=family_home / "profiles" / "ops" / "state.db"))
+    registry = SimpleNamespace(_active_subagents_lock=threading.Lock(),
+        _active_subagents={"thread": {"agent": agent, "status": "running"}})
+    monkeypatch.setitem(sys.modules, "tools.delegate_tool_registry", registry)
+    server._sessions["ops"]["agent_running"] = False
+    result = rpc("session.family", profile="default", session_id="root")["result"]
+    thread = next(n for n in result["nodes"] if n["session_id"] == "ops-root")
+    assert thread["status"] == "working"
