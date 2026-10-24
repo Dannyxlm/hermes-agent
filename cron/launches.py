@@ -48,10 +48,17 @@ def record_run(record, *, creating=False, launcher=None, terminal_cause=None):
     from hermes_state_launch_context import launch_writer
     job = get_job(record['job_id'])
     cause = terminal_cause or {'completed': 'success', 'failed': 'error', 'unknown': 'unknown'}.get(record['status'])
-    if creating and (job is None or job.get('creator_profile') is None):
+    if job is not None and job.get('creator_profile') is None:
+        return
+    if creating and job is None:
         return
     if not creating and not cause:
         return
+    if job is None:
+        from agent.runtime_session_store import is_worker_process
+        from hermes_constants import get_hermes_home
+        if not is_worker_process() and not (get_hermes_home() / 'state.db').exists():
+            return
     with launch_writer() as db:
         lid = run_launch_id(record['id'])
         if creating:
