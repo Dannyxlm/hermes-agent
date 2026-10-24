@@ -334,9 +334,26 @@ def test_failed_inbox_waits_for_helper_parent_turn_but_not_other_work(tmp_path):
             launch(db, kind, kind=kind, cause="error", finished=NOW - 10 + i)
     profiles = {"default": read_profile("default", path)}
     running = Family(profiles, live={("default", "root"): {"running": True}}, now=NOW).overview(since=0)
+    assert "failed" in running
     assert [n["kind"] for n in running["failed"]] == ["background", "process", "check_in_run", "teammate", "lane"]
     idle = Family(profiles, live={("default", "root"): {"running": False}}, now=NOW).overview(since=0)
     assert [n["kind"] for n in idle["failed"]] == ["background", "process", "check_in_run", "teammate", "lane", "helper"]
     unknown = Family(profiles, now=NOW).overview(since=0)
     assert "helper" not in {n["kind"] for n in unknown["failed"]}
     assert Family(profiles, now=NOW).overview(since=NOW)["failed"] == []
+
+
+
+@pytest.mark.parametrize("statuses,visible", [(["terminal"], True), (["terminal", "queued"], True),
+    (["terminal", "started"], False), (["terminal", "unknown"], False), ([], False)])
+def test_failed_helper_requires_parent_turn_end_evidence(tmp_path, statuses, visible):
+    from hermes_family import read_profile, Family
+    path = tmp_path / "turns.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        session(db, "helper", source="subagent", parent="root")
+        launch(db, "helper", cause="error", finished=NOW)
+        db.execute("CREATE TABLE session_admissions (target_session_id TEXT,status TEXT)")
+        db.executemany("INSERT INTO session_admissions VALUES ('root',?)", [(status,) for status in statuses])
+    result = Family({"default": read_profile("default", path)}, now=NOW).overview(since=0)
+    assert bool(result["failed"]) is visible

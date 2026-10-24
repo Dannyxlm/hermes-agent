@@ -125,3 +125,43 @@ async def test_canonical_cold_stored_root_never_adopts_or_reads_another_local_ow
             assert not authority.sessions
         finally:
             await connection.close()
+
+
+
+@pytest.mark.asyncio
+async def test_canonical_pending_input_is_generation_bound_and_read_only(tmp_path, monkeypatch):
+    import threading
+    from gateway.session_authority import LiveSession, SessionAuthority
+    from gateway.session_controls import AuthorityConnection
+    from hermes_state_runtime import begin_runtime_epoch
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
+    with SessionDB(db_path=home / "state.db") as db:
+        db.create_session("root", source="test")
+        db.create_session("child", source="subagent", parent_session_id="root")
+        db._conn.executescript(LAUNCH_DDL)
+        launch(db._conn, "child")
+        db._conn.commit()
+        authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="pending",
+                                    db=db, epoch=begin_runtime_epoch(db, instance_id="pending"))
+        live = LiveSession(None, "route")
+        authority.sessions["child"] = live
+        generation = db.get_session("child")["runtime_generation"]
+        prompt = {"kind": "clarify", "prompt_id": "question", "execution_generation": generation}
+        live.controls.pending["question"] = (SimpleNamespace(event=threading.Event()), prompt)
+        before = db._conn.total_changes
+        connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
+        try:
+            request = {"id": 1, "method": "session.family", "params": {"profile": "default", "session_id": "root"}}
+            result = (await connection.dispatch(request))["result"]["nodes"][0]
+            assert result["status"] == "needs_you" and result["needs_you"]["kind"] == "clarify"
+            assert "answer" in result["actions"]
+            prompt["execution_generation"] += 1
+            stale = (await connection.dispatch(request))["result"]["nodes"][0]
+            assert stale["status"] == "unknown" and stale["needs_you"] is None
+            assert list(live.controls.pending) == ["question"]
+            assert db._conn.total_changes == before
+            assert set(authority.sessions) == {"child"}
+        finally:
+            await connection.close()
