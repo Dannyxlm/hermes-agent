@@ -179,6 +179,11 @@ def test_cron_only_updates_changed_launches_in_one_transaction(tmp_path, monkeyp
         begins = [s for s in statements if s.startswith('BEGIN IMMEDIATE')]
         assert len(begins) == 1 and len(writes) == 1, statements
         assert depths and set(depths) == {0}
+        statements.clear()
+        db._conn.set_trace_callback(statements.append)
+        jobs.save_jobs(jobs.load_jobs())
+        db._conn.set_trace_callback(None)
+        assert not any(s.startswith('BEGIN IMMEDIATE') for s in statements), statements
 
 
 def test_cron_execution_does_not_reload_job_store(tmp_path, monkeypatch):
@@ -301,3 +306,59 @@ def test_worker_process_launch_uses_compression_lineage(tmp_path):
     finally:
         store.close()
         db.close()
+
+
+
+@pytest.mark.asyncio
+async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    from dataclasses import replace
+    import psutil
+    from gateway.session_contract import SessionRef
+    from gateway.session_controls import AuthorityConnection
+    from gateway.session_worker import _claim
+    from hermes_cli.process_identity import process_birth
+    from hermes_state_runtime import register_worker_execution
+    from tests.gateway.test_local_source_labels import _authority
+    authority, _ = await _authority(tmp_path, monkeypatch)
+    connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+    worker = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        created = await connection.dispatch({'id': 1, 'method': 'session.create',
+            'params': dict(request_id='worker-fixture', source='cli', cwd=str(tmp_path))})
+        sid = created['result']['stored_session_id']
+        await connection.close()
+        connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+        connection.actor = replace(connection.actor, capabilities=frozenset({'worker:adopt'}))
+        scope = dict(profile_id=authority.profile_id, session_id=sid, execution_id='worker', generation=0,
+                     pid=worker.pid, birth=process_birth(psutil.Process(worker.pid)), secret='fixture-worker-secret')
+        claim = _claim(connection, SessionRef(authority.profile_id, sid), scope)
+        register_worker_execution(authority.db, epoch=authority.epoch, execution_id='worker', session_id=sid,
+                                  generation=0, kind='compute', adoption_secret=claim)
+        params = scope | dict(epoch=authority.epoch, sequence=0, operation='launch.record', payload=dict(
+            launch_id='optional-worker', kind='process', launcher_profile='default', launcher_session_id=sid,
+            child_profile='default', backend_ref='fixture-process'))
+        recorded = await connection.dispatch({'id': 2, 'method': 'worker.persist', 'params': params})
+        assert 'result' in recorded, recorded
+        assert authority.db._read_one('SELECT COUNT(*) FROM worker_receipts')[0] == 0
+        appended = await connection.dispatch({'id': 3, 'method': 'worker.persist', 'params': scope | dict(
+            epoch=authority.epoch, sequence=1, operation='transcript.append',
+            payload={'messages': [{'role': 'assistant', 'content': 'real result'}], 'turn_lease_holder': None})})
+        assert 'result' in appended, appended
+        assert authority.db._read_one('SELECT COUNT(*) FROM worker_receipts')[0] == 1
+        from hermes_state_runtime import RuntimeStoreError
+        await connection.close()
+        connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+        connection.actor = replace(connection.actor, capabilities=frozenset({'worker:adopt'}), subject='another-principal')
+        try:
+            denied = await connection.dispatch({'id': 4, 'method': 'worker.persist', 'params': params})
+        except RuntimeStoreError:
+            denied = {'error': 'permission_denied'}
+        assert 'error' in denied, denied
+    finally:
+        worker.terminate()
+        worker.wait(timeout=5)
+        await connection.close()
+        authority.db.close()
