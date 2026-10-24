@@ -11,12 +11,23 @@ def new_process_session(command, task_id, owner_task_id, session_key, cwd, **ext
     # Gateway routing keys are not SessionDB identities. Capture the scoped durable
     # id while it exists; an exact registered delegate can supply its root instead.
     stored_session_id = get_session_env("HERMES_SESSION_ID", "")
-    return ProcessSession(
+    session = ProcessSession(
         id=f"proc_{uuid.uuid4().hex[:12]}", command=command, task_id=task_id,
         owner_task_id=owner_task_id, session_key=session_key, cwd=cwd,
         **worker_provenance(stored_session_id, owner_task_id),
         parent_session_id=stored_session_id,
         wsl_chain=_is_wsl_launcher_command(command), started_at=time.time(), **extra)
+    from pathlib import Path
+    from hermes_state_launches import short_title
+    from tools.process_launches import record_process_launch
+    home = Path(session.owner_profile_home)
+    session.launch_id = "process:" + session.id
+    session.launcher_session_id = stored_session_id
+    session.launcher_profile = home.name if home.parent.name == "profiles" else "default"
+    from agent.redact import redact_sensitive_text
+    session.title = short_title(redact_sensitive_text(command, code_file=True, force=True))
+    record_process_launch(session)
+    return session
 
 
 def process_activity_snapshot() -> list[dict]:

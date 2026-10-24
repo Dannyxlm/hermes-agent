@@ -39,6 +39,7 @@ from tools.process_registry_output_log import ProcessOutputLogMixin, open_output
 from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
 from tools.process_registry_activity import new_process_session
+from tools.process_launches import fields as launch_fields
 from tools.process_registry_env_log import log_delta_command
 from tools.process_registry_wsl import _is_wsl_launcher_command
 
@@ -500,6 +501,12 @@ class ProcessSession:
     owner_task_id: str = ""                     # RAW spawning task id ("sa-..."); ownership
                                                 # checks must use this, not task_id
     session_key: str = ""                       # Gateway session key (reset protection)
+    launch_id: str = ""
+    launcher_session_id: str = ""
+    launcher_profile: str = ""
+    title: Optional[str] = None
+    batch_id: Optional[str] = None
+    batch_name: Optional[str] = None
     owner_profile_home: str = ""                # Captured at spawn; empty on old checkpoints.
     owner_conversation_id: str = ""             # Durable root, including delegated descendants.
     pid: Optional[int] = None
@@ -609,6 +616,7 @@ _CHECKPOINT_FIELDS = (
     "command", "pid", "pid_scope", "host_start_time", "systemd_unit", "wsl_chain", "cwd",
     "started_at", "task_id", "owner_task_id", "session_key", "owner_profile_home", "owner_conversation_id",
     *(f"watcher_{k}" for k in _WATCHER_ROUTE_KEYS), "watcher_interval",
+    "launch_id", "launcher_session_id", "launcher_profile", "title", "batch_id", "batch_name",
     "parent_session_id", "notify_on_complete", "completion_output_chars", "watch_patterns",
     "heartbeat_seconds", "persist_on_release", "output_log")
 _CHECKPOINT_DEFAULTS = {
@@ -847,7 +855,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             "session_key": session.session_key,
             "task_id": session.task_id,
             "owner_task_id": session.owner_task_id,
-            "command": session.command,
+            "command": session.command, **launch_fields(session),
             **{key: getattr(session, f"watcher_{key}") for key in _WATCHER_ROUTE_KEYS},
         }
 
@@ -1134,6 +1142,14 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         safe_command = _rewrite_bg(command)
         session = self._new_session(command, task_id, owner_task_id, session_key, _resolve_safe_cwd(cwd or os.getcwd()),
                                     persist_on_release=persist_on_release)
+        try:
+            return self._spawn_local_reserved(session, safe_command, env_vars, use_pty)
+        except BaseException:
+            from tools.process_launches import finish_process_launch
+            finish_process_launch(session, "failed_start")
+            raise
+
+    def _spawn_local_reserved(self, session, safe_command, env_vars, use_pty):
         pty_scope_attempted = False
         # A worker's pipe or PTY dies with the worker (the child's next write is SIGPIPE): write to a log.
         log = worker_output_log(session.id)
@@ -1228,6 +1244,14 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         agent-lifecycle kill sweeps (#41225)."""
         session = self._new_session(command, task_id, owner_task_id, session_key, cwd, env_ref=env, pid_scope="sandbox",
                                     persist_on_release=persist_on_release)
+        try:
+            return self._spawn_env_reserved(session, env, command, cwd, timeout)
+        except BaseException:
+            from tools.process_launches import finish_process_launch
+            finish_process_launch(session, "failed_start")
+            raise
+
+    def _spawn_env_reserved(self, session, env, command, cwd, timeout):
         temp_dir = self._env_temp_dir(env)
         log_path, pid_path, exit_path = (f"{temp_dir}/hermes_bg_{session.id}.{ext}" for ext in ("log", "pid", "exit"))
         q = shlex.quote
@@ -1541,6 +1565,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 "task_id": session.task_id,
                 "owner_task_id": session.owner_task_id,
                 "command": session.command,
+                **launch_fields(session),
                 **({"handoff_note": session.handoff_note} if session.handoff_note else {}),
                 **self._exit_fields(session),
                 # A consumer that relays the output (a bot DM's reply) must know it is not whole.
@@ -1935,7 +1960,9 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
 
     @staticmethod
     def _status_head(session: ProcessSession) -> dict:
-        return {"session_id": session.id, "command": session.command, "status": "exited" if session.exited else "running"}
+        from tools.process_launches import fields
+        return {"session_id": session.id, "command": session.command,
+                "status": "exited" if session.exited else "running", **fields(session)}
 
     def poll(self, session_id: str) -> dict:
         """Check status and get new output for a background process."""
@@ -2068,7 +2095,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
     def _exit_snapshot(session: ProcessSession, status: str) -> dict:
         """Result dict for an exited session: exit metadata + the completion-sized output tail."""
         return {
-            "status": status, "command": session.command,
+            "status": status, "command": session.command, **launch_fields(session),
             **ProcessRegistry._exit_fields(session), **_completion_output(session)}
 
     def kill_process(
@@ -2337,7 +2364,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             self._reconcile_local_exit(s)
             entry = {
                 "session_id": s.id,
-                "command": s.command[:200],
+                "command": s.command[:200], **launch_fields(s),
                 "cwd": s.cwd,
                 "pid": s.pid,
                 "owner_task_id": s.owner_task_id,

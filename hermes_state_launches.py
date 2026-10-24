@@ -16,7 +16,7 @@ def validate_record(payload):
     required = {'launch_id', 'kind', 'launcher_profile', 'launcher_session_id', 'child_profile'}
     if (set(payload) - RECORD_FIELDS or not required <= set(payload)
             or any(not isinstance(payload[k], str) or (not payload[k] and not (
-                k == 'launcher_session_id' and payload['kind'] in {'check_in', 'check_in_run'})) for k in required)
+                k == 'launcher_session_id')) for k in required)
             or payload['kind'] not in KINDS
             or any(v is not None and not isinstance(v, str) for k, v in payload.items() if k != 'next_run_at')):
         raise ValueError('invalid launch')

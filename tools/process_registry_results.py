@@ -23,6 +23,7 @@ _RESULT_FIELDS = (
     "id", "command", "cwd", "task_id", "owner_task_id", "session_key",
     "parent_session_id", "started_at", "exit_code", "completion_reason",
     "termination_source", "notify_on_complete",
+    "launch_id", "launcher_session_id", "launcher_profile", "title", "batch_id", "batch_name",
 )
 
 
@@ -50,6 +51,8 @@ def save_completed_result(session) -> None:
     from agent.redact import redact_sensitive_text, redact_terminal_output
     from tools.process_registry import MAX_OUTPUT_CHARS
 
+    from tools.process_launches import finish_process_launch
+    finish_process_launch(session)
     with session._lock:
         record = {key: getattr(session, key) for key in _RESULT_FIELDS}
         record["output"] = session.output_buffer[-MAX_OUTPUT_CHARS:]
@@ -109,7 +112,7 @@ def load_completed_results(prefix: str = "") -> dict:
             if not _owns_result(owner, record.get("parent_session_id")):
                 continue
             session = ProcessSession(
-                **{key: record[key] for key in _RESULT_FIELDS},
+                **{key: record[key] for key in _RESULT_FIELDS if key in record},
                 exited=True, output_buffer=record["output"],
             )
             session._completion_event.set()
