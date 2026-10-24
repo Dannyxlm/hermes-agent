@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 
 from cron import jobs
 from hermes_cli.web_routers import cron
-from tests.hermes_cli.test_web_server_cron_profiles import isolated_profiles
+from tests.hermes_cli import test_web_server_cron_profiles as profile_fixtures
+
+isolated_profiles = profile_fixtures.isolated_profiles
 
 
 @pytest.fixture

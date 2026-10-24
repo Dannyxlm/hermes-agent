@@ -35,6 +35,16 @@ def test_watcher_observes_only_with_ui_demand(tmp_path, monkeypatch, stdio, peer
     assert bool(opened) == bool(stdio or peers)
 
 
+def test_idle_watcher_forgets_disconnected_cursor_peers(monkeypatch):
+    peer = object()
+    monkeypatch.setattr(session_change_cursor, "_subscribers", {peer})
+    monkeypatch.setattr(server, "_live_transports", set())
+    monkeypatch.setattr(server, "_stdio_is_rpc_channel", False)
+    monkeypatch.setattr(server, "_CHANGE_WATCHES", {})
+    server._broadcast_watched_changes(now=10)
+    assert not session_change_cursor.is_subscribed(peer)
+
+
 def test_listener_refresh_survives_no_ui(tmp_path, monkeypatch):
     path = tmp_path / "state.db"
     with sqlite3.connect(path) as conn:
