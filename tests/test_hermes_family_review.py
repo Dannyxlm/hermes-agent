@@ -82,6 +82,25 @@ def test_overview_does_not_route_to_an_unreadable_launcher(tmp_path, launcher_pr
         session(db, "child")
         launch(db, "child", kind="lane", launcher="private", launcher_profile=launcher_profile,
                cause="error", finished=NOW)
-    node = Family({"default": read_profile("default", path)}, now=NOW).overview(since=0)["failed"][0]
+    failed = Family({"default": read_profile("default", path)}, now=NOW).overview(since=0)["failed"]
+    assert len(failed) == 1
+    node = failed[0]
     assert node["root_session_id"] is None
     assert node["root_profile"] is None
+
+
+def test_compressed_teammate_keeps_recorded_kind_and_descendants(tmp_path):
+    path = tmp_path / "state.db"
+    with fixture_db(path) as db:
+        session(db, "root", source="desktop")
+        session(db, "thread", source="desktop", ended=NOW - 3600)
+        db.execute("UPDATE sessions SET end_reason='compression' WHERE id='thread'")
+        session(db, "tip", source="desktop", parent="thread")
+        launch(db, "thread", kind="teammate")
+        session(db, "helper", source="subagent", parent="tip")
+        launch(db, "helper", launcher="tip")
+    result = Family({"default": read_profile("default", path)}, now=NOW).session_family("default", "root", since=0)
+    nodes = {n["session_id"]: n for n in result["nodes"]}
+    assert set(nodes) == {"tip", "helper"}
+    assert nodes["tip"]["kind"] == "teammate"
+    assert nodes["helper"]["parent_node_id"] == nodes["tip"]["node_id"]

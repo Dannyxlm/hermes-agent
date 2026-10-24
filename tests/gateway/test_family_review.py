@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_state import SessionDB
-from tests.test_hermes_family import LAUNCH_DDL, launch
+from tests.test_hermes_family import LAUNCH_DDL, NOW, launch
 
 
 @pytest.fixture
@@ -110,3 +110,28 @@ async def test_live_compressed_root_uses_logical_and_tip_signals(reader):
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+async def test_overview_loads_only_live_and_recent_launch_rows(reader, monkeypatch):
+    import gateway.session_family as module
+    db, _, connection = reader
+    for i in range(1000):
+        db.create_session(f"past-{i}", source="test")
+        launch(db._conn, f"past-{i}", launcher="root", cause="unknown", finished=NOW - 7200)
+    db.create_session("recent", source="test")
+    launch(db._conn, "recent", kind="lane", cause="error", finished=NOW)
+    db._conn.commit()
+    original, loaded = module.read_profile, []
+    def counted(*args, **kwargs):
+        snapshot = original(*args, **kwargs)
+        loaded.append(len(snapshot.sessions) + len(snapshot.launches))
+        return snapshot
+    monkeypatch.setattr(module, "read_profile", counted)
+    try:
+        result = await connection.dispatch({"id": 1, "method": "family.overview", "params": {"since": NOW - 3600}})
+        assert "result" in result, result
+        assert [n["session_id"] for n in result["result"]["failed"]] == ["recent"]
+        assert sum(loaded) <= 4, loaded
+    finally:
+        await connection.close()
