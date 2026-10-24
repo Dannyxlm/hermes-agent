@@ -34,7 +34,7 @@ def take_launch(args=None):
 def validate_intake(fields):
     from hermes_state_optional_launch import warn
     invalid = {k for k, v in fields.items() if k in FIELDS and (not isinstance(v, str) or not v.strip())}
-    if fields.get('launch_kind') is not None and fields['launch_kind'] not in {'lane', 'teammate'}:
+    if fields.get('launch_kind') is not None and ('launch_kind' in invalid or fields['launch_kind'] not in {'lane', 'teammate'}):
         invalid.add('launch_kind')
     for key in invalid:
         fields.pop(key, None)

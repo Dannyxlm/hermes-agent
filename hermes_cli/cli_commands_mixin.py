@@ -1379,9 +1379,10 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         turn_route = self._resolve_turn_agent_config(prompt)
         runtime = turn_route["runtime"]
         from hermes_state_background import reserve_background, finish_background
+        parent_db, parent_session_id = self._session_db, self.session_id
 
         def produce():
-            launch_id = reserve_background(self._session_db, self.session_id, task_id, prompt)
+            launch_id = reserve_background(parent_db, parent_session_id, task_id, prompt)
             from agent.vault_backends.unlock import set_code_prompt_callback, set_save_login_prompt_callback, set_unlock_prompt_callback
             set_sudo_password_callback(self._sudo_password_callback)
             set_approval_callback(self._approval_callback)
@@ -1419,7 +1420,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                 bg_agent.thinking_callback = _bg_thinking
                 try:
                     result = bg_agent.run_conversation(user_message=prompt, task_id=task_id)
-                    finish_background(self._session_db, launch_id, result)
+                    finish_background(parent_db, launch_id, result)
                     response = result.get("final_response", "") if result else ""
                     if not response and result and result.get("error"):
                         response = _gt("model.error_prefix", error=result["error"])
@@ -1432,7 +1433,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                     with suppress(Exception):
                         bg_agent.close()
             except BaseException:
-                finish_background(self._session_db, launch_id, cause="error" if bg_agent else "failed_start")
+                finish_background(parent_db, launch_id, cause="error" if bg_agent else "failed_start")
                 raise
             finally:
                 with suppress(Exception):

@@ -1421,9 +1421,10 @@ def _(rid, params: dict) -> dict:
 
     from hermes_state_background import reserve_background, finish_background
     parent_db = getattr(session["agent"], "_session_db", None) or _get_db()
+    parent_session_id = session["session_key"]
 
     def body():
-        launch_id = reserve_background(parent_db, session["session_key"], task_id, text, "tui")
+        launch_id = reserve_background(parent_db, parent_session_id, task_id, text, "tui")
         from run_agent import AIAgent
         kwargs = _background_agent_kwargs(session["agent"], task_id)
         with _side_agent_session_db(kwargs.get("session_db")) as session_db:
