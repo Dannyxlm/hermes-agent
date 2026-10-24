@@ -166,12 +166,13 @@ def test_profile_not_inferred_from_child_home(tmp_path, monkeypatch):
     assert 'started_by_session' not in lp.take_launch()
 
 
+@pytest.mark.parametrize('source', ['cli', 'oneshot'])
 @pytest.mark.parametrize(('end_reason', 'expected'), [('user_stop', 'user_stop'), ('cli_close', 'success')])
-def test_multiturn_launch_stays_open_after_turn(tmp_path, end_reason, expected):
+def test_multiturn_launch_stays_open_after_turn(tmp_path, end_reason, expected, source):
     from hermes_state_runtime import (admit_session_input, begin_runtime_epoch, claim_session_input,
                                       settle_session_input)
     with SessionDB(tmp_path / 'state.db') as db:
-        db.create_session('child', 'cli')
+        db.create_session('child', source)
         db.record_launch('launch', kind='lane', launcher_profile='default', launcher_session_id='parent',
                          child_profile='default')
         db.bind_launch('launch', child_session_id='child')
