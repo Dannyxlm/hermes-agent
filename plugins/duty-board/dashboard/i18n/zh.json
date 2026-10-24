@@ -1,0 +1,176 @@
+{
+  "appTitle": "值班台",
+  "appSubtitle": "所有对话、后台任务和定时任务的实时状态",
+  "openIn": "打开链接：",
+  "discordApp": "Discord 应用",
+  "browser": "浏览器",
+  "warnings": "部分数据暂不可用",
+  "waiting": "等你回复",
+  "waitingHint": "最后一句是我在问你 / 等你定，按等待时长排序",
+  "unanswered": "你发了消息，但没有看到回复",
+  "waitingEmpty": "没有在等你的事",
+  "unansweredAge": "已 {value}",
+  "waitingAge": "等了 {value}",
+  "causedBy": "起因：{value}",
+  "you": "你：{value}",
+  "openInDiscord": "在 Discord 中打开",
+  "web": "网页",
+  "dismiss": "知道了",
+  "seen": "已看过",
+  "collapse": "收起",
+  "expandMore": {
+    "other": "展开其余 {count} 条"
+  },
+  "running": "正在跑",
+  "runningHint": "进度条满格 = 1 小时",
+  "allIdle": "全部空闲",
+  "runningFor": "已跑 {value}",
+  "stalledFor": "{value} 没动静",
+  "doing": "处理中",
+  "privateConversation": "{who}的对话",
+  "someone": "其他人",
+  "privateContent": "内容不显示",
+  "delegations": "后台子任务",
+  "noDelegations": "没有在跑的后台子任务",
+  "completedNotDelivered": "做完了，但结果没能自动送回原会话",
+  "delegationHint": "可能已在新会话里处理，点开核对后收起",
+  "parallel": {
+    "other": "{count} 路并行"
+  },
+  "completedAt": "完成于 {value}",
+  "handled": "已处理",
+  "cron": "定时任务",
+  "cronPaused": {
+    "other": "{count} 个已暂停"
+  },
+  "cronRunning": "运行中",
+  "cronScript": "脚本",
+  "cronUpcoming": "下一个 {time} · {name}",
+  "cronReason": {
+    "lastError": "报错：{detail}",
+    "deliveryError": "投递失败：{detail}",
+    "state": "状态：{detail}",
+    "overdue": "到点未跑"
+  },
+  "recentDone": "最近完成",
+  "recentDoneHint": "24 小时内，最后一句是汇报而不是提问",
+  "promised": "说过会回来汇报",
+  "none": "暂无",
+  "goals": "长期目标",
+  "staleGoals": {
+    "other": "另有 {count} 个超过时间范围的旧目标未显示"
+  },
+  "noGoals": "近段时间没有挂着的长期目标",
+  "progress": {
+    "other": "{turns}/{count} 轮"
+  },
+  "active": "推进中",
+  "paused": "已暂停",
+  "gateway": {
+    "connected": "在线",
+    "retrying": "重连中",
+    "disconnected": "离线",
+    "error": "异常"
+  },
+  "refreshed": "{value}前更新",
+  "justNow": "刚刚更新",
+  "loading": "正在读取…",
+  "loadFailed": "加载失败：{error}",
+  "stale": "数据已 {value} 未更新",
+  "sectionUnavailable": "部分区域不可用",
+  "neverRan": "还没跑过",
+  "ago": "{value}前",
+  "in": "{value}后",
+  "soon": "即将运行",
+  "conversation": "对话",
+  "activity": {
+    "output": "正在输出",
+    "response": "等待模型响应",
+    "waiting": "等 {who} 响应 · {duration}",
+    "call": "第 {n} 次调用模型",
+    "callDone": "调用完成",
+    "starting": "刚开始",
+    "retry": "接口出错重试 {a}/{b}",
+    "tool": "执行 {tool}",
+    "toolDone": "{tool} 完成",
+    "toolError": "{tool} 出错",
+    "terminal": "终端命令已跑 {duration}",
+    "script": "脚本已跑 {duration}",
+    "compressed": "刚压缩完上下文",
+    "subtask": "子任务 · {value}"
+  },
+  "section": {
+    "conversations": "对话",
+    "gateway": "网关状态",
+    "database": "Hermes 数据库"
+  },
+  "issue": {
+    "missingTable": "{section}：找不到数据表 {detail}",
+    "missingColumn": "{section}：找不到字段 {detail}",
+    "collectorFailed": "{section}：读取失败（{detail}）"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "飞书",
+    "dingtalk": "钉钉",
+    "wecom": "企业微信",
+    "weixin": "微信",
+    "wechat": "微信",
+    "wechat_android": "微信",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "邮件",
+    "sms": "短信"
+  },
+  "chat": {
+    "empty": "现在没有需要你处理的事。",
+    "ownerOnly": "此摘要仅供值班台所有者查看。",
+    "configureOwner": "请先在 duty-board/settings.json 中设置 owner，再在聊天中使用此命令。",
+    "oldHost": "在聊天中使用此命令需要 Hermes 0.21.7 或更新版本。",
+    "isolated": "插件在独立进程中运行时（plugins.isolation: host）无法提供聊天摘要：那里无法确认是谁在调用。请使用仪表盘，或将 plugins.isolation 设为 in_process。",
+    "dmHint": "请私聊机器人或打开仪表盘查看详情。",
+    "error": "值班台暂不可用（{error}）。",
+    "stalled": "{age}（停滞）",
+    "privatePlace": "私密会话",
+    "untitled": "未命名",
+    "localPlace": "本地",
+    "waitingHeading": "等你回复（含未答复消息）",
+    "cronHeading": "定时任务异常",
+    "units": {
+      "minute": "分钟",
+      "hour": "小时",
+      "day": "天"
+    },
+    "headline": "值班台 · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "内容不显示",
+    "runningHeading": "正在跑",
+    "droppedHeading": "做完了，但结果没能自动送回原会话",
+    "goalsHeading": "长期目标",
+    "waitingCount": {
+      "other": "{count} 项等你回复"
+    },
+    "runningCount": {
+      "other": "{count} 项进行中"
+    },
+    "droppedCount": {
+      "other": "{count} 项结果未送达"
+    },
+    "cronCount": {
+      "other": "{count} 项定时任务异常"
+    },
+    "goalsCount": {
+      "other": "{count} 项长期目标"
+    },
+    "more": {
+      "other": "另有 {count} 项"
+    }
+  }
+}

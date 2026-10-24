@@ -6,6 +6,30 @@ separate from ending its session and settling execution (including deferred work
 
 
 class RuntimeSessionLifecycleMixin:
+    def _launch(self, operation, payload):
+        # Metadata has no ordered outbox entry: a lost ACK must not poison transcript writes.
+        from hermes_state_optional_launch import optional_launch
+        with optional_launch(operation), self.lock:
+            return self.rpc('worker.persist', **self.scope, sequence=0,
+                            operation=operation, payload=payload)['value']
+        return None
+
+    def sync_launch_jobs(self, jobs, removed_ids):
+        return self._launch('launch.sync', dict(jobs=jobs, removed_ids=removed_ids))
+
+    def record_launch(self, launch_id, **fields):
+        return self._launch('launch.record', dict(fields, launch_id=launch_id))
+
+    def bind_launch(self, launch_id, *, child_session_id=None, backend_ref=None):
+        return self._launch('launch.bind', dict(launch_id=launch_id, child_session_id=child_session_id,
+                                              backend_ref=backend_ref))
+
+    def finish_launch(self, launch_id, terminal_cause):
+        return self._launch('launch.finish', dict(launch_id=launch_id, terminal_cause=terminal_cause))
+
+    def schedule_launch(self, launch_id, next_run_at):
+        return self._launch('launch.schedule', dict(launch_id=launch_id, next_run_at=next_run_at))
+
     def create_session(self, session_id, source, *, model=None, model_config=None,
                        system_prompt=None, user_id=None, session_key=None, chat_id=None,
                        chat_type=None, thread_id=None, parent_session_id=None, cwd=None,
@@ -47,9 +71,11 @@ class RuntimeSessionLifecycleMixin:
     def get_next_title_in_lineage(self, base_title):
         return self._apply('session.next_title', {'base_title': base_title})['value']
 
-    def touch_session_activity(self, session_id, ts=None, *, description=None, provenance=None):
+    def touch_session_activity(self, session_id, ts=None, *, description=None, provenance=None,
+                               step_kind=None, step_tool=None):
         self._session(session_id)
-        self._apply('session.activity', {'ts': ts, 'description': description, 'provenance': provenance})
+        self._apply('session.activity', {'ts': ts, 'description': description, 'provenance': provenance,
+                                         'step_kind': step_kind, 'step_tool': step_tool})
 
     def clear_session_activity_labels(self, session_id):
         self._session(session_id)

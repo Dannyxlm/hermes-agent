@@ -1378,8 +1378,11 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
             f"  {_t('background.task_id', task_id=task_id)}", f"  {_t('background.keep_chatting')}\n")
         turn_route = self._resolve_turn_agent_config(prompt)
         runtime = turn_route["runtime"]
+        from hermes_state_background import reserve_background, finish_background
+        parent_db, parent_session_id = self._session_db, self.session_id
 
         def produce():
+            launch_id = reserve_background(parent_db, parent_session_id, task_id, prompt)
             from agent.vault_backends.unlock import set_code_prompt_callback, set_save_login_prompt_callback, set_unlock_prompt_callback
             set_sudo_password_callback(self._sudo_password_callback)
             set_approval_callback(self._approval_callback)
@@ -1388,6 +1391,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
             set_code_prompt_callback(self._vault_code_callback)
             with suppress(Exception):
                 set_secret_capture_callback(self._secret_capture_callback)
+            bg_agent = None
             try:
                 bg_agent = AIAgent(
                     model=turn_route["model"], acp_command=runtime.get("command"),
@@ -1416,6 +1420,7 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                 bg_agent.thinking_callback = _bg_thinking
                 try:
                     result = bg_agent.run_conversation(user_message=prompt, task_id=task_id)
+                    finish_background(parent_db, launch_id, result)
                     response = result.get("final_response", "") if result else ""
                     if not response and result and result.get("error"):
                         response = _gt("model.error_prefix", error=result["error"])
@@ -1427,6 +1432,9 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
                     # until the CLI exits (#50197).
                     with suppress(Exception):
                         bg_agent.close()
+            except BaseException:
+                finish_background(parent_db, launch_id, cause="error" if bg_agent else "failed_start")
+                raise
             finally:
                 with suppress(Exception):
                     set_sudo_password_callback(None)
@@ -1438,21 +1446,6 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
 
         self._start_background_worker(task_id, task_num, preview, produce)
 
-    def _start_background_worker(self, task_id, task_num, preview, produce):
-        """The /bg result panel's daemon thread (``produce()`` returns the answer text)."""
-        def done():
-            self._background_tasks.pop(task_id, None)
-            if not self._agent_running:  # clear spinner only if no foreground agent owns it
-                self._spinner_text = ""
-
-        thread = self._side_worker(
-            produce, name=f"bg-task-{task_id}", fail_label=_t("background.label", number=task_num),
-            header_lines=[f"  {_t('background.complete', number=task_num)}",
-                          f"  {_t('background.prompt', preview=preview)}"],
-            title_suffix=_t("background.title_suffix", number=task_num),
-            empty_note=f"  {_t('background.no_response')}", bell=True, on_done=done)
-        self._background_tasks[task_id] = thread
-        thread.start()
 
     def _side_worker(self, produce, *, name, fail_label, header_lines, title_suffix, empty_note,
                      bell=False, on_done=None, console=None) -> threading.Thread:

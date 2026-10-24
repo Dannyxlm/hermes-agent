@@ -1018,13 +1018,6 @@ def _float_env(name: str, default: float) -> float:
         return float(default)
 
 
-def _stamp_hygiene_compression_provenance(
-    agent: Any, desc: str, provenance: ActivityProvenance, debug_label: str) -> None:
-    """Best-effort activity provenance stamp for hygiene compression transitions."""
-    try:
-        agent._touch_activity(desc, provenance=provenance)
-    except Exception:
-        logger.debug(debug_label, exc_info=True)
 
 
 def _is_fresh_gateway_interruption(
@@ -2623,8 +2616,10 @@ _INTERRUPT_REASON_EVICTED = "Session ended while the turn was running"
 _INTERRUPT_TOOL_REASON_EVICTED = "session evicted"
 _INTERRUPT_TOOL_REASON_GATEWAY_SHUTDOWN = "gateway shutdown"
 _INTERRUPT_REASON_SSE_DISCONNECT = "SSE client disconnected"
-_INTERRUPT_REASON_GATEWAY_SHUTDOWN = "Gateway shutting down"
-_INTERRUPT_REASON_GATEWAY_RESTART = "Gateway restarting"
+from hermes_state_launch_causes import (
+    GATEWAY_SHUTDOWN as _INTERRUPT_REASON_GATEWAY_SHUTDOWN,
+    GATEWAY_RESTART as _INTERRUPT_REASON_GATEWAY_RESTART,
+)
 
 
 def _reap_gateway_turn_processes(
@@ -4162,6 +4157,8 @@ class GatewayRunner(
         if interrupt_depth == 0:
             agent._last_activity_ts = time.time()
             agent._last_activity_desc = "starting new turn (cached)"
+            agent._last_activity_kind, agent._last_activity_tool = "starting", None
+            agent._launch_stop_cause = None
             agent._last_activity_provenance = ActivityProvenance.UNKNOWN
             # Reset the SessionDB flush cursor so the new turn's messages are fully persisted — a stale
             # value from the previous turn makes `_flush_messages_to_session_db` skip new rows.

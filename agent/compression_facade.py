@@ -65,7 +65,7 @@ def _report_compression_timeout(
     touch = getattr(agent, "_touch_activity", None)
     if callable(touch):
         try:
-            touch("context compression timed out", provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT)
+            touch("context compression timed out", provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT, step_kind="retrying")
         except Exception:
             logger.debug("compress_context timeout activity touch failed", exc_info=True)
     # Same timeout cooldown ladder as summary-LLM timeouts: avoid re-burning the full idle budget every turn.

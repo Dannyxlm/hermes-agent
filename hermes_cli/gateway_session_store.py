@@ -135,7 +135,10 @@ class GatewaySessionStore:
         refuses it instead, as the thin client does."""
         if session_id in self.snapshots:
             return self.snapshots[session_id]
-        snapshot = self.connection.resume(self.call, session_id, typed=typed)
+        from hermes_cli.launch_provenance import take_launch
+        launch = take_launch()
+        call = (lambda method, **params: self.call(method, **params, **launch)) if launch else self.call
+        snapshot = self.connection.resume(call, session_id, typed=typed)
         self._adopt(snapshot)
         return snapshot
 
@@ -163,7 +166,9 @@ class GatewaySessionStore:
         title step); adopts and returns the new session id. ``record_cwd=False`` (``/new``,
         ``--create-if-missing``) leaves the row's cwd empty, as main's explicit creates did."""
         from agent.session_source import CLI_FAMILY_SOURCES, session_source_for
+        from hermes_cli.launch_provenance import take_launch
         params = _creation_policy(launch or {})
+        params.update(take_launch())
         params["cwd"] = os.path.realpath(os.getenv("TERMINAL_CWD") or os.getcwd())
         # Main's row label: ``cli``, ``oneshot`` for a finite -q/-Q run, or an explicit --source.
         params["source"] = session_source_for("cli")

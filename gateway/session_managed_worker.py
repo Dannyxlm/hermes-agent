@@ -228,6 +228,10 @@ class ManagedWorker:
         if self.closed.is_set():
             raise RuntimeStoreError('managed_worker_lost')
         if frame == {'type': 'stop'}:
+            if self.stop_cause:
+                from hermes_state_launch_causes import result_cause
+                frame = {**frame, 'terminal_cause': result_cause(
+                    {'interrupted': True, 'interrupt_message': self.stop_cause})}
             if self.stopped_at is None:
                 self.stopped_at = time.monotonic()
             self.stop.set()
@@ -463,8 +467,12 @@ def _latched_stop_cause(authority, session_id, generation):
 
 def _with_stop_cause(accepted, worker):
     """The wire result carries no interruption cause; the owner recorded which stop it sent."""
-    if accepted.get('interrupted') and worker.stop_cause:
-        return {**accepted, 'interrupt_message': worker.stop_cause}
+    if accepted.get('interrupted'):
+        from hermes_state_launch_causes import result_cause
+        value = {**accepted, **({'interrupt_message': worker.stop_cause} if worker.stop_cause else {})}
+        cause = result_cause(value) if worker.stop_cause else (
+            'user_stop' if worker.stop.is_set() else 'unknown')
+        return {**value, 'terminal_cause': cause}
     return accepted
 
 

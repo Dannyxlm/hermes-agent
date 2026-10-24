@@ -2827,7 +2827,7 @@ def run_one_job(
     # attempt to adopt before any launch can occur.
     if not job.get("execution_id"):
         execution = create_execution(
-            job["id"], source="direct", scheduled_instant=job.get("_scheduled_instant"))
+            job["id"], source="direct", scheduled_instant=job.get("_scheduled_instant"), job=job)
         job["execution_id"] = execution["id"]
 
     execution_id = str(job["execution_id"])
@@ -3296,7 +3296,7 @@ def _run_one_job_body(
     execution_id = job.get("execution_id")
     if not execution_id:
         execution_id = create_execution(
-            job["id"], source="direct", scheduled_instant=job.get("_scheduled_instant"))["id"]
+            job["id"], source="direct", scheduled_instant=job.get("_scheduled_instant"), job=job)["id"]
     job = dict(job, execution_id=execution_id)
     delivery_attempted = False
     delivery_error = None
@@ -4315,7 +4315,7 @@ def _submit_with_guard(job: dict, pool: concurrent.futures.ThreadPoolExecutor, p
     execution = None
     try:
         execution = create_execution(
-            job_id, source="builtin", scheduled_instant=job.get("_scheduled_instant"))
+            job_id, source="builtin", scheduled_instant=job.get("_scheduled_instant"), job=job)
         dispatched_job = dict(job, execution_id=execution["id"])
         note_cron_execution(dispatched_job)
         _ctx = contextvars.copy_context()

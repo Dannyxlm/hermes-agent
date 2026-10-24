@@ -10,7 +10,8 @@ Ids are ``srq-<12 hex>``: strings never collide with client-minted integer ids, 
 part keeps a compute-host child's requests distinct from the parent's when both reach one socket.
 A request that times out or is cancelled (interrupt, session close, shutdown) emits ONE
 ``request.cancel {id, method, reason}`` notification so every renderer tears the card down the
-same way. A response for an id that is no longer open is dropped — the wait already returned.
+same way. An answered request emits it once with reason ``resolved`` so other attached clients
+dismiss the card. A response for an id that is no longer open is dropped — the wait already returned.
 
 Reconnect: unanswered requests are returned as ``open_requests`` by ``session.resume`` /
 ``session.activate`` / ``session.events.since`` (:func:`open_requests`); the shared TypeScript

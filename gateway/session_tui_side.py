@@ -175,14 +175,21 @@ async def background(connection, ref, params):
     """``/bg <prompt>``: a fresh agent on the session's route runs the prompt to completion."""
     live, policy, text, task_id = _admit(connection, ref, params, 'bg')
     authority = connection.authority
+    from hermes_state_background import reserve_background, finish_background
     holder = [None]
 
     def body():
         from tui_gateway.methods_prompt import _final_response_text
         with _side_scope(authority, policy, task_id):
-            agent = holder[0] = _side_agent(authority, policy, live, task_id)
+            launch_id = reserve_background(authority.db, ref.session_id, task_id, text, policy.platform)
+            agent = None
             try:
+                agent = holder[0] = _side_agent(authority, policy, live, task_id)
                 result = agent.run_conversation(user_message=text, task_id=task_id)
+                finish_background(authority.db, launch_id, result)
+            except BaseException:
+                finish_background(authority.db, launch_id, cause="error" if agent else "failed_start")
+                raise
             finally:
                 # AIAgent.close() is the owner boundary (memory, tool subprocesses, clients).
                 with contextlib.suppress(Exception):

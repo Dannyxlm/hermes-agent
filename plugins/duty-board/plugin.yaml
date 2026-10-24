@@ -1,0 +1,6 @@
+name: duty-board
+version: 0.4.0
+description: "Live dashboard and model-free summaries of waiting conversations, running turns, background jobs and cron health. Registers one slash command (/duty) and one CLI command (hermes duty); no tools or hooks. Read-only except dashboard dismissals."
+author: xiaoyaner0201
+requires_hermes: ">=0.21.1"
+kind: standalone

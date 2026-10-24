@@ -1419,13 +1419,22 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
 
+    from hermes_state_background import reserve_background, finish_background
+    parent_session_id = session["session_key"]
+
     def body():
         from run_agent import AIAgent
         kwargs = _background_agent_kwargs(session["agent"], task_id)
         with _side_agent_session_db(kwargs.get("session_db")) as session_db:
-            agent = AIAgent(**{**kwargs, "session_db": session_db})
+            launch_id = reserve_background(session_db, parent_session_id, task_id, text, "tui")
+            agent = None
             try:
+                agent = AIAgent(**{**kwargs, "session_db": session_db})
                 result = agent.run_conversation(user_message=text, task_id=task_id)
+                finish_background(session_db, launch_id, result)
+            except BaseException:
+                finish_background(session_db, launch_id, cause="error" if agent else "failed_start")
+                raise
             finally:
                 # AIAgent.close() is the owner boundary (memory shutdown, tool
                 # subprocesses, httpx clients); an unclosed side agent leaks
@@ -1717,7 +1726,7 @@ def _validated_preview_cwd(cwd: str) -> str:
 
 
 def _spawn_side_agent(
-    rid, session, task_id, parent, event, body, *, cwd="", extra=None, cleanup=None):
+    rid, session, task_id, parent, event, body, *, cwd="", extra=None, cleanup=None, failed_start=None):
     """Run ``body()`` on a daemon thread under the session's profile home (the ContextVar
     doesn't propagate across threads) and cwd; its text — or ``error: <exc>`` — lands on
     ``parent`` as ``event`` with ``task_id`` (+ ``extra``).  Replies ``{task_id}``."""
@@ -1762,10 +1771,14 @@ def _spawn_side_agent(
     try:
         worker = _start_session_work(run, name=f"side-agent-{task_id}")
     except Exception:
+        if failed_start is not None:
+            failed_start()
         if activity_key is not None:
             registry.finish(activity_key, "failed_start")
         return _err(rid, 5035, "side task could not start")
     if worker is None:
+        if failed_start is not None:
+            failed_start()
         if activity_key is not None:
             registry.finish(activity_key, "failed_start")
         return _err(rid, 5035, "backend is retiring; reconnect to continue")

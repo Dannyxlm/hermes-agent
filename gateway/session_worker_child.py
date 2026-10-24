@@ -45,7 +45,13 @@ def reserve_child_execution(db, conn, session_id, payload, *, epoch, execution_i
     from hermes_state_runtime import _secret_digest
     from hermes_state_worker_lifecycle import insert_session_row_in_transaction
     secret = payload.get('secret') if isinstance(payload, dict) else None
-    if set(payload) != {'secret'} or not isinstance(secret, str) or not 16 <= len(secret) <= 256:
+    if (set(payload) - {'secret', 'launch'} or not isinstance(secret, str) or not 16 <= len(secret) <= 256):
+        raise RuntimeStoreError('invalid_params')
+    from tools.delegate_launches import launch_metadata
+    launch = payload.get('launch', launch_metadata())
+    if (not isinstance(launch, dict) or set(launch) != {'launch_id', 'batch_id', 'batch_name', 'title'}
+            or any(v is not None and not isinstance(v, str) for v in launch.values())
+            or not launch['launch_id'] or not launch['batch_id']):
         raise RuntimeStoreError('invalid_params')
     max_children, max_depth = limits
     prefix = execution_id + CHILD_SEPARATOR
@@ -62,6 +68,13 @@ def reserve_child_execution(db, conn, session_id, payload, *, epoch, execution_i
     child_sid, child_eid = new_session_id(), prefix + secrets.token_hex(8)
     insert_session_row_in_transaction(db, conn, child_sid, 'subagent', model_config={'_delegate_from': session_id},
                                       parent_session_id=session_id, profile_name=parent['profile_name'])
+    from hermes_state_launches import record_launch, bind_launch
+    profile = parent['profile_name'] or db._own_profile_name() or 'default'
+    from hermes_state_optional_launch import optional_launch
+    with optional_launch('child.reserve.launch', conn=conn):
+        record_launch(conn, **launch, kind='helper', launcher_profile=profile, launcher_session_id=session_id,
+                      child_profile=profile)
+        bind_launch(conn, launch['launch_id'], child_session_id=child_sid, backend_ref=child_eid)
     scope = dict(identity, session_id=child_sid, execution_id=child_eid, generation=0, secret=secret)
     claim = admission_fingerprint(canonical_target=child_sid, payload=scope | {'principal': principal})
     conn.execute("INSERT INTO worker_executions(execution_id,session_id,kind,owner_epoch,generation,status,adoption_digest) "

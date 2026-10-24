@@ -69,14 +69,16 @@ def retire_stale_children(conn, epoch):
     """Owner restart: a child dies with its worker, which dies with its owner, so it is never
     adoptable; only its root execution can be recovered as ``unknown``."""
     _retire_children(conn, conn.execute("SELECT execution_id,session_id FROM worker_executions WHERE kind='child' "
-                                        "AND status!='terminal' AND owner_epoch!=?", (epoch,)).fetchall())
+                                        "AND status!='terminal' AND owner_epoch!=?", (epoch,)).fetchall(), terminal_cause='owner_restart')
 
 
-def _retire_children(conn, rows):
+def _retire_children(conn, rows, terminal_cause="parent_stop"):
     for child, _session_id in rows:
         conn.execute("UPDATE worker_executions SET status='terminal' WHERE execution_id=?", (child,))
         _compact(conn, child)
         _end_child_row(conn, child)
+        from hermes_state_launch_causes import finish_for_session
+        finish_for_session(conn, _session_id, terminal_cause)
 
 
 def _end_child_row(conn, execution_id):

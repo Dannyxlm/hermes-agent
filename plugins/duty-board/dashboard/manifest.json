@@ -1,0 +1,15 @@
+{
+  "name": "duty-board",
+  "label": "Duty Board",
+  "description": "Live conversation, background job, and scheduled job status",
+  "icon": "Activity",
+  "version": "0.4.0",
+  "tab": {
+    "path": "/duty",
+    "position": "before:sessions"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py",
+  "default_enabled": false
+}

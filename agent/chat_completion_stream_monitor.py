@@ -32,8 +32,8 @@ class StreamingWaitMonitor:
         if _load_notice is not None:
             m.wait_notice_started_ts = None  # The local loader now owns the display.
             m.wait_notice.reset()
-            self.agent._emit_wait_notice(_load_notice)
-            self.agent._touch_activity("local model loading")
+            self.agent._emit_wait_notice(_load_notice, step_kind="starting")
+            self.agent._touch_activity("local model loading", step_kind="starting")
             m.load_notice_shown, m.load_notice_misses, m.last_heartbeat = True, 0, now  # loading IS liveness
             return True
         if m.load_notice_shown:
@@ -41,7 +41,7 @@ class StreamingWaitMonitor:
             m.load_notice_misses += 1
             if m.load_notice_misses >= 3:
                 m.load_notice_shown, m.load_notice_misses = False, 0
-                self.agent._emit_wait_notice("")
+                self.agent._emit_wait_notice("", step_kind="thinking")
         return False
 
     def _show_prompt_progress(self, now: float) -> bool:
@@ -59,7 +59,7 @@ class StreamingWaitMonitor:
         if first_token:
             if m.load_notice_shown:
                 m.load_notice_shown, m.load_notice_misses = False, 0
-                self.agent._emit_wait_notice("")
+                self.agent._emit_wait_notice("", step_kind="thinking")
             return False
         if now - state["t"] > 60.0 or now - m.last_load_poll < 1.0:
             return False
@@ -68,7 +68,7 @@ class StreamingWaitMonitor:
         m.wait_notice_started_ts = None  # The prompt-progress line owns the display.
         m.wait_notice.reset()
         self.agent._emit_wait_notice(
-            f"⚙ processing prompt — {percent}%" if percent is not None else "⚙ processing prompt")
+            f"⚙ processing prompt — {percent}%" if percent is not None else "⚙ processing prompt", step_kind="thinking")
         m.load_notice_shown, m.load_notice_misses, m.last_heartbeat = True, 0, now
         return True
 
@@ -82,7 +82,7 @@ class StreamingWaitMonitor:
         self.last_chunk_time["t"] = min(self.last_chunk_time["t"] + slept, now)
         self._mon.last_heartbeat = min(self._mon.last_heartbeat + slept, now)
         logger.info("Computer slept for %.0fs during a model request; the stall timer skips that time.", slept)
-        self.agent._touch_activity(f"resumed after the computer slept for {int(slept)}s")
+        self.agent._touch_activity(f"resumed after the computer slept for {int(slept)}s", step_kind="thinking")
 
     def _heartbeat(self, waiting_secs: int) -> None:
         """Gateway inactivity heartbeat: the start-to-first-chunk gap (thinking,
@@ -95,14 +95,14 @@ class StreamingWaitMonitor:
             diag = getattr(getattr(self, "clients", None), "diag", None)
             phase = "post_chunk" if isinstance(diag, dict) and diag.get("first_chunk_at") else "first_chunk"
             if not self._mon.wait_notice.should_emit(phase, watchdog):
-                self.agent._touch_activity(f"waiting for stream response ({waiting_secs}s, {phase})")
+                self.agent._touch_activity(f"waiting for stream response ({waiting_secs}s, {phase})", step_kind="thinking")
                 return
             self._mon.wait_notice_started_ts = self._mon.last_heartbeat
             self.agent._emit_wait_notice(wn.wait_notice_text(
-                self.api_kwargs.get('model', 'the provider'), waiting_secs, phase, watchdog))
+                self.api_kwargs.get('model', 'the provider'), waiting_secs, phase, watchdog), step_kind="thinking")
         else:
             # Chunks are flowing — keep the tracker fresh, leave the display alone.
-            self.agent._touch_activity(f"waiting for stream response ({waiting_secs}s, no chunks yet)")
+            self.agent._touch_activity(f"waiting for stream response ({waiting_secs}s, no chunks yet)", step_kind="thinking")
 
     def _monitor_loop(self) -> None:
         _HEARTBEAT_INTERVAL = 30.0  # seconds between gateway activity touches
@@ -126,7 +126,7 @@ class StreamingWaitMonitor:
             # protocol payload resets status without adding synthetic reasoning.
             if (self._mon.wait_notice_started_ts is not None
                     and self.last_chunk_time["t"] > self._mon.wait_notice_started_ts):
-                self.agent._emit_wait_notice("")
+                self.agent._emit_wait_notice("", step_kind="thinking")
                 self._mon.wait_notice_started_ts = None
                 self._mon.wait_notice.reset()
             if _hb_now - self._mon.last_heartbeat >= _HEARTBEAT_INTERVAL:

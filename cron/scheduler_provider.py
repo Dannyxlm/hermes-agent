@@ -203,7 +203,11 @@ class CronScheduler(ABC):
         from cron.executions import create_execution, finish_execution, set_execution_occurrence
         from cron.jobs import claim_job_for_fire
 
-        execution = create_execution(job_id, source=self.name)
+        launch_args = {}
+        if manual:
+            from cron.launches import capture_creator
+            launch_args["launcher"] = capture_creator()
+        execution = create_execution(job_id, source=self.name, job=None, **launch_args)
         claim_kwargs = {"return_job": True}
         if force:
             claim_kwargs["force"] = True
@@ -213,6 +217,8 @@ class CronScheduler(ABC):
             claimed_job = claim_job_for_fire(job_id, **claim_kwargs)
             if isinstance(claimed_job, dict):
                 set_execution_occurrence(execution["id"], claimed_job.get("_scheduled_instant"))
+                from cron.launches import record_run
+                record_run(execution, creating=True, job=claimed_job, **launch_args)
         except BaseException as exc:
             finish_execution(
                 execution["id"], success=False,

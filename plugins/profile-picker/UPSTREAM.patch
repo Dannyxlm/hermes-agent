@@ -1,0 +1,4 @@
+--- a/desktop/plugin.js
++++ b/desktop/plugin.js
+@@ -273,0 +274 @@
++  defaultEnabled: false,

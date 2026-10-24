@@ -227,6 +227,8 @@ def claim_session_input(db, *, epoch: int, session_id: str, _guard=None, head=_A
         changed = conn.execute("UPDATE session_admissions SET status='started',owner_epoch=?,generation=? WHERE admission_id=? AND status='queued'", (epoch, generation, row['admission_id']))
         if changed.rowcount != 1:
             raise RuntimeStoreError('stale_generation')
+        from hermes_state_launch_causes import resume_for_session
+        resume_for_session(conn, session_id)
         claimed = _row(_admission(conn, row['admission_id']))
         # The transcript high-water mark at the claim (``messages.id`` is AUTOINCREMENT across every
         # session): a row above it on this conversation was written by this turn, so settlement can
@@ -261,6 +263,8 @@ def settle_session_input(db, *, epoch: int, admission_id: str, generation: int, 
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) '
                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (RESULT_PREFIX + admission_id, encoded))
+        from hermes_state_launch_causes import finish_for_session, result_cause
+        finish_for_session(conn, row['target_session_id'], result_cause(result, outcome=outcome), turn_only=True)
         conn.execute("UPDATE session_admissions SET status='terminal',outcome=? WHERE admission_id=?", (outcome, admission_id))
         settle_steer_transfers(conn, epoch=epoch, generation=generation, transfers=_transfers, outcome=outcome)
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (row['target_session_id'],))
@@ -906,6 +910,10 @@ def _worker_finish(db, conn, session_id, payload):
 def mutate_worker_execution(db, *, epoch, execution_id, session_id, generation,
                             sequence, operation, payload):
     """One closed durable mutation and receipt; never call a self-committing API here."""
+    if sequence == 0 and isinstance(operation, str) and operation.startswith('launch.'):
+        from hermes_state_launches import mutate_optional_worker_launch
+        return mutate_optional_worker_launch(db, epoch=epoch, execution_id=execution_id, session_id=session_id,
+                                            generation=generation, operation=operation, payload=payload)
     from hermes_state_worker_context import (worker_context, worker_prompt, worker_row_role, worker_sidecars,
                                              worker_tail_role, worker_tool_names)
     from hermes_state_worker_compression import WORKER_COMPRESSION_HANDLERS

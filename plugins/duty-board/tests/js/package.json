@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "description": "Development-only tooling for tests; the plugin itself ships no npm dependencies.",
+  "devDependencies": {
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  }
+}

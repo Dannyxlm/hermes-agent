@@ -27,6 +27,7 @@ from hermes_state_common import (
 )
 from hermes_state_compression import _CHAIN_CAP, _UNSET_CREATED_SQL
 from hermes_state_sessions_turn_leases import fence_delete_turn_leases
+from hermes_state_activity import SessionActivityMixin
 
 # caplog tests pin the "hermes_state" logger name.
 logger = logging.getLogger("hermes_state")
@@ -314,7 +315,7 @@ _INHERIT_PARENT_ROUTING_SQL = (
 )
 
 
-class SessionSessionsMixin:
+class SessionSessionsMixin(SessionActivityMixin):
     """Session rows: create/inherit, lifecycle flags, model_config, listing, deletion."""
 
     def _own_profile_name(self) -> Optional[str]:
@@ -468,6 +469,8 @@ class SessionSessionsMixin:
         changed = conn.execute(sql, params).rowcount
         if changed:
             self._bump_conversation_generation(conn, session_id, reason)
+            from hermes_state_launch_causes import finish_on_end
+            finish_on_end(conn, session_id, reason)
         return changed
 
     @staticmethod
@@ -517,6 +520,8 @@ class SessionSessionsMixin:
             conn.execute(
                 "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?", (session_id,),
             )
+            from hermes_state_launch_causes import resume_for_session
+            resume_for_session(conn, session_id)
             # Resuming re-activates the chat: drop the idle sweep's archive (never a manual one).
             self._unarchive_auto_archived_lineage(conn, session_id)
         self._execute_write(_do)
@@ -607,60 +612,10 @@ class SessionSessionsMixin:
                 pairs, many=True,
             )
 
-    def touch_session_activity(
-        self, session_id: str, ts: Optional[float] = None, *, description: Optional[str] = None,
-        provenance: Optional[ActivityProvenance] = None,
-    ) -> None:
-        """Stamp durable mid-turn activity (observation-only; rate-limited by the caller) so surfaces see
-        activity before any message row lands. Never moves ``last_activity_at`` backwards.
-
-        Called (rate-limited) from ``AIAgent._touch_activity`` so gateway/CLI surfaces and stall consumers
-        observe API/tool/compaction activity even when no new message row has been written yet (#72016 /
-        #72039).
-        """
-        if not session_id:
-            return
-        when = float(ts if ts is not None else time.time())
-        self._write_sql(
-            "UPDATE sessions SET last_activity_at = ?, "
-            "last_activity_description = ?, last_activity_provenance = ? "
-            "WHERE id = ? AND (last_activity_at IS NULL OR last_activity_at < ?)",
-            (
-                when, bound_activity_description(description),
-                normalize_activity_provenance(provenance).value, session_id, when,
-            ),
-            patience_s=self._ACTIVITY_WRITE_PATIENCE_S,
-        )
 
     # Observation-only write: never let it ride the full routine write-patience budget (#76354 review S1).
     # Under contention a heartbeat that waits ~20s would delay the response-critical path it is merely
     # observing; give up after a sub-second budget instead (the next due window retries naturally).
-    def clear_session_activity_labels(self, session_id: str) -> None:
-        """Clear activity labels after a turn (``last_activity_at`` is kept so idle / watchdog clocks stay
-        continuous). A no-op clear skips the write transaction.
-
-        Description and provenance are observation labels for *what was happening at* that timestamp during
-        an active turn; once the turn is idle they must not keep advertising "compressing" / "executing
-        tool" (#72039).
-        Response-critical-path contract (#76354 review S1): runs in the turn's ``finally``; a no-op clear
-        (labels already empty) skips the write transaction entirely, and a real clear uses the same short
-        sub-second busy budget as :meth:`touch_session_activity` instead of the full routine write patience.
-        """
-        if not session_id:
-            return
-        try:
-            row = self._read_one(
-                "SELECT last_activity_description, last_activity_provenance FROM sessions WHERE id = ?",
-                (session_id,),
-            )
-        except sqlite3.Error:
-            row = None
-        if row is not None and not row[0] and (not row[1] or row[1] == ActivityProvenance.UNKNOWN.value):
-            return
-        self._write_sql(
-            "UPDATE sessions SET last_activity_description = ?, last_activity_provenance = ? WHERE id = ?",
-            ("", ActivityProvenance.UNKNOWN.value, session_id), patience_s=self._ACTIVITY_WRITE_PATIENCE_S,
-        )
 
     def update_session_meta(
         self, session_id: str, model_config_json: str, model: Optional[str] = None,

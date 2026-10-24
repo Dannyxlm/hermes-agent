@@ -141,8 +141,14 @@ For more help on a command:
 """
 
 
+def _add_launch_flags(parser, default=None):
+    for name in ("started-by-session", "started-by-profile", "launch-title", "launch-kind"):
+        parser.add_argument("--" + name, default=default, help="Launch provenance only; grants no permissions.")
+
+
 def _add_top_level_flags(parser: argparse.ArgumentParser) -> None:
     """Top-level (pre-subcommand) flags; ``-m/--provider`` pair with ``-z`` without ``chat``."""
+    _add_launch_flags(parser)
     add, inherited = parser.add_argument, _inherited_flag
     add("--version", "-V", action="store_true", help="Show version and exit")
     add("-z", "--oneshot", metavar="PROMPT", default=None, help=(
@@ -228,6 +234,7 @@ def _build_chat_parser(subparsers) -> argparse.ArgumentParser:
     chat_parser = subparsers.add_parser(
         "chat", help="Interactive chat with the agent",
         description="Start an interactive chat session with Hermes Agent")
+    _add_launch_flags(chat_parser, argparse.SUPPRESS)
     add, inherited, SUPPRESS = chat_parser.add_argument, _inherited_flag, argparse.SUPPRESS
     _query_group = chat_parser.add_mutually_exclusive_group()
     _query_group.add_argument("-q", "--query", help=(

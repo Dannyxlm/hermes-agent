@@ -1698,6 +1698,98 @@ export interface LinkIndexItem {
   tag: 'preview' | 'internal' | null
   mention_text: string | null
 }
+export interface FamilySessionParams {
+  session_id: string
+  profile: string
+  since?: number | null
+  limit?: number | null
+}
+export interface FamilySessionResult {
+  protocol_version: 1
+  root: FamilyNode
+  nodes: FamilyNode[]
+  batches: FamilyBatch[]
+  complete: boolean
+  unavailable_profiles: string[]
+  truncated: boolean
+  generated_at: number
+}
+export interface FamilyNode {
+  node_id: string
+  parent_node_id: string | null
+  kind: string
+  profile: string
+  session_id: string | null
+  title: string | null
+  full_title: string | null
+  batch_id: string | null
+  status: 'working' | 'needs_you' | 'failed' | 'done' | 'paused_by_restart' | 'stopped' | 'quiet' | 'unknown'
+  step_kind: string | null
+  step_tool: string | null
+  activity_text: string | null
+  started_at: number | null
+  ended_at: number | null
+  last_activity_at: number | null
+  model: string | null
+  terminal_cause: string | null
+  needs_you: FamilyNeedsYou | null
+  next_run_at: number | null
+  exit_code: number | null
+  command: string | null
+  report_hint: string | null
+  child_count: number
+  backend_ref: string | null
+  root_session_id: string | null
+  root_profile: string | null
+  actions: ('open' | 'answer' | 'resume' | 'stop')[]
+}
+export interface FamilyNeedsYou {
+  kind: 'approval' | 'clarify'
+  session_id: string
+  profile: string
+}
+export interface FamilyBatch {
+  batch_id: string
+  batch_name: string | null
+  parent_node_id: string
+  created_at: number
+  size: number
+}
+export interface FamilyOverviewParams {
+  since?: number | null
+  coming_up_within?: number | null
+}
+export interface FamilyOverviewResult {
+  protocol_version: 1
+  team: FamilyTeamMember[]
+  needs_you: FamilyNode[]
+  failed: FamilyNode[]
+  roots: FamilyRoot[]
+  coming_up: FamilyNode[]
+  earlier: FamilyEarlier[]
+  complete: boolean
+  unavailable_profiles: string[]
+  generated_at: number
+}
+export interface FamilyTeamMember {
+  profile: string
+  state: 'working' | 'needs_you' | 'resting'
+  live_count: number
+}
+export interface FamilyRoot {
+  root: FamilyNode
+  live_leaves: FamilyNode[]
+  live_count: number
+  total_count: number
+  needs_you_count: number
+  failed_count: number
+}
+export interface FamilyEarlier {
+  root: FamilyNode
+  total_count: number
+  failed_count: number
+  ended_at: number
+}
 export interface GroupsCapabilitiesParams {
   profile?: string | null
 }
@@ -3735,6 +3827,7 @@ export interface MobileInboxPushRegisterResult {
 }
 export type MobileEmptyParams = Record<string, never>
 export interface MobileCapabilitiesResult {
+  family?: FamilyCapability | null
   protocol_version: number
   methods: string[]
   features: string[]
@@ -3743,6 +3836,9 @@ export interface MobileCapabilitiesResult {
   max_roster_limit: number
   video_upload?: VideoUploadLimits | null
   human_input?: MobileHumanInputCapability | null
+}
+export interface FamilyCapability {
+  protocol_version?: 1
 }
 /** Advertised in ``mobile.capabilities.video_upload`` (feature ``video_upload`` v1). */
 export interface VideoUploadLimits {
@@ -4828,6 +4924,9 @@ export interface ProcessListResult {
 }
 /** ``tools/process_registry.py::list_sessions`` row plus the gateway's ``output_tail``. */
 export interface ProcessEntry {
+  batch_id?: string | null
+  batch_name?: string | null
+  title?: string | null
   session_id: string
   command?: string
   cwd?: string | null
@@ -6429,6 +6528,11 @@ export interface GroupsDiscardResult {
 }
 export interface CanonicalCreateParams {
   profile?: string | null
+  started_by_session?: string | null
+  started_by_profile?: string | null
+  launch_title?: string | null
+  launch_kind?: string | null
+  launch_id?: string | null
   request_id?: string | null
   source?: 'cli' | 'tui' | 'gui' | 'acp' | 'tool' | 'oneshot'
   cwd?: string | null
@@ -6544,6 +6648,11 @@ export interface CanonicalSnapshotInfo {
 }
 export interface CanonicalResumeParams {
   profile?: string | null
+  started_by_session?: string | null
+  started_by_profile?: string | null
+  launch_title?: string | null
+  launch_kind?: string | null
+  launch_id?: string | null
   session_id?: string
   title?: string | null
   latest?: 'cli' | 'tui' | null
@@ -7530,6 +7639,11 @@ export interface SubagentEventPayload {
   parent_id?: string | null
   child_session_id?: string | null
   delegation_id?: string | null
+  batch_id?: string | null
+  batch_name?: string | null
+  title?: string | null
+  step_kind?: string | null
+  step_tool?: string | null
   depth?: number | null
   model?: string | null
   tool_count?: number | null
@@ -7819,6 +7933,7 @@ export interface RpcMethods {
   'display.switchSandboxImage': { params: DisplaySwitchSandboxImageParams; result: DisplaySwitchSandboxImageResult }
   /** One JPEG grab of the bot's screen; read-only, never changes the lease. */
   'display.thumbnail': { params: ProfileParams; result: DisplayThumbnailResult }
+  'family.overview': { params: FamilyOverviewParams; result: FamilyOverviewResult }
   /** Stage a non-image file into the session workspace and hand back its @file: ref. */
   'file.attach': { params: FileAttachParams; result: FileAttachResult }
   'files.index': { params: FilesIndexParams; result: FilesIndexResult }
@@ -8133,6 +8248,7 @@ export interface RpcMethods {
   'session.events.since': { params: SessionEventsSinceParams; result: SessionEventsSinceWireResult }
   /** Replay-buffer occupancy telemetry (ops/debug). */
   'session.events.stats': { params: SessionEventsStatsParams; result: SessionEventsStatsResult }
+  'session.family': { params: FamilySessionParams; result: FamilySessionResult }
   /** Import a foreign session into this profile's history (idempotent per origin). */
   'session.foreign.import': { params: SessionForeignIdParams; result: SessionForeignImportResult }
   /** One page of Claude Code / Codex sessions found on the serving backend. */
@@ -8367,6 +8483,7 @@ export const RPC_METHODS = [
   'display.stop',
   'display.switchSandboxImage',
   'display.thumbnail',
+  'family.overview',
   'file.attach',
   'files.index',
   'free_tier.ack_notice',
@@ -8538,6 +8655,7 @@ export const RPC_METHODS = [
   'session.delete',
   'session.events.since',
   'session.events.stats',
+  'session.family',
   'session.foreign.import',
   'session.foreign.list',
   'session.foreign.preview',
@@ -8646,6 +8764,7 @@ export interface CanonicalRpcMethods {
   'cron.status': { params: CronAdmissionParams; result: CronStatusResult }
   /** Admit one cron firing into the owning profile's durable FIFO. */
   'cron.submit': { params: CronRunParams; result: CronSubmitResult }
+  'family.overview': { params: FamilyOverviewParams; result: FamilyOverviewResult }
   'groups.approve': { params: CanonicalRoomApproveParams; result: GroupsApproveResult }
   /** Read one committed attachment for a live room viewer. */
   'groups.attachment.download': { params: GroupsAttachmentDownloadParams; result: RoomAttachmentBytes }
@@ -8682,6 +8801,7 @@ export interface CanonicalRpcMethods {
   'session.events.since': { params: CanonicalEventsParams; result: CanonicalEventsResult }
   /** The /save transcript rendered for the client to write (the gateway writes nothing). */
   'session.export': { params: SessionExportParams; result: SessionExportResult }
+  'session.family': { params: FamilySessionParams; result: FamilySessionResult }
   /** Frozen launch policy projection of one local session. */
   'session.info': { params: CanonicalSessionInfoParams; result: CanonicalSessionInfo }
   'session.interrupt': { params: CanonicalControlParams; result: CanonicalSessionHandle }
@@ -8719,6 +8839,7 @@ export const CANONICAL_RPC_METHODS = [
   'cron.recover',
   'cron.status',
   'cron.submit',
+  'family.overview',
   'groups.approve',
   'groups.attachment.download',
   'groups.attachment.upload',
@@ -8741,6 +8862,7 @@ export const CANONICAL_RPC_METHODS = [
   'session.detach',
   'session.events.since',
   'session.export',
+  'session.family',
   'session.info',
   'session.interrupt',
   'session.list',

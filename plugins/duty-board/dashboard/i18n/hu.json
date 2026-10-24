@@ -1,0 +1,187 @@
+{
+  "appTitle": "Ügyeleti tábla",
+  "appSubtitle": "Beszélgetések, háttérfeladatok és ütemezett feladatok élő állapota",
+  "openIn": "Hivatkozások megnyitása itt",
+  "discordApp": "Discord alkalmazás",
+  "browser": "Böngésző",
+  "warnings": "Egyes adatok nem érhetők el",
+  "waiting": "Az Ön válaszára várnak",
+  "waitingHint": "Az utolsó válasz az Ön döntését kéri; a legrégebbi beszélgetések elöl",
+  "unanswered": "Elküldte az üzenetet, de nem érkezett válasz",
+  "waitingEmpty": "Nincs az Ön válaszára váró beszélgetés",
+  "unansweredAge": "várakozás: {value}",
+  "waitingAge": "várakozás: {value}",
+  "causedBy": "Ok: {value}",
+  "you": "Ön: {value}",
+  "openInDiscord": "Megnyitás a Discordban",
+  "web": "Web",
+  "dismiss": "Elrejtés",
+  "seen": "Megtekintve",
+  "collapse": "Összecsukás",
+  "expandMore": {
+    "one": "További {count} elem",
+    "other": "További {count} elem"
+  },
+  "running": "Fut",
+  "runningHint": "A teljes sáv egy órát jelent",
+  "allIdle": "Nincs aktív folyamat",
+  "runningFor": "{value} óta fut",
+  "stalledFor": "{value} óta nincs aktivitás",
+  "doing": "Folyamatban",
+  "privateConversation": "Beszélgetőpartner: {who}",
+  "someone": "valaki",
+  "privateContent": "Tartalom elrejtve",
+  "delegations": "Háttérfeladatok",
+  "noDelegations": "Nincs futó háttérfeladat",
+  "completedNotDelivered": "Befejezve, de az eredmény nincs kézbesítve",
+  "delegationHint": "Az eredmény egy újabb beszélgetésben lehet; nyissa meg, ellenőrizze, majd rejtse el a kártyát",
+  "parallel": {
+    "one": "{count} alügynök fut párhuzamosan",
+    "other": "{count} alügynök fut párhuzamosan"
+  },
+  "completedAt": "befejezve: {value}",
+  "handled": "Elintézve",
+  "cron": "Ütemezett feladatok",
+  "cronPaused": {
+    "one": "{count} szüneteltetett feladat",
+    "other": "{count} szüneteltetett feladat"
+  },
+  "cronRunning": "Fut",
+  "cronScript": "parancsfájl",
+  "cronUpcoming": "következő: {time} · {name}",
+  "cronReason": {
+    "lastError": "Hiba: {detail}",
+    "deliveryError": "Sikertelen kézbesítés: {detail}",
+    "state": "Állapot: {detail}",
+    "overdue": "Késésben"
+  },
+  "recentDone": "Nemrég befejezve",
+  "recentDoneHint": "Az elmúlt napban; az utolsó válasz beszámoló volt, nem kérdés",
+  "promised": "Későbbi választ ígért",
+  "none": "Nincs",
+  "goals": "Hosszú távú célok",
+  "staleGoals": {
+    "one": "{count} régebbi cél elrejtve",
+    "other": "{count} régebbi cél elrejtve"
+  },
+  "noGoals": "Nincs hosszú távú cél a vizsgált időszakban",
+  "progress": {
+    "one": "{turns}/{count} forduló",
+    "other": "{turns}/{count} forduló"
+  },
+  "active": "Aktív",
+  "paused": "Szüneteltetve",
+  "gateway": {
+    "connected": "csatlakoztatva",
+    "retrying": "újracsatlakozás",
+    "disconnected": "lekapcsolva",
+    "error": "hiba"
+  },
+  "refreshed": "frissítve: {value} ezelőtt",
+  "justNow": "most frissítve",
+  "loading": "Betöltés…",
+  "loadFailed": "Sikertelen betöltés: {error}",
+  "stale": "az adatok {value} óta nem frissültek",
+  "sectionUnavailable": "A szakasz nem érhető el",
+  "neverRan": "Még nem futott",
+  "ago": "{value} ezelőtt",
+  "in": "{value} múlva",
+  "soon": "hamarosan",
+  "conversation": "Beszélgetés",
+  "activity": {
+    "output": "Válasz fogadása",
+    "response": "Várakozás a modell válaszára",
+    "waiting": "Válaszra vár: {who} · {duration}",
+    "call": "Modellhívás #{n}",
+    "callDone": "Modellhívás befejezve",
+    "starting": "Most indult",
+    "retry": "API-hívás újrapróbálása {a}/{b}",
+    "tool": "Eszköz futtatása: {tool}",
+    "toolDone": "Befejezve: {tool}",
+    "toolError": "Sikertelen: {tool}",
+    "terminal": "Terminálparancs fut ({duration})",
+    "script": "Parancsfájl fut ({duration})",
+    "compressed": "Kontextustömörítés befejezve",
+    "subtask": "Részfeladat · {value}"
+  },
+  "section": {
+    "conversations": "Beszélgetések",
+    "gateway": "Átjáró állapota",
+    "database": "Hermes-adatbázis"
+  },
+  "issue": {
+    "missingTable": "{section}: nem található a tábla: {detail}",
+    "missingColumn": "{section}: nem található az oszlop: {detail}",
+    "collectorFailed": "{section}: nem sikerült beolvasni az adatokat ({detail})"
+  },
+  "platform": {
+    "discord": "Discord",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "whatsapp": "WhatsApp",
+    "whatsapp_cloud": "WhatsApp",
+    "signal": "Signal",
+    "mattermost": "Mattermost",
+    "matrix": "Matrix",
+    "feishu": "Feishu",
+    "dingtalk": "DingTalk",
+    "wecom": "WeCom",
+    "weixin": "WeChat",
+    "wechat": "WeChat",
+    "wechat_android": "WeChat",
+    "qqbot": "QQ",
+    "bluebubbles": "iMessage",
+    "email": "E-mail",
+    "sms": "SMS-üzenet"
+  },
+  "chat": {
+    "empty": "Most semmi sem igényli a figyelmedet.",
+    "ownerOnly": "Ez az összefoglaló csak a tábla tulajdonosának érhető el.",
+    "configureOwner": "A parancs csevegésbeli használata előtt állítsd be az owner értékét a duty-board/settings.json fájlban.",
+    "oldHost": "A parancs csevegésbeli használatához Hermes 0.21.7 vagy újabb szükséges.",
+    "isolated": "A csevegésbeli összefoglalók nem érhetők el, amíg a bővítmények külön folyamatban futnak (plugins.isolation: host): ott nem ellenőrizhető, ki hívja a parancsot. Használd az irányítópultot, vagy állítsd be: plugins.isolation: in_process.",
+    "dmHint": "A részletekért írj privát üzenetet a botnak, vagy nyisd meg az irányítópultot.",
+    "error": "Az ügyeleti tábla nem érhető el ({error}).",
+    "stalled": "{age} (elakadt)",
+    "privatePlace": "Privát beszélgetés",
+    "untitled": "Névtelen",
+    "localPlace": "Helyi",
+    "waitingHeading": "Rád várnak (a megválaszolatlan üzenetekkel együtt)",
+    "cronHeading": "Ütemezett feladatok problémái",
+    "units": {
+      "minute": "p",
+      "hour": "ó",
+      "day": "n"
+    },
+    "headline": "Ügyeleti tábla · {waiting} · {running} · {cron}",
+    "item": "{title} · {place} · {age}",
+    "hidden": "Tartalom elrejtve",
+    "runningHeading": "Fut",
+    "droppedHeading": "Befejezve, de az eredmény nincs kézbesítve",
+    "goalsHeading": "Hosszú távú célok",
+    "waitingCount": {
+      "one": "{count} rád vár",
+      "other": "{count} rád vár"
+    },
+    "runningCount": {
+      "one": "{count} fut",
+      "other": "{count} fut"
+    },
+    "droppedCount": {
+      "one": "{count} kézbesítetlen eredmény",
+      "other": "{count} kézbesítetlen eredmény"
+    },
+    "cronCount": {
+      "one": "{count} ütemezettfeladat-probléma",
+      "other": "{count} ütemezettfeladat-probléma"
+    },
+    "goalsCount": {
+      "one": "{count} állandó cél",
+      "other": "{count} állandó cél"
+    },
+    "more": {
+      "one": "+{count} további",
+      "other": "+{count} további"
+    }
+  }
+}

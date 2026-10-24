@@ -12,7 +12,7 @@ import queue
 import threading
 import time
 from agent.i18n import t
-from agent.session_activity import format_iteration_progress
+from agent.session_activity import ActivityProvenance, format_iteration_progress
 from contextlib import nullcontext, suppress
 from contextvars import copy_context
 from gateway.config import Platform
@@ -37,6 +37,16 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
+
+
+def _stamp_hygiene_compression_provenance(
+    agent: Any, desc: str, provenance: ActivityProvenance, debug_label: str) -> None:
+    """Best-effort activity provenance stamp for hygiene compression transitions."""
+    try:
+        agent._touch_activity(desc, provenance=provenance, step_kind=(
+            "retrying" if provenance == ActivityProvenance.AGENT_COMPRESSION_TIMEOUT else "compressing"))
+    except Exception:
+        logger.debug(debug_label, exc_info=True)
 
 
 class GatewayTurnHygieneMixin:
@@ -313,7 +323,6 @@ class GatewayTurnHygieneMixin:
     @staticmethod
     def _hmwa_hygiene_stamp(agent, desc, provenance_name, debug_label):
         from agent.session_activity import ActivityProvenance
-        from gateway.run import _stamp_hygiene_compression_provenance
         _stamp_hygiene_compression_provenance(agent, desc, getattr(ActivityProvenance, provenance_name), debug_label)
 
     async def _hmwa_hygiene_notify(self, source, meta, message, what):

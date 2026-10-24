@@ -9,6 +9,22 @@ API_BINDING_PREFIX = 'gateway.api.binding.v1.'
 API_DECLARED_PREFIX = 'gateway.api.conversation.v1.'
 
 
+def bind_resumed_launch(db, *, epoch, session_id, fields):
+    from hermes_cli.launch_provenance import launch_record
+    from hermes_state_launches import record_launch, bind_launch
+    def write(conn):
+        _epoch(conn, epoch)
+        if not conn.execute('SELECT 1 FROM sessions WHERE id=?', (session_id,)).fetchone():
+            raise RuntimeStoreError('not_found')
+        launch = launch_record(fields, db._own_profile_name() or 'default', launch_id='session:' + session_id)
+        if launch:
+            record_launch(conn, **launch)
+            bind_launch(conn, launch['launch_id'], child_session_id=session_id)
+    from hermes_state_optional_launch import optional_launch
+    with optional_launch("resume.launch"):
+        db._execute_write(write, patience_s=0)
+
+
 def commit_local_session(db, *, epoch, receipt):
     """Reserve the row, route and immutable policy together, before publication. A staged receipt's
     ``on_create`` (owner memory, never stored) is published by the transaction that creates the row
@@ -70,6 +86,17 @@ def commit_local_session(db, *, epoch, receipt):
             (sid, policy['source'], created, receipt['principal_id'], route,
              entry['origin']['chat_id'], policy['model'], _row_cwd(policy), db._own_profile_name(),
              _json(entry['origin']), started))
+        from hermes_state_optional_launch import optional_launch
+        with optional_launch('session.create.launch', conn=conn):
+            from hermes_cli.launch_provenance import launch_record
+            from hermes_state_launches import record_launch, bind_launch
+            launch = launch_record(json.loads(policy['request_json']), db._own_profile_name() or 'default',
+                                   launch_id='session:' + sid)
+            if launch:
+                record_launch(conn, **launch)
+                bind_launch(conn, launch['launch_id'], child_session_id=sid)
+        from cron.launches import bind_run_session
+        bind_run_session(conn, json.loads(policy['request_json']), sid)
         conn.execute("INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES('',?,?,?)",
                      (route, _json(entry), started))
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (key, encoded))

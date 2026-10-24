@@ -556,6 +556,7 @@ def _dashboard_plugin_entry(data: dict[str, Any], name: str, dashboard_dir: Path
         "entry": data.get("entry", "dist/index.js"),
         "css": data.get("css"),
         "has_api": bool(safe_api),
+        "default_enabled": data.get("default_enabled") is not False,
         "source": source,
         "_dir": str(dashboard_dir),
         "_api_file": safe_api,
@@ -799,14 +800,16 @@ def _plugin_api_mount_skip_reason(plugin: dict[str, Any], enabled_set: set, disa
     """Why a plugin's backend ``api`` must NOT be imported, or None when it may be.
 
     User plugins must be in ``plugins.enabled`` and not ``plugins.disabled`` before their
-    Python runs (GHSA-mcfc-hp25-cjv7); bundled plugins are trusted but respect an explicit
-    disable; project plugins (``./.hermes/plugins/``) ship with the CWD and are
+    Python runs (GHSA-mcfc-hp25-cjv7); bundled plugins respect an explicit disable,
+    and ``default_enabled: false`` opts a bundled dashboard into the same allow-list.
+    Project plugins (``./.hermes/plugins/``) ship with the CWD and are
     attacker-controlled when opening a malicious repo — never auto-imported (GHSA-5qr3-c538-wm9j).
     """
     source, plugin_name = plugin.get("source"), plugin.get("name", "")
     if source in ("user", "bundled") and plugin_name in disabled_set:
         return "explicitly disabled"
-    if source == "user" and plugin_name not in enabled_set:
+    requires_enable = source == "user" or (source == "bundled" and plugin.get("default_enabled") is False)
+    if requires_enable and plugin_name not in enabled_set:
         return "not in plugins.enabled"
     return None
 

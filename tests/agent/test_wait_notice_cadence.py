@@ -17,7 +17,7 @@ WARNING_COPY = ("provider may be slow", "no response yet")
 def _nonstream_request(ttfb_timeout=300.0):
     request = _NonStreamRequest.__new__(_NonStreamRequest)
     notices, touches = [], []
-    request.agent = SimpleNamespace(_emit_wait_notice=notices.append, _touch_activity=touches.append,
+    request.agent = SimpleNamespace(_emit_wait_notice=lambda text, **kwargs: notices.append(text), _touch_activity=lambda text, **kwargs: touches.append(text),
                                     _interrupt_requested=False)
     request.api_kwargs = {"model": "test-model"}
     request.call_start = 1000.0
@@ -55,7 +55,7 @@ def test_nonstream_notice_once_per_phase_then_near_deadline_only():
 def test_stream_monitor_notice_does_not_repeat_every_heartbeat():
     call = h._StreamingCall.__new__(h._StreamingCall)
     notices, touches = [], []
-    call.agent = SimpleNamespace(_emit_wait_notice=notices.append, _touch_activity=touches.append)
+    call.agent = SimpleNamespace(_emit_wait_notice=lambda text, **kwargs: notices.append(text), _touch_activity=lambda text, **kwargs: touches.append(text))
     call.api_kwargs = {"model": "test-model"}
     call._stream_stale_timeout = 180.0
     call.clients = SimpleNamespace(diag={"first_chunk_at": None})

@@ -201,6 +201,8 @@ class AuthorityConnection:
         handlers.update(tui_config_handlers(self))
         from gateway.session_ancillary import handlers as ancillary_handlers
         handlers.update(ancillary_handlers(self))
+        from gateway.session_family import handlers as family_handlers
+        handlers.update(family_handlers(self))
         from gateway.session_shell import handlers as shell_handlers
         handlers.update(shell_handlers(self))
         from gateway.session_tui_ops import handlers as tui_ops_handlers
@@ -284,7 +286,8 @@ class AuthorityConnection:
         original_params = dict(params)
         contract = contract or METHODS.get(method)
         authority = self.authority
-        if (isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
+        if (method not in {'session.family', 'family.overview'}
+                and isinstance(ref.session_id, str) and ref.session_id and not getattr(authority, 'retiring', False)
                 and ref.profile_id == getattr(authority, 'profile_id', None)
                 and ref.session_id not in getattr(authority, 'sessions', {ref.session_id: None})):
             # A first read of a session recovery never restored: its compression catch-up (#140060)
@@ -608,6 +611,14 @@ class AuthorityConnection:
         # reopens it (``reopen_local_session`` in the drain), so opening a finished chat
         # never re-lights DB-derived liveness with no new activity.
         self.authority.authorize(self.actor, ref, 'session:read')
+        from hermes_cli.launch_provenance import FIELDS
+        launch = {k: v for k, v in params.items() if k in FIELDS and v is not None}
+        if launch:
+            self.authority.authorize(self.actor, ref, 'session:control')
+            from hermes_state_local import bind_resumed_launch
+            from gateway.session_runtime_workers import tracked_write
+            await tracked_write(self.authority, partial(bind_resumed_launch, self.authority.db,
+                epoch=self.authority.epoch, session_id=ref.session_id, fields=launch))
         if 'session:control' in self.actor.capabilities:
             # A client attaching (main's `hermes -c` was a new process) re-reads the config-derived settings
             # (CFG-2); a snapshot poll on this attachment does not. Any open still adopts a frozen Bot Chat
