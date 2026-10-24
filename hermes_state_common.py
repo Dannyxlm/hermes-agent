@@ -795,19 +795,24 @@ CREATE INDEX IF NOT EXISTS idx_async_delegations_delivery
 """
 
 # Indexes on later-added columns must run AFTER _reconcile_columns(), or executescript fails on legacy DBs.
-# sessions_runtime_ledger_delete_guard: every delete path in this release retires a session's ledger rows
-# (session_admissions / worker_executions, ON DELETE RESTRICT) first, so only a release that predates the
-# gateway runtime reaches it. Such a release (schema_version 31 too, and it never refuses a newer schema)
-# otherwise dies on the bare FK with no hint. It prints the RAISE text verbatim and buckets errors by phrase,
-# so the text must stay free of the words it reads as storage damage, lock contention or disk trouble.
+# Candidate delete paths retire ledger rows (and publish retry fences) before parent deletion.
+# A predecessor cannot do that retirement: let it remove terminal history, but never unresolved work.
+# One trigger keeps the refusal before child-to-parent cleanup regardless of SQLite trigger ordering.
+# Older releases print RAISE text verbatim and bucket errors by phrase; keep the refusal free of
+# words they read as storage damage, lock contention or disk trouble.
 DEFERRED_INDEX_SQL = """
 DROP TRIGGER IF EXISTS sessions_runtime_ledger_delete_guard;
 CREATE TRIGGER IF NOT EXISTS sessions_runtime_ledger_delete_guard
 BEFORE DELETE ON sessions
-WHEN EXISTS (SELECT 1 FROM session_admissions WHERE target_session_id = old.id)
-  OR EXISTS (SELECT 1 FROM worker_executions WHERE session_id = old.id)
 BEGIN
-    SELECT RAISE(ABORT, 'Refused to delete a session that has gateway runtime history: state.db was upgraded by a newer Hermes, and this older Hermes cannot delete such sessions. Downgrading is unsupported. Run hermes update to go back to the newer release, or restore the pre-update snapshot: https://hermes-agent.nousresearch.com/docs/getting-started/updating#rolling-back-to-an-older-release');
+    SELECT RAISE(ABORT, 'Refused to delete a session with unresolved gateway runtime work; return to the newer Hermes and finish or resolve that work first.')
+    WHERE EXISTS (SELECT 1 FROM session_admissions WHERE target_session_id = old.id AND status != 'terminal')
+       OR EXISTS (SELECT 1 FROM worker_executions WHERE session_id = old.id AND status != 'terminal');
+    DELETE FROM worker_receipts WHERE execution_id IN (
+        SELECT execution_id FROM worker_executions WHERE session_id = old.id AND status = 'terminal'
+    );
+    DELETE FROM worker_executions WHERE session_id = old.id AND status = 'terminal';
+    DELETE FROM session_admissions WHERE target_session_id = old.id AND status = 'terminal';
 END;
 DROP TRIGGER IF EXISTS messages_transcript_revision_update;
 CREATE TRIGGER IF NOT EXISTS messages_transcript_revision_update
