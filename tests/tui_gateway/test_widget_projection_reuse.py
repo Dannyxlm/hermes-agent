@@ -59,3 +59,48 @@ def test_cached_reply_refreshes_on_in_place_transcript_changes(inbox_reader, cha
         writer._conn.commit()
     assert read(first["next_cursor"]).status_code == 409
     assert read().json()["revision"] != first["revision"]
+
+
+def test_subagent_activity_does_not_rebuild_parent_inbox(inbox_reader, monkeypatch):
+    path, read, _, _ = inbox_reader
+    with SessionDB(db_path=path) as writer:
+        writer.create_session("child", "tool", parent_session_id="chat-104")
+        writer._conn.execute("UPDATE sessions SET model_config=? WHERE id='child'",
+                             ('{"_delegate_from":"chat-104"}',))
+        writer._conn.commit()
+    calls = []
+    original = SessionDB.list_sessions_rich
+
+    def listing(db, *args, **kwargs):
+        calls.append(1)
+        return original(db, *args, **kwargs)
+
+    monkeypatch.setattr(SessionDB, "list_sessions_rich", listing)
+    first = read().json()
+    with SessionDB(db_path=path) as writer:
+        writer.append_message("child", "assistant", "child activity")
+    assert read().json()["items"] == first["items"]
+    assert len(calls) == 1
+
+
+def test_reply_markers_match_shared_projection_through_compression(inbox_reader):
+    from tui_gateway.inbox_summaries import page_replies
+
+    path, read, _, _ = inbox_reader
+    with SessionDB(db_path=path) as writer:
+        writer.end_session("chat-104", end_reason="compression")
+        writer.create_session("tip", "desktop", parent_session_id="chat-104")
+        writer.append_message("tip", "assistant", "eligible reply", timestamp=9000.123456789)
+        writer.append_message("tip", "assistant", "tool request", finish_reason="tool_calls")
+        writer._conn.execute("UPDATE messages SET active=0,compacted=1 WHERE session_id='chat-104'")
+        writer._conn.execute("UPDATE sessions SET last_read_at=0 WHERE id IN ('tip','chat-104')")
+        writer._conn.commit()
+    with SessionDB(db_path=path, read_only=True) as db:
+        rows = db.list_sessions_rich(limit=-1, compact_rows=True, order_by_last_active=True, include_pinned=False)
+        expected = {row.get('_lineage_root_id') or row['id']: {
+            k: v for k, v in reply.items() if k != 'preview'}
+            for row in rows if (reply := page_replies(db, [row]).get(row['id']))}
+    first = read().json()
+    second = read(first['next_cursor']).json()
+    actual = {item['session_id']: item['reply'] for item in first['items'] + second['items'] if item['reply']}
+    assert actual == expected
