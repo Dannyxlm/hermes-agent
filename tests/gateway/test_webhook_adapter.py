@@ -33,6 +33,7 @@ from gateway.platforms.webhook import (
     _INSECURE_NO_AUTH,
     _is_usable_secret,
 )
+from tests.waiting import async_wait_until
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +483,57 @@ class TestPayloadFilters:
         await asyncio.sleep(0.05)
         assert captured[0].text == "Task: PAY BILLS"
         assert captured[0].raw_message["body"] == "PAY BILLS"
+
+    @pytest.mark.asyncio
+    async def test_bare_route_script_runs_under_multiplexing(self, tmp_path, monkeypatch):
+        """Under multiplexing a bare route's script runs in the gateway's own profile scope.
+
+        Without a bound secret scope, building the script's subprocess env raised
+        UnscopedSecretError and the event was silently dropped as "script ignored"."""
+        from agent.secret_scope import set_multiplex_active
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / ".env").write_text("OWNER_ONLY_KEY=owner-value\n", encoding="utf-8")
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        (scripts / "probe.py").write_text(
+            "import json, sys\n"
+            "payload = json.load(sys.stdin)\n"
+            "print(json.dumps({'body': 'ran:' + payload['note']}))\n",
+            encoding="utf-8",
+        )
+        adapter = _make_adapter(routes={"probe": {
+            "secret": _INSECURE_NO_AUTH, "script": "probe.py", "prompt": "Script: {body}"}})
+        captured, seen_secret = [], []
+
+        async def _capture(event):
+            captured.append(event)
+
+        # In a live multiplexed gateway, platform/plugin hooks read profile secrets while the
+        # script's subprocess env is built; reproduce that read deterministically here.
+        import tools.environments.local as local_env
+        from agent.secret_scope import get_secret
+        real_build = local_env.build_subprocess_env
+
+        def _build_reading_a_secret(*args, **kwargs):
+            seen_secret.append(get_secret("OWNER_ONLY_KEY"))
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(local_env, "build_subprocess_env", _build_reading_a_secret)
+        adapter.handle_message = _capture
+        try:
+            app = _create_app(adapter)
+            async with TestClient(TestServer(app)) as cli:
+                # After startup: the mounted route authority's GatewayRunner sets it from its config (off).
+                set_multiplex_active(True)
+                resp = await cli.post("/webhooks/probe", json={"note": "hi"},
+                                      headers={"X-GitHub-Delivery": "bare-multiplex-1"})
+                assert resp.status == 202, await resp.text()
+            await async_wait_until(lambda: captured, what="the bare route's dispatch")
+        finally:
+            set_multiplex_active(False)
+        assert captured[0].text == "Script: ran:hi"
+        assert seen_secret == ["owner-value"]
 
 
 # ===================================================================

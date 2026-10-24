@@ -527,6 +527,23 @@ class WebhookAdapter(BasePlatformAdapter):
         from hermes_cli.profiles import get_profile_dir
         return _profile_runtime_scope(get_profile_dir(profile))
 
+    def _ingress_scope(self, profile: Optional[str]):
+        """Scope for a route's script, prompt render and skill lookup.
+
+        A ``/p/<profile>/`` request uses that profile's scope. A bare route still needs one once
+        unscoped reads fail closed: without it the script's ``build_subprocess_env()`` raises
+        ``UnscopedSecretError`` and the event is dropped as "script ignored" with a 200, so the
+        sender never retries. Under ``multiplex_profiles`` a bare route is ``default``'s
+        (``_route_allows_profile``) and the primary config is the default root's, never a named
+        launcher's home. A standalone gateway binds its launch profile like its other ingress
+        (``run_turn.py::_standalone_launch_scope``): a no-op until a hosted room flips the guard."""
+        if profile and isinstance(profile, str):
+            return self._profile_scope(profile)
+        if getattr(getattr(self.gateway_runner, "config", None), "multiplex_profiles", False):
+            return self._profile_scope("default")
+        from tui_gateway.launch_profile_policy import launch_profile_scope_if_multiplexed
+        return launch_profile_scope_if_multiplexed()
+
     async def _read_authenticated_body(self, request: web.Request, route_name: str,
                                        route_config: dict) -> tuple[Optional[bytes], Optional[web.Response]]:
         """Auth-before-body: size-cap, read, then HMAC-validate. Returns ``(body, None)`` or ``(None, response)``."""
@@ -604,10 +621,10 @@ class WebhookAdapter(BasePlatformAdapter):
         async def _fire_cron_job() -> None:
             try:
                 from tools.cronjob_tools import execute_job_for_event
-                # The job store (cron/jobs.json) and the run belong to the ROUTED profile, not the gateway's
-                # default home; to_thread copies contextvars so the scope follows. A cron job is a full agent
-                # run (minutes) — keep it off the gateway event loop.
-                with self._profile_scope(profile):
+                # The job store (cron/jobs.json) and the run belong to the route's owner (``_ingress_scope``),
+                # not a named launcher's home; to_thread copies contextvars so the scope follows. A cron job
+                # is a full agent run (minutes) — keep it off the gateway event loop.
+                with self._ingress_scope(profile):
                     result = await asyncio.to_thread(execute_job_for_event, job_ref, event_context)
                 if not result.get("success"):
                     logger.warning("[webhook] cron-trigger job=%s route=%s did not complete cleanly: %s", job_ref,
@@ -699,8 +716,8 @@ class WebhookAdapter(BasePlatformAdapter):
             return web.json_response({"status": "ignored", "reason": "filter", "route": route_name})
         # Script, prompt render and skill lookup read the profile's home (skills/, config); the runner
         # only enters the routed profile's scope later around handle_message, so enter it here.
-        # See #67277.
-        with self._profile_scope(profile):
+        # See #67277. Bare routes enter their owner's scope too (``_ingress_scope``).
+        with self._ingress_scope(profile):
             script = route_config.get("script")
             if script:
                 # Shells out (up to its timeout) — worker thread so the loop isn't blocked; to_thread
