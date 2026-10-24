@@ -8,9 +8,11 @@ BINDING_PREFIX = 'gateway.history_control.v1.'
 def _history_sources():
     """Local surfaces whose unrouted rows are owner history: every source the native resume adopts
     (``LEGACY_LOCAL_SOURCES``: old ``desktop`` chats and ``oneshot``/``tool`` CLI runs too) plus imports.
-    A row resume can adopt must also take a sidebar edit (pin/archive/hide/rename)."""
+    A row resume can adopt must also take a sidebar edit (pin/archive/hide/rename).
+    Remote mobile sessions use the same login-stamped, unrouted rows, but their execution stays
+    on the sidecar: allow control-only history without adding a native resume/adoption source."""
     from hermes_state_local_migration import LEGACY_LOCAL_SOURCES
-    return LEGACY_LOCAL_SOURCES | {'import'}
+    return LEGACY_LOCAL_SOURCES | {'import', 'mobile'}
 
 
 def _owner_user(row):
