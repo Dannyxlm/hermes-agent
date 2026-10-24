@@ -959,9 +959,17 @@ async def backfill_session_owner_profiles(body: SessionOwnerBackfill, request: R
             # would 409 every Desktop boot), so the idempotent stamp runs on its own connection.
             stamped = await asyncio.to_thread(owner_db.backfill_null_session_profiles, stamp)
         else:
-            stamped = await asyncio.to_thread(
-                _with_db, body.profile, lambda db: db.backfill_null_session_profiles(stamp),
-                read_only=False)
+            # Desktop repeats this migration on reconnect. A completed store needs no
+            # writer reservation (and a standalone dashboard cannot reserve a live owner's).
+            pending = await asyncio.to_thread(
+                _with_db, body.profile, lambda db: db._read_one(
+                    "SELECT 1 FROM sessions WHERE profile_name IS NULL OR TRIM(profile_name) = '' LIMIT 1"),
+                read_only=True)
+            stamped = 0
+            if pending is not None:
+                stamped = await asyncio.to_thread(
+                    _with_db, body.profile, lambda db: db.backfill_null_session_profiles(stamp),
+                    read_only=False)
 
     if stamped:
         _log.info(

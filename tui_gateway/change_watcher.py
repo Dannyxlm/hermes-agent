@@ -5,6 +5,7 @@ rebound onto server.py's globals at install time (method_ctx.bind_module)."""
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -208,9 +209,20 @@ _SESSION_SIGNATURE_FIELDS = (
 # normal 0.5 s watch pass stat-only; SQLite is read only after another process
 # actually commits (and for ``utils.RACY_MTIME_WINDOW_NS`` after it, see _settled_mtime).
 _sessions_db_sig_cache: dict[str, tuple[object, tuple | None]] = {}
+_session_observation_locks: dict[str, Any] = {}
+_session_observation_lock = threading.Lock()
 
 
 def _session_db_content_sig(db_path: Path):
+    """Share a store observation across overlapping watcher, push and list readers."""
+    key = os.path.realpath(db_path)
+    with _session_observation_lock:
+        lock = _session_observation_locks.setdefault(key, threading.Lock())
+    with lock:
+        return _read_session_db_content_sig(db_path)
+
+
+def _read_session_db_content_sig(db_path: Path):
     """Digest list/transcript-relevant session rows, excluding unrelated tables.
 
     ``gateway_heartbeats`` shares state.db and writes every minute. Using the
@@ -443,6 +455,13 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
     """One pass: recompute due signatures, broadcast events whose signature moved.
     First sighting seeds silently so a gateway boot never fires a refresh storm."""
     from tui_gateway import session_change_cursor
+    with _live_transports_lock:
+        live = list(_live_transports)
+    # Durable Inbox push owns its leased-store refresh in mobile_inbox_invalidation.process;
+    # this UI watcher has no work without a WebSocket or the stdio TUI.
+    if not live and not _stdio_is_rpc_channel:
+        session_change_cursor.pump(_send_session_cursor_frames, live, now)
+        return
     now = time.monotonic() if now is None else now
     for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
         if event == "sessions.changed":

@@ -124,14 +124,16 @@ def page_replies(db, rows):
     if not ids:
         return {}
     latest = db._read_all(f"""
-        SELECT m.session_id, m.id, m.timestamp, substr(m.content, 1, 1200) AS head FROM messages m
-        JOIN (SELECT session_id, MAX(id) AS max_id FROM messages
-              WHERE session_id IN ({','.join('?' for _ in ids)})
+        WITH requested(session_id) AS (VALUES {','.join('(?)' for _ in ids)})
+        SELECT m.session_id, m.id, m.timestamp, substr(m.content, 1, 1200) AS head
+        FROM requested r JOIN messages m ON m.id = (
+            SELECT id FROM messages
+            WHERE session_id = r.session_id
                 AND role = 'assistant'
                 AND (active = 1 OR compacted = 1)
                 AND COALESCE(finish_reason, '') != 'tool_calls'
                 AND length(trim(COALESCE(content, ''), char(9)||char(10)||char(13)||' ')) > 0
-              GROUP BY session_id) final ON m.id = final.max_id
+            ORDER BY id DESC LIMIT 1)
     """, ids)
     by_id = {r["session_id"]: r for r in latest}
     result = {}
