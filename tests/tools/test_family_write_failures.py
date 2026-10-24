@@ -264,7 +264,7 @@ async def test_background_runs_when_launch_reservation_fails(tmp_path, monkeypat
     from gateway import session_tui_side as side
     from gateway.session_controls import AuthorityConnection
     from tests.gateway.test_local_source_labels import _authority
-    import hermes_state_launches
+    import hermes_state_background
     authority, _ = await _authority(tmp_path, monkeypatch)
     connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
     done, ran = threading.Event(), []
@@ -277,7 +277,7 @@ async def test_background_runs_when_launch_reservation_fails(tmp_path, monkeypat
         created = await connection.dispatch({'id': 1, 'method': 'session.create',
             'params': dict(request_id='optional-bg', source='cli', cwd=str(tmp_path))})
         sid = created['result']['stored_session_id']
-        monkeypatch.setattr(hermes_state_launches, 'record_launch', unavailable)
+        monkeypatch.setattr(hermes_state_background, 'record_launch', unavailable)
         spawned = await connection.dispatch({'id': 2, 'method': 'prompt.background',
             'params': dict(session_id=sid, text='fixture')})
         assert 'result' in spawned, spawned
