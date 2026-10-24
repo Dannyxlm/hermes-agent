@@ -4,10 +4,13 @@ from pathlib import Path
 import sqlite3
 import subprocess
 
+import pytest
+
 from tests.hermes_cli.test_finite_chat_delegation import test_finite_chat_joins_parallel_children_before_final_response as finite_chat
 
 
-def test_family_end_to_end(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["quiet", "resumed"])
+def test_family_end_to_end(tmp_path, monkeypatch, mode):
     real_run = subprocess.run
     child_launches = []
 
@@ -26,7 +29,7 @@ def test_family_end_to_end(tmp_path, monkeypatch):
         return real_run(command, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, 'run', run)
-    finite_chat(tmp_path, 'quiet')
+    finite_chat(tmp_path, mode)
     assert len(child_launches) == 1
     home = tmp_path / 'profile'
     monkeypatch.setenv('HERMES_HOME', str(home))

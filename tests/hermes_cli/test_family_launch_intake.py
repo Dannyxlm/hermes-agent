@@ -99,3 +99,31 @@ async def test_gateway_create_receipt_records_child_profile_only_and_is_idempote
     finally:
         await conn.close()
         authority.db.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_resume_binds_launch_before_the_next_admitted_turn(tmp_path, monkeypatch):
+    from gateway.session_controls import AuthorityConnection
+    from tests.gateway.test_local_source_labels import _authority
+    authority, _ = await _authority(tmp_path, monkeypatch)
+    conn = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+    try:
+        created = await conn.dispatch({'id': 1, 'method': 'session.create',
+                                      'params': dict(request_id='resumed-target', source='oneshot', cwd=str(tmp_path))})
+        sid = created['result']['stored_session_id']
+        fields = dict(session_id=sid, started_by_session='launcher', started_by_profile='foreign-profile',
+                      launch_id='resumed-launch', launch_title='Resume child')
+        for request_id in (2, 3):
+            result = await conn.dispatch({'id': request_id, 'method': 'session.resume', 'params': fields})
+            assert 'result' in result, result
+        with authority.db._read_ctx() as db:
+            rows = [dict(r) for r in db.execute('SELECT * FROM work_launches')]
+        assert len(rows) == 1
+        assert rows[0]['launch_id'] == 'resumed-launch'
+        assert rows[0]['child_session_id'] == sid
+        assert rows[0]['launcher_session_id'] == 'launcher'
+        assert rows[0]['kind'] == 'teammate'
+        assert authority.db.get_session(sid)['parent_session_id'] is None
+    finally:
+        await conn.close()
+        authority.db.close()
