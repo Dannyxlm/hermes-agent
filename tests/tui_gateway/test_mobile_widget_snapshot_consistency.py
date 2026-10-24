@@ -78,12 +78,13 @@ def test_relevant_projection_change_refuses_old_cursor(inbox_reader, change):
     with SessionDB(db_path=path) as writer:
         if change == "reply":
             writer.append_message("chat-000", "assistant", "new reply", timestamp=1000)
+        elif change == "delete":
+            writer.delete_session("chat-000")
         else:
             sql = {
                 "title": "UPDATE sessions SET title='Renamed' WHERE id='chat-000'",
                 "read": "UPDATE sessions SET last_read_at=1000 WHERE id='chat-000'",
                 "archive": "UPDATE sessions SET archived=1 WHERE id='chat-000'",
-                "delete": "DELETE FROM sessions WHERE id='chat-000'",
             }[change]
             writer._conn.execute(sql)
             writer._conn.commit()
@@ -100,7 +101,7 @@ def test_epoch_change_during_read_fails_closed(inbox_reader, monkeypatch):
 
     def new_epoch(db, rows):
         result = original(db, rows)
-        server_requests.reset_for_tests()
+        monkeypatch.setattr(server_requests, "inbox_epoch", lambda: "replacement-process-epoch")
         return result
 
     monkeypatch.setattr(mobile_widget_inbox, "page_replies", new_epoch)
