@@ -67,7 +67,8 @@ SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenCon
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
 SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
-                        'should_begin_calls', 'state', 'surface', 'to', 'verified_empty'})
+                        'should_begin_calls', 'state', 'surface', 'to', 'verified_empty',
+                        'will_show_ms', 'did_show_ms', 'kb_anim_ms', 'tail'})
 BG_TRIGGERS = frozenset({'scheduled', 'silent_push'})
 BG_OUTCOMES = frozenset({'new_data', 'no_data', 'failed', 'expired'})
 PUSH_TYPES = frozenset({'alert', 'background', 'live_activity'})
@@ -174,8 +175,13 @@ def _metrickit_payload(value):
 def _span_attrs(value):
     if not isinstance(value, dict) or set(value) - SPAN_ATTRS:
         _fail('invalid span attributes')
-    for attr in value.values():
+    for key, attr in value.items():
         _match(_TOKEN, attr)
+        if key in {'will_show_ms', 'did_show_ms', 'kb_anim_ms'}:
+            if not re.fullmatch(r'[0-9]+', attr) or not 0 <= int(attr) <= 600000:
+                _fail('invalid span timing')
+        elif key == 'tail':
+            _one_of({'memory', 'disk', 'none'})(attr)
     return value
 
 

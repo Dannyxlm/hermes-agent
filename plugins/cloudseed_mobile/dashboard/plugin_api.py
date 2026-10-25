@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 from hermes_cli.config import load_config
 from plugins.cloudseed_mobile.scope import profile_id, state_dir
-from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, PhotoStorageFull
+from plugins.cloudseed_mobile.photo_catalog import PhotoCatalog, PhotoError, PhotoResetRequired, PhotoStorageFull
 from plugins.cloudseed_mobile.iphone_reminders import ReminderOutbox, ReminderError
 from plugins.cloudseed_mobile import provider_accounts as accounts
 from plugins.cloudseed_mobile.memory_files import MAX_MEMORY, read_memory, write_memory
@@ -115,6 +115,8 @@ def device_args(principal, body):
 def guarded(fn):
     try:
         return fn()
+    except PhotoResetRequired:
+        return JSONResponse({'error': 'reset_required'}, status_code=409)
     except PhotoStorageFull:
         return JSONResponse({'error': 'Photo sync paused: server storage is low', 'code': 'storage_low'}, status_code=507)
     except accounts.AccountControlError as exc:
@@ -130,14 +132,14 @@ def guarded(fn):
         return JSONResponse({'error': 'Mobile storage unavailable'}, status_code=503)
 
 
-PHOTO_OPS = ('capabilities', 'register', 'begin', 'manifest', 'put', 'finish', 'disconnect', 'status', 'search', 'preview')
+PHOTO_OPS = ('capabilities', 'register', 'begin', 'manifest', 'delta', 'put', 'finish', 'disconnect', 'status', 'search', 'preview')
 REMINDER_OPS = ('register', 'poll', 'ack', 'disconnect', 'status')
 
 
 def photo_call(op, principal, body):
     args = device_args(principal, body)
     if op == 'capabilities':
-        return {'ok': True, 'protocol_version': 1}
+        return {'ok': True, 'protocol_version': 1, 'feature_versions': {'photo_delta': 1}}
     store = photo_store()
     if op == 'register':
         if 'rebind' in body and type(body['rebind']) is not bool:
@@ -147,6 +149,8 @@ def photo_call(op, principal, body):
         return store.begin(*args, body.get('count'))
     if op == 'manifest':
         return store.manifest(*args, body.get('epoch'), body.get('items'))
+    if op == 'delta':
+        return store.delta(*args, body.get('epoch'), body.get('upserts'), body.get('deletes'))
     if op == 'put':
         return store.put(*args, body.get('epoch'), body.get('item'))
     if op == 'finish':
