@@ -510,3 +510,147 @@ def test_native_dashboard_discovery_mount_and_disable(client, monkeypatch):
     dashboard._mount_plugin_api_routes()
     with TestClient(disabled_app) as disabled:
         assert disabled.get(P+'/memory').status_code == 404
+
+
+def delta_baseline(client, monkeypatch):
+    c, home = client
+    monkeypatch.setattr(api, 'photo_store', lambda: api.PhotoCatalog(
+        home/'webui/photo-catalog/catalog.sqlite3', free_bytes=lambda: 10 * 1024**3))
+    assert post(c, 'photo-catalog', 'register').status_code == 200
+    epoch = post(c, 'photo-catalog', 'begin', count=2).json()['epoch']
+    items = [{'id': f'{i:064x}', 'fingerprint': 'c'*64, 'created': i, 'albums': [],
+              'text': 'fixture', 'favorite': False, 'screenshot': False,
+              'preview': base64.b64encode(b'\xff\xd8\xff\xff\xd9').decode()} for i in range(3)]
+    assert post(c, 'photo-catalog', 'manifest', epoch=epoch, items=items[:2]).status_code == 200
+    for item in items[:2]:
+        assert post(c, 'photo-catalog', 'put', epoch=epoch, item=item).status_code == 200
+    assert post(c, 'photo-catalog', 'finish', epoch=epoch).json()['complete']
+    return epoch, items
+
+
+def test_photo_delta_capability_keeps_legacy_protocol(client):
+    c, _ = client
+    response = post(c, 'photo-catalog', 'capabilities')
+    assert response.status_code == 200
+    assert response.json() == {'ok': True, 'protocol_version': 1, 'feature_versions': {'photo_delta': 1}}
+
+
+def test_photo_delta_route_put_without_finish_and_delete(client, monkeypatch):
+    c, _ = client
+    epoch, items = delta_baseline(client, monkeypatch)
+    cut = {'epoch': epoch, 'upserts': [{'id': items[2]['id'], 'fingerprint': items[2]['fingerprint']}], 'deletes': []}
+    expected = {'ok': True, 'epoch': epoch, 'missing': [items[2]['id']], 'applied': {'upserts': 1, 'deletes': 0}}
+    response = post(c, 'photo-catalog', 'delta', **cut)
+    assert response.status_code == 200
+    assert response.json() == expected
+    assert post(c, 'photo-catalog', 'delta', **cut).json() == expected
+    assert not post(c, 'photo-catalog', 'status').json()['complete']
+    assert post(c, 'photo-catalog', 'put', epoch=epoch, item=items[2]).status_code == 200
+    status = post(c, 'photo-catalog', 'status').json()
+    assert (status['epoch'], status['count'], status['total'], status['complete']) == (epoch, 3, 3, True)
+    assert {p['id'] for p in post(c, 'photo-catalog', 'search').json()['items']} == {p['id'] for p in items}
+    for _ in range(2):
+        response = post(c, 'photo-catalog', 'delta', epoch=epoch, upserts=[], deletes=[items[0]['id']])
+        assert response.status_code == 200
+        assert response.json()['applied'] == {'upserts': 0, 'deletes': 1}
+    assert post(c, 'photo-catalog', 'preview', asset_id=items[0]['id']).status_code == 400
+    assert {p['id'] for p in post(c, 'photo-catalog', 'search', query={'text': 'fixture'}).json()['items']} == {p['id'] for p in items[1:]}
+    status = post(c, 'photo-catalog', 'status').json()
+    assert (status['count'], status['total'], status['complete']) == (2, 2, True)
+    # A later legacy full cycle still sweeps omitted rows and fences the delta epoch.
+    next_epoch = post(c, 'photo-catalog', 'begin', count=1).json()['epoch']
+    assert post(c, 'photo-catalog', 'manifest', epoch=next_epoch, items=[items[1]]).json()['missing'] == []
+    assert post(c, 'photo-catalog', 'finish', epoch=next_epoch).json()['complete']
+    assert post(c, 'photo-catalog', 'preview', asset_id=items[2]['id']).status_code == 400
+    response = post(c, 'photo-catalog', 'delta', **cut)
+    assert response.status_code == 409
+    assert response.json() == {'error': 'reset_required'}
+
+
+@pytest.mark.parametrize('failure,code', [
+    ('epoch', 409), ('no_epoch', 409), ('unfinished', 409), ('not_started', 409), ('disabled', 400),
+    ('secret', 400), ('no_secret', 400), ('device', 400), ('profile', 403), ('principal', 400),
+    ('owner', 403), ('anonymous', 401), ('cookie_origin', 403),
+])
+def test_photo_delta_admission_is_atomic(client, monkeypatch, failure, code):
+    c, home = client
+    epoch, items = delta_baseline(client, monkeypatch)
+    cut = {'epoch': epoch, 'upserts': [items[2]], 'deletes': [items[0]['id']]}
+    if failure == 'epoch':
+        cut['epoch'] = str(uuid.UUID(int=9))
+    elif failure == 'no_epoch':
+        cut['epoch'] = None
+    elif failure == 'unfinished':
+        cut['epoch'] = post(c, 'photo-catalog', 'begin', count=2).json()['epoch']
+        assert post(c, 'photo-catalog', 'manifest', epoch=cut['epoch'], items=items[:2]).status_code == 200
+    elif failure == 'not_started':
+        cut['device_id'] = str(uuid.UUID(int=2))
+        assert post(c, 'photo-catalog', 'register', device_id=cut['device_id']).status_code == 200
+    elif failure == 'disabled':
+        assert post(c, 'photo-catalog', 'disconnect').status_code == 200
+    elif failure == 'secret':
+        cut['secret'] = 'f' * 64
+    elif failure == 'no_secret':
+        cut['secret'] = None
+    elif failure == 'device':
+        cut['device_id'] = str(uuid.UUID(int=3))
+    elif failure == 'profile':
+        cut['profile'] = 'other'
+    elif failure == 'principal':
+        with api.photo_store().connection() as db:
+            db.execute('UPDATE devices SET principal=? WHERE id=?', ('other', DEVICE))
+    elif failure == 'owner':
+        monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'other', 'owner_provider': 'basic'})
+    elif failure in ('anonymous', 'cookie_origin'):
+        c.headers.pop('authorization')
+        if failure == 'cookie_origin':
+            c.cookies.set('fixture_session', 'owner')
+    path = home/'webui/photo-catalog/catalog.sqlite3'
+    before = path.read_bytes()
+    response = post(c, 'photo-catalog', 'delta', **cut)
+    assert response.status_code == code
+    if code == 409:
+        assert response.json() == {'error': 'reset_required'}
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('bad_cut', [
+    {'upserts': [{'id': 'b'*64, 'fingerprint': 'c'*64}]*2, 'deletes': []},
+    {'upserts': [], 'deletes': ['b'*64]*2},
+    {'upserts': [{'id': 'b'*64, 'fingerprint': 'c'*64}], 'deletes': ['b'*64]},
+    {'upserts': [{'id': f'{i:064x}', 'fingerprint': 'c'*64} for i in range(500)], 'deletes': ['f'*64]},
+    {'upserts': [], 'deletes': [f'{i:064x}' for i in range(501)]},
+    {'upserts': [{'id': 'b'*64, 'fingerprint': 'invalid'}], 'deletes': ['0'*64]},
+    {'upserts': [{'id': 'B'*64, 'fingerprint': 'c'*64}], 'deletes': []},
+    {'upserts': [], 'deletes': ['invalid']},
+    {'upserts': [None], 'deletes': []}, {'upserts': {}, 'deletes': []},
+    {'upserts': [], 'deletes': None}, {'deletes': []}, {'upserts': []},
+])
+def test_photo_delta_invalid_cut_has_no_effect(client, monkeypatch, bad_cut):
+    c, home = client
+    epoch, _ = delta_baseline(client, monkeypatch)
+    path = home/'webui/photo-catalog/catalog.sqlite3'
+    before = path.read_bytes()
+    response = post(c, 'photo-catalog', 'delta', epoch=epoch, **bad_cut)
+    assert response.status_code == 400
+    assert path.read_bytes() == before
+
+
+def test_photo_delta_accepts_500_total_operations_and_low_storage(client, monkeypatch):
+    c, home = client
+    epoch, items = delta_baseline(client, monkeypatch)
+    monkeypatch.setattr(api, 'photo_store', lambda: api.PhotoCatalog(
+        home/'webui/photo-catalog/catalog.sqlite3', free_bytes=lambda: 0))
+    upserts = [{'id': f'{i:064x}', 'fingerprint': 'c'*64} for i in range(2, 501)]
+    cut = {'epoch': epoch, 'upserts': upserts, 'deletes': [items[0]['id']]}
+    for _ in range(2):
+        response = post(c, 'photo-catalog', 'delta', **cut)
+        assert response.status_code == 200
+        assert response.json()['missing'] == [p['id'] for p in upserts]
+        assert response.json()['applied'] == {'upserts': 499, 'deletes': 1}
+    assert post(c, 'photo-catalog', 'status').json()['total'] == 500
+    assert post(c, 'photo-catalog', 'put', epoch=epoch, item=items[2]).status_code == 507
+    response = post(c, 'photo-catalog', 'delta', epoch=epoch, upserts=[], deletes=[p['id'] for p in upserts])
+    assert response.status_code == 200
+    status = post(c, 'photo-catalog', 'status').json()
+    assert (status['count'], status['total'], status['complete']) == (1, 1, True)

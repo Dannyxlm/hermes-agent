@@ -85,3 +85,119 @@ def test_schema_guard_reinitializes_for_schema_version_or_replaced_file(tmp_path
     photos.PhotoCatalog(path)
     photos.PhotoCatalog(path)
     assert sum('CREATE TABLE IF NOT EXISTS devices' in sql for sql in statements) == 3
+
+
+def baseline(store, device=DEVICE, count=2):
+    store.register('owner', 'default', device, SECRET)
+    epoch = store.begin('owner', 'default', device, SECRET, count)['epoch']
+    store.manifest('owner', 'default', device, SECRET, epoch, [item(i) for i in range(count)])
+    for i in range(count):
+        store.put('owner', 'default', device, SECRET, epoch, item(i))
+    assert store.finish('owner', 'default', device, SECRET, epoch)['complete']
+    return epoch
+
+
+def catalog_state(store):
+    with store.connection(readonly=True) as db:
+        return {table: [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                for table in ('devices', 'manifest', 'photos')}
+
+
+def test_delta_put_without_finish_preserves_baseline_and_replays(tmp_path):
+    path = tmp_path / 'catalog.sqlite3'
+    store = photos.PhotoCatalog(path, free_bytes=lambda: 10 * 1024**3)
+    epoch = baseline(store)
+    cut = [dict(id=item(2)['id'], fingerprint=item(2)['fingerprint'])]
+    expected = {'ok': True, 'epoch': epoch, 'missing': [item(2)['id']],
+                'applied': {'upserts': 1, 'deletes': 0}}
+    assert store.delta('owner', 'default', DEVICE, SECRET, epoch, cut, []) == expected
+    state = catalog_state(store)
+    assert store.delta('owner', 'default', DEVICE, SECRET, epoch, cut, []) == expected
+    assert catalog_state(store) == state
+    status = store.status('default', DEVICE)
+    assert (status['epoch'], status['count'], status['total'], status['complete']) == (epoch, 2, 3, False)
+    with pytest.raises(photos.PhotoError):
+        store.put('owner', 'default', DEVICE, SECRET, epoch, {**item(2), 'fingerprint': 'c' * 64})
+    store.put('owner', 'default', DEVICE, SECRET, epoch, item(2))
+    status = store.status('default', DEVICE)
+    assert (status['epoch'], status['count'], status['total'], status['complete']) == (epoch, 3, 3, True)
+    assert {p['id'] for p in store.search('default', DEVICE, {})['items']} == {item(i)['id'] for i in range(3)}
+    assert store.preview('default', DEVICE, item(0)['id']) == base64.b64decode(item(0)['preview'])
+    expected['missing'] = []
+    assert photos.PhotoCatalog(path).delta('owner', 'default', DEVICE, SECRET, epoch, cut, []) == expected
+    assert store.status('default', DEVICE) == status
+
+
+def test_delta_delete_is_device_scoped_and_works_without_reserve(tmp_path):
+    store = photos.PhotoCatalog(tmp_path / 'catalog.sqlite3', free_bytes=lambda: 10 * 1024**3)
+    epoch = baseline(store)
+    other = str(uuid.UUID(int=2))
+    baseline(store, other)
+    store.free_bytes = lambda: 0
+    deleted = item(0)['id']
+    result = store.delta('owner', 'default', DEVICE, SECRET, epoch, [], [deleted])
+    assert result == {'ok': True, 'epoch': epoch, 'missing': [], 'applied': {'upserts': 0, 'deletes': 1}}
+    state = catalog_state(store)
+    assert store.delta('owner', 'default', DEVICE, SECRET, epoch, [], [deleted]) == result
+    assert catalog_state(store) == state
+    status = store.status('default', DEVICE)
+    assert (status['count'], status['total'], status['complete']) == (1, 1, True)
+    assert [p['id'] for p in store.search('default', DEVICE, {'text': 'cat'})['items']] == [item(1)['id']]
+    with pytest.raises(photos.PhotoError, match='Photo unavailable'):
+        store.preview('default', DEVICE, deleted)
+    assert store.preview('default', other, deleted) == base64.b64decode(item(0)['preview'])
+    assert store.status('default', other)['count'] == 2
+    with store.connection(readonly=True) as db:
+        for table in ('manifest', 'photos'):
+            assert db.execute(f'SELECT 1 FROM {table} WHERE device=? AND asset=?', (DEVICE, deleted)).fetchone() is None
+        indexed = {r[0] for r in db.execute("SELECT rowid FROM photo_text WHERE photo_text MATCH 'cat'")}
+        assert indexed == {r[0] for r in db.execute('SELECT rowid FROM photos')}
+
+
+def test_delta_changed_fingerprint_and_mixed_replay(tmp_path):
+    store = photos.PhotoCatalog(tmp_path / 'catalog.sqlite3', free_bytes=lambda: 10 * 1024**3)
+    epoch = baseline(store)
+    changed = {**item(0), 'fingerprint': 'c' * 64, 'text': 'dog'}
+    upserts = [{'id': changed['id'], 'fingerprint': changed['fingerprint']},
+               {'id': item(2)['id'], 'fingerprint': item(2)['fingerprint']}]
+    for _ in range(2):
+        result = store.delta('owner', 'default', DEVICE, SECRET, epoch, upserts, [item(1)['id']])
+        assert result['missing'] == [changed['id'], item(2)['id']]
+        status = store.status('default', DEVICE)
+        assert (status['count'], status['total'], status['complete']) == (0, 2, False)
+    store.free_bytes = lambda: 0
+    assert store.delta('owner', 'default', DEVICE, SECRET, epoch, upserts, [item(1)['id']]) == result
+    with pytest.raises(photos.PhotoStorageFull):
+        store.put('owner', 'default', DEVICE, SECRET, epoch, changed)
+    store.free_bytes = lambda: 10 * 1024**3
+    for payload in (changed, item(2)):
+        store.put('owner', 'default', DEVICE, SECRET, epoch, payload)
+    assert store.status('default', DEVICE)['complete']
+    assert [p['id'] for p in store.search('default', DEVICE, {'text': 'dog'})['items']] == [changed['id']]
+    assert [p['id'] for p in store.search('default', DEVICE, {'text': 'cat'})['items']] == [item(2)['id']]
+
+
+def test_delta_rolls_back_entire_cut_on_write_failure(tmp_path, monkeypatch):
+    store = photos.PhotoCatalog(tmp_path / 'catalog.sqlite3', free_bytes=lambda: 10 * 1024**3)
+    epoch = baseline(store)
+    with store.connection() as db:
+        db.execute("CREATE TRIGGER reject_manifest BEFORE INSERT ON manifest BEGIN SELECT RAISE(ABORT, 'fixture'); END")
+    before = catalog_state(store)
+    statements, _ = traced(monkeypatch)
+    with pytest.raises(sqlite3.IntegrityError, match='fixture'):
+        store.delta('owner', 'default', DEVICE, SECRET, epoch, [item(2)], [item(0)['id']])
+    assert statements.count('BEGIN IMMEDIATE') == 1
+    assert 'ROLLBACK' in statements and 'COMMIT' not in statements
+    assert catalog_state(store) == before
+
+
+def test_delta_accepts_finished_baseline_with_pending_payloads_and_empty_baseline(tmp_path):
+    store = photos.PhotoCatalog(tmp_path / 'catalog.sqlite3', free_bytes=lambda: 10 * 1024**3)
+    epoch = baseline(store, count=0)
+    assert store.delta('owner', 'default', DEVICE, SECRET, epoch, [], []) == {
+        'ok': True, 'epoch': epoch, 'missing': [], 'applied': {'upserts': 0, 'deletes': 0}}
+    epoch = store.begin('owner', 'default', DEVICE, SECRET, 1)['epoch']
+    store.manifest('owner', 'default', DEVICE, SECRET, epoch, [item(0)])
+    assert not store.finish('owner', 'default', DEVICE, SECRET, epoch)['complete']
+    store.delta('owner', 'default', DEVICE, SECRET, epoch, [item(1)], [])
+    assert store.status('default', DEVICE)['total'] == 2
