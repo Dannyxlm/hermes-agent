@@ -64,13 +64,13 @@ def test_upgrade_keeps_latest_device_lease_and_cascades_old_jobs(tmp_path, kind,
                 assert db.execute("SELECT id,principal FROM subscriptions").fetchall() == [(new_id, "owner-1")]
                 assert db.execute("SELECT subscription_id FROM outbox").fetchall() == [(new_id,)]
                 for table in ("alert_policies", "activity_start_tokens"):
-                    assert db.execute(f"SELECT principal FROM {table}").fetchall() == [("owner-1",)]
+                    assert db.execute(f"SELECT principal FROM {table} ORDER BY rowid").fetchall() == [("owner-0",), ("owner-1",)]
                 assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         finally:
             store.close()
 
 
-def test_upgrade_retires_single_stale_policy_before_it_can_reclaim_new_lease(tmp_path):
+def test_upgrade_preserves_unauthenticated_all_policy_until_owner_adoption(tmp_path):
     from tui_gateway.mobile_push_payloads import Scope
 
     path = tmp_path / "legacy-policy.sqlite"
@@ -87,9 +87,9 @@ def test_upgrade_retires_single_stale_policy_before_it_can_reclaim_new_lease(tmp
             (str(uuid.uuid4()), *ids.values(), scope.key, "ab" * 32))
     store = PushStore(path, lambda: 1000)
     try:
-        assert store.policy("old-owner", **ids)["policy"] == "opened"
-        store.start_run(scope, listed=True)
-        assert store.unregister("old-owner", **ids) == 0
+        assert store.policy("old-owner", **ids)["policy"] == "all"
+        store.start_run(Scope("native_session", "ops", "brand-new-listed"), listed=True)
+        assert store.unregister("old-owner", **ids) == 1
         assert store.unregister("current-owner", **ids) == 1
     finally:
         store.close()

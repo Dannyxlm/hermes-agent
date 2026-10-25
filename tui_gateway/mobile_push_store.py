@@ -233,9 +233,6 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 version=subscriptions.version+1""", (sid, principal, installation_id, connection_id,
                 scope.key, scope.surface, scope.profile, scope.session_id, kind, activity_id, run_id,
                 token.lower(), environment, json.dumps(sorted(set(categories))), expires, int(preview_enabled and kind == "alert")))
-            if kind == "alert":
-                db.execute("""DELETE FROM alert_policies WHERE installation_id=? AND token=?
-                    AND environment=? AND principal!=?""", (installation_id, token.lower(), environment, principal))
             if kind == "widget":
                 self._save_widget_reader(db, principal, installation_id, connection_id, read_token, expires)
             subscription = db.execute("SELECT * FROM subscriptions WHERE id=?", (sid,)).fetchone()
@@ -261,9 +258,9 @@ class PushStore(ActivityPushStore, WidgetPushStore):
         now = self.clock()
         with self._lock:
             rows = self._db.execute("""SELECT * FROM subscriptions WHERE principal=? AND installation_id=?
-                AND connection_id=? AND kind=? AND environment=? AND expires_at>?
+                AND kind=? AND environment=? AND expires_at>?
                 AND (?='alert' OR (activity_id=? AND run_id=?))""",
-                (principal, installation_id, connection_id, kind, environment, now, kind, activity_id, run_id)).fetchall()
+                (principal, installation_id, kind, environment, now, kind, activity_id, run_id)).fetchall()
         # Profile/session authorization can read another DB. Do that outside our
         # transaction, then compare the selected version so logout always wins.
         accepted = [(row, Scope(row["surface"], row["profile"], row["session_id"])) for row in rows]
@@ -299,13 +296,15 @@ class PushStore(ActivityPushStore, WidgetPushStore):
 
     def _refresh_policy(self, db, identity, environment, token, categories, preview_enabled, now):
         policy = db.execute("""SELECT * FROM alert_policies WHERE principal=? AND installation_id=?
-            AND connection_id=? AND environment=? AND expires_at>?""", (*identity, environment, now)).fetchone()
+            AND environment=? AND expires_at>? ORDER BY (connection_id=?) DESC,expires_at DESC,rowid DESC LIMIT 1""",
+            (identity[0], identity[1], environment, now, identity[2])).fetchone()
         if policy is None:
             return
         allowed = set(categories)
         if token is None:  # privacy-only: narrow, never widen
             allowed.intersection_update(json.loads(policy["categories"]))
             preview_enabled = preview_enabled and bool(policy["preview_enabled"])
+        identity = tuple(policy[key] for key in ("principal", "installation_id", "connection_id"))
         self._write_policy(db, identity, policy["policy"], token or policy["token"], environment,
                            sorted(allowed), preview_enabled,
                            policy["expires_at"] if token is None else now + 30 * 86400)
@@ -322,9 +321,9 @@ class PushStore(ActivityPushStore, WidgetPushStore):
             raise ValueError("preview_enabled must be a boolean")
         with self.transaction() as db:
             if policy == "opened":
-                db.execute("DELETE FROM alert_policies WHERE principal=? AND installation_id=? AND connection_id=?", identity)
-                db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?
-                    AND kind='alert' AND origin='policy'""", identity)
+                db.execute("DELETE FROM alert_policies WHERE principal=? AND installation_id=?", identity[:2])
+                db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=?
+                    AND kind='alert' AND origin='policy'""", identity[:2])
                 return {"policy": "opened", "expires_at": None}
             _validate_delivery(principal, token, environment, "alert", categories)
             expires = self.clock() + 30 * 86400
@@ -339,19 +338,20 @@ class PushStore(ActivityPushStore, WidgetPushStore):
             token=excluded.token, environment=excluded.environment, categories=excluded.categories,
             preview_enabled=excluded.preview_enabled, expires_at=excluded.expires_at""",
             (*identity, policy, token, environment, json.dumps(categories), int(preview_enabled), expires))
-        db.execute("""DELETE FROM subscriptions WHERE installation_id=? AND token=? AND environment=?
-            AND kind='alert' AND principal!=?""", (identity[1], token, environment, identity[0]))
+        db.execute("""DELETE FROM alert_policies WHERE principal=? AND installation_id=? AND token=?
+            AND environment=? AND connection_id!=?""", (identity[0], identity[1], token, environment, identity[2]))
         # Leases this policy already made follow its token and privacy; explicit leases keep theirs.
         db.execute("""UPDATE subscriptions SET token=?, environment=?, categories=?, preview_enabled=?,
-            version=version+1 WHERE principal=? AND installation_id=? AND connection_id=?
+            version=version+1 WHERE principal=? AND installation_id=? AND environment=?
             AND kind='alert' AND origin='policy'""",
-            (token, environment, json.dumps(categories), int(preview_enabled), *identity))
+            (token, environment, json.dumps(categories), int(preview_enabled), *identity[:2], environment))
 
     def policy(self, principal, *, installation_id, connection_id):
         identity = (principal, normalized_uuid(installation_id), normalized_uuid(connection_id))
         with self._lock:
             row = self._db.execute("""SELECT * FROM alert_policies WHERE principal=? AND installation_id=?
-                AND connection_id=? AND expires_at>?""", (*identity, self.clock())).fetchone()
+                AND expires_at>? ORDER BY (connection_id=?) DESC,expires_at DESC,rowid DESC LIMIT 1""",
+                (principal, identity[1], self.clock(), identity[2])).fetchone()
         if row is None:
             return {"policy": "opened", "expires_at": None}
         return {"policy": row["policy"], "expires_at": row["expires_at"],
@@ -405,10 +405,8 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 environment=excluded.environment, expires_at=excluded.expires_at""",
                 (principal, installation_id, connection_id, token.lower(), environment, expires))
             # Starts queued under a rotated token must not reach Apple with the old one.
-            db.execute("""DELETE FROM subscriptions WHERE installation_id=? AND kind='activity_start'
-                AND ((principal=? AND connection_id=? AND token!=?)
-                    OR (token=? AND environment=? AND principal!=?))""",
-                (installation_id, principal, connection_id, token.lower(), token.lower(), environment, principal))
+            db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?
+                AND kind='activity_start' AND token!=?""", (principal, installation_id, connection_id, token.lower()))
         return {"expires_at": expires}
 
     def unregister_start_token(self, principal, *, installation_id, connection_id):
@@ -463,6 +461,10 @@ class PushStore(ActivityPushStore, WidgetPushStore):
 
     def unregister(self, principal, *, installation_id, connection_id, subscription_id=None, kind=None, surface=None):
         args = [principal, normalized_uuid(installation_id), normalized_uuid(connection_id)]
+        if subscription_id is None and kind is None and surface is None:
+            from .mobile_push_adoption import unregister_installation
+            with self.transaction() as db:
+                return unregister_installation(db, principal, args[1])
         query = "DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?"
         if subscription_id is not None:
             query += " AND id=?"
@@ -475,11 +477,7 @@ class PushStore(ActivityPushStore, WidgetPushStore):
             args.append(surface)
         with self.transaction() as db:
             count = db.execute(query, args).rowcount
-            if subscription_id is None and kind is None and surface is None:
-                # Logout: nothing this device registered may outlive it.
-                for table in ("widget_readers", "alert_policies", "activity_start_tokens", "human_origins"):
-                    db.execute(f"DELETE FROM {table} WHERE principal=? AND installation_id=? AND connection_id=?", args)
-            elif kind == "widget":
+            if kind == "widget":
                 if subscription_id is None:
                     db.execute("DELETE FROM widget_inbox_grants WHERE principal=? AND installation_id=? AND connection_id=?", args[:3])
                 db.execute("""DELETE FROM widget_readers WHERE principal=? AND installation_id=? AND connection_id=?
@@ -801,16 +799,7 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 # A second transition this second waits until the next real clock second.
                 aps = job["payload"]["aps"]
                 if aps["content-state"]["status"] in ATTENTION:
-                    # Alert only for this device's opted-in destination, evaluated
-                    # at delivery so a queued update respects a later opt-out.
-                    alert = db.execute("""SELECT a.* FROM subscriptions a JOIN subscriptions live
-                        ON a.principal=live.principal AND a.installation_id=live.installation_id
-                        AND a.connection_id=live.connection_id AND a.scope=live.scope
-                        WHERE live.id=? AND a.kind='alert' AND a.expires_at>?
-                        AND EXISTS (SELECT 1 FROM json_each(a.categories) WHERE value='attention')""",
-                        (job["subscription_id"], now)).fetchone()
-                    if alert is not None and not self._foreground(db, alert):
-                        aps["alert"] = generic_alert(aps["content-state"]["status"])
+                    self._claim_attention_activity(db, job, now)
                 self._claim_activity_finish(db, job, now)
                 aps["timestamp"] = int(now)
                 from .mobile_push_attention import freshness

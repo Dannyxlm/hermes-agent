@@ -59,58 +59,57 @@ def test_policy_flip_cannot_rematerialize_old_principal(device):
     service.record(scope, run["run_id"], "one-event", "waitingForApproval")
     service.drain_once()
     assert [job["token"] for job in sender.jobs] == ["ab" * 32]
-    assert service.store.policy("old-owner", **ids)["policy"] == "opened"
+    assert service.store.policy("old-owner", **ids)["policy"] == "all"
 
 
-def test_policy_cannot_reclaim_an_explicit_lease_after_principal_flip(device):
+def test_explicit_registration_keeps_another_humans_all_policy(device):
     service, sender, now, ids, scope = device
     service.set_policy("old-owner", **ids, policy="all", token="ab" * 32, environment="production")
     now[0] += 1
     service.register("current-owner", scope, **ids, token="ab" * 32, environment="production")
-    run = service.start_run(scope, listed=True)
+    run = service.start_run(scope, listed=False)
     service.record(scope, run["run_id"], "one-event", "waitingForApproval")
     service.drain_once()
     assert [job["principal"] for job in sender.jobs] == ["current-owner"]
-    assert service.store.policy("old-owner", **ids)["policy"] == "opened"
+    assert service.store.policy("old-owner", **ids)["policy"] == "all"
 
 
-def test_new_policy_retires_old_explicit_lease_before_next_run(device):
+def test_policy_for_another_human_keeps_unlisted_explicit_lease(device):
     service, sender, now, ids, scope = device
     service.register("old-owner", scope, **ids, token="ab" * 32, environment="production")
     run = service.start_run(scope)
     now[0] += 1
     service.set_policy("current-owner", **ids, policy="all", token="ab" * 32, environment="production")
-    assert service.unregister("old-owner", **ids) == 0
-    next_run = service.start_run(scope, listed=True)
-    assert next_run["run_id"] != run["run_id"]
-    service.record(scope, next_run["run_id"], "one-event", "waitingForApproval")
+    service.record(scope, run["run_id"], "one-event", "waitingForApproval")
     service.drain_once()
-    assert [job["principal"] for job in sender.jobs] == ["current-owner"]
+    assert [job["principal"] for job in sender.jobs] == ["old-owner"]
+    assert service.unregister("old-owner", **ids) == 1
 
 
-def test_start_token_flip_revokes_old_origin(device):
+def test_start_token_for_another_human_keeps_old_origin(device):
     service, sender, _now, ids, scope = device
     for principal in ("old-owner", "current-owner"):
         service.register_start_token(principal, **ids, token="ab" * 32, environment="production")
     service.store.set_origin(scope, "old-owner", **ids)
     service.start_run(scope, continuation=True)
     service.drain_once()
-    assert sender.jobs == []
+    assert [job["principal"] for job in sender.jobs] == ["old-owner"]
+    sender.jobs.clear()
     service.store.set_origin(scope, "current-owner", **ids)
     service.start_run(scope, continuation=True)
     service.drain_once()
     assert [job["kind"] for job in sender.jobs] == ["activity_start"]
 
 
-def test_start_token_flip_removes_already_queued_old_principal_start(device):
+def test_another_humans_start_token_keeps_already_queued_start(device):
     service, sender, _now, ids, scope = device
     service.register_start_token("old-owner", **ids, token="ab" * 32, environment="production")
     service.store.set_origin(scope, "old-owner", **ids)
     service.start_run(scope, continuation=True)
     service.register_start_token("current-owner", **ids, token="ab" * 32, environment="production")
-    assert service.unregister("old-owner", **ids, kind="activity_start") == 0
     service.drain_once()
-    assert sender.jobs == []
+    assert [job["principal"] for job in sender.jobs] == ["old-owner"]
+    assert service.unregister("old-owner", **ids, kind="activity_start") == 1
 
 
 def test_delivery_backstop_deduplicates_same_token_across_installations(device):
