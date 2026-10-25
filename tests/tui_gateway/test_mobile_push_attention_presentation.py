@@ -41,24 +41,34 @@ def test_activity_keeps_attention_cue_when_no_ordinary_job_covers_event(delivery
     assert [job["kind"] for job in sender.jobs if "alert" in job["payload"]["aps"]] == ["activity"]
 
 
-def test_activity_only_attention_reservation_survives_retry_and_reopen(delivery):
+@pytest.mark.parametrize("adopt", [False, True])
+def test_activity_only_attention_reservation_survives_retry_and_reopen(delivery, adopt):
+    import hashlib
+
+    from tui_gateway.methods_browser_control import _principal_digest
+    from tui_gateway.mobile_push_adoption import adopt_legacy_installation
     from tui_gateway.mobile_push_provider import DeliveryResult
     from tui_gateway.mobile_push_store import PushStore
 
+    identity = {"provider": "test-auth", "user_id": "test-user"}
+    legacy = "principal:dashboard:" + hashlib.sha256(b"test-auth\0test-user").hexdigest()[:32]
     service, _sender, now, ids, scope = delivery
     run = service.start_run(scope)
-    service.register("p", scope, **ids, token="cc" * 32, environment="production", kind="activity",
+    service.register(legacy, scope, **ids, token="cc" * 32, environment="production", kind="activity",
                      activity_id="activity", run_id=run["run_id"])
     service.record(scope, run["run_id"], "ask", "waitingForApproval")
-    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    service.register(legacy, scope, **ids, token="aa" * 32, environment="production")
     first = service.store.claim()
     assert first is not None and "alert" in first["payload"]["aps"]
     service.store.finish(first, DeliveryResult("retry"))
+    if adopt:
+        adopt_legacy_installation(service.store, identity, _principal_digest(identity), ids["installation_id"])
     now[0] += 31
     reopened = PushStore(service.store.path, lambda: now[0])
     try:
         retry = reopened.claim()
         assert retry is not None and retry["job_id"] == first["job_id"]
+        assert retry["principal"] == (_principal_digest(identity) if adopt else legacy)
         assert "alert" not in retry["payload"]["aps"]
         assert retry["payload"]["aps"]["content-state"]["status"] == "waitingForApproval"
     finally:
