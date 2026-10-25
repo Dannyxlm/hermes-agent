@@ -88,3 +88,18 @@ def test_legacy_idle_viewer_does_not_erase_resident_work(family_home, monkeypatc
     result = rpc("session.family", profile="default", session_id="root")["result"]
     thread = next(n for n in result["nodes"] if n["session_id"] == "ops-root")
     assert thread["status"] == "working"
+
+
+def test_agents_page_opens_a_listed_family_whose_chat_is_not_hosted(family_home):
+    """The phone's Agents page drills into each root family.overview lists, including a chat that is
+    not open on this phone (here only its teammate is hosted). Hosting a chat governs Stop and
+    Answer, not reading its family."""
+    del server._sessions["default"]
+    roots = rpc("family.overview", since=0)["result"]["roots"]
+    assert {(r["root"]["profile"], r["root"]["session_id"]) for r in roots} == {("default", "root")}
+    for entry in roots:
+        root = entry["root"]
+        result = rpc("session.family", profile=root["profile"], session_id=root["session_id"], since=0)
+        assert "result" in result, result
+        assert result["result"]["root"]["session_id"] == root["session_id"]
+        assert {n["session_id"] for n in result["result"]["nodes"]} == {"ops-root", "helper"}
