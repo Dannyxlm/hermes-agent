@@ -104,3 +104,4 @@ def test_agents_page_opens_a_listed_family_whose_chat_is_not_hosted(family_home)
         assert "result" in result, result
         assert result["result"]["root"]["session_id"] == root["session_id"]
         assert {n["session_id"] for n in result["result"]["nodes"]} == {"ops-root", "helper"}
+        assert result["result"]["root"]["actions"] == ["open"], "reading an unhosted chat grants no control"
