@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .mobile_push_widgets import WidgetPushStore, reader_digest
 from .mobile_push_activity import ACTIVITY_SCHEMA, ActivityPushStore
+from .mobile_push_devices import migrate_device_keys
 
 from .mobile_push_payloads import (
     ATTENTION, LABELS, TERMINAL, AlertPreview, Scope, activity_payload, alert_payload, generic_alert,
@@ -174,6 +175,7 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                     db.execute("""INSERT OR IGNORE INTO run_state (run_id, owner, closed_reason, presentation)
                         SELECT run_id, owner, closed_reason, presentation FROM runs
                         WHERE owner!='' OR closed_reason!='' OR presentation!=''""")
+                migrate_device_keys(db)
         except sqlite3.Error:
             self._db.close()
             raise
@@ -231,6 +233,9 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 version=subscriptions.version+1""", (sid, principal, installation_id, connection_id,
                 scope.key, scope.surface, scope.profile, scope.session_id, kind, activity_id, run_id,
                 token.lower(), environment, json.dumps(sorted(set(categories))), expires, int(preview_enabled and kind == "alert")))
+            if kind == "alert":
+                db.execute("""DELETE FROM alert_policies WHERE installation_id=? AND token=?
+                    AND environment=? AND principal!=?""", (installation_id, token.lower(), environment, principal))
             if kind == "widget":
                 self._save_widget_reader(db, principal, installation_id, connection_id, read_token, expires)
             subscription = db.execute("SELECT * FROM subscriptions WHERE id=?", (sid,)).fetchone()
@@ -334,6 +339,8 @@ class PushStore(ActivityPushStore, WidgetPushStore):
             token=excluded.token, environment=excluded.environment, categories=excluded.categories,
             preview_enabled=excluded.preview_enabled, expires_at=excluded.expires_at""",
             (*identity, policy, token, environment, json.dumps(categories), int(preview_enabled), expires))
+        db.execute("""DELETE FROM subscriptions WHERE installation_id=? AND token=? AND environment=?
+            AND kind='alert' AND principal!=?""", (identity[1], token, environment, identity[0]))
         # Leases this policy already made follow its token and privacy; explicit leases keep theirs.
         db.execute("""UPDATE subscriptions SET token=?, environment=?, categories=?, preview_enabled=?,
             version=version+1 WHERE principal=? AND installation_id=? AND connection_id=?
@@ -398,8 +405,10 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 environment=excluded.environment, expires_at=excluded.expires_at""",
                 (principal, installation_id, connection_id, token.lower(), environment, expires))
             # Starts queued under a rotated token must not reach Apple with the old one.
-            db.execute("""DELETE FROM subscriptions WHERE principal=? AND installation_id=? AND connection_id=?
-                AND kind='activity_start' AND token!=?""", (principal, installation_id, connection_id, token.lower()))
+            db.execute("""DELETE FROM subscriptions WHERE installation_id=? AND kind='activity_start'
+                AND ((principal=? AND connection_id=? AND token!=?)
+                    OR (token=? AND environment=? AND principal!=?))""",
+                (installation_id, principal, connection_id, token.lower(), token.lower(), environment, principal))
         return {"expires_at": expires}
 
     def unregister_start_token(self, principal, *, installation_id, connection_id):
