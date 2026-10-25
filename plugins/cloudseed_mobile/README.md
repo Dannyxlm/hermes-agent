@@ -161,10 +161,11 @@ matching the prior owner-read contract.
 
 | Operation | Additional request fields | Success response beyond common wrapper |
 |---|---|---|
-| capabilities | none | none |
+| capabilities | none | `feature_versions:{photo_delta:1}` |
 | register | optional `rebind:true` | catalog stats below |
 | begin | `count` integer 0–10,000,000 | `epoch` UUID |
 | manifest | `epoch`, `items:[{id,fingerprint}]` (at most 500, unique IDs) | `missing:[asset_id]` |
+| delta | `epoch` of a finished full sync, `upserts:[{id,fingerprint}]`, `deletes:[asset_id]` (at most 500 combined) | `epoch`, `missing:[asset_id]`, `applied:{upserts,deletes}`; HTTP 409 `reset_required` when the epoch is not the device's finished one |
 | put | `epoch`, `item:{id,fingerprint,created,albums,text,favorite,screenshot,preview}` | none |
 | finish | `epoch` | catalog stats |
 | disconnect | none | none (catalog removed, device tombstoned) |
@@ -179,6 +180,9 @@ limit defaults 30, range 1–100. Cursor binds device, epoch and complete query 
 limit); changed epoch/query requires restart. New `begin` fences stale writes and
 visibility; finish requires the full expected manifest, removes absent assets, and
 reports incomplete if previews are still missing. Manifest retries are idempotent.
+`delta` applies library changes on top of the device's finished epoch without `finish`:
+upserts join the manifest (send `put` for each `missing` ID), deletes remove only that
+device's rows, and retries of the same cut are idempotent.
 Preview is JPEG <=262144 bytes, OCR <=65536 UTF-8 bytes, albums <=100, name <=1000
 characters. Put refuses storage below 5 GiB plus three times preview size.
 

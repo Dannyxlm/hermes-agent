@@ -40,6 +40,10 @@ class PhotoStorageFull(PhotoError):
     pass
 
 
+class PhotoResetRequired(PhotoError):
+    pass
+
+
 def token(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
         raise PhotoError("Invalid identifier")
@@ -186,7 +190,8 @@ class PhotoCatalog:
             )
         return {"ok": True, "protocol_version": 1, "epoch": epoch}
 
-    def manifest(self, principal, profile, device, secret, epoch, items):
+    @staticmethod
+    def _manifest_pairs(items):
         if not isinstance(items, list) or len(items) > 500:
             raise PhotoError("Invalid manifest")
         pairs = [
@@ -196,21 +201,55 @@ class PhotoCatalog:
         ]
         if len(pairs) != len(items) or len({a for a, _ in pairs}) != len(pairs):
             raise PhotoError("Invalid manifest")
+        return pairs
+
+    @staticmethod
+    def _write_manifest(db, device, epoch, pairs):
+        missing = []
+        for asset, fingerprint in pairs:
+            db.execute(
+                "INSERT INTO manifest VALUES(?,?,?,?) ON CONFLICT(device,asset) DO UPDATE SET fingerprint=excluded.fingerprint,epoch=excluded.epoch",
+                (device, asset, fingerprint, epoch),
+            )
+            old = db.execute(
+                "SELECT fingerprint FROM photos WHERE device=? AND asset=?",
+                (device, asset),
+            ).fetchone()
+            if not old or old["fingerprint"] != fingerprint:
+                missing.append(asset)
+        return missing
+
+    def manifest(self, principal, profile, device, secret, epoch, items):
+        pairs = self._manifest_pairs(items)
         with self.connection() as db:
             self._epoch(db, device, profile, principal, secret, epoch)
-            missing = []
-            for asset, fingerprint in pairs:
-                db.execute(
-                    "INSERT INTO manifest VALUES(?,?,?,?) ON CONFLICT(device,asset) DO UPDATE SET fingerprint=excluded.fingerprint,epoch=excluded.epoch",
-                    (device, asset, fingerprint, epoch),
-                )
-                old = db.execute(
-                    "SELECT fingerprint FROM photos WHERE device=? AND asset=?",
-                    (device, asset),
-                ).fetchone()
-                if not old or old["fingerprint"] != fingerprint:
-                    missing.append(asset)
+            missing = self._write_manifest(db, device, epoch, pairs)
         return {"ok": True, "protocol_version": 1, "missing": missing}
+
+    def delta(self, principal, profile, device, secret, epoch, upserts, deletes):
+        pairs = self._manifest_pairs(upserts)
+        if not isinstance(deletes, list) or len(pairs) + len(deletes) > 500:
+            raise PhotoError("Invalid delta")
+        removed = {token(asset) for asset in deletes}
+        if len(removed) != len(deletes) or removed.intersection(asset for asset, _ in pairs):
+            raise PhotoError("Invalid delta")
+        with self.connection() as db:
+            row = self._device(db, device, profile, principal, token(secret))
+            if not isinstance(epoch, str) or not epoch or row["epoch"] != epoch or row["finished"] is None:
+                raise PhotoResetRequired("reset_required")
+            db.executemany(
+                "DELETE FROM manifest WHERE device=? AND asset=?", ((device, asset) for asset in deletes)
+            )
+            db.executemany(
+                "DELETE FROM photos WHERE device=? AND asset=?", ((device, asset) for asset in deletes)
+            )
+            missing = self._write_manifest(db, device, epoch, pairs)
+            db.execute(
+                "UPDATE devices SET expected=(SELECT count(*) FROM manifest WHERE device=? AND epoch=?) WHERE id=?",
+                (device, epoch, device),
+            )
+        return {"ok": True, "epoch": epoch, "missing": missing,
+                "applied": {"upserts": len(pairs), "deletes": len(deletes)}}
 
     def put(self, principal, profile, device, secret, epoch, item):
         if not isinstance(item, dict):

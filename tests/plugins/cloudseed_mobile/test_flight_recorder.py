@@ -235,8 +235,15 @@ def test_prune_removes_only_old_dated_entries(tmp_path):
 SESSION = '20261007_195052_eff4cd'
 
 
+def legacy_span_attrs():
+    return {key: 'true' for key in (
+        'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
+        'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
+        'should_begin_calls', 'state', 'surface', 'to', 'verified_empty')}
+
+
 def r53_events():
-    attrs = {key: 'true' for key in sorted(fr.SPAN_ATTRS)}
+    attrs = legacy_span_attrs()
     # Keep legacy event positions stable for the malformed-dimension matrix below.
     names = fr.SPAN_NAMES - {'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta'}
     spans = [{'kind': 'span', 't': T + i, 'name': name, 'outcome': outcome, 'ms': 120, 'screen': 'inbox',
@@ -265,7 +272,7 @@ def test_r53_kinds_and_span_dimensions_are_accepted(client):
     stored = json.loads(day.read_text())['events']
     assert {e['kind'] for e in stored} == {'span', 'bg_refresh', 'push', 'push_tap', 'live_activity'}
     assert {e['outcome'] for e in stored if e['kind'] == 'span'} == fr.SPAN_OUTCOMES
-    assert stored[0]['attrs'] == {key: 'true' for key in fr.SPAN_ATTRS}
+    assert stored[0]['attrs'] == legacy_span_attrs()
 
 
 def test_allowlists_match_the_app_schema_exactly():
@@ -273,9 +280,6 @@ def test_allowlists_match_the_app_schema_exactly():
                              'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction',
                              'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta'}
     assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
-    assert fr.SPAN_ATTRS == {'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
-                             'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
-                             'should_begin_calls', 'state', 'surface', 'to', 'verified_empty'}
     assert fr.SCREENS == {'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',
                           'flag', 'unknown'}
     assert fr.ERROR_DOMAINS == {'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'}
@@ -357,3 +361,35 @@ def test_metrickit_summary_drops_a_non_integer_size(client):
     assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 200
     [day] = (root / 'events').iterdir()
     assert SENTINEL not in day.read_text()
+
+
+@pytest.mark.parametrize('tail', ['memory', 'disk', 'none'])
+def test_keyboard_and_tail_attrs_ingest_without_changing_legacy_batches(client, tail):
+    c, root = client
+    evs = [
+        {'kind': 'span', 't': T, 'name': 'ComposerFocusToSettled', 'outcome': 'ok', 'ms': 300,
+         'attrs': {'will_show_ms': '0', 'did_show_ms': '600000', 'kb_anim_ms': '250'}},
+        {'kind': 'span', 't': T + 1, 'name': 'ChatOpenContent', 'outcome': 'ok', 'ms': 30,
+         'attrs': {'tail': tail}},
+    ]
+    response = c.post(P + '/batch', json=batch(evs=evs))
+    assert response.status_code == 200
+    assert response.json()['accepted'] == 2
+    assert c.post(P + '/batch', json=batch(seq=1, evs=r53_events())).status_code == 200
+    [day] = (root / 'events').iterdir()
+    records = [json.loads(line) for line in day.read_text().splitlines()]
+    assert records[0]['events'] == evs
+    assert records[1]['events'][0]['attrs'] == legacy_span_attrs()
+
+
+@pytest.mark.parametrize('key,value', [
+    ('tail', 'other'), ('tail', 'Memory'), ('tail', ''), ('tail', 0),
+    *[(key, value) for key in ('will_show_ms', 'did_show_ms', 'kb_anim_ms')
+      for value in ('-1', '600001', '1.5', '1e2', '+1', 'true', '١', '', 1, True, None)],
+])
+def test_new_span_attrs_reject_invalid_values_without_ingest(client, key, value):
+    c, root = client
+    evs = [{'kind': 'span', 't': T, 'name': 'ChatOpenContent', 'outcome': 'ok', 'ms': 30,
+            'attrs': {key: value}}]
+    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
+    assert not (root / 'events').exists() or not any((root / 'events').iterdir())
