@@ -4,7 +4,7 @@ import json
 import uuid
 
 from .mobile_push_payloads import (
-    SWIFT_EPOCH, TERMINAL, AlertPreview, Scope, activity_payload, agent_name, completion_summary, content_state,
+    ATTENTION, SWIFT_EPOCH, TERMINAL, AlertPreview, Scope, activity_payload, agent_name, completion_summary, content_state, generic_alert,
 )
 
 ACTIVITY_SCHEMA = """
@@ -19,6 +19,13 @@ CREATE TABLE IF NOT EXISTS activity_cleanup (
 def _device_event(sub, run_id, purpose):
     identity = (sub["principal"], sub["installation_id"], sub["connection_id"], sub["scope"], run_id, purpose)
     return hashlib.sha256("\0".join(identity).encode()).hexdigest()
+
+
+def _reserve_alert(db, job, purpose, now):
+    if purpose.startswith("attention:"):
+        job = {**job, "principal": "", "connection_id": ""}
+    return db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
+                      (_device_event(job, job["run_id"], purpose), now)).rowcount
 
 
 def _insert_job(db, sub, run_id, event_id, payload, expires, due, urgent=True):
@@ -52,6 +59,9 @@ class ActivityPushStore:
 
     def _claim_completion_alert(self, db, job, now):
         payload = job["payload"]
+        if payload.get("hermex.status") in ATTENTION:
+            _reserve_alert(db, job, f"attention:{job['event_id']}", now)
+            return
         if payload.get("hermex.status") != "complete":
             return
         reserved = db.execute("SELECT 1 FROM events WHERE event_id=?",
@@ -64,8 +74,26 @@ class ActivityPushStore:
             # Restore pre-upgrade queued payloads whose sound was stripped at enqueue.
             aps.pop("interruption-level", None)
             aps["sound"] = "default"
-            db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
-                       (_device_event(job, job["run_id"], "done-alert"), now))
+            _reserve_alert(db, job, "done-alert", now)
+
+    def _claim_attention_activity(self, db, job, now):
+        alert = db.execute("""SELECT a.* FROM subscriptions a WHERE a.kind='alert'
+            AND a.principal=? AND a.installation_id=? AND a.scope=? AND a.environment=? AND a.expires_at>?
+            AND EXISTS (SELECT 1 FROM json_each(a.categories) WHERE value='attention')
+            ORDER BY a.expires_at DESC,a.rowid DESC LIMIT 1""",
+            (job["principal"], job["installation_id"], job["scope"], job["environment"], now)).fetchone()
+        aps = job["payload"]["aps"]
+        aps.pop("alert", None)
+        if alert is None or self._foreground(db, alert):
+            return
+        covered = db.execute("""SELECT 1 FROM outbox o JOIN subscriptions s ON s.id=o.subscription_id
+            WHERE s.principal=? AND s.installation_id=? AND s.scope=? AND s.kind='alert' AND s.environment=?
+            AND o.event_id=? AND o.state IN ('pending','accepted') AND o.expires_at>? AND s.expires_at>?
+            AND EXISTS (SELECT 1 FROM json_each(s.categories) WHERE value='attention') LIMIT 1""",
+            (job["principal"], job["installation_id"], job["scope"], job["environment"], job["event_id"], now, now)).fetchone()
+        # Reserve in the same durable ledger as Done, before any APNs send.
+        if covered is None and _reserve_alert(db, job, f"attention:{job['event_id']}", now):
+            aps["alert"] = generic_alert(aps["content-state"]["status"])
 
     def _enqueue_terminal_activity(self, db, sub, run, scope, preview=None, *, announce=True):
         now = self.clock()
@@ -116,8 +144,7 @@ class ActivityPushStore:
         db.execute("""UPDATE activity_cleanup SET announced_at=?, end_due=?
             WHERE subscription_id=? AND announced_at=0""", (now, now + 8, job["subscription_id"]))
         # Persist BEFORE sending: a timeout/crash can lose the beat, never duplicate its alert.
-        inserted = db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
-                              (_device_event(job, job["run_id"], "done-alert"), now)).rowcount
+        inserted = _reserve_alert(db, job, "done-alert", now)
         if inserted:
             content = aps["content-state"]
             run = {"started_at": content["startedAt"], "updated_at": content["updatedAt"]}

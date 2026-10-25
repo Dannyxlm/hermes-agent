@@ -54,7 +54,11 @@ def _mobile_push_handler(name):
             if not _is_authenticated_identity(identity):
                 return _err(rid, 4403, "authenticated mobile identity required")
             try:
-                return fn(rid, params, _principal_digest(identity))
+                from tui_gateway.mobile_push_adoption import adopt_mobile_identity
+                principal = _principal_digest(identity)
+                if params.get("installation_id"):
+                    adopt_mobile_identity(_hermes_home, _mobile_push_service(), identity, principal, params["installation_id"])
+                return fn(rid, params, principal)
             except (ValueError, FileNotFoundError, TypeError) as exc:
                 reason = next(cls.__name__ for cls in (ValueError, FileNotFoundError, TypeError) if isinstance(exc, cls))
                 logger.warning("mobile_notification_refused method=%s reason=%s", name, reason)

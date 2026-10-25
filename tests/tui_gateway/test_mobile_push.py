@@ -368,8 +368,9 @@ def test_detached_refresh_rotates_only_live_owned_subscriptions(delivery):
     assert next(row for row in rows if row["principal"] == "foreign")["token"] == "cc" * 32
     assert service.refresh("missing", **ids, token="bb" * 32, environment="production",
                            categories=[], accepts_scope=lambda value: True)["updated"] == 0
+    # Connection rotation does not turn the same human's installation into a second device.
     assert service.refresh("p", **{**ids, "connection_id": str(uuid.uuid4())}, token="bb" * 32,
-                           environment="production", categories=[], accepts_scope=lambda value: True)["updated"] == 0
+                           environment="production", categories=[], accepts_scope=lambda value: True)["updated"] == 2
     service.record(scope, run["run_id"], "complete", "complete")
     service.drain_once()
     assert not any(job["kind"] == "alert" and job["token"] == "bb" * 32 for job in sender.jobs)
@@ -578,11 +579,12 @@ def test_activity_attention_cue_honors_current_scoped_alert_preference(delivery,
     aps = next(job['payload']['aps'] for job in sender.jobs if job['kind'] == 'activity')
     assert aps['content-state']['status'] == status
     assert aps['relevance-score'] == 100
-    assert ('alert' in aps) == (policy == 'enabled')
+    assert 'alert' not in aps
     if policy == 'enabled':
-        # Generic attention copy is calm (R9 DECISIONS §1): it names the ask, never "open the app".
-        assert aps['alert']['body'] == generic_alert(status)['body']
-        assert 'stored' not in json.dumps(aps['alert'])
+        ordinary = next(job['payload']['aps'] for job in sender.jobs if job['kind'] == 'alert')
+        # The one interrupting surface still uses generic, content-free attention copy.
+        assert ordinary['alert']['body'] == generic_alert(status)['body']
+        assert 'stored' not in json.dumps(ordinary['alert'])
     service.record(scope, run['run_id'], 'resumed', 'thinking')
     now[0] += 11
     service.drain_once()
