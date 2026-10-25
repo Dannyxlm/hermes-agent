@@ -23,7 +23,7 @@ def _device_event(sub, run_id, purpose):
 
 def _reserve_alert(db, job, purpose, now):
     if purpose.startswith("attention:"):
-        job = {**job, "connection_id": ""}
+        job = {**job, "principal": "", "connection_id": ""}
     return db.execute("INSERT OR IGNORE INTO events VALUES (?,?)",
                       (_device_event(job, job["run_id"], purpose), now)).rowcount
 
