@@ -576,32 +576,30 @@ def test_photo_delta_admission_is_atomic(client, monkeypatch, failure, code):
     c, home = client
     epoch, items = delta_baseline(client, monkeypatch)
     cut = {'epoch': epoch, 'upserts': [items[2]], 'deletes': [items[0]['id']]}
-    if failure == 'epoch':
-        cut['epoch'] = str(uuid.UUID(int=9))
-    elif failure == 'no_epoch':
-        cut['epoch'] = None
-    elif failure == 'unfinished':
-        cut['epoch'] = post(c, 'photo-catalog', 'begin', count=2).json()['epoch']
-        assert post(c, 'photo-catalog', 'manifest', epoch=cut['epoch'], items=items[:2]).status_code == 200
-    elif failure == 'not_started':
-        cut['device_id'] = str(uuid.UUID(int=2))
-        assert post(c, 'photo-catalog', 'register', device_id=cut['device_id']).status_code == 200
-    elif failure == 'disabled':
-        assert post(c, 'photo-catalog', 'disconnect').status_code == 200
-    elif failure == 'secret':
-        cut['secret'] = 'f' * 64
-    elif failure == 'no_secret':
-        cut['secret'] = None
-    elif failure == 'device':
-        cut['device_id'] = str(uuid.UUID(int=3))
-    elif failure == 'profile':
-        cut['profile'] = 'other'
-    elif failure == 'principal':
+    cut.update({
+        'epoch': {'epoch': str(uuid.UUID(int=9))}, 'no_epoch': {'epoch': None},
+        'not_started': {'device_id': str(uuid.UUID(int=2))},
+        'secret': {'secret': 'f' * 64}, 'no_secret': {'secret': None},
+        'device': {'device_id': str(uuid.UUID(int=3))}, 'profile': {'profile': 'other'},
+    }.get(failure, {}))
+    setup_operations = {
+        'unfinished': ('begin', {'count': 2}),
+        'not_started': ('register', {'device_id': cut.get('device_id')}),
+        'disabled': ('disconnect', {}),
+    }
+    if failure in setup_operations:
+        operation, extra = setup_operations[failure]
+        response = post(c, 'photo-catalog', operation, **extra)
+        assert response.status_code == 200
+        if failure == 'unfinished':
+            cut['epoch'] = response.json()['epoch']
+            assert post(c, 'photo-catalog', 'manifest', epoch=cut['epoch'], items=items[:2]).status_code == 200
+    if failure == 'principal':
         with api.photo_store().connection() as db:
             db.execute('UPDATE devices SET principal=? WHERE id=?', ('other', DEVICE))
-    elif failure == 'owner':
+    if failure == 'owner':
         monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'other', 'owner_provider': 'basic'})
-    elif failure in ('anonymous', 'cookie_origin'):
+    if failure in ('anonymous', 'cookie_origin'):
         c.headers.pop('authorization')
         if failure == 'cookie_origin':
             c.cookies.set('fixture_session', 'owner')
