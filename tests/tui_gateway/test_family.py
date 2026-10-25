@@ -51,7 +51,8 @@ def test_legacy_not_found_matches_subagents(family_home, peer):
         result = rpc("session.family", profile=profile, session_id=sid)
         assert result["error"] == reference
     server._sessions["default"]["transport"] = object()
-    assert rpc("session.family", profile="default", session_id="root")["error"] == reference
+    hosted_elsewhere = rpc("session.family", profile="default", session_id="root")
+    assert "result" in hosted_elsewhere, hosted_elsewhere
 
 
 def test_legacy_profile_bound_read_omits_foreign(family_home):

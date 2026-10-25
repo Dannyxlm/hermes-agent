@@ -78,30 +78,23 @@ def _family_live(profiles, unavailable):
     return signals
 
 
-def _family_root_owned(profile, stored_id):
+def _family_root_visible(profile, stored_id):
+    """Readable under family.overview's rule: a transport, a profile this connection may see, and
+    the chat stored there. The chat need not be hosted: the Agents page opens families of chats
+    that aren't open on the phone. Hosting still governs Stop and Answer (see _family_live)."""
     from hermes_cli.profiles import get_profile_dir
     from hermes_family import read_profile
-    from hermes_family_storage import compression_tips
+    from tui_gateway.ws_legacy_fallback import connection_profile_home
+    if current_transport() is None:
+        return False
     home = get_profile_dir(profile).resolve()
+    own = connection_profile_home()
+    if own and home != Path(own).resolve():
+        return False
     if not (home / "state.db").is_file():
         return False
     snapshot = read_profile(profile, home / "state.db", seeds=[(profile, stored_id)], walk="lineage")
-    if stored_id not in snapshot.sessions:
-        return False
-    tips = compression_tips(snapshot.sessions)
-    tip = tips[stored_id]
-    with _sessions_lock:
-        sessions = tuple(_sessions.items())
-    for runtime_id, session in sessions:
-        if Path(session.get("profile_home") or _hermes_home).resolve() != home:
-            continue
-        ids = {session.get("session_key"), getattr(session.get("agent"), "session_id", None)}
-        if not any(tips.get(sid) == tip for sid in ids if sid):
-            continue
-        _, owner = _current_session_steer_authority(runtime_id)
-        if owner is session:
-            return True
-    return False
+    return stored_id in snapshot.sessions
 
 
 @method("session.family")
@@ -118,7 +111,7 @@ def _family_read_rpc(rid, params):
     if not profile_exists(profile):
         return _err(rid, 4001, "session not found or not owned by this transport")
     try:
-        if not _family_root_owned(profile, sid):
+        if not _family_root_visible(profile, sid):
             return _err(rid, 4001, "session not found or not owned by this transport")
         import time
         since = params.get("since")

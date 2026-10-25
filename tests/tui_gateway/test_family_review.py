@@ -23,7 +23,7 @@ def test_internal_value_error_is_not_hidden_as_not_found(family_home, monkeypatc
     if stage == "projection":
         monkeypatch.setattr(Family, "session_family", broken)
     else:
-        monkeypatch.setattr(server, "_family_root_owned" if stage == "ownership" else "_family_profiles", broken)
+        monkeypatch.setattr(server, "_family_root_visible" if stage == "ownership" else "_family_profiles", broken)
     with pytest.raises(ValueError, match="broken Family projection"):
         rpc("session.family", profile="default", session_id="root", since=0)
 
