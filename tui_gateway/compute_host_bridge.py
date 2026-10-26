@@ -108,12 +108,15 @@ def _compute_host_session_info(session: dict) -> dict:
     return _session_info(session.get("agent"), session)
 
 
-def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> None:
+def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> bool:
     """Adopt a host frame's session_key / history_version. Caller holds history_lock.
 
     A rotated ``session_key`` means the child compressed A->B. The child only holds an inert
     borrowed token (``_install_borrowed_lease``), so the REAL registry lease is re-anchored here,
     by its owner — never claimed from the child pid (authority stays singular, #103737 review)."""
+    if (frame.get("history_version") is not None
+            and int(frame["history_version"]) < int(session.get("history_version", 0))):
+        return False  # A post-turn compaction can overtake an older turn.end snapshot.
     new_key = str(frame.get("session_key") or "")
     if new_key and new_key != str(session.get("session_key") or ""):
         if not _transfer_active_session_slot(str(frame.get("sid") or ""), session, new_session_id=new_key):
@@ -124,12 +127,19 @@ def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> None:
         with contextlib.suppress(Exception):
             session["history_version"] = max(int(session.get("history_version", 0)),
                                              int(frame.get("history_version") or 0))
+    return True
 
 
 def _relay_compute_host_rpc(message: dict) -> bool:
     """Relay host frames to the client while mirroring the server→client request the host has open, so a
     reconnecting client gets it back through ``open_requests``."""
     params = message.get("params") if isinstance(message, dict) else None
+    if isinstance(message, dict) and message.get("method") == "compute_host.session_meta":
+        if isinstance(params, dict):
+            session = _sessions.get(str(params.get("sid") or ""))
+            if session is not None:
+                _apply_compute_host_metadata_mirror(session, params)
+        return True  # Internal publication, never a client event or replay entry.
     if isinstance(message, dict) and message.get("method") == "compute_host.activity":
         if isinstance(params, dict):
             session = _sessions.get(str(params.get("session_id") or ""))
@@ -265,14 +275,17 @@ def _apply_compute_host_metadata_mirror(session: dict, frame: dict | None) -> No
     if not isinstance(frame, dict):
         return
     with _history_lock(session):
-        _compute_host_adopt_frame_meta(session, frame)
+        if not _compute_host_adopt_frame_meta(session, frame):
+            return
+        if isinstance(frame.get("history"), list):
+            session["history"] = frame["history"]
         if frame.get("message_count") is not None:
             with contextlib.suppress(Exception):
                 session["_metadata_message_count"] = int(frame.get("message_count") or 0)
-    info = frame.get("session_info")
-    if isinstance(info, dict):
-        session["_metadata_mirror"] = {**_metadata_mirror(session), **info}
-        session["_metadata_mirror_updated_at"] = time.time()
+        info = frame.get("session_info")
+        if isinstance(info, dict):
+            session["_metadata_mirror"] = {**_metadata_mirror(session), **info}
+            session["_metadata_mirror_updated_at"] = time.time()
 
 
 def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -> None:
