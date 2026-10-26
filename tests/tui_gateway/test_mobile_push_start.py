@@ -273,7 +273,8 @@ def test_idle_drains_do_not_scan_runtime_runs_between_reconciles(push_service, m
         for _ in range(20):
             now[0] += 2
             assert push_service.drain_once() == 0
-        assert not [s for s in statements if re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE)]
+        assert sum(bool(re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE))
+                   for s in statements) == 0
         statements.clear()
         now[0] += 20
         assert push_service.drain_once() == 0
