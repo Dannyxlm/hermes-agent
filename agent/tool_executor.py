@@ -1715,6 +1715,7 @@ def _resolve_sequential_dispatch(agent, ref: _ToolCallRef, messages: list) -> _S
             execute=lambda next_args: agent._memory_manager.handle_tool_call(
                 function_name, next_args,
                 caller_gsk=(getattr(agent, "_gateway_session_key", "") or ""),
+                tool_call_id=tool_call_id,
             ),
             spinner=_start_quiet_tool_spinner(agent, function_name, function_args),
             error_result=lambda e: json.dumps({"error": f"Memory tool '{function_name}' failed: {e}"}),

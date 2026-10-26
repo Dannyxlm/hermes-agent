@@ -161,7 +161,10 @@ class MemoryProvider(ABC):
         """OpenAI function-calling schemas ({"name", "description", "parameters"}); [] if none."""
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
-        """Handle one of this provider's tools; must return a JSON string."""
+        """Handle a provider tool; return a JSON string. ``tool_call_id`` identifies the
+        host invocation (also paired in the transcript), not a model-supplied argument.
+        Providers needing replay persist their exact intent before submitting work.
+        """
         raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
 
     def shutdown(self) -> None:

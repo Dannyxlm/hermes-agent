@@ -331,6 +331,7 @@ def resolve_invoke_tool_executor(agent, function_name: str) -> Optional[InlineTo
         return lambda agent, args, ctx: agent._memory_manager.handle_tool_call(
             function_name, args,
             caller_gsk=(getattr(agent, "_gateway_session_key", "") or ""),
+            tool_call_id=ctx.tool_call_id,
         )
     if function_name == "message_agent":
         return None

@@ -495,8 +495,11 @@ async def _call_tool_racing_stdio_death(server, server_name: str, tool_name: str
 def _error_result_text(result) -> str:
     """Concatenated text of an ``isError`` result's blocks (EmbeddedResource error payloads
     carry text under ``.resource.text``)."""
+    from tools.mcp_tool_error_projection import project_error_text
     texts = (getattr(b, "text", None) or getattr(getattr(b, "resource", None), "text", None) for b in (result.content or []))
-    return "".join(str(t) for t in texts if t)
+    # Project each block before joining: a prose prefix must not hide a JSON
+    # diagnostics block from the structured-field projection.
+    return "".join(project_error_text(str(t)) for t in texts if t)
 
 
 def _render_content_blocks(result, server_name: str) -> tuple[str, int, list[str]]:
@@ -597,7 +600,21 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
     (structuredContent-only servers); ``_meta`` minus reserved keys and the server's
     ``meta_exclude`` keys is always surfaced."""
     if mcp_field(result, "is_error", "isError", False):
-        return tool_error(_sanitize_error(_truncate_mcp_text_result(_error_result_text(result) or "MCP tool returned an error")))
+        from tools.mcp_tool_error_projection import project_error_data, project_error_meta, project_error_text
+        raw_text = _error_result_text(result) or "MCP tool returned an error"
+        payload = {"error": _truncate_mcp_text_result(project_error_text(raw_text))}
+        structured = _capped_structured_content(result)
+        if structured is None:
+            try:
+                structured = json.loads(raw_text)
+            except ValueError:
+                structured = None
+        if structured is not None:
+            payload["structuredContent"] = project_error_data(structured)
+        meta = project_error_meta(_strip_reserved_meta_keys(mcp_field(result, "meta", "meta"), meta_exclude))
+        if meta:
+            payload["_meta"] = meta
+        return json.dumps(payload, ensure_ascii=False)
     text_result, usable_parts, cached_images = _render_content_blocks(result, server_name)
     if image_paths is not None:
         image_paths.extend(cached_images)
@@ -625,7 +642,8 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
-def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
+def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False,
+                       skip_if_busy: bool = False):
     """Sync handler (``handler(args_dict, **kwargs)``) calling an MCP tool via the background loop. Always a JSON
     string, except with ``native_images`` (the registry handler the agent loop dispatches): a result carrying
     images then becomes the ``_multimodal`` envelope when the active route takes images in tool results.
@@ -659,6 +677,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
                 report(progress, total, message)
 
         async def _call():
+            # Check and acquire on the same event loop. Ambient reads must not queue behind a long tool.
+            if skip_if_busy and server._rpc_lock.locked():
+                return tool_error("mcp_busy")
             async with server._rpc_lock, _track_inflight_rpc(server, server_name, op, retry_safe=read_only):
                 server._pending_call_context = contextvars.copy_context()  # for the elicitation callback
                 try:

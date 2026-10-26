@@ -509,7 +509,7 @@ class PluginContext:
 
     def call_mcp(
         self, server: str, tool: str, arguments: Optional[dict[str, Any]] = None,
-        timeout: float = 30,
+        timeout: float = 30, *, skip_if_busy: bool = False,
     ) -> dict[str, Any]:
         """Call ``tool`` on MCP ``server`` synchronously through :mod:`tools.mcp_tool`'s native client
         (same trust gates, breaker, reconnect — never a parallel connection). Servers not in
@@ -533,7 +533,8 @@ class PluginContext:
             timeout = 30.0
         timeout = max(1.0, min(timeout, 600.0))
         from tools.mcp_tool_handlers import _make_tool_handler
-        raw = _make_tool_handler(server, tool, timeout)(dict(arguments or {}))
+        options = {"skip_if_busy": True} if skip_if_busy else {}
+        raw = _make_tool_handler(server, tool, timeout, **options)(dict(arguments or {}))
         logger.debug("Plugin %s called MCP %s/%s (timeout=%ss, %d chars returned)",
                      self.manifest.name, server, tool, timeout, len(raw or ""))
         return self._mcp_envelope(raw)
@@ -542,25 +543,9 @@ class PluginContext:
 
     @classmethod
     def _mcp_envelope(cls, raw: Any) -> dict[str, Any]:
-        """Normalize an MCP handler result string into a stable envelope."""
-        if not isinstance(raw, str):
-            raw = "" if raw is None else str(raw)
-        truncated = len(raw) > cls._MCP_RESULT_CHAR_CAP
-        if truncated:
-            raw = raw[: cls._MCP_RESULT_CHAR_CAP] + "… [truncated]"
-        try:
-            parsed: Any = json.loads(raw)
-        except (ValueError, TypeError):
-            parsed = None
-        if isinstance(parsed, dict) and "error" in parsed:
-            envelope: dict[str, Any] = {"ok": False, "error": parsed["error"]}
-        elif isinstance(parsed, dict) and "result" in parsed:
-            envelope = {"ok": True, "result": parsed["result"]}
-            if "structuredContent" in parsed:
-                envelope["structuredContent"] = parsed["structuredContent"]
-        else:
-            envelope = {"ok": True, "result": parsed if parsed is not None else raw}
-        return {**envelope, "truncated": True} if truncated else envelope
+        """Normalize native results without losing typed failures or metadata."""
+        from hermes_cli.plugins_mcp import mcp_envelope
+        return mcp_envelope(raw, cls._MCP_RESULT_CHAR_CAP)
 
     @staticmethod
     def _mcp_allowlist(plugin_id: str) -> list[str]:
