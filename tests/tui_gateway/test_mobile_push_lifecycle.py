@@ -178,6 +178,7 @@ def test_long_successful_run_subtitle_survives_privacy_at_dispatch(delivery, sec
 def test_long_step_heartbeat_refreshes_stale_date_without_changing_content(delivery):
     service, sender, now, ids, scope = delivery
     run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
     register_activity(service, scope, ids, run["run_id"])
     service.record(scope, run["run_id"], "tool", "usingTool", preview=AlertPreview(step="Long command"))
     now[0] += 10
@@ -274,6 +275,32 @@ def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
     now[0] += 121
     service.drain_once()
     assert len(activities(sender)) == sent
+
+
+@pytest.mark.parametrize("status", ["starting", "thinking", "responding", "usingTool"])
+@pytest.mark.parametrize("runtime", ["held_idle", "unknown", "unavailable"])
+def test_heartbeat_requires_positive_turn_liveness(delivery, status, runtime):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "phase", status)
+    now[0] += 10
+    service.drain_once()
+    assert len(activities(sender)) == 1
+
+    def runtime_snapshot():
+        if runtime == "unavailable":
+            raise RuntimeError("fixture runtime unavailable")
+        return {run["run_id"]}, set()
+
+    service.live_runs = None if runtime == "unknown" else runtime_snapshot
+    now[0] += 109
+    service.drain_once()  # refresh the sweep cadence without refreshing the activity
+    now[0] += 2
+    service.drain_once()
+    assert len(activities(sender)) == 1
+    assert service.current_run(scope)["status"] == status
 
 
 @pytest.mark.parametrize("outcome", ["accepted", "retry", "invalid", "failed"])
@@ -410,6 +437,7 @@ def test_end_claim_is_newer_than_heartbeat_and_final_update_across_restart(tmp_p
         run = service.start_run(scope)
         register_activity(service, scope, ids, run["run_id"])
         service.record(scope, run["run_id"], "tool", "usingTool")
+        service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
         now[0] += 10
         assert service.drain_once() == 1
         sender.result = DeliveryResult("retry", "transport")
