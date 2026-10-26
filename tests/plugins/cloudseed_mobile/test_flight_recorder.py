@@ -245,7 +245,8 @@ def legacy_span_attrs():
 def r53_events():
     attrs = legacy_span_attrs()
     # Keep legacy event positions stable for the malformed-dimension matrix below.
-    names = fr.SPAN_NAMES - {'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta'}
+    names = fr.SPAN_NAMES - {'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta',
+                             'NotificationOpenToContent'}
     spans = [{'kind': 'span', 't': T + i, 'name': name, 'outcome': outcome, 'ms': 120, 'screen': 'inbox',
               'attrs': attrs}
              for i, (name, outcome) in enumerate(zip(sorted(names), sorted(fr.SPAN_OUTCOMES)))]
@@ -278,7 +279,8 @@ def test_r53_kinds_and_span_dimensions_are_accepted(client):
 def test_allowlists_match_the_app_schema_exactly():
     assert fr.SPAN_NAMES == {'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent',
                              'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction',
-                             'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta'}
+                             'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta',
+                             'NotificationOpenToContent'}
     assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
     assert fr.SCREENS == {'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',
                           'flag', 'unknown'}
@@ -361,6 +363,28 @@ def test_metrickit_summary_drops_a_non_integer_size(client):
     assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 200
     [day] = (root / 'events').iterdir()
     assert SENTINEL not in day.read_text()
+
+
+@pytest.mark.parametrize('action', ['start', 'end', 'token_registered', 'end_requested'])
+@pytest.mark.parametrize('origin', ['local', 'push_to_start'])
+@pytest.mark.parametrize('act', [None, '0123abcd'])
+def test_live_activity_lifecycle_contract_is_stored_through_ingest(client, action, origin, act):
+    c, root = client
+    event = {'kind': 'live_activity', 't': T, 'action': action, 'origin': origin}
+    if act is not None:
+        event['act'] = act
+    response = c.post(P + '/batch', json=batch(evs=[event]))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == 1
+    [day] = (root / 'events').iterdir()
+    assert json.loads(day.read_text())['events'] == [event]
+
+
+@pytest.mark.parametrize('act', ['', '0123abc', '0123abcde', '0123ABCD', 'not-hex!', 12345678, None, {'id': 'private'}])
+def test_live_activity_correlation_refuses_non_digest_values(client, act):
+    c, _ = client
+    event = {'kind': 'live_activity', 't': T, 'action': 'start', 'origin': 'local', 'act': act}
+    assert c.post(P + '/batch', json=batch(evs=[event])).status_code == 400
 
 
 @pytest.mark.parametrize('tail', ['memory', 'disk', 'none'])

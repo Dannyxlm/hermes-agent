@@ -26,6 +26,30 @@ def test_new_app_span_is_stored_with_co_batched_events(client, name):
     assert json.loads(day.read_text())['events'] == evs
 
 
+@pytest.mark.parametrize('source', ['banner', 'live_activity', 'url', 'widget', 'attention_row'])
+@pytest.mark.parametrize('launch', ['cold', 'warm', 'foreground'])
+@pytest.mark.parametrize('tail', ['memory', 'disk', 'none'])
+def test_notification_open_span_contract_through_ingest(client, source, launch, tail):
+    c, root = client
+    event = span('NotificationOpenToContent') | {'attrs': {'source': source, 'launch': launch, 'tail': tail}}
+    response = c.post(P + '/batch', json=batch(evs=[events()[0], event]))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == 2
+    [day] = (root / 'events').iterdir()
+    assert json.loads(day.read_text())['events'] == [events()[0], event]
+
+
+@pytest.mark.parametrize('outcome', ['ok', 'cancelled', 'abandoned', 'superseded'])
+def test_notification_open_span_keeps_existing_outcomes(client, outcome):
+    c, root = client
+    event = span('NotificationOpenToContent') | {'outcome': outcome}
+    response = c.post(P + '/batch', json=batch(evs=[event]))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == 1
+    [day] = (root / 'events').iterdir()
+    assert json.loads(day.read_text())['events'] == [event]
+
+
 @pytest.mark.parametrize('name', ['future.private_name', 'future span free text', 'x' * 100])
 def test_future_span_drops_only_itself_and_counts_without_content(client, caplog, name):
     c, root = client
