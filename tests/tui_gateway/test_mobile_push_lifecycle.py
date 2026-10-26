@@ -205,6 +205,75 @@ def test_long_step_heartbeat_refreshes_stale_date_without_changing_content(deliv
     assert len(activities(sender)) == 4
 
 
+@pytest.mark.parametrize("status", ["starting", "thinking", "responding", "usingTool"])
+def test_quiet_running_phase_heartbeat_keeps_activity_fresh(delivery, status):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "phase", status)
+    now[0] += 10
+    service.drain_once()
+    first = activities(sender)[-1]["payload"]["aps"]
+    now[0] += 109
+    service.drain_once()
+    assert len(activities(sender)) == 1
+    now[0] += 2
+    assert service.record(scope, run["run_id"], "same-phase", status) is False
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    heartbeat = activities(sender)[-1]
+    assert heartbeat["urgent"] == 0  # APNs priority 5
+    assert heartbeat["payload"]["aps"]["event"] == "update"
+    assert heartbeat["payload"]["aps"]["content-state"] == first["content-state"]
+    assert heartbeat["payload"]["aps"]["stale-date"] == int(now[0] + 120)
+    now[0] += 99
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    now[0] += 1
+    service.drain_once()
+    assert len(activities(sender)) == 3
+
+
+@pytest.mark.parametrize("fence", ["terminal", "revoked", "expired", "changed_owner", "orphan", "attention_deadline"])
+def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    receipt = register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "tool", "usingTool")
+    now[0] += 10
+    service.drain_once()
+    assert len(activities(sender)) == 1
+    if fence == "terminal":
+        service.record(scope, run["run_id"], "done", "failed")
+    elif fence == "revoked":
+        service.unregister("p", **ids, subscription_id=receipt["subscription_id"])
+    elif fence == "expired":
+        with service.store.transaction() as db:
+            db.execute("UPDATE subscriptions SET expires_at=? WHERE id=?", (now[0] + 50, receipt["subscription_id"]))
+    elif fence == "changed_owner":
+        # A different live owner may keep its run open, but this worker must not refresh it.
+        service.store.owner = "replacement-owner"
+    elif fence == "orphan":
+        service.live_runs = lambda: (set(), set())
+    else:
+        service.record(scope, run["run_id"], "ask", "waitingForApproval",
+                       preview=AlertPreview(attention={"nearest_expires_at": now[0] + 30}))
+        now[0] += 1
+        service.drain_once()
+        assert activities(sender)[-1]["payload"]["aps"]["stale-date"] == int(now[0] + 29)
+    now[0] += 121
+    service.drain_once()
+    assert not [j for j in activities(sender)[1:]
+                if not j["payload"]["aps"]["content-state"]["isFinal"]
+                and j["payload"]["aps"]["content-state"]["status"] == "usingTool"]
+    sent = len(activities(sender))
+    now[0] += 121
+    service.drain_once()
+    assert len(activities(sender)) == sent
+
+
 @pytest.mark.parametrize("outcome", ["accepted", "retry", "invalid", "failed"])
 def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome):
     service, sender, _, ids, scope = delivery
