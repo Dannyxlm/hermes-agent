@@ -67,6 +67,19 @@ def test_two_signatures_group_separately(report, tmp_path):
     assert '-1005' in text.split('## Proposed items')[0] and '-1005' not in text.split('## Proposed items')[1]
 
 
+def test_notification_open_span_survives_ingest_into_the_report(report, tmp_path):
+    events = [{'kind': 'span', 't': T + i, 'name': 'NotificationOpenToContent', 'outcome': 'ok', 'ms': ms,
+               'attrs': {'source': 'banner', 'launch': 'warm', 'tail': 'memory'}}
+              for i, ms in enumerate([80, 160, 320])]
+    store(tmp_path, events)
+    rows = report.span_budgets(report.load_day(tmp_path, DAY)[0])
+    assert 'NotificationOpenToContent' in rows
+    row = rows['NotificationOpenToContent']
+    assert (row['count'], row['p50'], row['p90'], row['max']) == (3, 160, 320, 320)
+    assert row['budget_ms'] is None and row['verdict'] == 'not gated'
+    assert 'NotificationOpenToContent' in report.build_report(tmp_path, DAY, [])
+
+
 def test_slow_span_is_flagged_against_its_budget(report, tmp_path):
     events = [{'kind': 'span', 't': T + i, 'name': 'ChatOpenContent', 'outcome': 'ok', 'ms': ms}
               for i, ms in enumerate([90, 100, 110, 120, 130, 140, 145, 148, 400, 900])]
