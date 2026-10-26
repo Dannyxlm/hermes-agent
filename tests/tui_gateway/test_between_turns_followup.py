@@ -329,3 +329,66 @@ def test_late_ack_from_unseen_old_boot_cannot_replace_current_child(monkeypatch)
         "sid": "sid", "boot_id": "unseen-old", "history_version": 100, "session_key": "A"})
     assert parent["session_key"] == "B"
     assert parent["history_version"] == 8
+
+
+_DYING_CHILD = r'''
+import json, os, sys
+N = int(sys.argv[1])
+def out(f):
+    sys.stdout.write(json.dumps(f) + "\n"); sys.stdout.flush()
+out({"type": "hello", "host_pid": os.getpid(), "boot_id": "dying-boot", "build_sha": "", "hermes_home": ""})
+for raw in sys.stdin:
+    f = json.loads(raw)
+    if f.get("type") == "control":
+        for i in range(N):
+            out({"type": "rpc", "sid": "sid", "message": {"jsonrpc": "2.0", "method": "event",
+                 "params": {"type": "message.delta", "session_id": "sid", "payload": {"i": i}}}})
+        out({"type": "control.ack", "sid": "sid", "request_id": f["request_id"],
+             "route_name": "session.compress", "session_key": "B", "history_version": 9})
+        os._exit(3)
+'''
+
+
+@pytest.mark.parametrize("n,sink_delay", [(0, 0.0), (300, 0.002)])
+def test_frames_written_before_child_death_are_still_delivered(tmp_path, n, sink_delay):
+    """Crash path, no replacement: base delivered every frame the dead child had already
+    written (including a /compress ack carrying the rotated key). Only a LIVE replacement
+    may fence a retired reader; a nulled ``_proc`` is not a replacement."""
+    import queue
+    import sys
+    import time
+
+    script = tmp_path / "dying_child.py"
+    script.write_text(_DYING_CHILD)
+    relayed = []
+
+    def sink(msg):
+        if sink_delay:
+            time.sleep(sink_delay)
+        relayed.append(msg)
+
+    supervisor = HostSupervisor(registry_path=tmp_path / "h.json", argv=[sys.executable, str(script), str(n)],
+                                cwd=tmp_path, env={}, rpc_sink=sink, respawn_max=0,
+                                expected_build_sha="unknown", expected_hermes_home="", autostart=False)
+    supervisor.start()
+    ack = None
+    with __import__("contextlib").suppress(queue.Empty):
+        ack = supervisor.control("sid", route_name="session.compress", wait=True, timeout=8.0)
+    deadline = time.monotonic() + 5.0
+    while len(relayed) < n and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert ack is not None and ack.get("session_key") == "B", "control.ack written before death was dropped"
+    assert len(relayed) == n, f"only {len(relayed)}/{n} pre-death frames delivered"
+
+
+def test_bootless_version_frame_is_legacy_and_does_not_retire_live_boot(monkeypatch):
+    monkeypatch.setattr(server, "_transfer_active_session_slot", lambda *a, **kw: True)
+    monkeypatch.setattr(server, "_compute_host_supervisor", SimpleNamespace(boot_id="b1"), raising=False)
+    parent = {"history_lock": threading.Lock(), "session_key": "A", "history_version": 5}
+    server._apply_compute_host_metadata_mirror(parent, {
+        "sid": "sid", "boot_id": "b1", "session_key": "A", "history_version": 1})
+    server._apply_compute_host_metadata_mirror(parent, {"sid": "sid", "session_key": "A", "history_version": 2})
+    server._apply_compute_host_metadata_mirror(parent, {
+        "sid": "sid", "boot_id": "b1", "session_key": "B", "history_version": 3})
+    assert parent["session_key"] == "B", "a boot-less frame retired the live child boot"
+    assert "b1" not in parent.get("_compute_host_retired_metadata_boots", set())

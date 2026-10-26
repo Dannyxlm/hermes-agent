@@ -116,10 +116,12 @@ def _compute_host_adopt_frame_meta(
     A rotated ``session_key`` means the child compressed A->B. The child only holds an inert
     borrowed token (``_install_borrowed_lease``), so the REAL registry lease is re-anchored here,
     by its owner — never claimed from the child pid (authority stays singular, #103737 review)."""
-    if frame.get("history_version") is not None:
+    boot = str(frame.get("boot_id") or "")
+    # A frame without a boot id predates boot fencing: keep base's legacy adoption
+    # instead of letting it retire the live child's boot.
+    if frame.get("history_version") is not None and boot:
         # Parent-local edits and a respawned child's counter are not one clock.
         # Compare only this incarnation's own publications, not the parent's max.
-        boot = str(frame.get("boot_id") or "")
         active_boot = getattr(_compute_host_supervisor, "boot_id", "")
         if boot and active_boot and boot != active_boot:
             return False  # Includes an ack queued before respawn but adopted later.

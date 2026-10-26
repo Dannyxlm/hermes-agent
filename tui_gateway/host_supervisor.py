@@ -456,7 +456,10 @@ class HostSupervisor:
             if isinstance(frame, dict):
                 # A dead process's pipe may still drain after its replacement is
                 # live. Never let that reader publish into the new incarnation.
-                if self._proc is not proc:
+                # ``_proc is None`` (exit observed, no replacement yet) is not a
+                # replacement: frames the child wrote before dying still deliver.
+                current = self._proc
+                if current is not None and current is not proc:
                     continue
                 self._handle_host_frame(frame)
 
