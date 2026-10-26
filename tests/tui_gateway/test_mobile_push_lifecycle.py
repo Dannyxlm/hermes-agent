@@ -276,23 +276,57 @@ def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
 
 
 @pytest.mark.parametrize("outcome", ["accepted", "retry", "invalid", "failed"])
-def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome):
-    service, sender, _, ids, scope = delivery
+@pytest.mark.parametrize("event", ["alert", "start", "update", "end"])
+def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome, event):
+    service, sender, now, ids, scope = delivery
     sender.result = DeliveryResult(outcome)
     service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
-    run = service.start_run(scope)
-    service.record(scope, run["run_id"], "PRIVATE_EVENT", "complete",
-                   preview=AlertPreview(title="PRIVATE_TITLE", reply="PRIVATE_BODY"))
+    if event == "start":
+        service.store.set_origin(scope, "p", **ids)
+        service.register_start_token("p", **ids, token="ee" * 32, environment="production")
+    run = service.start_run(scope, continuation=event == "start")
+    if event in {"update", "end"}:
+        register_activity(service, scope, ids, run["run_id"])
+    if event != "start":
+        service.record(scope, run["run_id"], "PRIVATE_EVENT", "thinking" if event == "update" else "complete",
+                       preview=AlertPreview(title="PRIVATE_TITLE", reply="PRIVATE_BODY"))
+    if event == "update":
+        now[0] += 10
+    elif event == "end":
+        # Isolate END from the separate final UPDATE and completion alert.
+        service.unregister("p", **ids, kind="alert")
+        now[0] += 121
     service.drain_once()
     audit = service.store.path.parent / "push-shape-audit.jsonl"
     assert audit.is_file()
     text = audit.read_text()
     records = [json.loads(line) for line in text.splitlines()]
     assert len(records) == 1
-    assert records[0] == {"kind": "alert", "status": "complete", "title_length": 13, "body_length": 12,
-                          "event_id": hashlib.sha256(f"{scope.key}:{run['run_id']}:PRIVATE_EVENT".encode()).hexdigest(),
-                          "outcome": outcome, "sent_at": service._clock()}
-    assert all(value not in text for value in ("PRIVATE_TITLE", "PRIVATE_BODY", "PRIVATE_EVENT", "aa" * 32))
+    job = sender.jobs[0]
+    expected = {
+        "kind": job["kind"], "status": "starting" if event == "start" else "thinking" if event == "update" else "complete",
+        "title_length": len(job["payload"]["aps"].get("alert", {}).get("title", "")),
+        "body_length": len(job["payload"]["aps"].get("alert", {}).get("body", "")),
+        "event_id": hashlib.sha256(job["event_id"].encode()).hexdigest(),
+        "outcome": outcome, "sent_at": now[0], "event": "" if event == "alert" else event,
+        "run_id": hashlib.sha256(f"{scope.key}\0{run['run_id']}".encode()).hexdigest(),
+        "provider_status": {"accepted": "success", "retry": "transient_failure", "invalid": "invalid_token",
+                            "failed": "rejected"}[outcome]}
+    if event != "alert":
+        expected["timestamp"] = int(now[0])
+    if event in {"update", "end"}:
+        expected["act"] = hashlib.sha256(b"live").hexdigest()[:8]
+    if event == "end":
+        expected["dismissal_date"] = int(run["started_at"] + 120)
+    assert records[0] == expected
+    assert all(value not in text for value in ("PRIVATE_TITLE", "PRIVATE_BODY", "PRIVATE_EVENT", "aa" * 32,
+                                               "cc" * 32, "ee" * 32, run["run_id"], ids["installation_id"]))
+    # The lifecycle ledger remains useful after ordinary outbox/run retention.
+    now[0] += 31 * 86400
+    service.store.maintain()
+    assert audit.read_text() == text
+    with service.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
 
 
 def test_registered_push_started_activity_gets_silent_late_end(delivery):
