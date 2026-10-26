@@ -242,6 +242,36 @@ def test_quiet_running_phase_heartbeat_keeps_activity_fresh(delivery, status):
     assert len(activities(sender)) == 3
 
 
+@pytest.mark.parametrize("status", ["starting", "thinking", "responding", "usingTool"])
+def test_quiet_phase_heartbeat_stops_after_four_hours_without_blocking_end(delivery, status):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "phase", status)
+    now[0] += 10
+    service.drain_once()
+    first = activities(sender)[-1]["payload"]["aps"]["content-state"]
+    now[0] = run["started_at"] + 4 * 3600
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    assert activities(sender)[-1]["payload"]["aps"]["content-state"] == first
+    now[0] += 100
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    assert service.current_run(scope)["status"] == status
+    now[0] += 1
+    service.record(scope, run["run_id"], "done", "complete")
+    finished = now[0]
+    service.drain_once()
+    assert activities(sender)[-1]["payload"]["aps"]["content-state"]["isFinal"] is True
+    now[0] += 8
+    service.drain_once()
+    end = activities(sender)[-1]["payload"]["aps"]
+    assert end["event"] == "end" and "alert" not in end
+    assert end["dismissal-date"] == finished + 120
+
+
 @pytest.mark.parametrize("fence", ["terminal", "revoked", "expired", "changed_owner", "orphan", "attention_deadline"])
 def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
     service, sender, now, ids, scope = delivery
