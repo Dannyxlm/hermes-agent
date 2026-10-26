@@ -204,7 +204,8 @@ class ActivityPushStore:
         return sub["finished_at"] + 120 <= now or sub["announced_at"] != 0 and sub["end_due"] <= now
 
     def _heartbeat_activity(self, db, sub, run, now):
-        if run["status"] != "usingTool" or sub["expires_at"] <= now + 120:
+        if (run["status"] not in {"starting", "thinking", "responding", "usingTool"}
+                or run["owner"] != self.owner or sub["expires_at"] <= now + 120):
             return
         preview = AlertPreview.from_json(run.get("presentation"))
         started = preview.step_started_at if preview and preview.step_started_at else run["updated_at"]
