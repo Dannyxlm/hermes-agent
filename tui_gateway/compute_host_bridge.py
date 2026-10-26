@@ -108,7 +108,9 @@ def _compute_host_session_info(session: dict) -> dict:
     return _session_info(session.get("agent"), session)
 
 
-def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> bool:
+def _compute_host_adopt_frame_meta(
+    session: dict, frame: dict, *, between_turns_publication: bool = False,
+) -> bool:
     """Adopt a host frame's session_key / history_version. Caller holds history_lock.
 
     A rotated ``session_key`` means the child compressed A->B. The child only holds an inert
@@ -133,7 +135,10 @@ def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> bool:
         version = int(frame["history_version"])
         if version < session.get("_compute_host_metadata_version", -1):
             return False  # A compaction publication overtook an older turn.end.
-        session["_compute_host_metadata_version"] = version
+        # Only the new publication path may establish a version fence. Without
+        # it, ordinary/late acks retain base's unconditional version adoption.
+        if between_turns_publication or session.get("_compute_host_metadata_version", -1) >= 0:
+            session["_compute_host_metadata_version"] = version
     new_key = str(frame.get("session_key") or "")
     if new_key and new_key != str(session.get("session_key") or ""):
         if not _transfer_active_session_slot(str(frame.get("sid") or ""), session, new_session_id=new_key):
@@ -155,7 +160,7 @@ def _relay_compute_host_rpc(message: dict) -> bool:
         if isinstance(params, dict):
             session = _sessions.get(str(params.get("sid") or ""))
             if session is not None:
-                _apply_compute_host_metadata_mirror(session, params)
+                _apply_compute_host_metadata_mirror(session, params, between_turns_publication=True)
         return True  # Internal publication, never a client event or replay entry.
     if isinstance(message, dict) and message.get("method") == "compute_host.activity":
         if isinstance(params, dict):
@@ -286,13 +291,15 @@ def _lock_compute_host_clarify(rid: str, request_id: str, question_id: str, answ
     return _ok(rid, result)
 
 
-def _apply_compute_host_metadata_mirror(session: dict, frame: dict | None) -> None:
+def _apply_compute_host_metadata_mirror(
+    session: dict, frame: dict | None, *, between_turns_publication: bool = False,
+) -> None:
     """Mirror host-owned session metadata: under turn isolation the host is the only
     writer of live agent/history state, and UI reads must not build a second agent."""
     if not isinstance(frame, dict):
         return
     with _history_lock(session):
-        if not _compute_host_adopt_frame_meta(session, frame):
+        if not _compute_host_adopt_frame_meta(session, frame, between_turns_publication=between_turns_publication):
             return
         if isinstance(frame.get("history"), list):
             session["history"] = frame["history"]

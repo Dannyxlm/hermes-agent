@@ -178,8 +178,9 @@ def test_rejected_fifo_submit_replies_and_releases_retirement(monkeypatch, defer
     assert session["_between_turns_rpc_tail"].done()
 
 
+@pytest.mark.parametrize("previous_child_frame", [False, True])
 @pytest.mark.parametrize("route", ["turn.end", "compress", "slash", "late.compress"])
-def test_default_off_respawn_adopts_rotated_key_despite_parent_version(monkeypatch, route):
+def test_default_off_respawn_adopts_rotated_key_despite_parent_version(monkeypatch, route, previous_child_frame):
     """Reviewer respawn probes: OFF must retain base key/lease/mirror behavior."""
     monkeypatch.setattr(server, "_load_cfg", lambda: {"compression": {"between_turns": False}})
     parent = {"agent": None, "history_lock": threading.Lock(), "history": [],
@@ -192,6 +193,11 @@ def test_default_off_respawn_adopts_rotated_key_despite_parent_version(monkeypat
     monkeypatch.setattr(server, "_drain_queued_prompt", lambda *a, **kw: None)
     monkeypatch.setattr(server, "_emit", lambda *a, **kw: None)
     monkeypatch.setattr(server, "_status_update", lambda *a, **kw: None)
+    if previous_child_frame:
+        # Ordinary/late controls must keep base's unconditional adoption when no
+        # between-turns publication exists, even after another child snapshot.
+        server._apply_compute_host_metadata_mirror(parent, {
+            "sid": "sid", "session_key": "A", "history_version": 9})
     frame = {"type": "turn.end", "sid": "sid", "session_key": "B", "history_version": 2,
              "message_count": 4, "session_info": {"model": "child-model"}, "session_info_emitted": True}
     if route == "turn.end":
@@ -204,7 +210,7 @@ def test_default_off_respawn_adopts_rotated_key_despite_parent_version(monkeypat
         server._apply_compute_host_metadata_mirror(parent, frame)
     assert parent["session_key"] == "B", "fresh child rotation was dropped"
     assert transfers == ["B"]
-    assert parent["history_version"] == 7
+    assert parent["history_version"] == (9 if previous_child_frame else 7)
     assert parent["_metadata_message_count"] == 4
     assert parent["_metadata_mirror"]["model"] == "child-model"
 
