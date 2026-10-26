@@ -390,7 +390,18 @@ def test_live_activity_lifecycle_contract_is_stored_through_ingest(client, actio
     assert json.loads(day.read_text())['events'] == [event]
 
 
-@pytest.mark.parametrize('act', ['', '0123abc', '0123abcde', '0123ABCD', 'not-hex!', 12345678, None, {'id': 'private'}])
+@pytest.mark.parametrize('action', ['start', 'end', 'token_registered', 'end_requested'])
+def test_live_activity_null_correlation_is_optional(client, action):
+    c, root = client
+    event = {'kind': 'live_activity', 't': T, 'action': action, 'origin': 'local', 'act': None}
+    response = c.post(P + '/batch', json=batch(evs=[event]))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == 1
+    [day] = (root / 'events').iterdir()
+    assert json.loads(day.read_text())['events'] == [event]
+
+
+@pytest.mark.parametrize('act', ['', '0123abc', '0123abcde', '0123ABCD', 'not-hex!', 12345678, {'id': 'private'}])
 def test_live_activity_correlation_refuses_non_digest_values(client, act):
     c, root = client
     event = {'kind': 'live_activity', 't': T, 'action': 'start', 'origin': 'local', 'act': act}
