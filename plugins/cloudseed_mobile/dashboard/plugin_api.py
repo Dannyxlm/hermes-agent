@@ -8,7 +8,10 @@ import contextlib
 import errno
 import hashlib
 import json
+import os
 import sqlite3
+import stat
+from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -349,6 +352,56 @@ def activity(profile: str, stored_session_id: str):
 @router.get('/session-activity/batch')
 def activity_batch(profile: str, stored_session_id: list[str] = Query(...)):
     return guarded(lambda: session_activity_batch(profile, stored_session_id))
+
+
+def fleet_public_fields(value):
+    if isinstance(value, dict):
+        return {key: fleet_public_fields(item) for key, item in value.items()
+                if key not in {'top', 'processes', 'process'}}
+    if isinstance(value, list):
+        return [fleet_public_fields(item) for item in value]
+    return value
+
+
+def read_fleet_state():
+    from pathlib import Path
+    import pwd
+
+    # HOME is profile-scoped; the shared collector belongs to the OS user.
+    path = Path(pwd.getpwuid(os.getuid()).pw_dir) / '.local/state/cloudseed/fleet/latest.json'
+    limit = 256 * 1024
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError('Invalid fleet file')
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError('Fleet file too large')
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError('Fleet envelope required')
+    features = data.get('feature_versions')
+    if (type(data.get('protocol_version')) is not int or data['protocol_version'] != 1
+            or not isinstance(features, dict)
+            or type(features.get('machines')) is not int or features['machines'] != 1):
+        raise ValueError('Unsupported fleet version')
+    datetime.strptime(data['generated_at'], '%Y-%m-%dT%H:%M:%SZ')
+    machines = data['machines']
+    if not isinstance(machines, list) or not all(isinstance(machine, dict) for machine in machines):
+        raise ValueError('Machine objects required')
+    return {'generated_at': data['generated_at'], 'machines': fleet_public_fields(machines)}
+
+
+@router.get('/machines')
+def machines():
+    envelope = {'ok': True, 'status': 'unavailable', 'protocol_version': 1,
+                'feature_versions': {'machines': 1}, 'generated_at': None, 'machines': []}
+    headers = {'Cache-Control': 'private, no-store'}
+    try:
+        sample = read_fleet_state()
+        return JSONResponse({**envelope, **sample, 'status': 'ok'}, headers=headers)
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return JSONResponse(envelope, headers=headers)
 
 
 @router.get('/provider/accounts')
