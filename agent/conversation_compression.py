@@ -462,6 +462,7 @@ class CompressionCommitFence:
     def __init__(self, total_ceiling_seconds: float | None = None) -> None:
         self._lock = threading.Lock()
         self._cancelled = False
+        self.cancel_reason: str | None = None
         self._commit_started = False
         # Readable WITHOUT the lock (begin_commit holds it until finish_commit): hosts see a hung commit.
         # Lock-free commit-phase marker (#76354 review F1). ``begin_commit`` RETAINS ``self._lock`` until
@@ -555,11 +556,12 @@ class CompressionCommitFence:
         """Seconds since the worker last reported forward progress."""
         return max(0.0, time.monotonic() - self._last_progress)
 
-    def cancel_before_commit(self, cancel_event: Any = None) -> bool:
+    def cancel_before_commit(self, cancel_event: Any = None, *, reason: str | None = None) -> bool:
         """Cancel a pending commit (``True``), or block until an active commit finishes (``False``)."""
         with self._lock:
             if not self._commit_started:
                 self._cancelled = True
+                self.cancel_reason = reason
             if cancel_event is not None:
                 cancel_event.set()
             return not self._commit_started
@@ -833,6 +835,8 @@ def _record_stall_interrupted_backoff(
     """Persist a stall-interrupted cooldown after snapshot restore.
     Must run *after* ``_restore_compressor_attempt_state`` so rollback cannot wipe the new row. Returns True
     when the backoff was recorded."""
+    if commit_fence is not None and getattr(commit_fence, "cancel_reason", None) == "preempted_by_turn":
+        return False
     if not compression_attempt_stalled(commit_fence=commit_fence, started_at=started_at):
         return False
     compressor = getattr(agent, "context_compressor", None)
@@ -2771,7 +2775,8 @@ def _acquire_compression_lease(
                     "Compression commit cancelled before lock acquisition (session=%s).", agent.session_id or "none"
                 )
                 agent._last_compaction_in_place = False
-                return _abort_lease(agent, lifecycle, system_message, attempt, "commit_fence_cancelled")
+                return _abort_lease(agent, lifecycle, system_message, attempt,
+                                    getattr(commit_fence, "cancel_reason", None) or "commit_fence_cancelled")
             _lock_acquired = _try_acquire_durable_lock(lease, _try_acquire_lock, commit_fence)
         if not _lock_acquired:
             lease.finish_lock_setup()
@@ -2787,7 +2792,8 @@ def _acquire_compression_lease(
             )
             agent._last_compaction_in_place = False
             _existing_sp = _existing_system_prompt(agent, system_message)
-            _emit_aborted_attempt_telemetry(agent, attempt.started_at, "commit_fence_cancelled", attempt.seed)
+            _emit_aborted_attempt_telemetry(agent, attempt.started_at,
+                                            getattr(commit_fence, "cancel_reason", None) or "commit_fence_cancelled", attempt.seed)
             lease.release()
             return None, _existing_sp
     return lease, None
@@ -2996,7 +3002,7 @@ def _run_summary_dispatch(
                 _mark_compressor_working_attempt(agent.context_compressor, attempt_generation)
                 compressed = compress_fn(messages, **compress_kwargs)
                 # Freeze a hard stop that arrived after the last provider attempt but before session state rotates.
-                if hard_cancel_event is not None and hard_cancel_event.is_set():
+                if _compression_cancel_requested():
                     raise AuxiliaryExplicitCancellation()
     finally:
         _COMPRESSOR_ATTEMPT_GENERATION.reset(_attempt_ctx_token)
@@ -3814,9 +3820,10 @@ def _run_summary_phase(
             bypass_cooldown=bypass_cooldown,
         )
         messages_before_compression = copy.deepcopy(messages)
-        _activity_heartbeat = _CompressionActivityHeartbeat(
-            agent, commit_fence=commit_fence, emit_client_status=lease.status_emitted,
-        ).start()
+        if attempt.seed.get("trigger_source") != "between_turns":
+            _activity_heartbeat = _CompressionActivityHeartbeat(
+                agent, commit_fence=commit_fence, emit_client_status=lease.status_emitted,
+            ).start()
         # Start this attempt's telemetry clean (#118580) only now, under the lease: done at entry, a call that stops
         # at a gate or the lease erased a running attempt's record and seed.
         for _name, _value in zip(_ATTEMPT_TELEMETRY_FIELDS, (None, None, dict(attempt.seed))):
@@ -3855,8 +3862,8 @@ def _run_summary_phase(
         )
         _emit_aborted_attempt_telemetry(
             agent, attempt.started_at,
-            STALL_INTERRUPTED_FAILURE_CLASS if _stall_backoff
-            else "commit_fence_cancelled" if _host_cancel else "explicit_interrupt", attempt.seed,
+            getattr(commit_fence, "cancel_reason", None) or (STALL_INTERRUPTED_FAILURE_CLASS if _stall_backoff
+            else "commit_fence_cancelled" if _host_cancel else "explicit_interrupt"), attempt.seed,
         )
         return _SummaryPhase(messages=messages, abort_prompt=_existing_system_prompt(agent, system_message))
     except BaseException as _compress_exc:
@@ -4061,9 +4068,12 @@ def compress_context(
     # Announce BEFORE the lazy feasibility probe: its live catalog / provider lookups are
     # network-bound (connect timeouts stack up through proxies), and until this status lands
     # the Desktop working row is a bare spinner with no "Summarizing thread" label (#111294).
-    lifecycle = _announce_compression_start(
-        agent, message_count=_pre_msg_count, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force
-    )
+    if trigger == "between_turns":
+        lifecycle = _CompactionLifecycle(agent, False)
+    else:
+        lifecycle = _announce_compression_start(
+            agent, message_count=_pre_msg_count, approx_tokens=approx_tokens, focus_topic=focus_topic, force=force
+        )
     # After the announce: an expired token's refresh is a blocking network call. Before the probe and summary call.
     _refresh_main_credential(agent)
     # Lazy feasibility probe (~400ms cold) on first attempt, not __init__; it sets
@@ -4093,7 +4103,8 @@ def compress_context(
         lease.release()
         raise
     if not current:
-        _emit_aborted_attempt_telemetry(agent, attempt.started_at, "snapshot_stale", attempt.seed)
+        _emit_aborted_attempt_telemetry(agent, attempt.started_at,
+                                        getattr(commit_fence, "cancel_reason", None) or "snapshot_stale", attempt.seed)
         lease.release()
         return messages, _existing_system_prompt(agent, system_message)
     _adopted = _adopt_if_parent_rotated(
@@ -4173,7 +4184,8 @@ def compress_context(
                 _existing_sp = _existing_system_prompt(agent, system_message)
                 _emit_aborted_attempt_telemetry(
                     agent, attempt.started_at,
-                    STALL_INTERRUPTED_FAILURE_CLASS if _stall_backoff else "commit_fence_cancelled", attempt.seed,
+                    getattr(commit_fence, "cancel_reason", None) or (
+                        STALL_INTERRUPTED_FAILURE_CLASS if _stall_backoff else "commit_fence_cancelled"), attempt.seed,
                 )
                 return messages, _existing_sp
         _warn_summary_or_aux_fallback(agent)
