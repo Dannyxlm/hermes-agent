@@ -43,6 +43,7 @@ MAX_DAY_FILE = 50 * 1024 * 1024      # per-day events file; beyond this, 507
 PRUNE_INTERVAL = 3600.0
 
 _TOKEN = re.compile(r'[A-Za-z0-9_.:-]{1,64}', re.ASCII)
+_ACT = re.compile(r'[0-9a-f]{8}', re.ASCII)
 # A Hermes session id (YYYYMMDD_HHMMSS_<hex>) or a UUID, never a title or slug.
 _SESSION = re.compile(r'[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}',
                       re.ASCII)
@@ -221,7 +222,7 @@ KINDS = {
     'push_tap': ({'source': _one_of(TAP_SOURCES), 'outcome': _one_of(TAP_OUTCOMES)}, {'session_id': _session}),
     'live_activity': ({'action': _one_of(LIVE_ACTIONS), 'origin': _one_of(LIVE_ORIGINS)},
                       {'end_state': _one_of(LIVE_END_STATES), 'session_id': _session,
-                       'act': lambda v: _match(re.compile(r'[0-9a-f]{8}', re.ASCII), v)}),
+                       'act': lambda v: _match(_ACT, v)}),
 }
 
 
@@ -242,7 +243,7 @@ def validate_event(event):
             _fail('missing event key')
         event[key] = check(event[key])
     for key, check in optional.items():
-        if key in event and (event[key] is not None or key == 'act'):
+        if key in event and event[key] is not None:
             event[key] = check(event[key])
     return event
 
