@@ -2,6 +2,7 @@
 listed-chat alert policy (U14) through the real dispatcher, detached sessions included."""
 
 import json
+import re
 import threading
 import uuid
 
@@ -250,6 +251,36 @@ def test_exception_in_the_turn_still_closes_the_run(push_service, ordinary, mobi
     server._mobile_push_finish(server._sessions[sid], "error")
     assert scope_runs(push_service, ORDINARY)[-1]["status"] == "failed"
     assert server._sessions[sid]["_mobile_push_status"] == "failed"
+
+
+def test_idle_drains_do_not_scan_runtime_runs_between_reconciles(push_service, monkeypatch):
+    from tui_gateway import methods_mobile_push, mobile_push
+
+    now = [1800000000.0]
+    monkeypatch.setattr(push_service, "_clock", lambda: now[0])
+    monkeypatch.setattr(push_service.store, "clock", lambda: now[0])
+    # Inbox invalidation has its own independent run watcher, outside runtime liveness.
+    monkeypatch.setattr(mobile_push.mobile_inbox_invalidation, "process", lambda _: 0)
+    monkeypatch.setattr(mobile_push, "service_for_home", lambda _: push_service)
+    methods_mobile_push.register(server)
+    statements = []
+    push_service.store._db.set_trace_callback(statements.append)
+    try:
+        assert push_service.drain_once() == 0
+        assert sum(bool(re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE))
+                   for s in statements) == 1
+        statements.clear()
+        for _ in range(20):
+            now[0] += 2
+            assert push_service.drain_once() == 0
+        assert not [s for s in statements if re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE)]
+        statements.clear()
+        now[0] += 20
+        assert push_service.drain_once() == 0
+        assert sum(bool(re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE))
+                   for s in statements) == 1
+    finally:
+        push_service.store._db.set_trace_callback(None)
 
 
 def test_restart_that_lost_the_session_closes_orphans_but_not_live_runs(push_service, ordinary, mobile_home, peer):
