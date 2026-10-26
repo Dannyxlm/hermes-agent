@@ -203,8 +203,13 @@ def test_speculative_pool_cap_survives_detached_worker(tmp_path, monkeypatch):
 
     agent.context_compressor.compress.side_effect = blocked
     job = server._start_between_turns_compaction("sid", session, {"completed": True})
-    other = dict(session, history_lock=threading.Lock())
-    other.pop("_between_turns_compaction", None)
+    other_path = tmp_path / "other"
+    other_path.mkdir()
+    other_db, other_agent, other, _ = _fixture(other_path, monkeypatch)
+    other_key = "other-between-turns-parent"
+    other_db.create_session(other_key, source="cli")
+    other_db.replace_messages(other_key, other["history"])
+    other_agent.session_id = other["session_key"] = other_key
     second = None
     try:
         assert started.wait(5)
@@ -219,5 +224,7 @@ def test_speculative_pool_cap_survives_detached_worker(tmp_path, monkeypatch):
         job.done.wait(5)
         if second is not None:
             second.done.wait(5)
+        other_agent.close()
+        other_db.close()
         agent.close()
         db.close()
