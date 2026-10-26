@@ -230,6 +230,11 @@ def _utc(ms):
     return dt.datetime.fromtimestamp(ms / 1000, dt.UTC).strftime('%H:%M:%S') if ms else '-'
 
 
+def _drop_totals(records):
+    return {key: sum(record.get(key, 0) for record in records)
+            for key in ('dropped_invalid_events', 'dropped_unknown_spans')}
+
+
 def build_report(root: Path, day: str, log_paths) -> str:
     batches, flags, unreadable = load_day(root, day)
     logs = load_logs(log_paths)
@@ -239,8 +244,11 @@ def build_report(root: Path, day: str, log_paths) -> str:
     events = sum(len(b.get('events', ())) for b in batches)
     installs = {b.get('install_id') for b in batches}
     builds = sorted({b.get('app_build') for b in batches if b.get('app_build')})
+    dropped = _drop_totals((*batches, *flags))
     out = [f'# Hermex flight recorder: {day} (UTC)', '',
            f'- Batches {len(batches)}, events {events}, installations {len(installs)}, flags {len(flags)}.',
+           f'- Dropped telemetry: dropped_invalid_events={dropped["dropped_invalid_events"]}, '
+           f'dropped_unknown_spans={dropped["dropped_unknown_spans"]}.',
            f'- App builds: {", ".join(builds) if builds else "none"}.',
            f'- Server logs read: {", ".join(p for p, *_ in logs) if logs else "none (joins are unknown)"}.']
     if unreadable:
