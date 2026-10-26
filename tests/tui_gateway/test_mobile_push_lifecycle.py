@@ -17,6 +17,11 @@ def register_activity(service, scope, ids, run_id, name="live"):
                             kind="activity", activity_id=name, run_id=run_id)
 
 
+def expire_activity_lease(service, receipt, expires):
+    with service.store.transaction() as db:
+        db.execute("UPDATE subscriptions SET expires_at=? WHERE id=?", (expires, receipt["subscription_id"]))
+
+
 def activities(sender):
     return [j for j in sender.jobs if j["kind"] == "activity"]
 
@@ -247,22 +252,18 @@ def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
     now[0] += 10
     service.drain_once()
     assert len(activities(sender)) == 1
-    if fence == "terminal":
-        service.record(scope, run["run_id"], "done", "failed")
-    elif fence == "revoked":
-        service.unregister("p", **ids, subscription_id=receipt["subscription_id"])
-    elif fence == "expired":
-        with service.store.transaction() as db:
-            db.execute("UPDATE subscriptions SET expires_at=? WHERE id=?", (now[0] + 50, receipt["subscription_id"]))
-    elif fence == "changed_owner":
-        # A different live owner may keep its run open, but this worker must not refresh it.
-        service.store.owner = "replacement-owner"
-    elif fence == "orphan":
-        service.live_runs = lambda: (set(), set())
-    else:
-        service.record(scope, run["run_id"], "ask", "waitingForApproval",
-                       preview=AlertPreview(attention={"count": 1, "primary": {"category": "HERMEX_APPROVAL_V1"},
-                                                       "nearest_expires_at": now[0] + 30}))
+    actions = {
+        "terminal": lambda: service.record(scope, run["run_id"], "done", "failed"),
+        "revoked": lambda: service.unregister("p", **ids, subscription_id=receipt["subscription_id"]),
+        "expired": lambda: expire_activity_lease(service, receipt, now[0] + 50),
+        "changed_owner": lambda: setattr(service.store, "owner", "replacement-owner"),
+        "orphan": lambda: setattr(service, "live_runs", lambda: (set(), set())),
+        "attention_deadline": lambda: service.record(scope, run["run_id"], "ask", "waitingForApproval",
+            preview=AlertPreview(attention={"count": 1, "primary": {"category": "HERMEX_APPROVAL_V1"},
+                                            "nearest_expires_at": now[0] + 30})),
+    }
+    actions[fence]()
+    if fence == "attention_deadline":
         now[0] += 1
         service.drain_once()
         assert activities(sender)[-1]["payload"]["aps"]["stale-date"] == int(now[0] + 29)

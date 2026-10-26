@@ -67,7 +67,7 @@ class PushService:
     def _live_run_snapshot(self):
         try:
             return self.live_runs() if self.live_runs is not None else (None, None)
-        except Exception as error:
+        except Exception as error:  # health: allow BLE001 -- runtime observers must not block delivery or log private exception details
             logger.warning("mobile push runtime snapshot unavailable (%s)", type(error).__name__)
             return None, None
 
