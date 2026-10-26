@@ -2,6 +2,7 @@
 import hashlib
 import json
 import uuid
+from itertools import pairwise
 
 import pytest
 
@@ -396,6 +397,55 @@ def test_late_registration_after_reply_alert_does_not_sound_again(delivery):
     now[0] += 8
     service.drain_once()
     assert activities(sender)[-1]["payload"]["aps"]["event"] == "end"
+
+
+def test_end_claim_is_newer_than_heartbeat_and_final_update_across_restart(tmp_path):
+    now = [1800000000.0]
+    path = tmp_path / "push.sqlite"
+    sender = Sender()
+    scope = Scope("native_session", "default", "chat")
+    ids = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    service = PushService(path, sender, clock=lambda: now[0])
+    try:
+        run = service.start_run(scope)
+        register_activity(service, scope, ids, run["run_id"])
+        service.record(scope, run["run_id"], "tool", "usingTool")
+        now[0] += 10
+        assert service.drain_once() == 1
+        sender.result = DeliveryResult("retry", "transport")
+        now[0] += 121
+        assert service.drain_once() == 1
+        heartbeat = activities(sender)[-1]["payload"]["aps"]
+        assert heartbeat["content-state"]["status"] == "usingTool"
+        finished = now[0]
+        service.record(scope, run["run_id"], "done", "complete")
+        assert service.drain_once() == 0  # equal-second final content waits, never jumps into the future
+    finally:
+        service.close()
+    sender.result = DeliveryResult("accepted")
+    service = PushService(path, sender, clock=lambda: now[0])
+    try:
+        assert service.drain_once() == 0
+        now[0] += 1
+        assert service.drain_once() == 1
+        final = activities(sender)[-1]["payload"]["aps"]
+        assert final["event"] == "update" and final["content-state"]["isFinal"] is True
+        assert final["timestamp"] > heartbeat["timestamp"]
+        now[0] += 8
+        assert service.drain_once() == 1
+        end = activities(sender)[-1]["payload"]["aps"]
+        assert end["event"] == "end" and "alert" not in end
+        assert end["timestamp"] > final["timestamp"]
+        assert end["dismissal-date"] == finished + 120
+        now[0] += 901
+        assert service.drain_once() == 0
+        jobs = activities(sender)
+        assert [j["payload"]["aps"]["event"] for j in jobs] == ["update", "update", "update", "end"]
+        timestamps = [j["payload"]["aps"]["timestamp"] for j in jobs]
+        assert all(a < b for a, b in pairwise(timestamps))
+        assert sum(j["payload"]["aps"]["content-state"]["status"] == "usingTool" for j in jobs) == 2
+    finally:
+        service.close()
 
 
 def test_logout_removes_durable_cleanup_and_prevents_replay(delivery):
