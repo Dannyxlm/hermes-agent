@@ -114,9 +114,26 @@ def _compute_host_adopt_frame_meta(session: dict, frame: dict) -> bool:
     A rotated ``session_key`` means the child compressed A->B. The child only holds an inert
     borrowed token (``_install_borrowed_lease``), so the REAL registry lease is re-anchored here,
     by its owner — never claimed from the child pid (authority stays singular, #103737 review)."""
-    if (frame.get("history_version") is not None
-            and int(frame["history_version"]) < int(session.get("history_version", 0))):
-        return False  # A post-turn compaction can overtake an older turn.end snapshot.
+    if frame.get("history_version") is not None:
+        # Parent-local edits and a respawned child's counter are not one clock.
+        # Compare only this incarnation's own publications, not the parent's max.
+        boot = str(frame.get("boot_id") or "")
+        active_boot = getattr(_compute_host_supervisor, "boot_id", "")
+        if boot and active_boot and boot != active_boot:
+            return False  # Includes an ack queued before respawn but adopted later.
+        previous_boot = session.get("_compute_host_metadata_boot")
+        retired = session.setdefault("_compute_host_retired_metadata_boots", set())
+        if boot in retired:
+            return False
+        if previous_boot != boot:
+            if previous_boot is not None:
+                retired.add(previous_boot)
+            session["_compute_host_metadata_boot"] = boot
+            session["_compute_host_metadata_version"] = -1
+        version = int(frame["history_version"])
+        if version < session.get("_compute_host_metadata_version", -1):
+            return False  # A compaction publication overtook an older turn.end.
+        session["_compute_host_metadata_version"] = version
     new_key = str(frame.get("session_key") or "")
     if new_key and new_key != str(session.get("session_key") or ""):
         if not _transfer_active_session_slot(str(frame.get("sid") or ""), session, new_session_id=new_key):

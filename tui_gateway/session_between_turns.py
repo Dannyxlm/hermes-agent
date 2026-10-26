@@ -121,11 +121,14 @@ def _run_between_turns_compaction(sid: str, session: dict, job, messages: list, 
             if host_snapshot is not None:
                 # The parent already received turn.end (or captured its older
                 # snapshot). Publish the new identity without waiting for a turn.
-                from tui_gateway.compute_host import _history_meta
-                session["transport"].write({"jsonrpc": "2.0", "method": "compute_host.session_meta",
-                    "params": {"sid": sid, **_history_meta(host_snapshot),
-                               "history": host_snapshot["history"],
-                               "session_info": _session_info(agent, host_snapshot)}})
+                try:
+                    from tui_gateway.compute_host import _history_meta
+                    session["transport"].write({"jsonrpc": "2.0", "method": "compute_host.session_meta",
+                        "params": {"sid": sid, **_history_meta(host_snapshot),
+                                   "history": host_snapshot["history"],
+                                   "session_info": _session_info(agent, host_snapshot)}})
+                except Exception:
+                    logger.exception("compute-host compaction metadata publication failed")
             if restart_worker:
                 _restart_slash_worker(sid, session)
             _emit_session_info(sid, session)
