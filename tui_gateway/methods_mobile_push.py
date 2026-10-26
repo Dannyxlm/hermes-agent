@@ -653,11 +653,17 @@ def _mobile_push_note_submission(session, params, status="streaming"):
         logger.warning("mobile push origin unavailable (%s)", type(error).__name__)
 
 
-def _mobile_push_live_runs():
-    """(held, running) run ids for the orphan sweep; sessions are read, never locked."""
+def _mobile_push_session_runs():
+    """Session-only liveness is cheap enough for each heartbeat maintenance pass."""
     sessions = list(_sessions.values())
     held = {s.get("_mobile_push_run_id") for s in sessions if s.get("_mobile_push_run_id")}
     running = {s.get("_mobile_push_run_id") for s in sessions if s.get("_mobile_push_run_id") and s.get("running")}
+    return held, running
+
+
+def _mobile_push_live_runs():
+    """Include sessionless attention only on the bounded orphan-sweep cadence."""
+    held, running = _mobile_push_session_runs()
     service = _mobile_push_service()
     if service is not None:
         # Sessionless host setup has no chat runtime to hold its short-lived projection.
@@ -682,4 +688,5 @@ def register(server):
     # Resume a persisted outbox when this existing backend starts, before any new events.
     service = server._mobile_push_service()
     if service is not None:
-        service.live_runs = server._mobile_push_live_runs
+        service.live_runs = server._mobile_push_session_runs
+        service.reconcile_runs = server._mobile_push_live_runs
