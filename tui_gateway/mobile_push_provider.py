@@ -14,7 +14,7 @@ class DeliveryResult:
     reason: str = ""
 
 
-def send_shape(job, outcome, now):
+def send_shape(job, outcome, now, *, reason=""):
     """Only allowlisted shape metadata crosses the logging boundary, never payload text."""
     from .mobile_push_payloads import LABELS
     payload = job["payload"]
@@ -22,13 +22,28 @@ def send_shape(job, outcome, now):
     alert = aps.get("alert", {})
     status = payload.get("hermex.status", aps.get("content-state", {}).get("status", ""))
     kind = job["kind"]
-    return {"kind": kind if kind in {"alert", "activity", "activity_start", "widget", "background"} else "unknown",
-            "status": status if status in LABELS else "",
-            "title_length": len(alert.get("title", "")) if isinstance(alert, dict) else 0,
-            "body_length": len(alert.get("body", "")) if isinstance(alert, dict) else 0,
-            "event_id": hashlib.sha256(job["event_id"].encode()).hexdigest(),
-            "outcome": outcome if outcome in {"accepted", "retry", "invalid", "failed"} else "exception",
-            "sent_at": now}
+    event = aps.get("event")
+    event = event if kind in {"activity", "activity_start"} and event in {"start", "update", "end"} else ""
+    shape = {"kind": kind if kind in {"alert", "activity", "activity_start", "widget", "background"} else "unknown",
+             "status": status if status in LABELS else "",
+             "title_length": len(alert.get("title", "")) if isinstance(alert, dict) else 0,
+             "body_length": len(alert.get("body", "")) if isinstance(alert, dict) else 0,
+             "event_id": hashlib.sha256(job["event_id"].encode()).hexdigest(),
+             "run_id": hashlib.sha256(f"{job['scope']}\0{job['run_id']}".encode()).hexdigest(),
+             "event": event,
+             "outcome": outcome if outcome in {"accepted", "retry", "invalid", "failed"} else "exception",
+             "provider_status": {"accepted": "success", "retry": "transient_failure", "invalid": "invalid_token",
+                                 "failed": "local_failure" if reason == "invalid_channel" else "rejected"}.get(outcome, "exception"),
+             "provider_reason": reason if reason in {"", "transport", "provider_expired", "provider_unavailable",
+                                                     "token_invalid", "provider_rejected", "invalid_channel"} else "other",
+             "sent_at": now}
+    if event and type(aps.get("timestamp")) is int:
+        shape["timestamp"] = aps["timestamp"]
+    if kind == "activity":
+        shape["act"] = hashlib.sha256(job["activity_id"].encode()).hexdigest()[:8]
+    if event == "end" and type(aps.get("dismissal-date")) is int:
+        shape["dismissal_date"] = aps["dismissal-date"]
+    return shape
 
 
 class APNsProvider:

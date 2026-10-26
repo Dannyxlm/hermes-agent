@@ -29,6 +29,7 @@ class PushService:
         # Set by the owning gateway: () -> (held run ids, running run ids). Without it this
         # process's own runs are never treated as orphans.
         self.live_runs = None
+        self.reconcile_runs = None
         self._clock = clock
         self._reconciled_at = 0.0
 
@@ -64,6 +65,14 @@ class PushService:
             raise ValueError("delivery environment unavailable")
         return self.store.register_start_token(principal, **params)
 
+    def _live_run_snapshot(self, *, reconcile=False):
+        observer = self.reconcile_runs if reconcile and self.reconcile_runs is not None else self.live_runs
+        try:
+            return observer() if observer is not None else (None, None)
+        except Exception as error:  # health: allow BLE001 -- runtime observers must not block delivery or log private exception details
+            logger.warning("mobile push runtime snapshot unavailable (%s)", type(error).__name__)
+            return None, None
+
     def reconcile(self, force=False):
         """Bounded orphan sweep, at most once a minute from the delivery loop."""
         now = self._clock()
@@ -71,9 +80,7 @@ class PushService:
             return 0
         self._reconciled_at = now
         try:
-            held = running = None
-            if self.live_runs is not None:
-                held, running = self.live_runs()
+            held, running = self._live_run_snapshot(reconcile=True)
             closed = self.store.reconcile_orphans(held, running)
         except Exception as error:
             # The sweep is hygiene: it must never hold up deliveries in this pass.
@@ -94,7 +101,8 @@ class PushService:
 
     def drain_once(self):
         with self._drain_lock:
-            self.store.maintain()
+            live = self._live_run_snapshot()
+            self.store.maintain(running=live[1] or ())
             self.reconcile()
             mobile_inbox_invalidation.process(self.store)  # Inbox-changed silent hints (KTD9)
             count = 0
@@ -110,7 +118,7 @@ class PushService:
                 except Exception:
                     audit_send(self.store.path, job, "exception", sent_at)
                     raise
-                audit_send(self.store.path, job, result.outcome, sent_at)
+                audit_send(self.store.path, job, result.outcome, sent_at, reason=result.reason)
                 self.store.finish(job, result)
                 count += 1
             return count

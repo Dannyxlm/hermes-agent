@@ -170,7 +170,7 @@ class ActivityPushStore:
         aps["content-state"] = content_state(projected, scope,
             preview=AlertPreview.from_json(run["presentation"]), previews=True)
 
-    def _maintain_activity_cleanup(self, db, now):
+    def _maintain_activity_cleanup(self, db, now, running):
         from .mobile_push_store import _RUNS
         # Import existing registered activities once on upgrade. Keep the predecessor's tables intact.
         db.execute("""INSERT OR IGNORE INTO activity_cleanup (subscription_id, cleanup_until)
@@ -190,7 +190,7 @@ class ActivityPushStore:
                         projected.update(status="cancelled", updated_at=min(now, sub["expires_at"]), activity_expired=True)
                     self._enqueue_terminal_activity(db, sub, projected,
                         Scope(sub["surface"], sub["profile"], sub["session_id"]), announce=False)
-                else:
+                elif run["run_id"] in running:
                     self._heartbeat_activity(db, sub, dict(run), now)
             elif not sub["completed"] and self._end_ready(sub, now):
                 db.execute("DELETE FROM outbox WHERE subscription_id=? AND state='pending' AND json_extract(payload, '$.aps.event')='update'",
@@ -204,7 +204,9 @@ class ActivityPushStore:
         return sub["finished_at"] + 120 <= now or sub["announced_at"] != 0 and sub["end_due"] <= now
 
     def _heartbeat_activity(self, db, sub, run, now):
-        if run["status"] != "usingTool" or sub["expires_at"] <= now + 120:
+        if (run["status"] not in {"starting", "thinking", "responding", "usingTool"}
+                or run["owner"] != self.owner or sub["expires_at"] <= now + 120
+                or now - run["started_at"] > 4 * 3600):
             return
         preview = AlertPreview.from_json(run.get("presentation"))
         started = preview.step_started_at if preview and preview.step_started_at else run["updated_at"]

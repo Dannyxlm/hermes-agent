@@ -2,6 +2,7 @@
 listed-chat alert policy (U14) through the real dispatcher, detached sessions included."""
 
 import json
+import re
 import threading
 import uuid
 
@@ -158,6 +159,48 @@ def test_one_remote_start_per_installation_scope_and_run(store_delivery):
     assert [job["payload"]["aps"]["attributes"]["chatsDestination"]["run_id"] for job in starts] == [later["run_id"]]
 
 
+def test_accepted_start_without_update_token_retains_terminal_obligation(tmp_path):
+    now = [1800000000.0]
+    path = tmp_path / "push.sqlite"
+    sender = _Sender()
+    ids = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    service = PushService(path, sender, clock=lambda: now[0])
+    try:
+        service.store.set_origin(ORDINARY, "p", **ids)
+        service.register_start_token("p", **ids, token="ee" * 32, environment="production")
+        run = service.start_run(ORDINARY, continuation=True)
+        service.drain_once()
+        assert [job["payload"]["aps"]["event"] for job in sender.jobs] == ["start"]
+        now[0] += 10
+        service.record(ORDINARY, run["run_id"], "done", "complete")
+        finished = now[0]
+        service.drain_once()
+    finally:
+        service.close()
+    service = PushService(path, sender, clock=lambda: now[0])
+    try:
+        now[0] += 121
+        service.drain_once()
+        assert service.current_run(ORDINARY) == {
+            "run_id": run["run_id"], "status": "complete",
+            "started_at": run["started_at"], "updated_at": finished}
+        service.register("p", ORDINARY, **ids, token="cc" * 32, environment="production",
+                         kind="activity", activity_id="exact-remotely-started-activity", run_id=run["run_id"])
+        service.drain_once()
+        now[0] += 121
+        service.drain_once()
+        ends = [job for job in sender.jobs if job["kind"] == "activity"]
+        assert len(ends) == 1
+        assert ends[0]["token"] == "cc" * 32
+        aps = ends[0]["payload"]["aps"]
+        assert aps["event"] == "end" and "alert" not in aps
+        assert "sound" not in aps
+        assert aps["dismissal-date"] == finished + 120
+        assert aps["dismissal-date"] < aps["timestamp"]
+    finally:
+        service.close()
+
+
 def test_revoked_or_rotated_start_token_is_never_used(store_delivery):
     service, now, ids = store_delivery
     service.store.unregister_start_token("p", **ids)
@@ -208,6 +251,37 @@ def test_exception_in_the_turn_still_closes_the_run(push_service, ordinary, mobi
     server._mobile_push_finish(server._sessions[sid], "error")
     assert scope_runs(push_service, ORDINARY)[-1]["status"] == "failed"
     assert server._sessions[sid]["_mobile_push_status"] == "failed"
+
+
+def test_idle_drains_do_not_scan_runtime_runs_between_reconciles(push_service, monkeypatch):
+    from tui_gateway import methods_mobile_push, mobile_push
+
+    now = [1800000000.0]
+    monkeypatch.setattr(push_service, "_clock", lambda: now[0])
+    monkeypatch.setattr(push_service.store, "clock", lambda: now[0])
+    # Inbox invalidation has its own independent run watcher, outside runtime liveness.
+    monkeypatch.setattr(mobile_push.mobile_inbox_invalidation, "process", lambda _: 0)
+    monkeypatch.setattr(mobile_push, "service_for_home", lambda _: push_service)
+    methods_mobile_push.register(server)
+    statements = []
+    push_service.store._db.set_trace_callback(statements.append)
+    try:
+        assert push_service.drain_once() == 0
+        assert sum(bool(re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE))
+                   for s in statements) == 1
+        statements.clear()
+        for _ in range(20):
+            now[0] += 2
+            assert push_service.drain_once() == 0
+        assert sum(bool(re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE))
+                   for s in statements) == 0
+        statements.clear()
+        now[0] += 20
+        assert push_service.drain_once() == 0
+        assert sum(bool(re.search(r"^SELECT\b.*\bFROM\s+runs\b", " ".join(s.split()), re.IGNORECASE))
+                   for s in statements) == 1
+    finally:
+        push_service.store._db.set_trace_callback(None)
 
 
 def test_restart_that_lost_the_session_closes_orphans_but_not_live_runs(push_service, ordinary, mobile_home, peer):

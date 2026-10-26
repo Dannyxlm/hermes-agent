@@ -2,6 +2,7 @@
 import hashlib
 import json
 import uuid
+from itertools import pairwise
 
 import pytest
 
@@ -14,6 +15,11 @@ from tui_gateway.mobile_push_provider import DeliveryResult
 def register_activity(service, scope, ids, run_id, name="live"):
     return service.register("p", scope, **ids, token="cc" * 32, environment="production",
                             kind="activity", activity_id=name, run_id=run_id)
+
+
+def expire_activity_lease(service, receipt, expires):
+    with service.store.transaction() as db:
+        db.execute("UPDATE subscriptions SET expires_at=? WHERE id=?", (expires, receipt["subscription_id"]))
 
 
 def activities(sender):
@@ -177,6 +183,7 @@ def test_long_successful_run_subtitle_survives_privacy_at_dispatch(delivery, sec
 def test_long_step_heartbeat_refreshes_stale_date_without_changing_content(delivery):
     service, sender, now, ids, scope = delivery
     run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
     register_activity(service, scope, ids, run["run_id"])
     service.record(scope, run["run_id"], "tool", "usingTool", preview=AlertPreview(step="Long command"))
     now[0] += 10
@@ -205,24 +212,205 @@ def test_long_step_heartbeat_refreshes_stale_date_without_changing_content(deliv
     assert len(activities(sender)) == 4
 
 
-@pytest.mark.parametrize("outcome", ["accepted", "retry", "invalid", "failed"])
-def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome):
-    service, sender, _, ids, scope = delivery
-    sender.result = DeliveryResult(outcome)
-    service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
+@pytest.mark.parametrize("status", ["starting", "thinking", "responding", "usingTool"])
+def test_quiet_running_phase_heartbeat_keeps_activity_fresh(delivery, status):
+    service, sender, now, ids, scope = delivery
     run = service.start_run(scope)
-    service.record(scope, run["run_id"], "PRIVATE_EVENT", "complete",
-                   preview=AlertPreview(title="PRIVATE_TITLE", reply="PRIVATE_BODY"))
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "phase", status)
+    now[0] += 10
+    service.drain_once()
+    first = activities(sender)[-1]["payload"]["aps"]
+    now[0] += 109
+    service.drain_once()
+    assert len(activities(sender)) == 1
+    now[0] += 2
+    assert service.record(scope, run["run_id"], "same-phase", status) is False
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    heartbeat = activities(sender)[-1]
+    assert heartbeat["urgent"] == 0  # APNs priority 5
+    assert heartbeat["payload"]["aps"]["event"] == "update"
+    assert heartbeat["payload"]["aps"]["content-state"] == first["content-state"]
+    assert heartbeat["payload"]["aps"]["stale-date"] == int(now[0] + 120)
+    now[0] += 99
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    now[0] += 1
+    service.drain_once()
+    assert len(activities(sender)) == 3
+
+
+@pytest.mark.parametrize("status", ["starting", "thinking", "responding", "usingTool"])
+def test_quiet_phase_heartbeat_stops_after_four_hours_without_blocking_end(delivery, status):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "phase", status)
+    now[0] += 10
+    service.drain_once()
+    first = activities(sender)[-1]["payload"]["aps"]["content-state"]
+    now[0] = run["started_at"] + 4 * 3600
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    assert activities(sender)[-1]["payload"]["aps"]["content-state"] == first
+    now[0] += 100
+    service.drain_once()
+    assert len(activities(sender)) == 2
+    assert service.current_run(scope)["status"] == status
+    now[0] += 1
+    service.record(scope, run["run_id"], "done", "complete")
+    finished = now[0]
+    service.drain_once()
+    assert activities(sender)[-1]["payload"]["aps"]["content-state"]["isFinal"] is True
+    now[0] += 8
+    service.drain_once()
+    end = activities(sender)[-1]["payload"]["aps"]
+    assert end["event"] == "end" and "alert" not in end
+    assert end["dismissal-date"] == finished + 120
+
+
+@pytest.mark.parametrize("fence", ["terminal", "revoked", "expired", "changed_owner", "orphan", "attention_deadline"])
+def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    receipt = register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "tool", "usingTool")
+    now[0] += 10
+    service.drain_once()
+    assert len(activities(sender)) == 1
+    actions = {
+        "terminal": lambda: service.record(scope, run["run_id"], "done", "failed"),
+        "revoked": lambda: service.unregister("p", **ids, subscription_id=receipt["subscription_id"]),
+        "expired": lambda: expire_activity_lease(service, receipt, now[0] + 50),
+        "changed_owner": lambda: setattr(service.store, "owner", "replacement-owner"),
+        "orphan": lambda: setattr(service, "live_runs", lambda: (set(), set())),
+        "attention_deadline": lambda: service.record(scope, run["run_id"], "ask", "waitingForApproval",
+            preview=AlertPreview(attention={"count": 1, "primary": {"category": "HERMEX_APPROVAL_V1"},
+                                            "nearest_expires_at": now[0] + 30})),
+    }
+    actions[fence]()
+    if fence == "attention_deadline":
+        now[0] += 1
+        service.drain_once()
+        assert activities(sender)[-1]["payload"]["aps"]["stale-date"] == int(now[0] + 29)
+    now[0] += 121
+    service.drain_once()
+    assert not [j for j in activities(sender)[1:]
+                if not j["payload"]["aps"]["content-state"]["isFinal"]
+                and j["payload"]["aps"]["content-state"]["status"] == "usingTool"]
+    sent = len(activities(sender))
+    now[0] += 121
+    service.drain_once()
+    assert len(activities(sender)) == sent
+
+
+@pytest.mark.parametrize("status", ["starting", "thinking", "responding", "usingTool"])
+@pytest.mark.parametrize("runtime", ["held_idle", "unknown", "unavailable"])
+def test_heartbeat_requires_positive_turn_liveness(delivery, status, runtime):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+    register_activity(service, scope, ids, run["run_id"])
+    service.record(scope, run["run_id"], "phase", status)
+    now[0] += 10
+    service.drain_once()
+    assert len(activities(sender)) == 1
+
+    def runtime_snapshot():
+        if runtime == "unavailable":
+            raise RuntimeError("fixture runtime unavailable")
+        return {run["run_id"]}, set()
+
+    service.live_runs = None if runtime == "unknown" else runtime_snapshot
+    now[0] += 109
+    service.drain_once()  # refresh the sweep cadence without refreshing the activity
+    now[0] += 2
+    service.drain_once()
+    assert len(activities(sender)) == 1
+    assert service.current_run(scope)["status"] == status
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "retry", "invalid", "failed"])
+@pytest.mark.parametrize("event", ["alert", "start", "update", "end"])
+def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome, event):
+    service, sender, now, ids, scope = delivery
+    reason = {"accepted": "", "retry": "provider_unavailable", "invalid": "token_invalid",
+              "failed": "provider_rejected"}[outcome]
+    sender.result = DeliveryResult(outcome, reason)
+    service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
+    if event == "start":
+        service.store.set_origin(scope, "p", **ids)
+        service.register_start_token("p", **ids, token="ee" * 32, environment="production")
+    run = service.start_run(scope, continuation=event == "start")
+    if event in {"update", "end"}:
+        register_activity(service, scope, ids, run["run_id"])
+    if event != "start":
+        service.record(scope, run["run_id"], "PRIVATE_EVENT", "thinking" if event == "update" else "complete",
+                       preview=AlertPreview(title="PRIVATE_TITLE", reply="PRIVATE_BODY"))
+    if event == "update":
+        now[0] += 10
+    elif event == "end":
+        # Isolate END from the separate final UPDATE and completion alert.
+        service.unregister("p", **ids, kind="alert")
+        now[0] += 121
     service.drain_once()
     audit = service.store.path.parent / "push-shape-audit.jsonl"
     assert audit.is_file()
     text = audit.read_text()
     records = [json.loads(line) for line in text.splitlines()]
     assert len(records) == 1
-    assert records[0] == {"kind": "alert", "status": "complete", "title_length": 13, "body_length": 12,
-                          "event_id": hashlib.sha256(f"{scope.key}:{run['run_id']}:PRIVATE_EVENT".encode()).hexdigest(),
-                          "outcome": outcome, "sent_at": service._clock()}
-    assert all(value not in text for value in ("PRIVATE_TITLE", "PRIVATE_BODY", "PRIVATE_EVENT", "aa" * 32))
+    job = sender.jobs[0]
+    expected = {
+        "kind": job["kind"], "status": "starting" if event == "start" else "thinking" if event == "update" else "complete",
+        "title_length": len(job["payload"]["aps"].get("alert", {}).get("title", "")),
+        "body_length": len(job["payload"]["aps"].get("alert", {}).get("body", "")),
+        "event_id": hashlib.sha256(job["event_id"].encode()).hexdigest(),
+        "outcome": outcome, "provider_reason": reason, "sent_at": now[0], "event": "" if event == "alert" else event,
+        "run_id": hashlib.sha256(f"{scope.key}\0{run['run_id']}".encode()).hexdigest(),
+        "provider_status": {"accepted": "success", "retry": "transient_failure", "invalid": "invalid_token",
+                            "failed": "rejected"}[outcome]}
+    if event != "alert":
+        expected["timestamp"] = int(now[0])
+    if event in {"update", "end"}:
+        expected["act"] = hashlib.sha256(b"live").hexdigest()[:8]
+    if event == "end":
+        expected["dismissal_date"] = int(run["started_at"] + 120)
+    assert records[0] == expected
+    assert all(value not in text for value in ("PRIVATE_TITLE", "PRIVATE_BODY", "PRIVATE_EVENT", "aa" * 32,
+                                               "cc" * 32, "ee" * 32, run["run_id"], ids["installation_id"]))
+    # The lifecycle ledger remains useful after ordinary outbox/run retention.
+    now[0] += 31 * 86400
+    service.store.maintain()
+    assert audit.read_text() == text
+    with service.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("outcome,reason,category", [
+    ("retry", "transport", "transient_failure"),
+    ("retry", "provider_expired", "transient_failure"),
+    ("retry", "provider_unavailable", "transient_failure"),
+    ("invalid", "token_invalid", "invalid_token"),
+    ("failed", "provider_rejected", "rejected"),
+    ("failed", "invalid_channel", "local_failure"),
+    ("retry", "PRIVATE_PROVIDER_DETAILS", "transient_failure"),
+])
+def test_shape_audit_allows_only_fixed_provider_reasons(delivery, outcome, reason, category):
+    service, sender, _, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "done", "complete")
+    sender.result = DeliveryResult(outcome, reason)
+    service.drain_once()
+    text = (service.store.path.parent / "push-shape-audit.jsonl").read_text()
+    record = json.loads(text)
+    assert record.get("provider_status") == category
+    assert record.get("provider_reason") == ("other" if reason == "PRIVATE_PROVIDER_DETAILS" else reason)
+    assert "PRIVATE_PROVIDER_DETAILS" not in text
 
 
 def test_registered_push_started_activity_gets_silent_late_end(delivery):
@@ -292,6 +480,56 @@ def test_late_registration_after_reply_alert_does_not_sound_again(delivery):
     now[0] += 8
     service.drain_once()
     assert activities(sender)[-1]["payload"]["aps"]["event"] == "end"
+
+
+def test_end_claim_is_newer_than_heartbeat_and_final_update_across_restart(tmp_path):
+    now = [1800000000.0]
+    path = tmp_path / "push.sqlite"
+    sender = Sender()
+    scope = Scope("native_session", "default", "chat")
+    ids = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    service = PushService(path, sender, clock=lambda: now[0])
+    try:
+        run = service.start_run(scope)
+        register_activity(service, scope, ids, run["run_id"])
+        service.record(scope, run["run_id"], "tool", "usingTool")
+        service.live_runs = lambda: ({run["run_id"]}, {run["run_id"]})
+        now[0] += 10
+        assert service.drain_once() == 1
+        sender.result = DeliveryResult("retry", "transport")
+        now[0] += 121
+        assert service.drain_once() == 1
+        heartbeat = activities(sender)[-1]["payload"]["aps"]
+        assert heartbeat["content-state"]["status"] == "usingTool"
+        finished = now[0]
+        service.record(scope, run["run_id"], "done", "complete")
+        assert service.drain_once() == 0  # equal-second final content waits, never jumps into the future
+    finally:
+        service.close()
+    sender.result = DeliveryResult("accepted")
+    service = PushService(path, sender, clock=lambda: now[0])
+    try:
+        assert service.drain_once() == 0
+        now[0] += 1
+        assert service.drain_once() == 1
+        final = activities(sender)[-1]["payload"]["aps"]
+        assert final["event"] == "update" and final["content-state"]["isFinal"] is True
+        assert final["timestamp"] > heartbeat["timestamp"]
+        now[0] += 8
+        assert service.drain_once() == 1
+        end = activities(sender)[-1]["payload"]["aps"]
+        assert end["event"] == "end" and "alert" not in end
+        assert end["timestamp"] > final["timestamp"]
+        assert end["dismissal-date"] == finished + 120
+        now[0] += 901
+        assert service.drain_once() == 0
+        jobs = activities(sender)
+        assert [j["payload"]["aps"]["event"] for j in jobs] == ["update", "update", "update", "end"]
+        timestamps = [j["payload"]["aps"]["timestamp"] for j in jobs]
+        assert all(a < b for a, b in pairwise(timestamps))
+        assert sum(j["payload"]["aps"]["content-state"]["status"] == "usingTool" for j in jobs) == 2
+    finally:
+        service.close()
 
 
 def test_logout_removes_durable_cleanup_and_prevents_replay(delivery):

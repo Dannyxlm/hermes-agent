@@ -751,7 +751,7 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                   AND p.connection_id=s.connection_id AND p.scope=s.scope
                   WHERE s.kind='alert' AND p.expires_at>?)""", (now, now))
             row = db.execute("""SELECT o.*, s.token, s.environment, s.kind, s.preview_enabled, s.version AS token_version,
-                s.principal, s.installation_id, s.connection_id, s.scope, s.profile
+                s.principal, s.installation_id, s.connection_id, s.scope, s.profile, s.activity_id
                 FROM outbox o JOIN subscriptions s ON o.subscription_id=s.id
                 WHERE o.state='pending' AND o.next_attempt<=? AND o.lease_until<=?
                 AND o.expires_at>? AND (s.expires_at>? OR s.kind='activity' AND EXISTS
@@ -843,10 +843,10 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 WHERE job_id=? AND attempts=?""", (state, result.reason, now + min(900, 2 ** job["attempts"] * 5),
                 job["job_id"], job["attempts"]))
 
-    def maintain(self):
+    def maintain(self, *, running=()):
         now = self.clock()
         with self.transaction() as db:
-            self._maintain_activity_cleanup(db, now)
+            self._maintain_activity_cleanup(db, now, running)
         with self.transaction() as db:
             db.execute("DELETE FROM mobile_presence WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM widget_readers WHERE expires_at<=?", (now,))
