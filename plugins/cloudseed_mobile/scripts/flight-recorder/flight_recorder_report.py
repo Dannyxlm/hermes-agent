@@ -40,6 +40,7 @@ BUDGETS = {
     'app.foreground_fresh': ('app.foreground_fresh', None),
     'chat.history_complete': ('chat.history_complete', None),
     'chat.send_first_delta': ('chat.send_first_delta', None),
+    'NotificationOpenToContent': ('NotificationOpenToContent', None),
 }
 TIMED_OUTCOMES = frozenset({'ok'})
 DEFAULT_LOGS = ('gui.log', 'errors.log', 'agent.log')
