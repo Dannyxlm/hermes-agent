@@ -24,7 +24,7 @@ def test_memory_tool_receives_host_invocation_not_a_model_argument(monkeypatch, 
         ref = _ToolCallRef("fixture_save", args, "task", "durable-host-call", [])
         result = _resolve_sequential_dispatch(agent, ref, []).execute(args)
     assert result == "saved"
-    assert seen[0][2] == {"tool_call_id": "durable-host-call"}
+    assert seen[0][1] == args and seen[0][2]["tool_call_id"] == "durable-host-call"
 
 
 def test_legacy_provider_without_kwargs_still_dispatches():

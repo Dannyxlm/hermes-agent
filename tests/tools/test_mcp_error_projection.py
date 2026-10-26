@@ -46,3 +46,10 @@ def test_error_envelope_projects_untrusted_fields_even_without_renderer():
     assert result["structuredContent"] == {"error": "pending_write", "write_request": {
         "request_id": "op", "state": "pending"}}
     assert not result.get("_meta")
+
+
+def test_error_renderer_honors_server_meta_exclude():
+    wire = SimpleNamespace(isError=True, content=[SimpleNamespace(text="pending")], structuredContent=None,
+                           meta={"vendor/notice": "pending", "vendor/warnings": ["degraded"]})
+    raw = _render_call_tool_result(wire, "fixture", None, frozenset({"vendor/notice"}))
+    assert json.loads(raw)["_meta"] == {"vendor/warnings": ["degraded"]}
