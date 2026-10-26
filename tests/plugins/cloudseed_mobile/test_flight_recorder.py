@@ -74,6 +74,17 @@ def flag(flag_id=None, install=INSTALL, shot=JPEG, **extra):
     return body
 
 
+def assert_event_dropped(c, root, evs, known, seq=0):
+    response = c.post(P + '/batch', json=batch(seq=seq, evs=evs))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == len(known)
+    assert response.json()['dropped_invalid_events'] == 1
+    [day] = (root / 'events').iterdir()
+    record = json.loads(day.read_text().splitlines()[-1])
+    assert record['events'] == known
+    assert record['dropped_invalid_events'] == 1
+
+
 def mode(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
@@ -109,8 +120,7 @@ def test_free_text_cannot_ride_in_any_event_field(client, index, key):
     c, root = client
     evs = events()
     evs[index][key] = SENTINEL
-    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
-    assert not (root / 'events').exists() or not any((root / 'events').iterdir())
+    assert_event_dropped(c, root, evs, [e for i, e in enumerate(events()) if i != index])
 
 
 @pytest.mark.parametrize('mutate', [
@@ -123,11 +133,11 @@ def test_free_text_cannot_ride_in_any_event_field(client, index, key):
     lambda e: e[0].pop('t'),
     lambda e: e[8].update(payload={'blob': 'x' * (fr.MAX_METRICKIT + 1)}),
 ])
-def test_invalid_events_are_rejected(client, mutate):
-    c, _ = client
+def test_invalid_events_are_dropped_without_blinding_the_batch(client, mutate):
+    c, root = client
     evs = events()
     mutate(evs)
-    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
+    assert_event_dropped(c, root, evs, [e for e in events() if e in evs])
 
 
 def test_envelope_bounds(client):
@@ -306,20 +316,20 @@ def test_allowlists_match_the_app_schema_exactly():
     (0, {'screen': 'compose'}),
     (9, {'session_id': 'shannon-pricing-notes'}),
 ])
-def test_r53_unknown_kinds_values_and_keys_fail_closed(client, index, mutation):
+def test_r53_unknown_kinds_values_and_keys_drop_only_the_event(client, index, mutation):
     c, root = client
     evs = r53_events()
     evs[index].update(mutation)
-    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
-    assert not (root / 'events').exists() or not any((root / 'events').iterdir())
+    assert_event_dropped(c, root, evs, [e for i, e in enumerate(r53_events()) if i != index])
 
 
 def test_error_domain_and_screen_are_closed_vocabularies(client):
-    c, _ = client
-    for mutate in (lambda e: e[5].update(domain='NSURLErrorDomain'), lambda e: e[1].update(screen='Compose')):
+    c, root = client
+    for seq, mutate in enumerate((lambda e: e[5].update(domain='NSURLErrorDomain'),
+                                  lambda e: e[1].update(screen='Compose'))):
         evs = events()
         mutate(evs)
-        assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
+        assert_event_dropped(c, root, evs, [e for e in events() if e in evs], seq=seq)
 
 
 def test_metrickit_keeps_only_fixed_keys_and_strips_free_text(client):
@@ -382,9 +392,9 @@ def test_live_activity_lifecycle_contract_is_stored_through_ingest(client, actio
 
 @pytest.mark.parametrize('act', ['', '0123abc', '0123abcde', '0123ABCD', 'not-hex!', 12345678, None, {'id': 'private'}])
 def test_live_activity_correlation_refuses_non_digest_values(client, act):
-    c, _ = client
+    c, root = client
     event = {'kind': 'live_activity', 't': T, 'action': 'start', 'origin': 'local', 'act': act}
-    assert c.post(P + '/batch', json=batch(evs=[event])).status_code == 400
+    assert_event_dropped(c, root, [events()[0], event], [events()[0]])
 
 
 @pytest.mark.parametrize('tail', ['memory', 'disk', 'none'])
@@ -415,5 +425,4 @@ def test_new_span_attrs_reject_invalid_values_without_ingest(client, key, value)
     c, root = client
     evs = [{'kind': 'span', 't': T, 'name': 'ChatOpenContent', 'outcome': 'ok', 'ms': 30,
             'attrs': {key: value}}]
-    assert c.post(P + '/batch', json=batch(evs=evs)).status_code == 400
-    assert not (root / 'events').exists() or not any((root / 'events').iterdir())
+    assert_event_dropped(c, root, evs, [])
