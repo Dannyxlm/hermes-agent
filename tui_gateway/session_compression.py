@@ -18,7 +18,7 @@ def _tui_compression_config_signature(cfg: dict | None) -> tuple:
     keys = GatewayRunner._extract_cache_busting_config(cfg)
     picked = {k: v for k, v in keys.items() if k.startswith("compression.") or k == "model.context_length"}
     compression = cfg.get("compression") if isinstance(cfg, dict) and isinstance(cfg.get("compression"), dict) else {}
-    picked.update({f"compression.{k}": compression.get(k) for k in ("idle_compact_after_seconds", "tail_mode")})
+    picked.update({f"compression.{k}": compression.get(k) for k in ("idle_compact_after_seconds", "tail_mode", "between_turns", "between_turns_ratio")})
     return tuple(sorted(picked.items()))
 
 
@@ -111,6 +111,8 @@ def _apply_live_compression_config(agent: Any, cfg: dict | None) -> None:
     # Absence restores the agent_init/config default (0 = disabled).
     with contextlib.suppress(TypeError, ValueError):
         agent.compression_idle_compact_after_seconds = max(0, int(compression.get("idle_compact_after_seconds", 0) or 0))
+    from agent.between_turns_compaction import between_turns_settings
+    agent.compression_between_turns, agent.compression_between_turns_ratio = between_turns_settings(compression)
     cc = getattr(agent, "context_compressor", None)
     if cc is None:
         return
@@ -244,6 +246,8 @@ def _manual_compress_turn(sid: str, session: dict):
     and session-key re-anchor. A prompt.submit arriving meanwhile takes the busy path (demoted to queue
     by ``_session_compression_in_flight``) instead of snapshotting a history version the compaction is
     about to bump, which dropped the turn's reply (#133504). The queued prompt drains on release."""
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
     with session["history_lock"]:
         if session.get("running"):
             raise CompressionBusy(busy_message("compress", bool(session.get("_manual_compress_active"))))

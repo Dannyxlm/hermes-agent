@@ -17,8 +17,17 @@ def _session_turn_admission(session: dict):
     """Hold process admission until the history-locked running claim is visible to idle probes."""
     from hermes_cli.backend_retirement import retirement
 
-    with retirement.work() as admitted, session["history_lock"]:
-        yield admitted
+    with retirement.work() as admitted:
+        while True:
+            session["history_lock"].acquire()
+            if session.get("_between_turns_compaction") is None:
+                break
+            session["history_lock"].release()
+            _preempt_between_turns_compaction(session)
+        try:
+            yield admitted
+        finally:
+            session["history_lock"].release()
 
 
 def _start_session_work(target, *, name: str, session: dict | None = None):
@@ -650,6 +659,8 @@ def _teardown_popped_session(session: dict | None, *, end_reason: str = "tui_clo
     """Finish a close after the caller has atomically detached the session."""
     if session is None:
         return False
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
     run_thread = session.get("_run_thread")
     if end_reason != "tui_shutdown" and run_thread is not None and run_thread is not threading.current_thread():
         try:
@@ -791,6 +802,8 @@ def _interrupt_session_turn(
     ``orphan=True`` (reaper path) labels dropped approvals ``ws_orphan_reap``; the label comes from the
     caller, never from request_id prefix sniffing — a future orphan caller may use another id (#106678).
     """
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
     use_compute_host = _session_uses_compute_host(session)
     # A manual compaction holds `running` with no run thread and its own finally releases it: Stop must not
     # abort it nor clear `running` under it, or the next submit is admitted idle and loses its reply (#133504).

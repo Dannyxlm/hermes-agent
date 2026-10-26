@@ -1550,7 +1550,11 @@ def _parse_compression_config(agent, _agent_cfg) -> CompressionSettings:
     # Opt-in idle compaction: compact up front when a session resumes after this many
     # seconds idle (0 = disabled). Consumed by build_turn_context().
     idle_compact_after_seconds = max(0, int(cfg.get("idle_compact_after_seconds", 0)))
+    from agent.between_turns_compaction import between_turns_settings
+    _between_turns, _between_turns_ratio = between_turns_settings(cfg)
     return CompressionSettings(
+        between_turns=_between_turns,
+        between_turns_ratio=_between_turns_ratio,
         threshold=threshold,
         autoraise_notice_enabled=autoraise_notice_enabled,
         enabled=_cfg_flag(cfg, "enabled", True),
@@ -2050,6 +2054,8 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
     )
     agent.max_compression_attempts = cs.max_attempts
     agent.compression_idle_compact_after_seconds = cs.idle_compact_after_seconds
+    agent.compression_between_turns = cs.between_turns
+    agent.compression_between_turns_ratio = cs.between_turns_ratio
 
 
 def _enforce_minimum_context(agent):

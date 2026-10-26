@@ -53,6 +53,17 @@ def test_aborted_attempts_keep_their_skip_and_failure_verdicts(monkeypatch):
     assert _finish(monkeypatch, "aborted", "summary_auth_failure") == [("failed", "summary_auth_failure")]
 
 
+def test_between_turns_preemption_is_an_automatic_skip(monkeypatch):
+    rows = []
+    monkeypatch.setattr(events, "record_compression", lambda **kw: rows.append(compression_fields(**kw)))
+    events.begin_compression_attempt("between_turns", 90_000)
+    events.finish_compression_attempt("aborted", "preempted_by_turn", 100_000)
+    assert len(rows) == 1
+    assert rows[0]["trigger"] == "auto"
+    assert rows[0]["outcome"] == "skipped"
+    assert rows[0]["failure_class"] == "explicit_interrupt"
+
+
 def test_benched_attempt_when_aborted_keeps_failed_other_class(monkeypatch):
     assert _finish(monkeypatch, "aborted", "summary_model_benched") == [("failed", "other")]
 

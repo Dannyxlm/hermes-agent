@@ -1101,6 +1101,8 @@ def _run_prompt_submit(
     auto_continue: bool = True,
     terminal_callback: Callable[[dict[str, Any]], None] | None = None,
     turn_author: dict | None = None, report_ownership_refusal: bool = True) -> bool:
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
     # Every dispatch binds the session's own row (session_key, real source) before the turn writes:
     # the synthesized turns that enter here directly (crash auto-continue, queued-prompt drain,
     # wake-ups) bypass prompt.submit's persist, and a row-less turn is otherwise materialized by
@@ -1149,6 +1151,7 @@ def _run_prompt_submit(
             session["agent"], session.pop("one_turn_model_restore", None), terminal_callback,
             receipt_committed=terminal_callback is None)
         goal_followup = None
+        between_turns_ready = False
         try:
             st.marker_key = _record_turn_marker(
                 session, text, auto_continue=auto_continue and terminal_callback is None,
@@ -1174,6 +1177,7 @@ def _run_prompt_submit(
                 from tui_gateway.free_tier_task_done import note_task_done
                 note_task_done(session, st.result, st.agent, display_kind)
             _emit("message.complete", sid, payload)
+            between_turns_ready = status == "complete"
             goal_followup = _goal_followup_after_turn(sid, session, st.result, status, raw)
             if status == "complete":
                 _after_complete_turn(sid, session, st, raw)
@@ -1221,7 +1225,7 @@ def _run_prompt_submit(
                 _emit_settled_session_info(sid, session, st.agent)
             finally:
                 _post_turn_housekeeping(sid, session, st)
-        return st.result, goal_followup
+        return st.result, goal_followup, between_turns_ready
     def run():
         from agent.notification_presentation import notification_turn
         # _prepare_turn_input owns profile binding for the worker. The context
@@ -1230,7 +1234,11 @@ def _run_prompt_submit(
         with notification_policy_snapshot(agent, "tui", notification_config), notification_turn(agent, muted=muted, session_id=sid):
             followup = run_body()
         if followup is not None:
-            _run_post_turn_followups(rid, sid, session, *followup)
+            result, goal_followup, between_turns_ready = followup
+            _run_post_turn_followups(rid, sid, session, result, goal_followup)
+            if between_turns_ready and getattr(agent, "compression_between_turns", False) is True:
+                with _session_profile_runtime_scope(session):
+                    _start_between_turns_compaction(sid, session, result)
     # The handle is resolved BEFORE _sessions_lock: a profile session opens its own SessionDB through the
     # state registry, and _sessions_lock gates every create/close/prompt on this backend.
     with _routing_provenance_db(session) as routing_db, _sessions_lock:

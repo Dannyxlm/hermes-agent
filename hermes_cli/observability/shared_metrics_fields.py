@@ -120,7 +120,7 @@ _COMPRESSION_TRIGGERS = {
     **dict.fromkeys(("auto", "threshold", "preflight", "auto_threshold"), "auto"),
     # The attempt log's precise automatic triggers stay one coarse bucket here.
     **dict.fromkeys(
-        ("idle", "turn_start_threshold", "engine_preflight", "pre_api", "post_tool", "gateway_hygiene"), "auto",
+        ("idle", "between_turns", "turn_start_threshold", "engine_preflight", "pre_api", "post_tool", "gateway_hygiene"), "auto",
     ),
     **dict.fromkeys(("overflow", "context_overflow", "overflow_error", "error"), "overflow"),
     **dict.fromkeys(("manual", "user", "command", "slash"), "manual"),
@@ -142,6 +142,10 @@ def compression_failure_class(outcome: str, failure_class: Any) -> str:
     through a fallback (``feasibility_skip``, ``summary_generation_failed``, ``aux_model_fallback``, ...),
     which keeps that class so a fallback commit never reads as a clean one."""
     value = _norm(failure_class if isinstance(failure_class, str) else None).split(":", 1)[0]
+    # Keep the public metrics schema closed; the precise preemption reason is
+    # retained in the attempt log, while metrics reuse the user-interrupt skip.
+    if value == "preempted_by_turn":
+        value = "explicit_interrupt"
     if outcome == "success":
         value = _COMPRESSION_FAILURE_CLASS_ALIASES.get(value, value)
         if value in {"", "none"}:
