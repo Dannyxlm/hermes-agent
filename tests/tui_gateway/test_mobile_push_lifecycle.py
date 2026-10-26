@@ -307,7 +307,9 @@ def test_heartbeat_requires_positive_turn_liveness(delivery, status, runtime):
 @pytest.mark.parametrize("event", ["alert", "start", "update", "end"])
 def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outcome, event):
     service, sender, now, ids, scope = delivery
-    sender.result = DeliveryResult(outcome)
+    reason = {"accepted": "", "retry": "provider_unavailable", "invalid": "token_invalid",
+              "failed": "provider_rejected"}[outcome]
+    sender.result = DeliveryResult(outcome, reason)
     service.register("p", scope, **ids, token="aa" * 32, environment="production", preview_enabled=True)
     if event == "start":
         service.store.set_origin(scope, "p", **ids)
@@ -336,7 +338,7 @@ def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outco
         "title_length": len(job["payload"]["aps"].get("alert", {}).get("title", "")),
         "body_length": len(job["payload"]["aps"].get("alert", {}).get("body", "")),
         "event_id": hashlib.sha256(job["event_id"].encode()).hexdigest(),
-        "outcome": outcome, "sent_at": now[0], "event": "" if event == "alert" else event,
+        "outcome": outcome, "provider_reason": reason, "sent_at": now[0], "event": "" if event == "alert" else event,
         "run_id": hashlib.sha256(f"{scope.key}\0{run['run_id']}".encode()).hexdigest(),
         "provider_status": {"accepted": "success", "retry": "transient_failure", "invalid": "invalid_token",
                             "failed": "rejected"}[outcome]}
@@ -355,6 +357,29 @@ def test_shape_audit_is_content_free_and_correlates_each_attempt(delivery, outco
     assert audit.read_text() == text
     with service.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("outcome,reason,category", [
+    ("retry", "transport", "transient_failure"),
+    ("retry", "provider_expired", "transient_failure"),
+    ("retry", "provider_unavailable", "transient_failure"),
+    ("invalid", "token_invalid", "invalid_token"),
+    ("failed", "provider_rejected", "rejected"),
+    ("failed", "invalid_channel", "local_failure"),
+    ("retry", "PRIVATE_PROVIDER_DETAILS", "transient_failure"),
+])
+def test_shape_audit_allows_only_fixed_provider_reasons(delivery, outcome, reason, category):
+    service, sender, _, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production")
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "done", "complete")
+    sender.result = DeliveryResult(outcome, reason)
+    service.drain_once()
+    text = (service.store.path.parent / "push-shape-audit.jsonl").read_text()
+    record = json.loads(text)
+    assert record.get("provider_status") == category
+    assert record.get("provider_reason") == ("other" if reason == "PRIVATE_PROVIDER_DETAILS" else reason)
+    assert "PRIVATE_PROVIDER_DETAILS" not in text
 
 
 def test_registered_push_started_activity_gets_silent_late_end(delivery):
