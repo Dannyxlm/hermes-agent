@@ -63,19 +63,19 @@ SCREENS = frozenset({'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview
 ERROR_DOMAINS = frozenset({'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'})
 SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent', 'ComposerFocusToSettled',
                         'TabFirstContent', 'ScrollInteraction', 'app.foreground_fresh',
-                        'chat.history_complete', 'chat.send_first_delta'})
+                        'chat.history_complete', 'chat.send_first_delta', 'NotificationOpenToContent'})
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
 SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
                         'should_begin_calls', 'state', 'surface', 'to', 'verified_empty',
-                        'will_show_ms', 'did_show_ms', 'kb_anim_ms', 'tail'})
+                        'will_show_ms', 'did_show_ms', 'kb_anim_ms', 'tail', 'source', 'launch'})
 BG_TRIGGERS = frozenset({'scheduled', 'silent_push'})
 BG_OUTCOMES = frozenset({'new_data', 'no_data', 'failed', 'expired'})
 PUSH_TYPES = frozenset({'alert', 'background', 'live_activity'})
 APP_STATES = frozenset({'active', 'inactive', 'background', 'suspended'})
 TAP_SOURCES = frozenset({'banner', 'live_activity', 'widget', 'attention_row', 'snooze_reminder'})
 TAP_OUTCOMES = frozenset({'opened', 'foreign_account', 'recoverable', 'rejected'})
-LIVE_ACTIONS = frozenset({'start', 'end'})
+LIVE_ACTIONS = frozenset({'start', 'end', 'token_registered', 'end_requested'})
 LIVE_ORIGINS = frozenset({'local', 'push_to_start'})
 LIVE_END_STATES = frozenset({'complete', 'failed', 'cancelled', 'stale', 'dismissed'})
 LIFECYCLE = frozenset({'launch', 'foreground', 'background', 'terminate_hint', 'memory_warning'})
@@ -182,6 +182,10 @@ def _span_attrs(value):
                 _fail('invalid span timing')
         elif key == 'tail':
             _one_of({'memory', 'disk', 'none'})(attr)
+        elif key == 'source':
+            _one_of({'banner', 'live_activity', 'url', 'widget', 'attention_row'})(attr)
+        elif key == 'launch':
+            _one_of({'cold', 'warm', 'foreground'})(attr)
     return value
 
 
@@ -215,7 +219,8 @@ KINDS = {
     'push': ({'push_type': _one_of(PUSH_TYPES), 'app_state': _one_of(APP_STATES)}, {'session_id': _session}),
     'push_tap': ({'source': _one_of(TAP_SOURCES), 'outcome': _one_of(TAP_OUTCOMES)}, {'session_id': _session}),
     'live_activity': ({'action': _one_of(LIVE_ACTIONS), 'origin': _one_of(LIVE_ORIGINS)},
-                      {'end_state': _one_of(LIVE_END_STATES), 'session_id': _session}),
+                      {'end_state': _one_of(LIVE_END_STATES), 'session_id': _session,
+                       'act': lambda v: _match(re.compile(r'[0-9a-f]{8}', re.ASCII), v)}),
 }
 
 
@@ -236,7 +241,7 @@ def validate_event(event):
             _fail('missing event key')
         event[key] = check(event[key])
     for key, check in optional.items():
-        if key in event and event[key] is not None:
+        if key in event and (event[key] is not None or key == 'act'):
             event[key] = check(event[key])
     return event
 
