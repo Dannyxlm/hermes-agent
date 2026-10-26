@@ -246,9 +246,9 @@ def _manual_compress_turn(sid: str, session: dict):
     and session-key re-anchor. A prompt.submit arriving meanwhile takes the busy path (demoted to queue
     by ``_session_compression_in_flight``) instead of snapshotting a history version the compaction is
     about to bump, which dropped the turn's reply (#133504). The queued prompt drains on release."""
-    with _session_turn_admission(session) as admitted:
-        if not admitted:
-            raise CompressionBusy("backend is retiring; reconnect to continue")
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
+    with session["history_lock"]:
         if session.get("running"):
             raise CompressionBusy(busy_message("compress", bool(session.get("_manual_compress_active"))))
         session["running"] = session["_manual_compress_active"] = True

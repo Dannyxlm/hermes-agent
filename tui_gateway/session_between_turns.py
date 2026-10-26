@@ -6,16 +6,21 @@ its DB result, agent delta and host history/version have all been published.
 """
 from __future__ import annotations
 
-import contextlib
 import copy
 import threading
 
 from .method_ctx import bind_module
 
 
+# Retain the slot until even an abandoned, uncooperative owner unwinds. Required
+# in-turn compression shares the four-slot core pool and must not be starved.
+_BETWEEN_TURNS_SLOT = threading.BoundedSemaphore(1)
+
+
 class _BetweenTurnsCompaction:
     def __init__(self, agent, session, version):
         from agent.between_turns_compaction import SessionCompactionFence, fork_compaction_agent
+        self.source_agent = agent
         self.agent, self.baseline = fork_compaction_agent(agent)
         self.fence = SessionCompactionFence(session, version)
         self.done = threading.Event()
@@ -28,6 +33,7 @@ class _BetweenTurnsCompaction:
             if not self._slot_released:
                 self._slot_released = True
                 _release_compression_admission()
+                _BETWEEN_TURNS_SLOT.release()
 
 
 def _preempt_between_turns_compaction(session: dict) -> bool:
@@ -75,18 +81,22 @@ def _run_between_turns_compaction(sid: str, session: dict, job, messages: list, 
                     task_id=session.get("session_key") or "default", trigger="between_turns",
                     commit_fence=job.fence, snapshot_is_current=current,
                 )
-                if after is messages or getattr(job.fence, "cancel_reason", None):
+                if (after is messages or getattr(job.fence, "cancel_reason", None)
+                        or not job.fence.publication_locked):
                     return
-                with (contextlib.nullcontext() if job.fence.publication_locked else session["history_lock"]):
-                    from agent.between_turns_compaction import publish_compaction_agent
-                    publish_compaction_agent(session["agent"], agent, job.baseline)
-                    published = True
-                    session["history"] = after
-                    session["history_version"] = version + 1
-                    old_key = session.get("session_key")
-                    _sync_session_key_after_compress(
-                        sid, session, clear_pending_title=False, restart_slash_worker=False)
-                    restart_worker = session.get("session_key") != old_key
+                # begin_commit retained history_lock through this publication.
+                if (session.get("agent") is not job.source_agent
+                        or int(session.get("history_version", 0)) != version):
+                    return
+                from agent.between_turns_compaction import publish_compaction_agent
+                publish_compaction_agent(job.source_agent, agent, job.baseline)
+                published = True
+                session["history"] = after
+                session["history_version"] = version + 1
+                old_key = session.get("session_key")
+                _sync_session_key_after_compress(
+                    sid, session, clear_pending_title=False, restart_slash_worker=False)
+                restart_worker = session.get("session_key") != old_key
             finally:
                 _clear_session_context(tokens)
     except Exception:
@@ -126,6 +136,7 @@ def _start_between_turns_compaction(sid: str, session: dict, result: dict):
     from agent.conversation_compression import _try_admit_compression_job, _release_compression_admission
     with session["history_lock"]:
         if (session.get("running") or session.get("_closing") or session.get("queued_prompt")
+                or session.get("_compute_host_active")
                 or session.get("_manual_compress_active") or session.get("_between_turns_compaction")):
             return None
         # Do not launch on another path's lock. Core admission checks again under its fence.
@@ -137,12 +148,16 @@ def _start_between_turns_compaction(sid: str, session: dict, result: dict):
         if between_turns_pressure(agent, messages) is None:
             return None
         version = int(session.get("history_version", 0))
+        if not _BETWEEN_TURNS_SLOT.acquire(blocking=False):
+            return None
         if not _try_admit_compression_job():
+            _BETWEEN_TURNS_SLOT.release()
             return None
         try:
             job = _BetweenTurnsCompaction(agent, session, version)
         except BaseException:
             _release_compression_admission()
+            _BETWEEN_TURNS_SLOT.release()
             raise
         session["_between_turns_compaction"] = job
     try:

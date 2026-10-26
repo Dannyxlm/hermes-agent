@@ -3002,7 +3002,9 @@ def _run_summary_dispatch(
                 _mark_compressor_working_attempt(agent.context_compressor, attempt_generation)
                 compressed = compress_fn(messages, **compress_kwargs)
                 # Freeze a hard stop that arrived after the last provider attempt but before session state rotates.
-                if _compression_cancel_requested():
+                if ((hard_cancel_event is not None and hard_cancel_event.is_set())
+                        or (commit_fence is not None and commit_fence.cancel_reason
+                            and commit_fence.is_cancelled)):
                     raise AuxiliaryExplicitCancellation()
     finally:
         _COMPRESSOR_ATTEMPT_GENERATION.reset(_attempt_ctx_token)

@@ -164,8 +164,13 @@ def between_turns_pressure(agent: Any, messages: list) -> int | None:
     if getattr(agent, "api_mode", None) == "codex_app_server":
         return None
     cc = agent.context_compressor
+    cooldown = getattr(cc, "get_active_compression_failure_cooldown", None)
+    # These are compressor-specific, not ContextEngine requirements. Engines
+    # without this eligibility contract keep their normal in-turn compaction.
+    if not callable(cooldown) or not hasattr(cc, "summary_target_ratio"):
+        return None
     if (getattr(cc, "awaiting_real_usage_after_compression", False)
-            or cc.get_active_compression_failure_cooldown()):
+            or cooldown()):
         return None
     tokens = tc._preflight_request_tokens(agent, messages, getattr(agent, "_cached_system_prompt", "") or "")
     # Speculative character counts must not launch a cache-breaking summarizer.

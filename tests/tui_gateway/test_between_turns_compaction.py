@@ -88,7 +88,7 @@ def test_completed_turn_compacts_and_next_turn_uses_committed_history(tmp_path, 
         db.close()
 
 
-@pytest.mark.parametrize("guard", ["disabled", "compression_disabled", "interrupted", "failed", "incomplete", "cooldown", "latch", "native", "below", "threshold", "floor", "unanchored", "running", "queue", "lock"])
+@pytest.mark.parametrize("guard", ["disabled", "compression_disabled", "interrupted", "failed", "incomplete", "cooldown", "latch", "native", "below", "threshold", "floor", "unanchored", "running", "queue", "lock", "compute_host"])
 def test_does_not_start_when_ineligible(tmp_path, monkeypatch, guard):
     db, agent, session, before = _fixture(tmp_path, monkeypatch)
     result = {"completed": True}
@@ -102,6 +102,7 @@ def test_does_not_start_when_ineligible(tmp_path, monkeypatch, guard):
     if guard == "latch": cc.awaiting_real_usage_after_compression = True
     if guard == "native": agent.api_mode = "codex_app_server"
     if guard == "floor": cc.last_compression_rough_tokens = 400_000
+    if guard == "compute_host": session["_compute_host_active"] = True
     if guard == "running": session["running"] = True
     if guard == "queue": session["queued_prompt"] = {"text": "next"}
     if guard == "lock": assert db.try_acquire_compression_lock(agent.session_id, "another")

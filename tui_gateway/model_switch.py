@@ -279,6 +279,9 @@ def _expensive_model_confirm(result, current_base_url: str, current_api_key, age
 
 def _commit_agent_switch(sid: str, session: dict, agent, result, current_model: str, snapshot):
     """Swap the live agent in place, then restart/persist/mark/announce; a failed swap aborts."""
+    if session.get("_between_turns_compaction") is not None:
+        with session["history_lock"]:
+            session["history_version"] = int(session.get("history_version", 0)) + 1
     try:
         agent.switch_model(
             new_model=result.new_model, new_provider=result.target_provider, api_key=result.api_key,

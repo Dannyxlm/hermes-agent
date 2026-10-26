@@ -538,6 +538,9 @@ def _rebuild_session_agent(sid: str, session: dict, **kwargs):
     An unscoped _make_agent defaults to the launch store: named-profile Bot Chat turns then disappear
     from the profile's replay even though they were successfully written to another database (#104079).
     """
+    if session.get("_between_turns_compaction") is not None:
+        with session["history_lock"]:
+            session["history_version"] = int(session.get("history_version", 0)) + 1
     old_agent = session.get("agent")
     profile_home = session.get("profile_home")
     session_db = getattr(old_agent, "_session_db", None)

@@ -9,27 +9,68 @@ from tests.tui_gateway.test_between_turns_compaction import _fixture, _transcrip
 _REAL_THREAD = threading.Thread
 
 
-def test_trigger_runs_only_after_delivery_and_settlement(turn_env, marker_home, monkeypatch):
+def test_trigger_runs_only_after_delivery_and_settlement(turn_env, marker_home, tmp_path, monkeypatch):
+    from agent.turn_finalizer import finalize_turn
+
     events = []
+    # Construction starts a logging QueueListener: it must not run inline.
+    monkeypatch.setattr(server.threading, "Thread", _REAL_THREAD)
+    db, agent, base_session, before = _fixture(tmp_path, monkeypatch)
+    from tests.tui_gateway.test_auto_continue import _InlineThread
+    monkeypatch.setattr(server.threading, "Thread", _InlineThread)
     monkeypatch.setattr(server, "_sync_agent_compression_with_config", lambda *a: None)
     monkeypatch.setattr(server, "_emit", lambda kind, *a, **kw: events.append(kind))
     monkeypatch.setattr(server, "_start_usage_ticker", lambda *a: (threading.Event(), SimpleNamespace(join=lambda: None)))
-    agent = SimpleNamespace(session_id="session-key", clear_interrupt=lambda: None, compression_between_turns=True)
+    monkeypatch.setattr(agent, "_sync_external_memory_for_turn", lambda **kw: events.append("memory.sync_turn"))
+    monkeypatch.setattr(agent, "_spawn_background_review", lambda **kw: events.append("background_review"))
+    monkeypatch.setattr(agent, "_cleanup_task_resources", lambda *a: None)
+    agent.skip_background_review = False
+
     def run(message, **kwargs):
-        events.extend(["memory.sync_turn", "background_review"])
-        return {"completed": True, "final_response": "done", "messages": []}
+        # Exercise the actual agent finalizer, which owns persistence, memory
+        # sync and review scheduling; the fake model supplies only its reply.
+        return finalize_turn(
+            agent, final_response="done", api_call_count=1, interrupted=False, failed=False,
+            messages=before + [{"role": "user", "content": message}, {"role": "assistant", "content": "done"}],
+            conversation_history=before, effective_task_id=agent.session_id, turn_id="turn-fixture",
+            user_message=message, original_user_message=message, _should_review_memory=True,
+            _turn_exit_reason="text_response(stop)")
+
     agent.run_conversation = run
-    session = _session(agent=agent, running=True)
+    session = _session(**base_session)
+    session["running"] = True
+
     def schedule(sid, s, result):
         assert s["running"] is False
+        assert result["completed"] is True
         assert "message.complete" in events
         assert events.index("memory.sync_turn") < events.index("message.complete")
         assert events.index("background_review") < events.index("message.complete")
+        assert any(m.get("content") == "done" for m in db.get_messages_as_conversation(agent.session_id))
         events.append("between_turns")
+
     monkeypatch.setattr(server, "_start_between_turns_compaction", schedule)
-    server._run_prompt_submit("r", "sid", session, "go")
-    assert events.count("between_turns") == 1
-    assert events.index("between_turns") > events.index("message.complete")
+    try:
+        server._run_prompt_submit("r", "sid", session, "go")
+        assert events.count("between_turns") == 1
+        assert events.index("between_turns") > events.index("message.complete")
+    finally:
+        agent.close()
+        db.close()
+
+
+
+def test_default_off_prompt_submit_never_schedules_compaction(turn_env, marker_home, monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(server, "_sync_agent_compression_with_config", lambda *a: None)
+    monkeypatch.setattr(server, "_start_usage_ticker", lambda *a: (threading.Event(), SimpleNamespace(join=lambda: None)))
+    monkeypatch.setattr(server, "_start_between_turns_compaction", lambda *a: scheduled.append(a))
+    agent = SimpleNamespace(session_id="session-key", clear_interrupt=lambda: None,
+                            run_conversation=lambda *a, **kw: {"completed": True, "final_response": "done", "messages": []})
+    session = _session(agent=agent, running=True)
+    assert server._run_prompt_submit("r", "sid", session, "go")
+    assert scheduled == []
+    assert "_between_turns_compaction" not in session
 
 
 def test_real_compressor_commits_then_latch_prevents_second_attempt(tmp_path, monkeypatch):
