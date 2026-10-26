@@ -843,10 +843,10 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 WHERE job_id=? AND attempts=?""", (state, result.reason, now + min(900, 2 ** job["attempts"] * 5),
                 job["job_id"], job["attempts"]))
 
-    def maintain(self):
+    def maintain(self, *, running=()):
         now = self.clock()
         with self.transaction() as db:
-            self._maintain_activity_cleanup(db, now)
+            self._maintain_activity_cleanup(db, now, running)
         with self.transaction() as db:
             db.execute("DELETE FROM mobile_presence WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM widget_readers WHERE expires_at<=?", (now,))

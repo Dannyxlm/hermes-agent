@@ -64,16 +64,21 @@ class PushService:
             raise ValueError("delivery environment unavailable")
         return self.store.register_start_token(principal, **params)
 
-    def reconcile(self, force=False):
+    def _live_run_snapshot(self):
+        try:
+            return self.live_runs() if self.live_runs is not None else (None, None)
+        except Exception as error:
+            logger.warning("mobile push runtime snapshot unavailable (%s)", type(error).__name__)
+            return None, None
+
+    def reconcile(self, force=False, *, live=None):
         """Bounded orphan sweep, at most once a minute from the delivery loop."""
         now = self._clock()
         if not force and now - self._reconciled_at < 60:
             return 0
         self._reconciled_at = now
         try:
-            held = running = None
-            if self.live_runs is not None:
-                held, running = self.live_runs()
+            held, running = live if live is not None else self._live_run_snapshot()
             closed = self.store.reconcile_orphans(held, running)
         except Exception as error:
             # The sweep is hygiene: it must never hold up deliveries in this pass.
@@ -94,8 +99,9 @@ class PushService:
 
     def drain_once(self):
         with self._drain_lock:
-            self.store.maintain()
-            self.reconcile()
+            live = self._live_run_snapshot()
+            self.store.maintain(running=live[1] or ())
+            self.reconcile(live=live)
             mobile_inbox_invalidation.process(self.store)  # Inbox-changed silent hints (KTD9)
             count = 0
             for _ in range(20):
