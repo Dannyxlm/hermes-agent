@@ -14,7 +14,7 @@ class DeliveryResult:
     reason: str = ""
 
 
-def send_shape(job, outcome, now):
+def send_shape(job, outcome, now, *, reason=""):
     """Only allowlisted shape metadata crosses the logging boundary, never payload text."""
     from .mobile_push_payloads import LABELS
     payload = job["payload"]
@@ -33,7 +33,9 @@ def send_shape(job, outcome, now):
              "event": event,
              "outcome": outcome if outcome in {"accepted", "retry", "invalid", "failed"} else "exception",
              "provider_status": {"accepted": "success", "retry": "transient_failure", "invalid": "invalid_token",
-                                 "failed": "rejected"}.get(outcome, "exception"),
+                                 "failed": "local_failure" if reason == "invalid_channel" else "rejected"}.get(outcome, "exception"),
+             "provider_reason": reason if reason in {"", "transport", "provider_expired", "provider_unavailable",
+                                                     "token_invalid", "provider_rejected", "invalid_channel"} else "other",
              "sent_at": now}
     if event and type(aps.get("timestamp")) is int:
         shape["timestamp"] = aps["timestamp"]

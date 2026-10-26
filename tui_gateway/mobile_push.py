@@ -116,7 +116,7 @@ class PushService:
                 except Exception:
                     audit_send(self.store.path, job, "exception", sent_at)
                     raise
-                audit_send(self.store.path, job, result.outcome, sent_at)
+                audit_send(self.store.path, job, result.outcome, sent_at, reason=result.reason)
                 self.store.finish(job, result)
                 count += 1
             return count
