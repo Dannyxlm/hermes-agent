@@ -1,0 +1,138 @@
+{
+  "contract": "cloudseed-machines",
+  "protocol_version": 1,
+  "feature_versions": {"machines": 1},
+  "semantics": {
+    "machine_order": ["ava-box", "mac-mini", "macbook-air"],
+    "status_values": ["online", "stale", "unreachable", "unknown"],
+    "writer_status_rule": "unknown = never provisioned or never attempted; online = latest attempt succeeded; unreachable = latest attempt failed, last-good values and last_sample_at kept (null when never sampled); stale is reader-derived and readers must also accept it from the file",
+    "stale_after_seconds": 180,
+    "reader_stale_rule": "when evaluate_at - generated_at > stale_after_seconds every machine displays stale with its age; when an online machine's last_sample_at is more than stale_after_seconds older than generated_at it displays stale",
+    "null_means": "unknown; render as a dash, never as zero",
+    "cpu_percent": "percent of all cores, 0 to 100, one decimal. macOS: 100 - idle% from the second sample of top -l 2 -s 1 header line. Linux: 100 * (delta_total - delta_idle - delta_iowait) / delta_total from /proc/stat; null when delta_total <= 0 or the counters reset",
+    "memory_pressure_macos": "kern.memorystatus_vm_pressure_level 1 = normal, 2 = warn, 4 = critical, anything else = null",
+    "memory_pressure_linux": "ratio = MemAvailable / MemTotal; ratio < 0.05 = critical, ratio < 0.15 = warn, otherwise normal; null when either field is missing or MemTotal is 0",
+    "disk": "data volume: macOS /System/Volumes/Data, Linux /. free_gb and total_gb in GiB with one decimal, used_percent 0 to 100 with one decimal",
+    "process_names": "never collected or written; a writer drops any field named top, processes or process",
+    "timestamps": "ISO 8601 UTC, second precision, Z suffix"
+  },
+  "cases": {
+    "all_fresh": {
+      "evaluate_at": "2026-10-26T18:01:20Z",
+      "file": {
+        "protocol_version": 1,
+        "feature_versions": {"machines": 1},
+        "generated_at": "2026-10-26T18:01:05Z",
+        "machines": [
+          {"id": "ava-box", "name": "Ava box", "kind": "linux", "status": "online", "last_sample_at": "2026-10-26T18:01:04Z", "last_attempt_at": "2026-10-26T18:01:04Z",
+           "cpu": {"percent": 23.5, "cores": 8, "load1": 1.92},
+           "memory": {"pressure": "normal", "total_mb": 31744, "available_mb": 18210, "swap_used_mb": 512},
+           "disk": {"total_gb": 387.0, "free_gb": 210.4, "used_percent": 45.6}},
+          {"id": "mac-mini", "name": "Mac mini", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T18:01:03Z", "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": {"percent": 31.0, "cores": 12, "load1": 3.73},
+           "memory": {"pressure": "normal", "total_mb": 16384, "available_mb": null, "swap_used_mb": 990},
+           "disk": {"total_gb": 228.3, "free_gb": 86.1, "used_percent": 62.3}},
+          {"id": "macbook-air", "name": "MacBook Air", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T18:01:03Z", "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": {"percent": 12.4, "cores": 10, "load1": 2.05},
+           "memory": {"pressure": "warn", "total_mb": 24576, "available_mb": null, "swap_used_mb": 2048},
+           "disk": {"total_gb": 460.4, "free_gb": 131.7, "used_percent": 71.4},
+           "extras": {"battery_percent": 82, "charging": false}}
+        ]
+      }
+    },
+    "air_unreachable": {
+      "evaluate_at": "2026-10-26T18:02:00Z",
+      "file": {
+        "protocol_version": 1,
+        "feature_versions": {"machines": 1},
+        "generated_at": "2026-10-26T18:01:05Z",
+        "machines": [
+          {"id": "ava-box", "name": "Ava box", "kind": "linux", "status": "online", "last_sample_at": "2026-10-26T18:01:04Z", "last_attempt_at": "2026-10-26T18:01:04Z",
+           "cpu": {"percent": 18.2, "cores": 8, "load1": 1.41},
+           "memory": {"pressure": "normal", "total_mb": 31744, "available_mb": 17980, "swap_used_mb": 512},
+           "disk": {"total_gb": 387.0, "free_gb": 210.3, "used_percent": 45.7}},
+          {"id": "mac-mini", "name": "Mac mini", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T18:01:03Z", "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": {"percent": 27.9, "cores": 12, "load1": 2.88},
+           "memory": {"pressure": "normal", "total_mb": 16384, "available_mb": null, "swap_used_mb": 990},
+           "disk": {"total_gb": 228.3, "free_gb": 86.0, "used_percent": 62.3}},
+          {"id": "macbook-air", "name": "MacBook Air", "kind": "macos", "status": "unreachable", "last_sample_at": "2026-10-26T13:41:02Z", "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": {"percent": 9.8, "cores": 10, "load1": 1.66},
+           "memory": {"pressure": "normal", "total_mb": 24576, "available_mb": null, "swap_used_mb": 1024},
+           "disk": {"total_gb": 460.4, "free_gb": 132.0, "used_percent": 71.3}}
+        ]
+      }
+    },
+    "mini_busy": {
+      "evaluate_at": "2026-10-26T18:01:20Z",
+      "file": {
+        "protocol_version": 1,
+        "feature_versions": {"machines": 1},
+        "generated_at": "2026-10-26T18:01:05Z",
+        "machines": [
+          {"id": "ava-box", "name": "Ava box", "kind": "linux", "status": "online", "last_sample_at": "2026-10-26T18:01:04Z", "last_attempt_at": "2026-10-26T18:01:04Z",
+           "cpu": {"percent": 41.0, "cores": 8, "load1": 3.40},
+           "memory": {"pressure": "normal", "total_mb": 31744, "available_mb": 15002, "swap_used_mb": 512},
+           "disk": {"total_gb": 387.0, "free_gb": 210.1, "used_percent": 45.7}},
+          {"id": "mac-mini", "name": "Mac mini", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T18:01:03Z", "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": {"percent": 100.0, "cores": 12, "load1": 41.8},
+           "memory": {"pressure": "normal", "total_mb": 16384, "available_mb": null, "swap_used_mb": 3120},
+           "disk": {"total_gb": 228.3, "free_gb": 79.4, "used_percent": 65.2}},
+          {"id": "macbook-air", "name": "MacBook Air", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T18:01:03Z", "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": {"percent": 6.1, "cores": 10, "load1": 1.12},
+           "memory": {"pressure": "normal", "total_mb": 24576, "available_mb": null, "swap_used_mb": 1024},
+           "disk": {"total_gb": 460.4, "free_gb": 132.0, "used_percent": 71.3}}
+        ]
+      }
+    },
+    "never_sampled": {
+      "evaluate_at": "2026-10-26T18:01:20Z",
+      "file": {
+        "protocol_version": 1,
+        "feature_versions": {"machines": 1},
+        "generated_at": "2026-10-26T18:01:05Z",
+        "machines": [
+          {"id": "ava-box", "name": "Ava box", "kind": "linux", "status": "online", "last_sample_at": "2026-10-26T18:01:04Z", "last_attempt_at": "2026-10-26T18:01:04Z",
+           "cpu": {"percent": 22.0, "cores": 8, "load1": 1.70},
+           "memory": {"pressure": "normal", "total_mb": 31744, "available_mb": 18100, "swap_used_mb": 512},
+           "disk": {"total_gb": 387.0, "free_gb": 210.4, "used_percent": 45.6}},
+          {"id": "mac-mini", "name": "Mac mini", "kind": "macos", "status": "unreachable", "last_sample_at": null, "last_attempt_at": "2026-10-26T18:01:01Z",
+           "cpu": null, "memory": null, "disk": null},
+          {"id": "macbook-air", "name": "MacBook Air", "kind": "macos", "status": "unknown", "last_sample_at": null, "last_attempt_at": null,
+           "cpu": null, "memory": null, "disk": null}
+        ]
+      }
+    },
+    "envelope_stale": {
+      "evaluate_at": "2026-10-26T18:01:20Z",
+      "file": {
+        "protocol_version": 1,
+        "feature_versions": {"machines": 1},
+        "generated_at": "2026-10-26T17:50:05Z",
+        "machines": [
+          {"id": "ava-box", "name": "Ava box", "kind": "linux", "status": "online", "last_sample_at": "2026-10-26T17:50:04Z", "last_attempt_at": "2026-10-26T17:50:04Z",
+           "cpu": {"percent": 20.3, "cores": 8, "load1": 1.55},
+           "memory": {"pressure": "normal", "total_mb": 31744, "available_mb": 18300, "swap_used_mb": 512},
+           "disk": {"total_gb": 387.0, "free_gb": 210.6, "used_percent": 45.6}},
+          {"id": "mac-mini", "name": "Mac mini", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T17:50:03Z", "last_attempt_at": "2026-10-26T17:50:01Z",
+           "cpu": {"percent": 25.0, "cores": 12, "load1": 2.10},
+           "memory": {"pressure": "critical", "total_mb": 16384, "available_mb": null, "swap_used_mb": 6200},
+           "disk": {"total_gb": 228.3, "free_gb": 86.2, "used_percent": 62.2}},
+          {"id": "macbook-air", "name": "MacBook Air", "kind": "macos", "status": "online", "last_sample_at": "2026-10-26T17:50:03Z", "last_attempt_at": "2026-10-26T17:50:01Z",
+           "cpu": {"percent": 11.0, "cores": 10, "load1": 1.90},
+           "memory": {"pressure": "normal", "total_mb": 24576, "available_mb": null, "swap_used_mb": 1024},
+           "disk": {"total_gb": 460.4, "free_gb": 132.1, "used_percent": 71.3}}
+        ]
+      }
+    }
+  },
+  "route": {
+    "path": "GET /machines (cloudseed_mobile plugin, owner only, Cache-Control: private, no-store)",
+    "supported_ok": {"ok": true, "status": "ok", "protocol_version": 1, "feature_versions": {"machines": 1}, "generated_at": "<file.generated_at>", "machines": "<file.machines, objects byte-equal>"},
+    "supported_unavailable": {"ok": true, "status": "unavailable", "protocol_version": 1, "feature_versions": {"machines": 1}, "generated_at": null, "machines": []},
+    "unsupported": "HTTP 404 or the route's not-found body: the app hides the section"
+  },
+  "dannyos": {
+    "path": "GET /api/system adds machines (file.machines), machines_generated_at (file.generated_at) and machines_error (sanitized string or null) only for a verified operator session; legacy top-level fields unchanged for every caller",
+    "read_failure": {"machines": [], "machines_generated_at": null, "machines_error": "unavailable"}
+  }
+}
