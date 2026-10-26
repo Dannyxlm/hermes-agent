@@ -259,7 +259,8 @@ def test_quiet_phase_heartbeat_respects_lifecycle_fences(delivery, fence):
         service.live_runs = lambda: (set(), set())
     else:
         service.record(scope, run["run_id"], "ask", "waitingForApproval",
-                       preview=AlertPreview(attention={"nearest_expires_at": now[0] + 30}))
+                       preview=AlertPreview(attention={"count": 1, "primary": {"category": "HERMEX_APPROVAL_V1"},
+                                                       "nearest_expires_at": now[0] + 30}))
         now[0] += 1
         service.drain_once()
         assert activities(sender)[-1]["payload"]["aps"]["stale-date"] == int(now[0] + 29)
