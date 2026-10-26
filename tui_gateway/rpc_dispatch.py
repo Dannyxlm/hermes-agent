@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
+from concurrent.futures import ThreadPoolExecutor
+
 from .method_ctx import bind_module
+
+
+# A winning compaction can park one FIFO head. Keep a second worker available
+# for controls in other chats, independently of slow shared-pool handlers.
+_compaction_rpc_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tui-compaction-rpc")
+atexit.register(lambda: _compaction_rpc_pool.shutdown(wait=False, cancel_futures=True))
 
 
 def handle_request(req: dict) -> dict | None:
@@ -42,7 +51,7 @@ def _handle_admitted_request(req: dict) -> dict | None:
     return response
 
 
-def _submit_compaction_session_rpc(session: dict, run):
+def _submit_compaction_session_rpc(session: dict, run, on_submit_error):
     """FIFO for formerly-inline RPCs; only the head occupies a pool worker.
 
     The session's commit may hold history_lock for plugin/network work. Queue
@@ -67,9 +76,12 @@ def _submit_compaction_session_rpc(session: dict, run):
 
     def start(_=None):
         try:
-            _pool.submit(complete)
+            _compaction_rpc_pool.submit(complete)
         except BaseException as exc:
-            future.set_exception(exc)
+            try:
+                on_submit_error(exc)
+            finally:
+                future.set_exception(exc)
 
     if previous is None:
         start()
@@ -126,7 +138,9 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
                 if resp is not None:
                     t.write(resp)
             if compaction_session and normalized[1] not in _LONG_HANDLERS:
-                future = _submit_compaction_session_rpc(session, lambda: ctx.run(run))
+                future = _submit_compaction_session_rpc(
+                    session, lambda: ctx.run(run),
+                    lambda exc: t.write(_err(req.get("id"), -32000, f"handler dispatch failed: {exc}")))
             else:
                 future = _pool.submit(lambda: ctx.run(run))
         except BaseException:

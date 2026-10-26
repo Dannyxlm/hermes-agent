@@ -106,7 +106,7 @@ def test_commit_wait_never_blocks_rpc_reader(tmp_path, monkeypatch, method):
     monkeypatch.setitem(server._sessions, "sid", session)
     monkeypatch.setattr(server, "_handle_admitted_request", handle)
     pool = ThreadPoolExecutor(max_workers=2)
-    monkeypatch.setattr(server, "_pool", pool)
+    monkeypatch.setattr(server, "_compaction_rpc_pool", pool, raising=False)
     transport = SimpleNamespace(write=write)
     job = server._start_between_turns_compaction("sid", session, {"completed": True})
     returned = []
@@ -177,11 +177,18 @@ def test_compaction_session_rpc_queue_preserves_input_order(monkeypatch):
         return future
 
     monkeypatch.setattr(server, "_pool", SimpleNamespace(submit=submit))
+    monkeypatch.setattr(server, "_compaction_rpc_pool", SimpleNamespace(submit=submit), raising=False)
     monkeypatch.setattr(server, "_handle_admitted_request", lambda req: seen.append(req["id"]))
-    monkeypatch.setitem(server._sessions, "sid", {"agent": SimpleNamespace(compression_between_turns=True)})
+    session = {"agent": SimpleNamespace(compression_between_turns=True),
+               "_between_turns_compaction": object()}
+    monkeypatch.setitem(server._sessions, "sid", session)
     transport = SimpleNamespace(write=lambda response: None)
     for rid in ("first", "second"):
         server.dispatch({"id": rid, "method": "prompt.submit", "params": {"session_id": "sid"}}, transport)
+        # A completed job / hot-reload must not let the second input overtake
+        # an already-enqueued FIFO head.
+        session.pop("_between_turns_compaction", None)
+        session["agent"].compression_between_turns = False
     # The executor is allowed to start runnable tasks in reverse order. Only
     # the queue head may be runnable, so this must not reorder human input.
     while pending:

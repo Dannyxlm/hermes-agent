@@ -59,6 +59,7 @@ def _preempt_between_turns_compaction(session: dict) -> bool:
 def _run_between_turns_compaction(sid: str, session: dict, job, messages: list, version: int) -> None:
     agent = job.agent
     published = restart_worker = False
+    host_snapshot = None
     try:
         with _session_profile_runtime_scope(session):
             tokens = _set_session_context(session.get("session_key") or "", cwd=_session_cwd(session))
@@ -97,6 +98,8 @@ def _run_between_turns_compaction(sid: str, session: dict, job, messages: list, 
                 _sync_session_key_after_compress(
                     sid, session, clear_pending_title=False, restart_slash_worker=False)
                 restart_worker = session.get("session_key") != old_key
+                if os.environ.get("HERMES_COMPUTE_HOST_CHILD") == "1":
+                    host_snapshot = {**session, "history": copy.deepcopy(after)}
             finally:
                 _clear_session_context(tokens)
     except Exception:
@@ -115,6 +118,17 @@ def _run_between_turns_compaction(sid: str, session: dict, job, messages: list, 
         # UI I/O and slash-worker attachment must not prolong the commit fence or
         # invert history_lock -> _sessions_lock against a concurrent close.
         with _session_profile_runtime_scope(session):
+            if host_snapshot is not None:
+                # The parent already received turn.end (or captured its older
+                # snapshot). Publish the new identity without waiting for a turn.
+                try:
+                    from tui_gateway.compute_host import _history_meta
+                    session["transport"].write({"jsonrpc": "2.0", "method": "compute_host.session_meta",
+                        "params": {"sid": sid, **_history_meta(host_snapshot),
+                                   "history": host_snapshot["history"],
+                                   "session_info": _session_info(agent, host_snapshot)}})
+                except Exception:
+                    logger.exception("compute-host compaction metadata publication failed")
             if restart_worker:
                 _restart_slash_worker(sid, session)
             _emit_session_info(sid, session)
