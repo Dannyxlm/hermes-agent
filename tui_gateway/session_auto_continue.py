@@ -302,6 +302,8 @@ def _session_compression_in_flight(session: dict) -> bool:
     """
     if session.get("_manual_compress_active"):  # held before/after the DB lock row exists (#133504)
         return True
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
     agent = session.get("agent")
     sid = str(getattr(agent, "session_id", "") or "") or str(session.get("session_key") or "")
     if not sid:

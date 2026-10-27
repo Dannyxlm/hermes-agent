@@ -1011,6 +1011,8 @@ def _submit_prompt(rid, params: dict, image_paths=None, operations=None, receipt
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    if session.get("_between_turns_compaction") is not None:
+        _preempt_between_turns_compaction(session)
     if expected_session is not None and session is not expected_session:
         return _err(rid, 4001, "attachment operation session changed; reopen the conversation")
     from tools.bot_relay import DeliveryAuthor

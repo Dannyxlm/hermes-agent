@@ -4,7 +4,7 @@ The phone sends batches of typed events (screens, named taps, RPC/REST timing,
 errors, smoothness spans, MetricKit payloads) and, only when Danny taps Send,
 bug flags with a screenshot and a note. Everything is validated against a closed
 allowlist that mirrors the Swift `FlightRecorderEvent` enum, so free text cannot
-ride along in a stored event. Unknown span events are omitted and counted, not
+ride along in a stored event. Invalid events are omitted and counted, not
 allowed to discard their co-batched telemetry. Stores are root-scoped (like the photo catalog), private
 (0700/0600), never in Git, and pruned after RETENTION_DAYS.
 
@@ -43,6 +43,7 @@ MAX_DAY_FILE = 50 * 1024 * 1024      # per-day events file; beyond this, 507
 PRUNE_INTERVAL = 3600.0
 
 _TOKEN = re.compile(r'[A-Za-z0-9_.:-]{1,64}', re.ASCII)
+_ACT = re.compile(r'[0-9a-f]{8}', re.ASCII)
 # A Hermes session id (YYYYMMDD_HHMMSS_<hex>) or a UUID, never a title or slug.
 _SESSION = re.compile(r'[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}',
                       re.ASCII)
@@ -63,19 +64,24 @@ SCREENS = frozenset({'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview
 ERROR_DOMAINS = frozenset({'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'})
 SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent', 'ComposerFocusToSettled',
                         'TabFirstContent', 'ScrollInteraction', 'app.foreground_fresh',
-                        'chat.history_complete', 'chat.send_first_delta'})
+                        'chat.history_complete', 'chat.send_first_delta', 'NotificationOpenToContent'})
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
 SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
                         'should_begin_calls', 'state', 'surface', 'to', 'verified_empty',
-                        'will_show_ms', 'did_show_ms', 'kb_anim_ms', 'tail'})
+                        'will_show_ms', 'did_show_ms', 'kb_anim_ms', 'tail', 'source', 'launch'})
+SPAN_ATTR_VALUES = {
+    'tail': frozenset({'memory', 'disk', 'none'}),
+    'source': frozenset({'banner', 'live_activity', 'url', 'widget', 'attention_row'}),
+    'launch': frozenset({'cold', 'warm', 'foreground'}),
+}
 BG_TRIGGERS = frozenset({'scheduled', 'silent_push'})
 BG_OUTCOMES = frozenset({'new_data', 'no_data', 'failed', 'expired'})
 PUSH_TYPES = frozenset({'alert', 'background', 'live_activity'})
 APP_STATES = frozenset({'active', 'inactive', 'background', 'suspended'})
 TAP_SOURCES = frozenset({'banner', 'live_activity', 'widget', 'attention_row', 'snooze_reminder'})
 TAP_OUTCOMES = frozenset({'opened', 'foreign_account', 'recoverable', 'rejected'})
-LIVE_ACTIONS = frozenset({'start', 'end'})
+LIVE_ACTIONS = frozenset({'start', 'end', 'token_registered', 'end_requested'})
 LIVE_ORIGINS = frozenset({'local', 'push_to_start'})
 LIVE_END_STATES = frozenset({'complete', 'failed', 'cancelled', 'stale', 'dismissed'})
 LIFECYCLE = frozenset({'launch', 'foreground', 'background', 'terminate_hint', 'memory_warning'})
@@ -137,7 +143,7 @@ def _match(pattern, value):
 
 def _one_of(choices):
     def check(value):
-        if value not in choices:
+        if not isinstance(value, str) or value not in choices:
             _fail('invalid enum')
         return value
     return check
@@ -180,8 +186,8 @@ def _span_attrs(value):
         if key in {'will_show_ms', 'did_show_ms', 'kb_anim_ms'}:
             if not re.fullmatch(r'[0-9]+', attr) or not 0 <= int(attr) <= 600000:
                 _fail('invalid span timing')
-        elif key == 'tail':
-            _one_of({'memory', 'disk', 'none'})(attr)
+        elif key in SPAN_ATTR_VALUES:
+            _one_of(SPAN_ATTR_VALUES[key])(attr)
     return value
 
 
@@ -215,7 +221,8 @@ KINDS = {
     'push': ({'push_type': _one_of(PUSH_TYPES), 'app_state': _one_of(APP_STATES)}, {'session_id': _session}),
     'push_tap': ({'source': _one_of(TAP_SOURCES), 'outcome': _one_of(TAP_OUTCOMES)}, {'session_id': _session}),
     'live_activity': ({'action': _one_of(LIVE_ACTIONS), 'origin': _one_of(LIVE_ORIGINS)},
-                      {'end_state': _one_of(LIVE_END_STATES), 'session_id': _session}),
+                      {'end_state': _one_of(LIVE_END_STATES), 'session_id': _session,
+                       'act': lambda v: _match(_ACT, v)}),
 }
 
 
@@ -269,16 +276,23 @@ def _envelope(body, keys):
 
 
 def _validated_events(events):
-    kept, dropped = [], 0
+    kept, unknown_spans, invalid = [], 0, 0
     for event in events:
         if (isinstance(event, dict) and event.get('kind') == 'span'
                 and isinstance(event.get('name'), str) and event['name'] not in SPAN_NAMES):
-            dropped += 1
-        else:
+            unknown_spans += 1
+            continue
+        try:
             kept.append(validate_event(event))
-    # Preserve normal batch digests across upgrades. Unknown names and payloads
-    # are never stored, hashed, logged or echoed; only this aggregate survives.
-    return {'events': kept} | ({'dropped_unknown_spans': dropped} if dropped else {})
+        except FlightRecorderError:
+            invalid += 1
+    # Preserve existing batch digests. Only counts survive rejection, never names or payloads.
+    meta = {'events': kept}
+    if unknown_spans:
+        meta['dropped_unknown_spans'] = unknown_spans
+    if invalid:
+        meta['dropped_invalid_events'] = invalid
+    return meta
 
 
 def validate_batch(body):
@@ -395,7 +409,8 @@ class FlightRecorderStore:
                 if row[0] != digest:
                     raise FlightRecorderConflict()
                 return {'ok': True, 'receipt_id': receipt, 'accepted': 0, 'duplicate': True,
-                        'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
+                        'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0),
+                        'dropped_invalid_events': meta.get('dropped_invalid_events', 0)}
             path = self.root / 'events' / f'{day}.jsonl'
             try:
                 size = os.lstat(path).st_size
@@ -416,7 +431,8 @@ class FlightRecorderStore:
             db.close()
         self.maybe_prune()
         return {'ok': True, 'receipt_id': receipt, 'accepted': len(meta['events']), 'duplicate': False,
-                'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
+                'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0),
+                'dropped_invalid_events': meta.get('dropped_invalid_events', 0)}
 
     def put_flag(self, profile, meta):
         now = self._now()
@@ -435,7 +451,8 @@ class FlightRecorderStore:
                 if row[0] != digest:
                     raise FlightRecorderConflict()
                 return {'ok': True, 'receipt_id': receipt, 'duplicate': True,
-                        'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
+                        'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0),
+                        'dropped_invalid_events': meta.get('dropped_invalid_events', 0)}
             folder = _private_dir(_private_dir(self.root / 'flags' / day) / meta['flag_id'])
             if shot is not None:
                 _write_private(folder / 'screenshot.jpg', shot)
@@ -451,7 +468,8 @@ class FlightRecorderStore:
             db.close()
         self.maybe_prune()
         return {'ok': True, 'receipt_id': receipt, 'duplicate': False,
-                'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0)}
+                'dropped_unknown_spans': meta.get('dropped_unknown_spans', 0),
+                'dropped_invalid_events': meta.get('dropped_invalid_events', 0)}
 
     # Deletion and retention -------------------------------------------------
     def delete_install(self, install_id):

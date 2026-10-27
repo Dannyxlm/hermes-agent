@@ -185,6 +185,11 @@ class HostSupervisor:
             self.start()
 
     @property
+    def boot_id(self) -> str:
+        """Current child's identity, including when a late control ack is adopted."""
+        return str(self._hello.get("boot_id") or "")
+
+    @property
     def pid(self) -> int:
         proc = self._proc
         return int(proc.pid or 0) if proc is not None else 0
@@ -449,6 +454,13 @@ class HostSupervisor:
                 logger.warning("compute host emitted invalid json: %r", raw[:200])
                 continue
             if isinstance(frame, dict):
+                # A dead process's pipe may still drain after its replacement is
+                # live. Never let that reader publish into the new incarnation.
+                # ``_proc is None`` (exit observed, no replacement yet) is not a
+                # replacement: frames the child wrote before dying still deliver.
+                current = self._proc
+                if current is not None and current is not proc:
+                    continue
                 self._handle_host_frame(frame)
 
     def _drain_stderr(self, proc: subprocess.Popen[str]) -> None:

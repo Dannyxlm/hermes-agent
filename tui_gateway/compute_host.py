@@ -71,6 +71,10 @@ class ComputeHost:
         self._write_lock = threading.Lock()
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers or _default_workers(), thread_name_prefix="compute-host-turn")
+        # A commit-winning idle compaction can hold history_lock. Never join it
+        # on stdin, nor queue Stop behind the (possibly saturated) turn pool.
+        self._control_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="compute-host-compaction-control")
         self._closed = threading.Event()
         self._parent_pid = os.getppid()
         self._boot_id = uuid.uuid4().hex
@@ -102,6 +106,7 @@ class ComputeHost:
     def close(self) -> None:
         self._closed.set()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._control_executor.shutdown(wait=False, cancel_futures=True)
         # Every caller hard-exits next (os._exit skips atexit): a foreground command still
         # running in its own process group would outlive the host.
         with contextlib.suppress(Exception):
@@ -153,6 +158,22 @@ class ComputeHost:
                 "type": "error", "request_id": frame.get("request_id"),
                 "message": f"unknown frame type: {kind}"})
         else:
+            if kind in {"interrupt", "turn.start", "control", "reload_mcp"}:
+                from tui_gateway import server
+                session = server._sessions.get(str(frame.get("sid") or ""))
+                tail = (session or {}).get("_compute_host_control_tail")
+                if session is not None and (
+                    (tail is not None and not tail.done())
+                    or (kind == "interrupt" and (
+                        session.get("_between_turns_compaction") is not None
+                        or getattr(session.get("agent"), "compression_between_turns", False) is True))
+                ):
+                    # One FIFO worker preserves Stop -> next prompt/control order.
+                    # Respond frames bypass this queue so other sessions' questions
+                    # remain answerable while the commit winner finishes.
+                    session["_compute_host_control_tail"] = self._control_executor.submit(
+                        getattr(self, handler), dict(frame))
+                    return
             getattr(self, handler)(frame)
 
     def _handle_shutdown(self, frame: dict[str, Any]) -> None:
@@ -341,6 +362,7 @@ class ComputeHost:
                 session["explicit_cwd"] = bool(frame["explicit_cwd"])
         else:
             session = self._build_server_session(server, frame, sid)
+        session["_compute_host_boot_id"] = self._boot_id
         if isinstance(frame.get("attached_images"), list):
             session["attached_images"] = list(frame.get("attached_images") or [])
         # A model switch queued on the host side while this session was busy rides
@@ -425,6 +447,7 @@ class ComputeHost:
                 "source": server._resolve_session_source(frame.get("source")),
                 "transport": self._transport}
         session = server._sessions[sid]
+        session["_compute_host_boot_id"] = self._boot_id
         session["transport"] = self._transport
         # The host pipe names no login; the record carries the one the gateway stamped at creation.
         session["auth_user_id"] = frame.get("auth_user_id")
@@ -539,6 +562,7 @@ class ComputeHost:
 def _history_meta(session: dict) -> dict[str, Any]:
     """Transcript identity for turn.end / control.ack frames; caller holds history_lock."""
     return {
+        **({"boot_id": session["_compute_host_boot_id"]} if session.get("_compute_host_boot_id") else {}),
         "session_key": str(session.get("session_key") or ""),
         "history_version": int(session.get("history_version", 0)),
         "message_count": len(session.get("history") or [])}

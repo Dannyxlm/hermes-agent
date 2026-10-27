@@ -47,6 +47,26 @@ def test_budget_keys_cover_every_span_name(report):
     assert set(report.BUDGETS) == fr.SPAN_NAMES
 
 
+@pytest.mark.parametrize('with_drops,invalid,unknown', [(False, 0, 0), (True, 10, 31)])
+def test_daily_report_surfaces_content_free_drop_totals(report, tmp_path, with_drops, invalid, unknown):
+    event = {'kind': 'lifecycle', 't': T, 'state': 'foreground'}
+    store(tmp_path, [event], flags=[(T, '')])
+    store(tmp_path, [event], seq=1)
+    if with_drops:
+        path = tmp_path / 'events' / f'{DAY}.jsonl'
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        for record, counts in zip(records, [(2, 7), (3, 11)]):
+            record.update(dropped_invalid_events=counts[0], dropped_unknown_spans=counts[1])
+        path.write_text(''.join(json.dumps(record) + '\n' for record in records))
+        [flag_path] = (tmp_path / 'flags').glob('*/*/flag.json')
+        record = json.loads(flag_path.read_text())
+        record.update(dropped_invalid_events=5, dropped_unknown_spans=13)
+        flag_path.write_text(json.dumps(record))
+    text = report.build_report(tmp_path, DAY, [])
+    line = f'- Dropped telemetry: dropped_invalid_events={invalid}, dropped_unknown_spans={unknown}.'
+    assert text.splitlines().count(line) == 1
+
+
 def test_two_signatures_group_separately(report, tmp_path):
     events = [
         {'kind': 'error', 't': T, 'domain': 'url', 'code': -1001, 'screen': 'inbox'},
@@ -65,6 +85,19 @@ def test_two_signatures_group_separately(report, tmp_path):
     text = report.build_report(tmp_path, DAY, [])
     assert 'Fix signature `error · url · -1001 · - · inbox` (2×)' in text
     assert '-1005' in text.split('## Proposed items')[0] and '-1005' not in text.split('## Proposed items')[1]
+
+
+def test_notification_open_span_survives_ingest_into_the_report(report, tmp_path):
+    events = [{'kind': 'span', 't': T + i, 'name': 'NotificationOpenToContent', 'outcome': 'ok', 'ms': ms,
+               'attrs': {'source': 'banner', 'launch': 'warm', 'tail': 'memory'}}
+              for i, ms in enumerate([80, 160, 320])]
+    store(tmp_path, events)
+    rows = report.span_budgets(report.load_day(tmp_path, DAY)[0])
+    assert 'NotificationOpenToContent' in rows
+    row = rows['NotificationOpenToContent']
+    assert (row['count'], row['p50'], row['p90'], row['max']) == (3, 160, 320, 320)
+    assert row['budget_ms'] is None and row['verdict'] == 'not gated'
+    assert 'NotificationOpenToContent' in report.build_report(tmp_path, DAY, [])
 
 
 def test_slow_span_is_flagged_against_its_budget(report, tmp_path):

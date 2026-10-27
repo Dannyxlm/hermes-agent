@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
+from concurrent.futures import ThreadPoolExecutor
+
 from .method_ctx import bind_module
+
+
+# A winning compaction can park one FIFO head. Keep a second worker available
+# for controls in other chats, independently of slow shared-pool handlers.
+_compaction_rpc_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tui-compaction-rpc")
+atexit.register(lambda: _compaction_rpc_pool.shutdown(wait=False, cancel_futures=True))
 
 
 def handle_request(req: dict) -> dict | None:
@@ -42,6 +51,45 @@ def _handle_admitted_request(req: dict) -> dict | None:
     return response
 
 
+def _submit_compaction_session_rpc(session: dict, run, on_submit_error):
+    """FIFO for formerly-inline RPCs; only the head occupies a pool worker.
+
+    The session's commit may hold history_lock for plugin/network work. Queue
+    here instead of parking the reader or filling the pool with same-chat waits.
+    """
+    from concurrent.futures import Future
+    import threading
+
+    future = Future()
+    lock = session.setdefault("_between_turns_rpc_lock", threading.Lock())
+    with lock:
+        previous = session.get("_between_turns_rpc_tail")
+        session["_between_turns_rpc_tail"] = future
+
+    def complete():
+        try:
+            result = run()
+        except BaseException as exc:
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+
+    def start(_=None):
+        try:
+            _compaction_rpc_pool.submit(complete)
+        except BaseException as exc:
+            try:
+                on_submit_error(exc)
+            finally:
+                future.set_exception(exc)
+
+    if previous is None:
+        start()
+    else:
+        previous.add_done_callback(start)
+    return future
+
+
 def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
     """Route inbound RPCs — long handlers to the pool (returns None; the worker writes its own
     response via the bound transport), everything else inline (returns the response dict).
@@ -59,7 +107,17 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
         normalized = _normalize_request(req)
         if isinstance(normalized, dict):
             return normalized
-        if normalized[1] not in _LONG_HANDLERS:
+        # An opted-in session can acquire its publication lock immediately after
+        # this probe. Never run its history-locking RPCs on the socket reader:
+        # an already-started commit (including plugin hooks) may be unbounded.
+        sid = normalized[2].get("session_id")
+        session = _sessions.get(sid) if isinstance(sid, str) else None
+        pending_rpc = session.get("_between_turns_rpc_tail") if session is not None else None
+        compaction_session = session is not None and (
+            session.get("_between_turns_compaction") is not None
+            or (pending_rpc is not None and not pending_rpc.done())
+            or getattr(session.get("agent"), "compression_between_turns", False) is True)
+        if normalized[1] not in _LONG_HANDLERS and not compaction_session:
             return handle_request(req)
         from hermes_cli.backend_retirement import retirement
 
@@ -79,7 +137,12 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
                     resp = _err(req.get("id"), -32000, f"handler error: {exc}")
                 if resp is not None:
                     t.write(resp)
-            future = _pool.submit(lambda: ctx.run(run))
+            if compaction_session and normalized[1] not in _LONG_HANDLERS:
+                future = _submit_compaction_session_rpc(
+                    session, lambda: ctx.run(run),
+                    lambda exc: t.write(_err(req.get("id"), -32000, f"handler dispatch failed: {exc}")))
+            else:
+                future = _pool.submit(lambda: ctx.run(run))
         except BaseException:
             retirement.release()
             raise
