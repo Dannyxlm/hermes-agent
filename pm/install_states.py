@@ -11,8 +11,9 @@ The state dir records the checkout it belongs to in ``inputs/.project-root`` (wr
 checkout is gone: a data root shared with a container (``-v ~/.hermes:/opt/data``) or an
 unmounted volume records paths this process cannot see. So a dir is an orphan only when its
 checkout sat where this process can see that it was deleted -- under the data root that owns
-``installs/`` (scratch clones, the runtime checkout) or directly in a ``.worktrees/`` dir that
-still exists. Removal still fails closed on anything a live process could hold: the install
+``installs/`` (scratch clones, the runtime checkout), directly in a ``.worktrees/`` dir that
+still exists, or in ``~/worktrees/<repo>/`` with that repo directory still visible. Removal
+still fails closed on anything a live process could hold: the install
 lock, or a dependency / PM runtime generation lease.
 """
 
@@ -30,7 +31,10 @@ logger = logging.getLogger(__name__)
 def _provably_deleted(root: Path, data_root: Path) -> bool:
     if root.exists():
         return False
-    return root.is_relative_to(data_root) or (root.parent.name == ".worktrees" and root.parent.is_dir())
+    return root.is_relative_to(data_root) or (
+        root.parent.is_dir()
+        and (root.parent.name == ".worktrees" or root.parent.parent == Path.home() / "worktrees")
+    )
 
 
 def orphan_install_states(installs: Path) -> list[Path]:
