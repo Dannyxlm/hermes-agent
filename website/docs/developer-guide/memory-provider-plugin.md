@@ -367,11 +367,20 @@ operator grant in `plugins.entries.<provider-name>.mcp_allowlist`. Denials
 propagate to the provider. It never opens a parallel connection.
 
 For bounded ambient reads, `ctx.call_mcp(server, tool, arguments, timeout=2,
-skip_if_busy=True)` skips an occupied native RPC slot. Budget the entire recall
-composition, including hydration. The result envelope preserves nonreserved
-`_meta`, structured content and typed native errors. An oversized JSON result
-returns `ok: false`, `error: mcp_result_too_large`, and `truncated: true` rather
-than a successful partial JSON string.
+skip_if_busy=True)` returns `ok: false`, `error: mcp_busy` instead of queueing
+behind a call that holds the native RPC slot. A skipped call is not a server
+failure and is not charged. Budget the entire recall composition, including
+hydration.
+
+A successful envelope keeps the result, nonreserved `_meta` and structured
+content. A failure (`ok: false`) keeps only generic typed fields in its `error`
+text and `_meta`: an `error` or `code` token, `retryable`, `retry_after_ms`, and
+notice codes under a `notice`, `warnings` or `notices` key in any namespace. Its
+`structuredContent` is passed through as the server sent it, so the provider
+reads its own receipt shape and decides what, if anything, reaches a prompt.
+Over the ~64 KB cap, `result` and `error` text keep their head with a marker,
+an over-cap `structuredContent` or `_meta` object is dropped, and the envelope
+carries `truncated: true`.
 
 Provider tool handlers accepting `**kwargs` or `tool_call_id` receive the host's
 invocation ID in both sequential and concurrent dispatch. This ID is separate

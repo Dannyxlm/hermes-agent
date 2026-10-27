@@ -514,7 +514,8 @@ class PluginContext:
         """Call ``tool`` on MCP ``server`` synchronously through :mod:`tools.mcp_tool`'s native client
         (same trust gates, breaker, reconnect — never a parallel connection). Servers not in
         ``plugins.entries.<plugin_id>.mcp_allowlist`` raise ``PermissionError`` (default-deny). ``timeout``
-        clamps to 1–600s; results over ~64KB are truncated with a marker.
+        clamps to 1–600s; results over ~64KB are truncated with a marker. A failure's ``error`` text and
+        ``_meta`` keep only generic typed fields; its ``structuredContent`` is passed through as sent.
 
         This is a per-server grant, deliberately not ambient authority over every configured server.
         TODO(#64228): swap the per-server allowlist for the declared capability model once it lands
@@ -533,8 +534,7 @@ class PluginContext:
             timeout = 30.0
         timeout = max(1.0, min(timeout, 600.0))
         from tools.mcp_tool_handlers import _make_tool_handler
-        options = {"skip_if_busy": True} if skip_if_busy else {}
-        raw = _make_tool_handler(server, tool, timeout, **options)(dict(arguments or {}))
+        raw = _make_tool_handler(server, tool, timeout, skip_if_busy=skip_if_busy, typed_errors=True)(dict(arguments or {}))
         logger.debug("Plugin %s called MCP %s/%s (timeout=%ss, %d chars returned)",
                      self.manifest.name, server, tool, timeout, len(raw or ""))
         return self._mcp_envelope(raw)

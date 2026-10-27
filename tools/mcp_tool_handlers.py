@@ -504,14 +504,38 @@ async def _call_tool_racing_stdio_death(server, server_name: str, tool_name: str
 
 # ---------------------------------------------------------- result rendering
 
-def _error_result_text(result) -> str:
-    """Concatenated text of an ``isError`` result's blocks (EmbeddedResource error payloads
+def _error_result_blocks(result) -> list[str]:
+    """Text of each block of an ``isError`` result (EmbeddedResource error payloads
     carry text under ``.resource.text``)."""
-    from tools.mcp_tool_error_projection import project_error_text
     texts = (getattr(b, "text", None) or getattr(getattr(b, "resource", None), "text", None) for b in (result.content or []))
-    # Project each block before joining: a prose prefix must not hide a JSON
-    # diagnostics block from the structured-field projection.
-    return "".join(project_error_text(str(t)) for t in texts if t)
+    return [str(t) for t in texts if t]
+
+
+def _error_result_text(result) -> str:
+    """Concatenated text of an ``isError`` result's blocks."""
+    return "".join(_error_result_blocks(result))
+
+
+def _render_typed_error(result, meta_exclude: frozenset[str] = frozenset()) -> str:
+    """An ``isError`` result for ``ctx.call_mcp``, unprojected: ``error`` is the list of sanitized text
+    blocks (the plugin envelope projects each one, so a prose prefix cannot hide a JSON diagnostics
+    block), plus ``structuredContent`` (or a JSON text body) and ``_meta`` minus reserved and
+    ``meta_exclude`` keys."""
+    blocks = _error_result_blocks(result)
+    payload: dict[str, Any] = {"error": [_sanitize_error(_truncate_mcp_text_result(b)) for b in blocks]
+                               or ["MCP tool returned an error"]}
+    structured = _capped_structured_content(result)
+    if structured is None:
+        try:
+            structured = json.loads(_truncate_mcp_text_result("".join(blocks)))
+        except ValueError:
+            structured = None
+    if isinstance(structured, (dict, list)):
+        payload["structuredContent"] = structured
+    meta = _strip_reserved_meta_keys(mcp_field(result, "meta", "meta"), meta_exclude)
+    if meta:
+        payload["_meta"] = meta
+    return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def _render_content_blocks(result, server_name: str) -> tuple[str, int, list[str]]:
@@ -598,7 +622,7 @@ def _content_dual_emits_structured(result, structured) -> bool:
 
 
 def _render_call_tool_result(result, server_name: str, image_paths: Optional[list[str]] = None,
-                             meta_exclude: frozenset[str] = frozenset()) -> str:
+                             meta_exclude: frozenset[str] = frozenset(), *, typed_errors: bool = False) -> str:
     """Pure: ``CallToolResult`` -> handler JSON (``image_paths``, when given, receives the files this
     call's image blocks were cached to). ``content`` and ``structuredContent`` are both
     forwarded, except that a ``structuredContent`` whose JSON also sits verbatim in a text block
@@ -610,23 +634,12 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
     reorganisation costs only tokens, so data-preservation wins. No richness or size heuristic is
     used. ``structuredContent`` fills ``result`` when the blocks rendered effectively empty
     (structuredContent-only servers); ``_meta`` minus reserved keys and the server's
-    ``meta_exclude`` keys is always surfaced."""
+    ``meta_exclude`` keys is always surfaced. An ``isError`` result is the server's sanitized text,
+    or with ``typed_errors`` the unprojected failure ``ctx.call_mcp`` projects."""
     if mcp_field(result, "is_error", "isError", False):
-        from tools.mcp_tool_error_projection import project_error_data, project_error_meta, project_error_text
-        raw_text = _error_result_text(result) or "MCP tool returned an error"
-        payload = {"error": _truncate_mcp_text_result(project_error_text(raw_text))}
-        structured = _capped_structured_content(result)
-        if structured is None:
-            try:
-                structured = json.loads(raw_text)
-            except ValueError:
-                structured = None
-        if structured is not None:
-            payload["structuredContent"] = project_error_data(structured)
-        meta = project_error_meta(_strip_reserved_meta_keys(mcp_field(result, "meta", "meta"), meta_exclude))
-        if meta:
-            payload["_meta"] = meta
-        return json.dumps(payload, ensure_ascii=False)
+        if typed_errors:
+            return _render_typed_error(result, meta_exclude)
+        return tool_error(_sanitize_error(_truncate_mcp_text_result(_error_result_text(result) or "MCP tool returned an error")))
     text_result, usable_parts, cached_images = _render_content_blocks(result, server_name)
     if image_paths is not None:
         image_paths.extend(cached_images)
@@ -655,11 +668,13 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
 
 
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False,
-                       skip_if_busy: bool = False):
+                       skip_if_busy: bool = False, typed_errors: bool = False):
     """Sync handler (``handler(args_dict, **kwargs)``) calling an MCP tool via the background loop. Always a JSON
     string, except with ``native_images`` (the registry handler the agent loop dispatches): a result carrying
     images then becomes the ``_multimodal`` envelope when the active route takes images in tool results.
-    Direct callers (plugins' ``ctx.call_mcp``) keep the string contract and the ``MEDIA:`` paths."""
+    Direct callers (plugins' ``ctx.call_mcp``) keep the string contract and the ``MEDIA:`` paths, and pass
+    ``typed_errors`` for an unprojected failure. ``skip_if_busy`` returns ``mcp_busy`` instead of queueing
+    behind a call that holds the server's RPC slot."""
     op = f"tools/call {tool_name}"
 
     def _handler(args: dict, **kwargs) -> Any:
@@ -702,7 +717,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy
                 server._mark_session_proven()
             image_paths.clear()
-            return _render_call_tool_result(result, server_name, image_paths, meta_exclude)
+            return _render_call_tool_result(result, server_name, image_paths, meta_exclude, typed_errors=typed_errors)
 
         def _on_failure(exc):
             _core._bump_server_error(server_name)

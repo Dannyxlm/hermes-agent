@@ -34,7 +34,7 @@ def _patch_handler(monkeypatch, response: str, captured: dict | None = None):
     """Replace tools.mcp_tool_handlers._make_tool_handler with a transport mock."""
     from tools import mcp_tool_handlers as _mcp_handlers
 
-    def _fake_make_handler(server_name, tool_name, tool_timeout):
+    def _fake_make_handler(server_name, tool_name, tool_timeout, **_options):
         if captured is not None:
             captured["server"] = server_name
             captured["tool"] = tool_name
@@ -189,11 +189,11 @@ def test_timeout_defaults_and_bounds(monkeypatch):
 def test_oversized_result_is_truncated(monkeypatch):
     _patch_config(monkeypatch, {"my-plugin": {"mcp_allowlist": ["big"]}})
     huge = "x" * (PluginContext._MCP_RESULT_CHAR_CAP + 5000)
-    _patch_handler(monkeypatch, huge)
+    _patch_handler(monkeypatch, json.dumps({"result": huge}))  # the native handler's JSON shape
 
     ctx = _make_ctx()
     result = ctx.call_mcp("big", "dump")
     assert result["ok"] is True
     assert result["truncated"] is True
     assert len(result["result"]) <= PluginContext._MCP_RESULT_CHAR_CAP + 20
-    assert result["result"].endswith("… [truncated]")
+    assert result["result"].startswith("x") and result["result"].endswith("… [truncated]")

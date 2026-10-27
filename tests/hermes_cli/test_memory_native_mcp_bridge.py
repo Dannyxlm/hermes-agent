@@ -36,14 +36,15 @@ def test_oversized_json_never_becomes_successful_unparseable_text():
     result = PluginContext._mcp_envelope(json.dumps({"error": "denied", "structuredContent": {"body": "x" * 70000}}))
     assert result["ok"] is False
     assert result["truncated"] is True
-    assert result["error"] == "mcp_result_too_large"
+    assert result["error"] == "denied"
+    assert "structuredContent" not in result
 
 
 def test_native_renderer_preserves_typed_error_data_and_public_metadata():
     payload = {"error": "pending_write", "write_request": {"state": "pending", "request_id": "op"}}
     wire = SimpleNamespace(isError=True, content=[SimpleNamespace(text=json.dumps(payload))],
                            structuredContent=payload, meta={"vendor/notice": "pending", "mcp.io/internal": "hidden"})
-    result = PluginContext._mcp_envelope(_render_call_tool_result(wire, "brain"))
+    result = PluginContext._mcp_envelope(_render_call_tool_result(wire, "brain", typed_errors=True))
     assert result["ok"] is False
     assert result["structuredContent"] == payload
     assert result["_meta"] == {"vendor/notice": "pending"}
