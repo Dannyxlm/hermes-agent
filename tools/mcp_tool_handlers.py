@@ -204,9 +204,21 @@ def _result_is_error(result) -> bool:
         return False
 
 
+class _NotDispatched(str):
+    """A handler result produced before the request reached the server: no breaker bookkeeping, and
+    the handler refunds any charge it booked."""
+
+
+# ``skip_if_busy`` found the RPC slot taken. Not a server failure, so it must not open the breaker
+# on the agent's own calls while a long tool holds the slot.
+_MCP_BUSY = _NotDispatched(tool_error("mcp_busy"))
+
+
 def _record_call_outcome(server_name: str, result) -> Any:
     """Breaker bookkeeping: an error payload from the tool itself still counts as a strike (#10447),
     flagged as an application error so the open-breaker message stays truthful."""
+    if isinstance(result, _NotDispatched):
+        return result
     if _result_is_error(result):
         _core._bump_server_error(server_name, application=True)
     else:
@@ -679,7 +691,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         async def _call():
             # Check and acquire on the same event loop. Ambient reads must not queue behind a long tool.
             if skip_if_busy and server._rpc_lock.locked():
-                return tool_error("mcp_busy")
+                return _MCP_BUSY
             async with server._rpc_lock, _track_inflight_rpc(server, server_name, op, retry_safe=read_only):
                 server._pending_call_context = contextvars.copy_context()  # for the elicitation callback
                 try:
@@ -700,6 +712,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             server_name, server, op, _call, tool_timeout,
             (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
             _on_failure, record_outcome=True)
+        if isinstance(text, _NotDispatched):
+            for charge in booked:
+                charge.refund()
         # Off the MCP loop on purpose: image prep is CPU work (bounded vision pool) that must not stall other servers' I/O.
         return _mcp_result_with_native_images(text, image_paths) if native_images and not _result_is_error(text) else text
     return _handler
