@@ -787,6 +787,65 @@ class TestProtectedInstructionFiles:
         assert not res.get("error"), res
         assert approvals["calls"] == []
 
+    # ---- opt-in exempt roots (security.protected_instruction_exempt_roots) ----
+
+    @pytest.fixture
+    def exempt_root(self, tmp_path, monkeypatch):
+        import tools.file_tools_write_guards as ft
+        root = tmp_path / "worktrees"
+        (root / "repo").mkdir(parents=True)
+        monkeypatch.setattr(ft, "_protected_instruction_exempt_roots", lambda: (os.path.realpath(root),))
+        return root
+
+    def test_exempt_root_write_needs_no_approval(self, exempt_root, approvals):
+        target = exempt_root / "repo" / "AGENTS.md"
+        res = self._write(target, "reviewed via PR")
+        assert not res.get("error"), res
+        assert target.read_text(encoding="utf-8") == "reviewed via PR"
+        assert approvals["calls"] == []
+
+    def test_outside_exempt_root_still_gated(self, tmp_path, exempt_root, approvals):
+        approvals["answer"] = "deny"
+        res = self._write(tmp_path / "AGENTS.md")
+        assert res.get("error") and "BLOCKED" in res["error"]
+        assert len(approvals["calls"]) == 1
+
+    @pytest.mark.require_symlinks
+    def test_link_inside_root_to_outside_file_is_gated(self, tmp_path, exempt_root, approvals):
+        real = tmp_path / "AGENTS.md"
+        real.write_text("original", encoding="utf-8")
+        (exempt_root / "repo" / "AGENTS.md").symlink_to(real)
+        approvals["answer"] = "deny"
+        res = self._write(exempt_root / "repo" / "AGENTS.md", "injected")
+        assert res.get("error") and "BLOCKED" in res["error"]
+        assert real.read_text(encoding="utf-8") == "original"
+
+    @pytest.mark.require_symlinks
+    def test_link_outside_root_into_root_is_gated(self, tmp_path, exempt_root, approvals):
+        """A live AGENTS.md outside the root must not become writable by pointing it into one."""
+        inner = exempt_root / "repo" / "AGENTS.md"
+        inner.write_text("original", encoding="utf-8")
+        live = tmp_path / "home"
+        live.mkdir()
+        (live / "AGENTS.md").symlink_to(inner)
+        approvals["answer"] = "deny"
+        res = self._write(live / "AGENTS.md", "injected")
+        assert res.get("error") and "BLOCKED" in res["error"]
+        assert inner.read_text(encoding="utf-8") == "original"
+
+    def test_exempt_roots_config_rejects_relative_root_and_junk(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+        import tools.file_tools_write_guards as ft
+        root = tmp_path / "worktrees"
+        root.mkdir()
+        roots = [str(root), "relative/dir", "/", "", None, 7]
+        monkeypatch.setattr(config, "load_config", lambda: {"security": {"protected_instruction_exempt_roots": roots}})
+        assert ft._protected_instruction_exempt_roots() == (os.path.realpath(root),)
+        monkeypatch.setattr(config, "load_config", lambda: {"security": {"protected_instruction_exempt_roots": "/tmp"}})
+        assert ft._protected_instruction_exempt_roots() == ()
+        monkeypatch.setattr(config, "load_config", lambda: {})
+        assert ft._protected_instruction_exempt_roots() == ()
+
     def test_real_hermes_home_not_gated_by_this_check(
         self, tmp_path, approvals, monkeypatch
     ):

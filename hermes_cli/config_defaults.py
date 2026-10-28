@@ -1806,6 +1806,10 @@ DEFAULT_CONFIG = {
         # globs on the basename (e.g. "*.mdc").
         "protected_instruction_files": True,
         "protected_instruction_extra_patterns": [],
+        # Absolute trees exempt from that gate because their files reach other agents only
+        # after review, e.g. ["~/worktrees"] for disposable PR checkouts. Both the path and
+        # its realpath must be inside a root. Empty = no exemptions.
+        "protected_instruction_exempt_roots": [],
         "website_blocklist": {"enabled": False, "domains": [], "shared_files": []},
         # IDs of supply-chain advisories the user has read and acted on; acked ones stop the startup
         # banner. Add via `hermes doctor --ack <id>`; remove by editing the list. Catalog:

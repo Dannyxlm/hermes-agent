@@ -23,7 +23,8 @@ from tools.binary_extensions import (
     is_sqlite_sidecar,
 )
 from tools.file_tools_paths import (
-    _expand_tilde, _resolve_path_for_task, _ssh_path_escapes_home, _terminal_env_type_for_task)
+    _expand_tilde, _resolve_entry_for_task, _resolve_path_for_task, _ssh_path_escapes_home,
+    _terminal_env_type_for_task)
 from tools.file_tools_read_tracking import _has_full_write_baseline, _is_own_blind_patch, _read_mtime_drifted
 import itertools
 
@@ -208,6 +209,32 @@ def _protected_instruction_config() -> tuple[bool, list[str]]:
     return enabled, [str(p) for p in extra if p]
 
 
+def _protected_instruction_exempt_roots() -> tuple[str, ...]:
+    """Realpaths from ``security.protected_instruction_exempt_roots``: opt-in trees whose
+    instruction files reach other agents only after review, such as disposable PR worktrees.
+    Empty by default. A read failure, a relative root or ``/`` exempts nothing (fail-safe)."""
+    try:
+        from hermes_cli.config import load_config, cfg_get
+        roots = cfg_get(load_config(), "security", "protected_instruction_exempt_roots", default=[])
+    except Exception:
+        return ()
+    if not isinstance(roots, list):
+        return ()
+    exempt = []
+    for root in roots:
+        expanded = os.path.expanduser(root.strip()) if isinstance(root, str) else ""
+        if not os.path.isabs(expanded):
+            continue
+        real = os.path.realpath(expanded)
+        if os.path.dirname(real) != real:  # never the filesystem root
+            exempt.append(real)
+    return tuple(exempt)
+
+
+def _within(path: str, root: str) -> bool:
+    return path.startswith(root + os.sep)
+
+
 def _protected_instruction_reason(filepath: str, task_id: str = "default",
                                   *, enabled: bool | None = None,
                                   extra_patterns: list[str] | None = None) -> str | None:
@@ -236,6 +263,18 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
     # profile, so ~/.hermes/<file> cannot read as project-local ``.hermes`` config.
     for real_home in _hermes_exempt_homes():
         if resolved == real_home or resolved.startswith(real_home + os.sep):
+            return None
+
+    # Opt-in exempt roots. BOTH the directory entry (parent resolved, last component kept)
+    # and its realpath must sit inside one root, so a link from outside a root into it
+    # (or out of it) stays gated.
+    exempt_roots = _protected_instruction_exempt_roots()
+    if exempt_roots:
+        try:
+            entry = os.path.normpath(str(_resolve_entry_for_task(filepath, task_id)))
+        except (OSError, ValueError, RuntimeError):
+            entry = ""
+        if entry and any(_within(entry, root) and _within(resolved, root) for root in exempt_roots):
             return None
 
     for candidate in (normalized, resolved):
