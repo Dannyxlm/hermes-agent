@@ -193,7 +193,7 @@ def test_empty_discovery_output_is_zero_matches_without_retry():
     assert len(env.rg_commands) == 1
 
 
-def test_modified_capability_failure_is_actionable_and_not_downgraded():
+def test_modified_search_error_without_matches_is_not_downgraded():
     env = RecordingEnvironment(rg_output="", rg_code=2)
     ops = ShellFileOperations(env)
 
@@ -201,20 +201,25 @@ def test_modified_capability_failure_is_actionable_and_not_downgraded():
 
     assert len(env.rg_commands) == 1
     assert result.error is not None
-    assert "exact modification-time order" in result.error.lower()
+    assert "exit code 2" in result.error.lower()
     assert "ripgrep" in result.error
+    assert result.files == []
 
 
 @pytest.mark.parametrize("order", ["discovery", "modified"])
-def test_rg_partial_output_with_error_exit_fails_closed(order):
+def test_rg_partial_output_with_error_exit_is_explicitly_incomplete(order):
     env = RecordingEnvironment(rg_output="/repo/partial.py\n", rg_code=2)
 
     result = ShellFileOperations(env).search(
         "*.py", path="/repo", target="files", order=order
     )
 
-    assert result.error is not None
-    assert result.files == []
+    assert result.error is None
+    assert result.files == ["/repo/partial.py"]
+    assert result.total_count == 1
+    assert result.truncated is True
+    assert result.limit_reason == "search_error"
+    assert "exit code 2" in (result.warning or "")
     assert len(env.rg_commands) == 1
 
 
@@ -233,16 +238,19 @@ def test_rg_sigpipe_is_benign_only_after_fetch_limit_paths(order):
 
 
 @pytest.mark.parametrize("order", ["discovery", "modified"])
-def test_rg_sigpipe_with_fewer_than_fetch_limit_paths_fails_closed(order):
+def test_rg_sigpipe_with_fewer_than_fetch_limit_paths_reports_partial_page(order):
     env = RecordingEnvironment(rg_output="/repo/partial.py\n", rg_code=141)
 
     result = ShellFileOperations(env).search(
         "*.py", path="/repo", target="files", limit=2, offset=1, order=order
     )
 
-    assert result.error is not None
-    assert result.files == []
-    assert result.total_count == 0
+    assert result.error is None
+    assert result.files == []  # the one available match precedes the requested offset
+    assert result.total_count == 1
+    assert result.truncated is True
+    assert result.limit_reason == "search_error"
+    assert "exit code 141" in (result.warning or "")
 
 
 def test_invalid_direct_file_order_returns_structured_error():

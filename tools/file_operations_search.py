@@ -372,7 +372,7 @@ class SearchMixin:
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
                 start_new_session=True)
         except OSError as exc:
-            return ExecuteResult(stdout=f"rg: {exc}", exit_code=2)
+            return ExecuteResult(stdout=f"rg: {exc}" if merge_stderr else "", exit_code=2)
 
         # Drain on a thread so a silent rg (huge tree, no hits yet) cannot pin the
         # caller past the deadline or past a /stop; the waiter below owns both.
@@ -409,7 +409,7 @@ class SearchMixin:
         if exit_code == 124:
             return ExecuteResult(stdout=stdout + f"\n[Command timed out after {timeout}s]", exit_code=124)
         if exit_code == 130:
-            return ExecuteResult(stdout=stdout + "\n[Command interrupted]", exit_code=130)
+            return ExecuteResult(stdout=stdout + ("\n[Command interrupted]" if merge_stderr else ""), exit_code=130)
         # A killed-at-bound rg reports a signal (negative returncode); head would have
         # left the pipeline at 0 unless rg itself already failed.
         return ExecuteResult(stdout=stdout, exit_code=0 if bounded.is_set() else proc.returncode)
@@ -587,7 +587,7 @@ class SearchMixin:
             note += "; skipped missing: " + ", ".join(missing[:3])
             if len(missing) > 3:
                 note += f" (+{len(missing) - 3} more)"
-        warning_parts = [note]
+        warning_parts = list(filter(None, [note, merged.warning]))
         if not merged.error:
             protected_paths = [absolute for _r, _rel, absolute in self._effective_macos_search_exclusions(existing)]
             if protected_paths:
@@ -638,7 +638,7 @@ class SearchMixin:
                 glob_expr_probe = f"{glob_expr} {self._search_prune_glob_args()}"
             else:
                 glob_expr_probe = glob_expr
-            probe_words = [rg, flags, "--count-matches", glob_expr_probe,
+            probe_words = [rg, flags, "--count-matches", glob_expr_probe, "--",
                            self._escape_shell_arg(pattern, translate_path=False), self._escape_native_tool_arg(path)]
             probe = self._run_rg_bounded(probe_words, 50, timeout=30)
             total, per_file = 0, []
@@ -968,18 +968,19 @@ class SearchMixin:
                 f if posixpath.isabs(f) else posixpath.normpath(posixpath.join(scoped_common, f))
                 for f in all_files]
         bounded_sigpipe = result.exit_code == 141 and len(all_files) >= fetch_limit
+        warning = None
         if result.exit_code not in {0, 1, 124} and not bounded_sigpipe:
-            if order == "modified":
-                return SearchResult(error=(
-                    "Exact modification-time order failed; ripgrep 14+ is "
-                    "required. Upgrade ripgrep or use order='discovery'."))
-            return SearchResult(error="File search failed while running ripgrep.")
+            if not all_files:
+                return SearchResult(error=f"File search failed while running ripgrep (exit code {result.exit_code}).")
+            warning = (
+                f"Partial file search results: ripgrep reported an error (exit code {result.exit_code}); "
+                "some paths may be unreadable.")
+            limit_reason = "search_error"
         # rg --files lists files only; supplement with matching directories so
         # empty directories stay discoverable (#54347). Skip the extra traversal
-        # when rg already timed out — partial file results must not be presented
-        # as a coherent page. Only the single-root path supplements (a multi-root
-        # walk is already the merged view across roots).
-        if limit_reason != "search_timeout" and isinstance(path, str) and self._has_command("find"):
+        # after an error or timeout: the file results are already incomplete.
+        # Only the single-root path supplements (a multi-root walk is already merged).
+        if not limit_reason and isinstance(path, str) and self._has_command("find"):
             dirs, directory_limit_reason = self._search_directories_with_find(glob_pattern, path, fetch_limit)
             if dirs:
                 existing = set(all_files)
@@ -991,7 +992,8 @@ class SearchMixin:
                 limit_reason = limit_reason or directory_limit_reason
         return SearchResult(
             files=all_files[offset:offset + limit], total_count=len(all_files),
-            truncated=len(all_files) > offset + limit or bool(limit_reason), limit_reason=limit_reason)
+            truncated=len(all_files) > offset + limit or bool(limit_reason), limit_reason=limit_reason,
+            warning=warning)
 
     def _search_content(self, pattern: str, path: str, file_glob: Optional[str],
                         limit: int, offset: int, output_mode: str, context: int) -> SearchResult:
@@ -1067,7 +1069,7 @@ class SearchMixin:
             cmd_parts.extend(["--glob", self._escape_shell_arg(file_glob)])
         if output_mode in _OUTPUT_MODE_FLAGS:
             cmd_parts.append(_OUTPUT_MODE_FLAGS[output_mode])
-        cmd_parts.append(self._escape_shell_arg(pattern, translate_path=False))
+        cmd_parts.extend(["--", self._escape_shell_arg(pattern, translate_path=False)])
         # rg is a native Windows binary (winget/cargo/choco): needs C:/... not MSYS /c/...
         cmd_parts.append(self._escape_native_tool_arg(path))
         ml_note = (
@@ -1086,7 +1088,7 @@ class SearchMixin:
             parts.extend(["--include", self._escape_shell_arg(file_glob)])
         if output_mode in _OUTPUT_MODE_FLAGS:
             parts.append(_OUTPUT_MODE_FLAGS[output_mode])
-        parts.append(self._escape_shell_arg(pattern, translate_path=False))
+        parts.extend(["--", self._escape_shell_arg(pattern, translate_path=False)])
         return parts
 
     def _search_with_grep(self, pattern: str, path: str, file_glob: Optional[str],
