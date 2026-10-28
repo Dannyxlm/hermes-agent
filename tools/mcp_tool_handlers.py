@@ -246,15 +246,21 @@ def _lookup_reconnectable_server(server_name: str, require_loop: bool = False):
     return srv if ok else None
 
 
-def _retry_once(server_name: str, retry_call, op_description: str, what: str):
+def _retry_once(server_name: str, retry_call, op_description: str, what: str, *, reset_on_completion=False):
     """Re-run ``retry_call`` after a recovery step. Returns the result when the RPC completed
     (an application error is still the tool's real answer, and still a breaker strike per #10447);
     None when the retry raised (caller falls through)."""
     try:
         result = retry_call()
+    except _loop._CallerBudgetTimeout:
+        raise
     except Exception as retry_exc:
+        if reset_on_completion:
+            _core._reset_server_error(server_name)
         logger.warning("MCP %s/%s retry after %s failed: %s", server_name, op_description, what, retry_exc)
         return None
+    if reset_on_completion:
+        _core._reset_server_error(server_name)
     return _record_call_outcome(server_name, result)
 
 
@@ -267,17 +273,19 @@ def _handle_auth_error_and_retry(server_name: str, exc: BaseException, retry_cal
     from tools.mcp_oauth_manager import get_manager
     try:
         recovered = _loop._run_on_mcp_loop(lambda: get_manager().handle_401(server_name, None), timeout=10)
+    except _loop._CallerBudgetTimeout:
+        raise
     except Exception as rec_exc:
         logger.warning("MCP OAuth '%s': recovery attempt failed: %s", server_name, rec_exc)
         recovered = False
     if recovered:
         srv = _lookup_reconnectable_server(server_name)
-        # Recovery + reconnect is independent evidence of viability: close the breaker here, not only on
-        # retry success (else a failing retry pins it open forever).
-        if srv is not None and _loop._signal_reconnect_and_wait(
-                server_name, srv, op_description=f"{op_description} after OAuth recovery", timeout=15):
-            _core._reset_server_error(server_name)
-        result = _retry_once(server_name, retry_call, op_description, "auth recovery")
+        # Preserve recovery's reset for completed retries, including remote failures,
+        # but not for an expired caller budget whose server outcome is unknown.
+        reconnected = srv is not None and _loop._signal_reconnect_and_wait(
+            server_name, srv, op_description=f"{op_description} after OAuth recovery", timeout=15)
+        result = _retry_once(server_name, retry_call, op_description, "auth recovery",
+                             reset_on_completion=reconnected)
         if result is not None:
             return result
     return _strike(server_name, _NEEDS_REAUTH_MSG.format(s=server_name, detail=_auth_error_detail(exc)),
@@ -375,6 +383,8 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
         return _strike(server_name, _STDIO_NO_RESPAWN_MSG.format(s=server_name, t=_core._STDIO_RESPAWN_WAIT_SEC))
     try:
         return _record_call_outcome(server_name, retry_call())
+    except _loop._CallerBudgetTimeout:
+        raise
     except _StdioChildExited as retry_exc:
         # Died again right after respawn: broken server; run()'s budget takes it to the park.
         logger.warning("MCP server '%s': %s stdio subprocess exited again right after respawn (%s); not retrying "
@@ -412,14 +422,18 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
     except InterruptedError:
         return tool_error("MCP call interrupted: user sent a new message")
     except Exception as exc:
+        if not isinstance(exc, _loop._CallerBudgetTimeout):
+            try:
+                for recover in recoverers:
+                    recovered = recover(server_name, exc, call_once, op)
+                    if recovered is not None:
+                        return recovered
+            except _loop._CallerBudgetTimeout as retry_exc:
+                exc = retry_exc
         if caller_timeout_neutral and isinstance(exc, _loop._CallerBudgetTimeout):
             # Ambient reads use a caller budget shorter than the server timeout.
             # They may have dispatched, so do not refund or change server health.
             return tool_error("mcp_timeout")
-        for recover in recoverers:
-            recovered = recover(server_name, exc, call_once, op)
-            if recovered is not None:
-                return recovered
         on_final_failure(exc)
         return tool_error(_mcp_call_failed_message(exc))
 
