@@ -30,7 +30,7 @@ class _FakeAgent:
         self._interrupt_requested = False
         self.activity = []
 
-    def _touch_activity(self, msg):
+    def _touch_activity(self, msg, **_kwargs):
         self.activity.append(msg)
 
 @pytest.fixture()

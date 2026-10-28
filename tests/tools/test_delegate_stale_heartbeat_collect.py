@@ -64,7 +64,7 @@ def _parent():
         _current_task_id=None,
         _active_children=[],
         _active_children_lock=threading.Lock(),
-        _touch_activity=lambda _desc: None,
+        _touch_activity=lambda _desc, **_kwargs: None,
         _interrupt_requested=False,
     )
 

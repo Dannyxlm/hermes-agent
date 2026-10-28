@@ -76,7 +76,7 @@ def test_container_backend_task_leaves_host_store_untouched(tmp_path, manager, c
     path = str(host_file)
     agent = SimpleNamespace(
         _checkpoint_mgr=manager, _turn_failed_file_mutations={}, _turn_file_mutation_paths=set(),
-        quiet_mode=True, tool_progress_callback=None, tool_start_callback=None, _touch_activity=lambda *_: None,
+        quiet_mode=True, tool_progress_callback=None, tool_start_callback=None, _touch_activity=lambda *_, **_kwargs: None,
     )
 
     _ensure_file_checkpoint(agent, "write_file", {"path": path}, container_task_id)

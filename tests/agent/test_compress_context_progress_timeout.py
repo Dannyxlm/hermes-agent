@@ -578,6 +578,7 @@ class TestCompressContextForwarderOwnsTimeout:
         agent._touch_activity.assert_called_with(
             "context compression timed out",
             provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT,
+            step_kind="retrying",
         )
 
     def test_owned_total_ceiling_reports_progress_accurately(self, monkeypatch):

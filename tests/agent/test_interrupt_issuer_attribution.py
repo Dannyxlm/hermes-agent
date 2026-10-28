@@ -109,7 +109,7 @@ def test_soft_interrupt_with_tool_reason_is_attributed_to_the_system():
     import agent.tool_executor as te
 
     agent = _bare_agent()
-    agent._touch_activity = lambda *_: None
+    agent._touch_activity = lambda *_, **_kwargs: None
     batch = SimpleNamespace(authorization_gate=te._ConcurrentToolAuthorizationGate(), executor=None, close=lambda: None)
     prepared = SimpleNamespace(batch=batch, tids=[], future=concurrent.futures.Future())
     try:

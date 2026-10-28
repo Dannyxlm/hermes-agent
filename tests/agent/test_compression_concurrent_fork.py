@@ -461,7 +461,7 @@ def test_compression_heartbeat_does_not_clobber_timeout_provenance() -> None:
         touches=[],
     )
 
-    def _touch(desc, *, provenance=None, force_persist=False):
+    def _touch(desc, *, provenance=None, force_persist=False, **_kwargs):
         agent.touches.append((desc, provenance))
         agent._last_activity_provenance = provenance
         agent._last_activity_desc = desc
@@ -489,7 +489,7 @@ def test_compression_heartbeat_start_republishes_after_terminal_provenance() -> 
         touches=[],
     )
 
-    def _touch(desc, *, provenance=None, force_persist=False):
+    def _touch(desc, *, provenance=None, force_persist=False, **_kwargs):
         agent.touches.append((desc, provenance))
         agent._last_activity_provenance = provenance
         agent._last_activity_desc = desc
@@ -523,7 +523,7 @@ def test_compression_heartbeat_does_not_rearm_after_unknown_provenance() -> None
         touches=[],
     )
 
-    def _touch(desc, *, provenance=None, force_persist=False):
+    def _touch(desc, *, provenance=None, force_persist=False, **_kwargs):
         agent.touches.append((desc, provenance))
         agent._last_activity_provenance = provenance
         agent._last_activity_desc = desc
@@ -559,7 +559,7 @@ def test_compression_heartbeat_stops_when_commit_fence_cancelled() -> None:
         touches=[],
     )
 
-    def _touch(desc, *, provenance=None, force_persist=False):
+    def _touch(desc, *, provenance=None, force_persist=False, **_kwargs):
         agent.touches.append((desc, provenance))
         agent._last_activity_provenance = provenance
         agent._last_activity_desc = desc

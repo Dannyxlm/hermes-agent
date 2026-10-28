@@ -61,7 +61,7 @@ def _make_agent(monkeypatch):
             self._tool_worker_threads_lock = threading.Lock()
             self._active_children_lock = threading.Lock()
 
-        def _touch_activity(self, desc):
+        def _touch_activity(self, desc, **_kwargs):
             self._last_activity = time.time()
 
         def _vprint(self, msg, force=False):

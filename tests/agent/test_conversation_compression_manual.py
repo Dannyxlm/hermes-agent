@@ -78,6 +78,7 @@ def test_every_surface_honours_preview_without_compressing(surface, monkeypatch)
         assert _compress_session_history(session, "--preview")[0] == 0
         assert session["history"] == frozen and session["history_version"] == 3
     else:
+        pytest.importorskip("acp")
         from acp_adapter.commands import SlashCommandsMixin
         acp = SlashCommandsMixin.__new__(SlashCommandsMixin)
         acp.session_manager = MagicMock()

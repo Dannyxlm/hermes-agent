@@ -78,7 +78,7 @@ class _SlowButLiveChild:
 def _run(child, monkeypatch, cap=_CAP_SECONDS):
     parent = SimpleNamespace(
         session_id="parent", _current_task_id=None, _active_children=[child],
-        _active_children_lock=threading.Lock(), _touch_activity=lambda _d: None, _interrupt_requested=False,
+        _active_children_lock=threading.Lock(), _touch_activity=lambda _d, **_kwargs: None, _interrupt_requested=False,
     )
     monkeypatch.setattr(delegate_tool, "_get_child_timeout", lambda: cap)
     monkeypatch.setattr(delegate_tool, "_get_worktree_isolation", lambda: False)
