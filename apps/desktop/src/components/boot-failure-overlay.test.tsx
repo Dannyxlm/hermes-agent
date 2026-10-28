@@ -61,7 +61,7 @@ const remoteToken = {
   remoteOauthConnected: false,
   remoteTokenPreview: null,
   remoteTokenSet: true,
-  remoteUrl: 'http://100.116.104.53:9191',
+  remoteUrl: 'http://192.0.2.43:8080',
   cloudOrg: ''
 }
 
@@ -213,7 +213,7 @@ describe('BootFailureOverlay', () => {
   })
 
   it('clears and signs in only the failed gateway once', async () => {
-    const gatewayUrl = 'http://100.116.104.53:9191'
+    const gatewayUrl = 'http://192.0.2.43:8080'
     const logout = vi.fn().mockResolvedValue({ ok: true, connected: false })
     const login = vi.fn().mockResolvedValue({ ok: true, connected: false })
 

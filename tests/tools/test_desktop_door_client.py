@@ -11,6 +11,32 @@ pytest_plugins = ['tests.tui_gateway.test_desktop_door']
 
 
 class TestDoorBoundary:
+    def test_configured_viewer_base_is_exact_and_client_local(self, desktop, door):
+        from tools.desktop_door_client import DoorUnavailable
+
+        door.viewer_base_url = 'https://viewer.example:9443/shared-screen'
+        door.client.viewer_base_url = door.viewer_base_url
+        assert helpers.watch(desktop)['result']['url'].startswith(door.viewer_base_url + '/')
+        door.viewer_base_url = 'https://other.example/shared-screen'
+        with pytest.raises(DoorUnavailable):
+            door.client.observe('fixture-owner', 'fixture-profile')
+
+    def test_configured_client_reads_nonsecret_endpoint_settings(self, tmp_path, monkeypatch):
+        from hermes_cli.config import atomic_config_write
+        from hermes_cli import profiles
+        from tools.desktop_door_client import DoorClient
+
+        monkeypatch.setattr(profiles, '_get_default_hermes_home', lambda: tmp_path)
+        credential = tmp_path / 'fixture-credential'
+        atomic_config_write(tmp_path / 'config.yaml', {'cloudseed_mobile': {'desktop_door': {
+            'credential_file': str(credential), 'port': 8081,
+            'viewer_base_url': 'https://viewer.example:9443/shared-screen',
+        }}})
+        client = DoorClient.configured()
+        assert client.credential_file == credential
+        assert client.port == 8081
+        assert client.viewer_base_url == 'https://viewer.example:9443/shared-screen'
+
     @pytest.mark.parametrize('change', ['unknown_field', 'boolean_epoch', 'wrong_resource', 'nonfinite_time'])
     def test_unexpected_state_never_authorizes(self, desktop, door, change):
         if change == 'unknown_field':
@@ -34,7 +60,7 @@ class TestDoorBoundary:
         parts = urlsplit(body['url'])
         fragment = parse_qs(parts.fragment)
         parts = {
-            'host': parts._replace(netloc='other.example:3443'),
+            'host': parts._replace(netloc='other.example:8443'),
             'credentials': parts._replace(netloc='user@' + parts.netloc),
             'path': parts._replace(path='/ava-desktop/v/other/viewer/'),
         }.get(change, parts)
@@ -43,7 +69,7 @@ class TestDoorBoundary:
         if change == 'relative_base':
             fragment['base'] = [urlsplit(fragment['base'][0]).path]
         if change == 'foreign_base':
-            fragment['base'] = ['https://other.example:3443' + urlsplit(fragment['base'][0]).path]
+            fragment['base'] = ['https://other.example:8443' + urlsplit(fragment['base'][0]).path]
         if change == 'upstream_ticket':
             body['ticket'] = 'fixture-upstream-ticket'
         body['url'] = urlunsplit(parts._replace(fragment=urlencode(fragment, doseq=True)))

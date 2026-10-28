@@ -62,7 +62,7 @@ def test_ssh_paths_resolve_on_the_remote_and_stay_guarded(monkeypatch):
     (HOST_HOME, "ssh", "~"),
     (f"{HOST_HOME}/proj", "ssh", "~/proj"),
     ("~bob/src", "ssh", "~bob/src"),
-    ("/home/ubuntu", "ssh", "/home/ubuntu"),
+    ("/home/example", "ssh", "/home/example"),
     ("/opt/data/homework", "ssh", "/opt/data/homework"),
     (HOST_HOME, "docker", HOST_HOME),
 ])

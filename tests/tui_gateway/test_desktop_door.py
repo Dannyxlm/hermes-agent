@@ -29,7 +29,7 @@ def door(desktop, tmp_path, monkeypatch):
         prefix = 'v' if mode == 'watch' else 'c'
         ticket = 'viewer' if mode == 'watch' else 'c' * 43
         # Same shape as door_state.viewer(): the fragment base is absolute, as the app requires.
-        base = f'https://ava-cloud.tailbe2d4b.ts.net:3443/ava-desktop/{prefix}/{ticket}'
+        base = f'{getattr(control, "viewer_base_url", "https://desktop.example/desktop")}/{prefix}/{ticket}'
         fragment = {'ticket': ticket, 'base': base, 'audio': 'off', 'scale': 'fit'}
         if mode == 'watch':
             fragment['view_only'] = '1'

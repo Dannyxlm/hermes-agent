@@ -246,10 +246,10 @@ df -h | grep lambda
 **Solutions**:
 ```bash
 # Use local SSD for temporary/intermediate files
-# /home/ubuntu has fast NVMe storage
+# /home/example has fast NVMe storage
 
 # Copy frequently accessed data to local storage
-cp -r /lambda/nfs/storage/dataset /home/ubuntu/dataset
+cp -r /lambda/nfs/storage/dataset /home/example/dataset
 
 # Use filesystem for checkpoints and final outputs only
 
@@ -263,14 +263,14 @@ iperf3 -c <filesystem_server>
 
 **Solutions**:
 ```bash
-# Root volume (/home/ubuntu) is EPHEMERAL
+# Root volume (/home/example) is EPHEMERAL
 # Data there is lost on termination
 
 # ALWAYS use filesystem for persistent data
 /lambda/nfs/<filesystem_name>/
 
 # Sync important local files before terminating
-rsync -av /home/ubuntu/outputs/ /lambda/nfs/storage/outputs/
+rsync -av /home/example/outputs/ /lambda/nfs/storage/outputs/
 ```
 
 ### Filesystem full

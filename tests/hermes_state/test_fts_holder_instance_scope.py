@@ -2,7 +2,7 @@
 
 Field-verified 2026-09-07 on a production host running TWO independent
 Hermes instances: a main gateway (user ``ubuntu``,
-HERMES_HOME=/home/ubuntu/.hermes) and a demo gateway (user ``demo``,
+HERMES_HOME=/home/example/.hermes) and a demo gateway (user ``demo``,
 HERMES_HOME=/home/demo/.hermes).  The demo gateway runs as another user, so
 its ``/proc/<pid>/fd`` table is unreadable from the main instance and the
 holder scan falls back to ``/proc/<pid>/cmdline`` + ``_looks_like_hermes``.

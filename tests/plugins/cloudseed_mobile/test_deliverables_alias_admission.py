@@ -18,7 +18,7 @@ def _index_semantics_over_synthetic_paths(monkeypatch):
 def test_renamed_workspace_deliveries_open_without_new_grants(client):
     c, home = client
     root, wid = setup_root(c, home)
-    alias = root.parent / 'CloudSeed Strategy'
+    alias = root.parent / 'Example Workspace'
     alias.symlink_to(root.name)
     (root / 'outputs/report.md').write_text('synthetic delivery')
     outside = home / 'outside'; outside.mkdir()

@@ -11,7 +11,7 @@ from tests.plugins.cloudseed_mobile.test_deliverables import project
     ('MEDIA:/tmp/a.pdf.', ['/tmp/a.pdf']),
     ('MEDIA:`/granted/my report.unknown`', ['/granted/my report.unknown']),
     ('MEDIA:/granted/a.pdf and MEDIA:/granted/b.md', ['/granted/a.pdf', '/granted/b.md']),
-    ('MEDIA:/granted/CloudSeed Strategy/report.md', ['/granted/CloudSeed Strategy/report.md']),
+    ('MEDIA:/granted/Example Workspace/report.md', ['/granted/Example Workspace/report.md']),
     ('MEDIA:outputs/a.pdf,', ['outputs/a.pdf']),
     ('MEDIA:"/granted/stop!.md"', ['/granted/stop!.md']),
 ])
