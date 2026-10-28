@@ -25,8 +25,8 @@ def _ledger_entry(**over):
         "spawner_pid": None,
         "spawner_create": None,
         "registered_at": 222.0,
-        "argv": "hermes serve --host 100.94.65.93 --port 9119",
-        "host": "100.94.65.93",
+        "argv": "hermes serve --host 192.0.2.93 --port 9119",
+        "host": "192.0.2.93",
         "port": 9119,
         "profile": "",
     }
@@ -43,7 +43,7 @@ def test_register_self_records_structured_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(pi, "_ledger_path", lambda: tmp_path / "ledger.json")
     monkeypatch.setattr(pi, "install_id", lambda *a, **k: "inst")
     assert pi.register_self(
-        "serve", detail={"host": "100.94.65.93", "port": 9119, "profile": "work"}
+        "serve", detail={"host": "192.0.2.93", "port": 9119, "profile": "work"}
     )
     entries = [
         e
@@ -52,7 +52,7 @@ def test_register_self_records_structured_detail(tmp_path, monkeypatch):
     ]
     assert entries, "serve entry must be written"
     e = entries[-1]
-    assert e["host"] == "100.94.65.93"
+    assert e["host"] == "192.0.2.93"
     assert e["port"] == 9119
     assert e["profile"] == "work"
 
@@ -95,7 +95,7 @@ def test_inventory_includes_manual_serve_from_ledger(monkeypatch):
     assert row.pid == 4321
     assert row.supervisor == "manual-serve"
     assert row.restart_via == "respawn-argv"
-    assert row.detail["host"] == "100.94.65.93"
+    assert row.detail["host"] == "192.0.2.93"
     assert row.detail["port"] == 9119
 
 def test_inventory_classifies_desktop_owned_serve(monkeypatch):
@@ -175,7 +175,7 @@ def test_scan_dashboard_processes_includes_ledger_only_serves(monkeypatch):
 
     profiled = _ledger_entry(
         pid=8123,
-        argv="hermes --profile work serve --host 100.94.65.93 --port 9119",
+        argv="hermes --profile work serve --host 192.0.2.93 --port 9119",
         profile="work",
     )
     fake_pi = SimpleNamespace(ledger_entries=lambda **k: [profiled])
@@ -233,7 +233,7 @@ def test_inventory_classifies_launchd_job_owned_serve(monkeypatch):
         spawner_is_dead=lambda e: True,  # bootstrap shell provably gone
     )
     jobs = [("gui/501", "ai.hermes.dashboard",
-             ["hermes", "serve", "--host", "100.94.65.93", "--port", "9119"], None)]
+             ["hermes", "serve", "--host", "192.0.2.93", "--port", "9119"], None)]
     monkeypatch.setitem(sys.modules, "hermes_cli.process_identity", fake_pi)
     with patch.object(main_dashboard, "_loaded_launchd_backend_jobs", return_value=jobs), \
          patch("hermes_cli.dashboard_procs._process_ancestors", return_value=[]):

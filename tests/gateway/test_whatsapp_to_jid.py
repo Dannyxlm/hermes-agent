@@ -17,8 +17,8 @@ class TestToWhatsappJid:
         "raw,expected",
         [
             # bare phone numbers → user JID
-            ("+50766715226", "50766715226@s.whatsapp.net"),
-            ("50766715226", "50766715226@s.whatsapp.net"),
+            ("+12025550102", "12025550102@s.whatsapp.net"),
+            ("12025550102", "12025550102@s.whatsapp.net"),
             # human-formatted phone numbers get stripped to digits
             ("+1 (555) 123-4567", "15551234567@s.whatsapp.net"),
             ("+1.555.123.4567", "15551234567@s.whatsapp.net"),
@@ -30,7 +30,7 @@ class TestToWhatsappJid:
     @pytest.mark.parametrize(
         "jid",
         [
-            "50766715226@s.whatsapp.net",  # already a user JID
+            "12025550102@s.whatsapp.net",  # already a user JID
             "123456789-987654321@g.us",    # group JID
             "130631430344750@lid",         # linked identity
             "status@broadcast",            # broadcast pseudo-chat

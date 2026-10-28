@@ -12,23 +12,23 @@ from agent.error_classifier import FailoverReason
 def _pool():
     entries = [
         PooledCredential.from_dict("anthropic", dict(
-            id="danny1", label="DANNY-ANT", source="manual:hermes_pkce", auth_type="oauth",
-            access_token="fixture-secret-danny", refresh_token="fixture-refresh-danny", priority=0)),
+            id="primary1", label="PRIMARY-ANT", source="manual:hermes_pkce", auth_type="oauth",
+            access_token="fixture-secret-primary", refresh_token="fixture-refresh-primary", priority=0)),
         PooledCredential.from_dict("anthropic", dict(
-            id="sj0001", label="SJ-ANT", source="manual:hermes_pkce", auth_type="oauth",
-            access_token="fixture-secret-sj", refresh_token="fixture-refresh-sj", priority=1)),
+            id="secondary0001", label="SECONDARY-ANT", source="manual:hermes_pkce", auth_type="oauth",
+            access_token="fixture-secret-secondary", refresh_token="fixture-refresh-secondary", priority=1)),
     ]
     return CredentialPool("anthropic", entries)
 
 
 def _agent(events):
     pool = _pool()
-    pool.set_current("danny1")
+    pool.set_current("primary1")
     return SimpleNamespace(
         model="claude-fable-5-1", provider="anthropic", api_mode="anthropic_messages", base_url="https://api.anthropic.com",
-        api_key="fixture-secret-danny", max_tokens=8192, session_id="sess-1",
+        api_key="fixture-secret-primary", max_tokens=8192, session_id="sess-1",
         reasoning_config={"enabled": True, "effort": "high"},
-        _credential_pool=pool, _credential_pool_entry_id="danny1",
+        _credential_pool=pool, _credential_pool_entry_id="primary1",
         _provider_fallback_active=False, _provider_fallback_route=None, _primary_runtime=None,
         status_callback=lambda kind, msg: events.append((kind, msg)),
     )
@@ -42,11 +42,11 @@ def _decode(events):
 def test_account_switched_uses_labels_never_secrets():
     events = []
     agent = _agent(events)
-    se.emit_account_switched(agent, from_account="DANNY-ANT", to_account="SJ-ANT",
+    se.emit_account_switched(agent, from_account="PRIMARY-ANT", to_account="SECONDARY-ANT",
                              reason=FailoverReason.billing, cause="rotation")
     (ev,) = _decode(events)
     assert ev["type"] == "account_switched" and ev["schema"] == 1
-    assert ev["from_account"] == "DANNY-ANT" and ev["to_account"] == "SJ-ANT"
+    assert ev["from_account"] == "PRIMARY-ANT" and ev["to_account"] == "SECONDARY-ANT"
     assert ev["reason"] == "billing" and ev["reason_text"] == "credits required" and ev["cause"] == "rotation"
     assert "fixture-secret" not in json.dumps(ev) and "refresh" not in json.dumps(ev).lower()
 
@@ -82,7 +82,7 @@ def test_provider_switched_and_restored_carry_serving_snapshot():
     se.emit_primary_restored(agent, previous_model="gpt-5.5", previous_provider="openai-codex")
     (ev,) = _decode(events)
     assert ev["type"] == "primary_restored" and ev["to_model"] == "claude-fable-5-1"
-    assert ev["serving"]["fallback_active"] is False and ev["serving"]["account"] == "DANNY-ANT"
+    assert ev["serving"]["fallback_active"] is False and ev["serving"]["account"] == "PRIMARY-ANT"
 
 
 def test_effective_reasoning_anthropic_adaptive():
@@ -101,8 +101,8 @@ def test_serving_dedupes_until_route_changes():
     assert se.emit_serving_if_changed(agent) is not None
     assert se.emit_serving_if_changed(agent) is None
     assert se.emit_serving_if_changed(agent) is None
-    agent._credential_pool_entry_id = "sj0001"          # same model, other account
-    assert se.emit_serving_if_changed(agent)["serving"]["account"] == "SJ-ANT"
+    agent._credential_pool_entry_id = "secondary0001"          # same model, other account
+    assert se.emit_serving_if_changed(agent)["serving"]["account"] == "SECONDARY-ANT"
     se.reset_serving_dedupe(agent)
     assert se.emit_serving_if_changed(agent) is not None
     assert len(events) == 3

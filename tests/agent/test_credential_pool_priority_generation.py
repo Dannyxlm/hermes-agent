@@ -33,11 +33,11 @@ def isolated_auth_store(tmp_path, monkeypatch):
 
 def _rows():
     return [
-        dict(id="danny1", label="DANNY-ANT", source="manual:hermes_pkce", auth_type="oauth",
-             access_token="fixture-access-danny", refresh_token="fixture-refresh-danny", priority=0,
+        dict(id="primary1", label="PRIMARY-ANT", source="manual:hermes_pkce", auth_type="oauth",
+             access_token="fixture-access-primary", refresh_token="fixture-refresh-primary", priority=0,
              last_status="ok", last_status_at=time.time()),
-        dict(id="sj0001", label="SJ-ANT", source="manual:hermes_pkce", auth_type="oauth",
-             access_token="fixture-access-sj", refresh_token="fixture-refresh-sj", priority=1,
+        dict(id="secondary0001", label="SECONDARY-ANT", source="manual:hermes_pkce", auth_type="oauth",
+             access_token="fixture-access-secondary", refresh_token="fixture-refresh-secondary", priority=1,
              last_status="ok", last_status_at=time.time()),
     ]
 
@@ -53,19 +53,19 @@ def _seed():
 
 def test_stale_flush_after_operator_reorder_keeps_new_order():
     _seed()
-    stale = load_pool(PROVIDER)                      # process A snapshot: DANNY first
-    assert [e.label for e in stale._entries] == ["DANNY-ANT", "SJ-ANT"]
+    stale = load_pool(PROVIDER)                      # process A snapshot: PRIMARY first
+    assert [e.label for e in stale._entries] == ["PRIMARY-ANT", "SECONDARY-ANT"]
 
-    operator = load_pool(PROVIDER)                   # process B: operator moves SJ first
-    moved = operator.move_entry("sj0001", 0)
+    operator = load_pool(PROVIDER)                   # process B: operator moves SECONDARY first
+    moved = operator.move_entry("secondary0001", 0)
     assert moved is not None and moved.priority == 0
-    assert _order() == [("SJ-ANT", 0), ("DANNY-ANT", 1)]
+    assert _order() == [("SECONDARY-ANT", 0), ("PRIMARY-ANT", 1)]
     assert read_pool_order_generation(PROVIDER) == 1
 
     stale._persist()                                 # process A routine flush from old snapshot
-    assert _order() == [("SJ-ANT", 0), ("DANNY-ANT", 1)], "stale flush must not revert the reorder"
+    assert _order() == [("SECONDARY-ANT", 0), ("PRIMARY-ANT", 1)], "stale flush must not revert the reorder"
     # Process A's in-memory order follows the operator too, so its next fill_first pick agrees.
-    assert [e.label for e in stale._entries] == ["SJ-ANT", "DANNY-ANT"]
+    assert [e.label for e in stale._entries] == ["SECONDARY-ANT", "PRIMARY-ANT"]
     assert stale._order_generation == 1
 
 
@@ -75,10 +75,10 @@ def test_reorder_after_stale_flush_still_wins():
     live = load_pool(PROVIDER)
     live._persist()
     operator = load_pool(PROVIDER)
-    operator.move_entry("sj0001", 0)
-    assert _order() == [("SJ-ANT", 0), ("DANNY-ANT", 1)]
+    operator.move_entry("secondary0001", 0)
+    assert _order() == [("SECONDARY-ANT", 0), ("PRIMARY-ANT", 1)]
     live._persist()                                  # second stale flush, still behind generation 1
-    assert _order() == [("SJ-ANT", 0), ("DANNY-ANT", 1)]
+    assert _order() == [("SECONDARY-ANT", 0), ("PRIMARY-ANT", 1)]
 
 
 def test_routine_flush_without_reorder_is_unchanged():
@@ -86,7 +86,7 @@ def test_routine_flush_without_reorder_is_unchanged():
     _seed()
     live = load_pool(PROVIDER)
     live._persist()
-    assert _order() == [("DANNY-ANT", 0), ("SJ-ANT", 1)]
+    assert _order() == [("PRIMARY-ANT", 0), ("SECONDARY-ANT", 1)]
     assert read_pool_order_generation(PROVIDER) == 0
 
 
@@ -94,36 +94,36 @@ def test_two_deliberate_reorders_are_monotonic():
     _seed()
     a = load_pool(PROVIDER)
     b = load_pool(PROVIDER)
-    a.move_entry("sj0001", 0)
+    a.move_entry("secondary0001", 0)
     assert read_pool_order_generation(PROVIDER) == 1
-    b.move_entry("danny1", 0)                        # b was at generation 0 but is a deliberate reorder
+    b.move_entry("primary1", 0)                        # b was at generation 0 but is a deliberate reorder
     assert read_pool_order_generation(PROVIDER) == 2
-    assert _order() == [("DANNY-ANT", 0), ("SJ-ANT", 1)]
+    assert _order() == [("PRIMARY-ANT", 0), ("SECONDARY-ANT", 1)]
     a._persist()                                     # a is at generation 1 < 2: adopts b's order
-    assert _order() == [("DANNY-ANT", 0), ("SJ-ANT", 1)]
-    assert [e.label for e in a._entries] == ["DANNY-ANT", "SJ-ANT"]
+    assert _order() == [("PRIMARY-ANT", 0), ("SECONDARY-ANT", 1)]
+    assert [e.label for e in a._entries] == ["PRIMARY-ANT", "SECONDARY-ANT"]
 
 
 def test_arbitration_only_touches_priority_and_is_provider_scoped():
     """Token generation / cooldown merges are untouched; another provider's generation is separate."""
     _seed()
     other = [PooledCredential.from_dict("xai-oauth", dict(
-        id="grok01", label="SHANNON-GROK", source="manual:device_code", auth_type="oauth",
+        id="grok01", label="SECONDARY-GROK", source="manual:device_code", auth_type="oauth",
         access_token="fixture-grok", refresh_token="fixture-grok-r", priority=0)).to_dict()]
     write_credential_pool("xai-oauth", other)
     stale = load_pool(PROVIDER)
-    load_pool(PROVIDER).move_entry("sj0001", 0)
+    load_pool(PROVIDER).move_entry("secondary0001", 0)
     assert read_pool_order_generation("xai-oauth") == 0
-    # Stale process also marks DANNY exhausted in memory; that observation must still land.
-    danny = next(e for e in stale._entries if e.id == "danny1")
+    # Stale process also marks PRIMARY exhausted in memory; that observation must still land.
+    primary = next(e for e in stale._entries if e.id == "primary1")
     from dataclasses import replace
-    stale._replace_entry(danny, replace(danny, last_status="exhausted", last_status_at=time.time(),
+    stale._replace_entry(primary, replace(primary, last_status="exhausted", last_status_at=time.time(),
                                         last_error_code=429, last_error_reset_at=time.time() + 600))
     stale._persist()
     rows = {r["id"]: r for r in read_credential_pool(PROVIDER)}
-    assert rows["danny1"]["last_status"] == "exhausted"
-    assert rows["danny1"]["priority"] == 1 and rows["sj0001"]["priority"] == 0
-    assert rows["danny1"]["access_token"] == "fixture-access-danny"
+    assert rows["primary1"]["last_status"] == "exhausted"
+    assert rows["primary1"]["priority"] == 1 and rows["secondary0001"]["priority"] == 0
+    assert rows["primary1"]["access_token"] == "fixture-access-primary"
 
 
 def test_write_credential_pool_without_order_is_legacy():
@@ -132,7 +132,7 @@ def test_write_credential_pool_without_order_is_legacy():
     for r in rows:
         r["priority"] = 1 - r["priority"]
     write_credential_pool(PROVIDER, rows)            # no order= -> last writer wins, as before
-    assert _order() == [("SJ-ANT", 0), ("DANNY-ANT", 1)]
+    assert _order() == [("SECONDARY-ANT", 0), ("PRIMARY-ANT", 1)]
     state = PoolOrderState(0)
     write_credential_pool(PROVIDER, rows, order=state)
     assert state.generation == 0 and state.adopted_disk_order is False

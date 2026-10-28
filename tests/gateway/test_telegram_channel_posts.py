@@ -101,7 +101,7 @@ def _make_adapter(telegram_adapter_cls):
 
 def _make_channel_message(text="channel id test @hermes_bot"):
     chat = SimpleNamespace(
-        id=-1003950368353,
+        id=-1001234567890,
         type="channel",
         title="wzrd",
         full_name=None,
@@ -140,10 +140,10 @@ def test_build_message_event_uses_channel_identity_for_channel_posts(telegram_ad
     event = adapter._build_message_event(msg, MessageType.TEXT, update_id=12345)
 
     assert event.source.chat_type == "channel"
-    assert event.source.chat_id == "-1003950368353"
+    assert event.source.chat_id == "-1001234567890"
     # Channel posts often have no from_user.  Preserve an identity so the
     # gateway authorization layer can allowlist the channel by numeric ID.
-    assert event.source.user_id == "-1003950368353"
+    assert event.source.user_id == "-1001234567890"
     assert event.source.user_name == "wzrd"
     assert event.platform_update_id == 12345
 

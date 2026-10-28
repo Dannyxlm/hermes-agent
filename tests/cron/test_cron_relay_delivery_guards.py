@@ -65,7 +65,7 @@ class TestOriginThreadStaleGuard:
     def test_non_slack_origin_thread_untouched(self, monkeypatch):
         """Telegram forum-topic origins replay their thread verbatim."""
         _slack_home(monkeypatch)
-        job = {"origin": {"platform": "telegram", "chat_id": "-1003941067111",
+        job = {"origin": {"platform": "telegram", "chat_id": "-1001234567890",
                           "thread_id": "2203"}}
         target = _resolve_single_delivery_target(job, "origin")
         assert target["thread_id"] == "2203"

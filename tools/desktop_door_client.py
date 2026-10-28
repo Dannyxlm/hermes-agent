@@ -30,6 +30,10 @@ class DoorNotConfigured(DoorUnavailable):
     pass
 
 
+class DoorConfigurationError(DoorUnavailable):
+    """Required non-secret configuration is missing; safe to report to the owner."""
+
+
 class DoorConflict(ValueError):
     pass
 
@@ -163,8 +167,11 @@ class DoorClient:
         path = cfg.get('credential_file')
         if not isinstance(path, str) or not Path(path).is_absolute():
             raise DoorUnavailable('Desktop door credential path invalid')
-        return cls(Path(path), port=cfg.get('port', 8080),
-                   viewer_base_url=cfg.get('viewer_base_url', 'https://desktop.example/desktop'))
+        missing = [f'cloudseed_mobile.desktop_door.{key}'
+                   for key in ('port', 'viewer_base_url') if key not in cfg]
+        if missing:
+            raise DoorConfigurationError('Desktop door configuration missing: ' + ', '.join(missing))
+        return cls(Path(path), port=cfg['port'], viewer_base_url=cfg['viewer_base_url'])
 
     def _request(self, route: str, body: dict | None, model):
         conn = None

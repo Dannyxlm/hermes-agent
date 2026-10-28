@@ -1,4 +1,4 @@
-"""Danny's KEEP decision: ``/approve always|session`` on a Smart-DENY request is a one-time owner override.
+"""Owner override contract: ``/approve always|session`` on a Smart-DENY request is a one-time owner override.
 
 The canonical resolver settles it as ``once`` for that exact request and persists no session or
 permanent grant. Consent kinds (payment, MCP trust/elicitation) still refuse reusable scopes even when

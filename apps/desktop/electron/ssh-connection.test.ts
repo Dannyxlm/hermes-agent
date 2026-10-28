@@ -70,10 +70,10 @@ test('redactSecrets masks a credential glued into an ssh target string', () => {
   const line = 'connecting (no-mux) to root@192.0.2.42:example-password:22'
   const out = redactSecrets(line)
   assert.ok(!out.includes('example-password'), 'credential must be masked')
-  assert.match(out, /root@100\.84\.204\.123:<redacted>:22/)
+  assert.match(out, /root@192\.0\.2\.42:<redacted>:22/)
 
   // Comma-mangled IP variant from the same incident.
-  const mangled = redactSecrets('connecting (no-mux) to root@100,84,204,123:example-password:22')
+  const mangled = redactSecrets('connecting (no-mux) to root@192,0,2,42:example-password:22')
   assert.ok(!mangled.includes('example-password'))
 })
 
@@ -1092,7 +1092,7 @@ test('validateSshTarget rejects ports outside 1-65535', () => {
 })
 
 test('validateSshTarget rejects commas in host (mistyped IP)', () => {
-  assert.throws(() => validateSshTarget('100,84,204,123', 'root', 22), /commas/i)
+  assert.throws(() => validateSshTarget('192,0,2,42', 'root', 22), /commas/i)
 })
 
 test('validateSshTarget rejects whitespace in host (pasted ssh command)', () => {

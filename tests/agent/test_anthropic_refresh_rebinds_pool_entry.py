@@ -15,18 +15,18 @@ import pytest
 from agent.credential_pool import CredentialPool, PooledCredential
 from run_agent import AIAgent
 
-DANNY = "fixture-token-danny-max"
-SJ = "fixture-token-sj-pro"
+PRIMARY = "fixture-token-primary-max"
+SECONDARY = "fixture-token-secondary-pro"
 
 
 def _pool():
     entries = [
         PooledCredential.from_dict("anthropic", dict(
-            id="danny1", label="DANNY-ANT", source="manual:hermes_pkce", auth_type="oauth",
-            access_token=DANNY, refresh_token="r-danny", priority=0)),
+            id="primary1", label="PRIMARY-ANT", source="manual:hermes_pkce", auth_type="oauth",
+            access_token=PRIMARY, refresh_token="r-primary", priority=0)),
         PooledCredential.from_dict("anthropic", dict(
-            id="sj0001", label="SJ-ANT", source="manual:hermes_pkce", auth_type="oauth",
-            access_token=SJ, refresh_token="r-sj", priority=1)),
+            id="secondary0001", label="SECONDARY-ANT", source="manual:hermes_pkce", auth_type="oauth",
+            access_token=SECONDARY, refresh_token="r-secondary", priority=1)),
     ]
     return CredentialPool("anthropic", entries)
 
@@ -52,45 +52,45 @@ def agent():
     a._anthropic_client = MagicMock()
     a._is_anthropic_oauth = True
     pool = _pool()
-    pool.set_current("danny1")
+    pool.set_current("primary1")
     a._credential_pool = pool
-    a._credential_pool_entry_id = "danny1"
-    a.api_key = a._anthropic_api_key = DANNY
+    a._credential_pool_entry_id = "primary1"
+    a.api_key = a._anthropic_api_key = PRIMARY
     return a
 
 
 def test_refresh_to_other_account_rebinds_attribution(agent):
     with (
-        patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=SJ),
+        patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=SECONDARY),
         patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
     ):
         assert agent._try_refresh_anthropic_client_credentials() is True
 
-    assert agent._anthropic_api_key == SJ
-    assert agent.api_key == SJ, "attribution key must follow the wire token"
-    assert agent._credential_pool_entry_id == "sj0001"
-    assert agent._credential_pool.current().id == "sj0001"
+    assert agent._anthropic_api_key == SECONDARY
+    assert agent.api_key == SECONDARY, "attribution key must follow the wire token"
+    assert agent._credential_pool_entry_id == "secondary0001"
+    assert agent._credential_pool.current().id == "secondary0001"
 
 
 def test_failed_entry_identity_names_the_wire_account(agent):
-    """End-to-end: after the silent switch, the pool attributes a 429 to SJ, not DANNY."""
+    """End-to-end: after the silent switch, the pool attributes a 429 to SECONDARY, not PRIMARY."""
     with (
-        patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=SJ),
+        patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=SECONDARY),
         patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
     ):
         agent._try_refresh_anthropic_client_credentials()
     from agent.agent_runtime_helpers import _failed_credential_identity
     api_key_hint, credential_id = _failed_credential_identity(agent, agent._credential_pool)
-    assert api_key_hint == SJ and credential_id == "sj0001"
+    assert api_key_hint == SECONDARY and credential_id == "secondary0001"
     entry = agent._credential_pool.identify_failed_entry(credential_id, api_key_hint)
-    assert entry is not None and entry.label == "SJ-ANT"
+    assert entry is not None and entry.label == "SECONDARY-ANT"
 
 
 def test_same_token_is_noop(agent):
-    with patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=DANNY):
+    with patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=PRIMARY):
         assert agent._try_refresh_anthropic_client_credentials() is False
-    assert agent._credential_pool_entry_id == "danny1"
-    assert agent.api_key == DANNY
+    assert agent._credential_pool_entry_id == "primary1"
+    assert agent.api_key == PRIMARY
 
 
 def test_token_outside_pool_clears_entry_id(agent):
@@ -103,15 +103,15 @@ def test_token_outside_pool_clears_entry_id(agent):
     assert agent.api_key == "fixture-env-token"
     assert agent._credential_pool_entry_id is None
     # Cursor untouched: nothing in the pool matched, so we must not move it arbitrarily.
-    assert agent._credential_pool.current().id == "danny1"
+    assert agent._credential_pool.current().id == "primary1"
 
 
 def test_no_pool_bound_is_safe(agent):
     agent._credential_pool = None
     agent._credential_pool_entry_id = None
     with (
-        patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=SJ),
+        patch("agent.anthropic_credentials.resolve_anthropic_token", return_value=SECONDARY),
         patch("agent.anthropic_adapter.build_anthropic_client", return_value=MagicMock()),
     ):
         assert agent._try_refresh_anthropic_client_credentials() is True
-    assert agent.api_key == SJ and agent._credential_pool_entry_id is None
+    assert agent.api_key == SECONDARY and agent._credential_pool_entry_id is None

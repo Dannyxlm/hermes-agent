@@ -42,7 +42,7 @@ class TestDashboardStatus:
         processes = [
             (12345, "hermes dashboard --port 9119"),
             (12346, "python -m hermes_cli.main dashboard --host 0.0.0.0 --port 9120"),
-            (12347, "hermes serve --host 100.94.65.93 --port 9119"),
+            (12347, "hermes serve --host 192.0.2.93 --port 9119"),
         ]
         with patch("hermes_cli.dashboard_procs._scan_dashboard_processes", return_value=processes), \
              patch("gateway.status._pid_exists", return_value=True), \

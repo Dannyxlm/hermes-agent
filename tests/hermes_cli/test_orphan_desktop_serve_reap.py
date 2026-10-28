@@ -31,7 +31,7 @@ def test_desktop_local_serve_shape_matches_ephemeral_loopback():
 
 def test_desktop_local_serve_shape_spares_fixed_port_and_non_serve():
     assert not _is_desktop_local_serve_cmdline(
-        "hermes serve --host 100.106.105.2 --port 9119 --skip-build"
+        "hermes serve --host 192.0.2.2 --port 9119 --skip-build"
     )
     assert not _is_desktop_local_serve_cmdline(
         "hermes serve --host 127.0.0.1 --port 9119"

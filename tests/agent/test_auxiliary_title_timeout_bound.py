@@ -28,7 +28,7 @@ def _route_patches(client):
 
 def test_title_timeout_hits_the_provider_once_and_names_the_deadline(caplog):
     primary = MagicMock()
-    primary.base_url = "http://100.121.173.79:11434/v1"
+    primary.base_url = "http://192.0.2.79:11434/v1"
     primary.chat.completions.create.side_effect = _Timeout("Request timed out.")
     p = _route_patches(primary)
     caplog.set_level(logging.INFO, logger="agent.auxiliary_client")
@@ -44,6 +44,6 @@ def test_title_timeout_hits_the_provider_once_and_names_the_deadline(caplog):
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     timed_out = [m for m in warnings if "timed out after 30s" in m]
     assert timed_out, warnings
-    assert "http://100.121.173.79:11434/v1" in timed_out[0]
+    assert "http://192.0.2.79:11434/v1" in timed_out[0]
     assert "auxiliary.title_generation.timeout" in timed_out[0]
     assert not any("connection error on" in m for m in warnings), warnings

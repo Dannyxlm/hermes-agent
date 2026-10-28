@@ -19,7 +19,7 @@ CMDLINES = [
     ("python -m hermes_cli.main serve " + LOOPBACK, "serve", True, True),
     ("python -m hermes_cli.main dashboard", "dashboard", False, True),
     ("/venv/bin/hermes serve --isolated --host=127.0.0.1 --port=0 --ssh-owner-nonce abc", "serve", True, False),
-    (r"C:\hermes\.venv\Scripts\hermes.exe serve --host 100.106.105.2 --port 9119", "serve", False, False),
+    (r"C:\hermes\.venv\Scripts\hermes.exe serve --host 192.0.2.2 --port 9119", "serve", False, False),
     ("hermes.exe dashboard", "dashboard", False, False),
     ("hermes --profile ops serve " + LOOPBACK, "serve", True, False),
     ("hermes -m serve kanban --preserve-cache " + LOOPBACK, "kanban", False, False),
@@ -42,7 +42,7 @@ def test_kill_and_relaunch_predicates_agree_with_the_canonical_holder_matcher(
 
 
 def test_desktop_local_serve_spares_fixed_port_and_remote_hosts():
-    assert not _is_desktop_local_serve_cmdline("hermes serve --host 100.106.105.2 --port 9119 --skip-build")
+    assert not _is_desktop_local_serve_cmdline("hermes serve --host 192.0.2.2 --port 9119 --skip-build")
     assert not _is_desktop_local_serve_cmdline("hermes serve --host 127.0.0.1 --port 9119")
     assert _is_desktop_local_serve_cmdline("hermes serve --host localhost --port 0")
 

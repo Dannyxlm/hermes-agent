@@ -523,7 +523,7 @@ JSON body limit, and the body `profile` must equal the native request profile.
   - When the day's file reaches its cap, the server returns 507 `storage_full`.
 - `POST /flight-recorder/flag` takes `{…envelope, flag_id, t, screen, note (≤2000), events[≤1000], screenshot_jpeg_b64?}`.
   - The screenshot is a JPEG of at most 600 KiB.
-  - The phone sends a flag only when Danny taps Send.
+  - The phone sends a flag only when the user taps Send.
   - Same duplicate and 409 rules as batches.
 - `POST /flight-recorder/delete` takes `{profile, install_id}` and removes every batch line and flag for that installation.
 

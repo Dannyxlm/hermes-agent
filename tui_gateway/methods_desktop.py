@@ -35,7 +35,7 @@ def _desktop_scope(server, params):
 
 def _desktop_rpc(server, operation, rid, params):
     from tools.desktop_spaces import SpaceStore
-    from tools.desktop_door_client import DoorUnavailable, DoorConflict
+    from tools.desktop_door_client import DoorUnavailable, DoorConflict, DoorConfigurationError
     from .contracts.desktop import (
         DesktopSnapshotParams, DesktopObserveParams, DesktopActionParams, DesktopActionStatusParams)
     models = {'snapshot': DesktopSnapshotParams, 'observe': DesktopObserveParams,
@@ -48,6 +48,8 @@ def _desktop_rpc(server, operation, rid, params):
             resource = params['space']
             result = _run_operation(store, resource, scope, home, operation, params)
         return server._ok(rid, result)
+    except DoorConfigurationError as exc:
+        return server._err(rid, 4002, str(exc))
     except DoorUnavailable:
         return server._err(rid, 4002, 'Desktop operation is not available yet')
     except DoorConflict:
@@ -66,7 +68,7 @@ def _desktop_rpc(server, operation, rid, params):
 
 def _run_operation(store, resource, scope, home, operation, params):
     from tools.desktop_control import DesktopController
-    from tools.desktop_door_client import DoorUnavailable, DoorConflict
+    from tools.desktop_door_client import DoorUnavailable, DoorConflict, DoorConfigurationError
 
     if operation == 'action' and params['action'] == 'not_now':
         return store.not_now(resource, scope, params)
@@ -74,6 +76,8 @@ def _run_operation(store, resource, scope, home, operation, params):
     if resource == 'desktop':
         try:
             controller = DesktopController(store, scope, home)
+        except DoorConfigurationError:
+            raise
         except DoorUnavailable:
             pass
     if operation == 'snapshot':

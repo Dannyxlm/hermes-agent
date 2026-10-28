@@ -373,7 +373,7 @@ class TestTelegramSlackApprovalCockpit:
         query.message.reply_markup = "keyboard"
         query.from_user = MagicMock()
         query.from_user.id = 123
-        query.from_user.first_name = "Danny"
+        query.from_user.first_name = "Alex"
         query.answer = AsyncMock()
         query.edit_message_text = AsyncMock()
         return query

@@ -170,7 +170,7 @@ def test_telegram_group_users_legacy_chat_ids_still_authorize(monkeypatch):
     chat IDs with a deprecation warning.
     """
     _clear_auth_env(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_GROUP_ALLOWED_USERS", "-1001878443972")
+    monkeypatch.setenv("TELEGRAM_GROUP_ALLOWED_USERS", "-1001234567890")
 
     runner, _adapter = _make_runner(
         Platform.TELEGRAM,
@@ -180,7 +180,7 @@ def test_telegram_group_users_legacy_chat_ids_still_authorize(monkeypatch):
     source = SessionSource(
         platform=Platform.TELEGRAM,
         user_id="999",
-        chat_id="-1001878443972",
+        chat_id="-1001234567890",
         user_name="tester",
         chat_type="forum",
     )
@@ -191,7 +191,7 @@ def test_telegram_group_users_legacy_chat_ids_still_authorize(monkeypatch):
 def test_telegram_group_users_mixed_sender_and_legacy_chat(monkeypatch):
     """Mixed values: positive user ID gates senders; negative chat ID gates chat."""
     _clear_auth_env(monkeypatch)
-    monkeypatch.setenv("TELEGRAM_GROUP_ALLOWED_USERS", "999,-1001878443972")
+    monkeypatch.setenv("TELEGRAM_GROUP_ALLOWED_USERS", "999,-1001234567890")
 
     runner, _adapter = _make_runner(
         Platform.TELEGRAM,
@@ -202,7 +202,7 @@ def test_telegram_group_users_mixed_sender_and_legacy_chat(monkeypatch):
     legacy_chat_source = SessionSource(
         platform=Platform.TELEGRAM,
         user_id="123",
-        chat_id="-1001878443972",
+        chat_id="-1001234567890",
         user_name="tester",
         chat_type="group",
     )
