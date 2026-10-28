@@ -212,7 +212,8 @@ def _protected_instruction_config() -> tuple[bool, list[str]]:
 def _protected_instruction_exempt_roots() -> tuple[str, ...]:
     """Realpaths from ``security.protected_instruction_exempt_roots``: opt-in trees whose
     instruction files reach other agents only after review, such as disposable PR worktrees.
-    Empty by default. A read failure, a relative root or ``/`` exempts nothing (fail-safe)."""
+    Empty by default. A read failure, a relative root, ``/``, or a root that equals or contains
+    the user's home or the Hermes home exempts nothing (fail-safe)."""
     try:
         from hermes_cli.config import load_config, cfg_get
         roots = cfg_get(load_config(), "security", "protected_instruction_exempt_roots", default=[])
@@ -220,14 +221,18 @@ def _protected_instruction_exempt_roots() -> tuple[str, ...]:
         return ()
     if not isinstance(roots, list):
         return ()
+    homes = {os.path.realpath(os.path.expanduser("~")), *_hermes_exempt_homes()}
     exempt = []
     for root in roots:
-        expanded = os.path.expanduser(root.strip()) if isinstance(root, str) else ""
+        expanded = _expand_tilde(root.strip()) if isinstance(root, str) else ""
         if not os.path.isabs(expanded):
             continue
         real = os.path.realpath(expanded)
-        if os.path.dirname(real) != real:  # never the filesystem root
-            exempt.append(real)
+        if os.path.dirname(real) == real:  # never the filesystem root
+            continue
+        if any(home == real or _within(home, real) for home in homes):
+            continue  # would exempt ~/AGENTS.md or the agent's own home
+        exempt.append(real)
     return tuple(exempt)
 
 
@@ -265,11 +270,12 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
         if resolved == real_home or resolved.startswith(real_home + os.sep):
             return None
 
-    # Opt-in exempt roots. BOTH the directory entry (parent resolved, last component kept)
-    # and its realpath must sit inside one root, so a link from outside a root into it
-    # (or out of it) stays gated.
+    # Opt-in exempt roots, local backend only: on ssh/container backends the path lives on
+    # another machine, so host realpaths cannot see its symlinks. BOTH the directory entry
+    # (parent resolved, last component kept) and its realpath must sit inside one root, so a
+    # link from outside a root into it (or out of it) stays gated.
     exempt_roots = _protected_instruction_exempt_roots()
-    if exempt_roots:
+    if exempt_roots and _terminal_env_type_for_task(task_id) == "local":
         try:
             entry = os.path.normpath(str(_resolve_entry_for_task(filepath, task_id)))
         except (OSError, ValueError, RuntimeError):

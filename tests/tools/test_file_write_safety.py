@@ -846,6 +846,27 @@ class TestProtectedInstructionFiles:
         monkeypatch.setattr(config, "load_config", lambda: {})
         assert ft._protected_instruction_exempt_roots() == ()
 
+    def test_exempt_roots_never_cover_home_or_hermes_home(self, tmp_path, monkeypatch):
+        import hermes_cli.config as config
+        import tools.file_tools_write_guards as ft
+        home = tmp_path / "home"
+        hermes_home = home / ".hermes"
+        worktrees = home / "worktrees"
+        for d in (hermes_home, worktrees):
+            d.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(ft, "_hermes_exempt_homes", lambda: (os.path.realpath(hermes_home),))
+        roots = ["~", str(home), str(hermes_home), str(tmp_path), str(worktrees)]
+        monkeypatch.setattr(config, "load_config", lambda: {"security": {"protected_instruction_exempt_roots": roots}})
+        assert ft._protected_instruction_exempt_roots() == (os.path.realpath(worktrees),)
+
+    def test_exempt_roots_apply_only_on_local_backend(self, exempt_root, approvals, monkeypatch):
+        """Remote/container paths can't be realpath-checked from the host: no exemption."""
+        import tools.file_tools_write_guards as ft
+        monkeypatch.setattr(ft, "_terminal_env_type_for_task", lambda task_id="default": "ssh")
+        target = exempt_root / "repo" / "AGENTS.md"
+        assert ft._protected_instruction_reason(str(target)) == "AGENTS.md"
+
     def test_real_hermes_home_not_gated_by_this_check(
         self, tmp_path, approvals, monkeypatch
     ):
