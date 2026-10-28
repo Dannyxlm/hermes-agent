@@ -360,6 +360,35 @@ def register(ctx) -> None:
     ctx.register_memory_provider(MyMemoryProvider())
 ```
 
+A provider may use `ctx.call_mcp`, `ctx.get_config`, and `ctx.state` in the
+registration callback, including when it runs in an isolated plugin host.
+`call_mcp` uses the existing profile-scoped native client and requires an
+operator grant in `plugins.entries.<provider-name>.mcp_allowlist`. Denials
+propagate to the provider. It never opens a parallel connection.
+
+For bounded ambient reads, `ctx.call_mcp(server, tool, arguments, timeout=2,
+skip_if_busy=True)` returns `ok: false`, `error: mcp_busy` instead of queueing
+behind a call that holds the native RPC slot. A skipped call is not a server
+failure and is not charged. Budget the entire recall composition, including
+hydration.
+
+A successful envelope keeps the result, nonreserved `_meta` and structured
+content. A failure (`ok: false`) keeps only generic typed fields in its `error`
+text and `_meta`: an `error` or `code` token, `retryable`, `retry_after_ms`, and
+notice codes under a `notice`, `warnings` or `notices` key in any namespace. Its
+`structuredContent` is passed through as the server sent it, so the provider
+reads its own receipt shape and decides what, if anything, reaches a prompt.
+Over the ~64 KB cap, `result` and `error` text keep their head with a marker,
+an over-cap `structuredContent` or `_meta` object is dropped, and the envelope
+carries `truncated: true`.
+
+Provider tool handlers accepting `**kwargs` or `tool_call_id` receive the host's
+invocation ID in both sequential and concurrent dispatch. This ID is separate
+from model-supplied arguments. Persist the exact intent in `ctx.state` before
+submitting a replayable write, and recover the backend's receipt after an
+uncertain response. A transport acknowledgement alone does not prove durability.
+Handlers with the older two-argument signature still work.
+
 A provider may also expose read-only skills from the same callback. Skills are
 qualified by the entry-point name and are loaded only when that memory provider
 is active:

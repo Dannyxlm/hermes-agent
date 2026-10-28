@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.inline_tool_executors import resolve_invoke_tool_executor
+from agent.inline_tool_executors import InlineToolContext, resolve_invoke_tool_executor
 from agent.memory_manager import MemoryManager
 from agent.memory_provider import MemoryProvider, ctx_bound
 from agent.secret_scope import is_multiplex_active
@@ -96,7 +96,7 @@ def _sequential(agent, content):
 def _concurrent(agent, content):
     executor = resolve_invoke_tool_executor(agent, _TOOL)
     assert executor is not None
-    return executor(agent, {"content": content}, SimpleNamespace())
+    return executor(agent, {"content": content}, InlineToolContext(effective_task_id="t", tool_call_id="c"))
 
 
 @pytest.fixture
@@ -408,7 +408,7 @@ def test_two_profiles_interleaving_tool_calls_and_hooks_stay_in_their_own_stores
                     if i % 2:
                         assert json.loads(_resolve_sequential_dispatch(agent, ref, []).execute({})) == {"ok": True}
                     else:
-                        assert json.loads(resolve_invoke_tool_executor(agent, _HOOK_TOOL)(agent, {}, SimpleNamespace())) == {"ok": True}
+                        assert json.loads(resolve_invoke_tool_executor(agent, _HOOK_TOOL)(agent, {}, InlineToolContext(effective_task_id="t", tool_call_id="c"))) == {"ok": True}
                     for hook in sorted(_HOOKS):
                         _HOOKS[hook](manager)
         except Exception as exc:  # surfaced below

@@ -204,9 +204,21 @@ def _result_is_error(result) -> bool:
         return False
 
 
+class _NotDispatched(str):
+    """A handler result produced before the request reached the server: no breaker bookkeeping, and
+    the handler refunds any charge it booked."""
+
+
+# ``skip_if_busy`` found the RPC slot taken. Not a server failure, so it must not open the breaker
+# on the agent's own calls while a long tool holds the slot.
+_MCP_BUSY = _NotDispatched(tool_error("mcp_busy"))
+
+
 def _record_call_outcome(server_name: str, result) -> Any:
     """Breaker bookkeeping: an error payload from the tool itself still counts as a strike (#10447),
     flagged as an application error so the open-breaker message stays truthful."""
+    if isinstance(result, _NotDispatched):
+        return result
     if _result_is_error(result):
         _core._bump_server_error(server_name, application=True)
     else:
@@ -234,15 +246,21 @@ def _lookup_reconnectable_server(server_name: str, require_loop: bool = False):
     return srv if ok else None
 
 
-def _retry_once(server_name: str, retry_call, op_description: str, what: str):
+def _retry_once(server_name: str, retry_call, op_description: str, what: str, *, reset_on_completion=False):
     """Re-run ``retry_call`` after a recovery step. Returns the result when the RPC completed
     (an application error is still the tool's real answer, and still a breaker strike per #10447);
     None when the retry raised (caller falls through)."""
     try:
         result = retry_call()
+    except _loop._CallerBudgetTimeout:
+        raise
     except Exception as retry_exc:
+        if reset_on_completion:
+            _core._reset_server_error(server_name)
         logger.warning("MCP %s/%s retry after %s failed: %s", server_name, op_description, what, retry_exc)
         return None
+    if reset_on_completion:
+        _core._reset_server_error(server_name)
     return _record_call_outcome(server_name, result)
 
 
@@ -255,17 +273,19 @@ def _handle_auth_error_and_retry(server_name: str, exc: BaseException, retry_cal
     from tools.mcp_oauth_manager import get_manager
     try:
         recovered = _loop._run_on_mcp_loop(lambda: get_manager().handle_401(server_name, None), timeout=10)
+    except _loop._CallerBudgetTimeout:
+        raise
     except Exception as rec_exc:
         logger.warning("MCP OAuth '%s': recovery attempt failed: %s", server_name, rec_exc)
         recovered = False
     if recovered:
         srv = _lookup_reconnectable_server(server_name)
-        # Recovery + reconnect is independent evidence of viability: close the breaker here, not only on
-        # retry success (else a failing retry pins it open forever).
-        if srv is not None and _loop._signal_reconnect_and_wait(
-                server_name, srv, op_description=f"{op_description} after OAuth recovery", timeout=15):
-            _core._reset_server_error(server_name)
-        result = _retry_once(server_name, retry_call, op_description, "auth recovery")
+        # Preserve recovery's reset for completed retries, including remote failures,
+        # but not for an expired caller budget whose server outcome is unknown.
+        reconnected = srv is not None and _loop._signal_reconnect_and_wait(
+            server_name, srv, op_description=f"{op_description} after OAuth recovery", timeout=15)
+        result = _retry_once(server_name, retry_call, op_description, "auth recovery",
+                             reset_on_completion=reconnected)
         if result is not None:
             return result
     return _strike(server_name, _NEEDS_REAUTH_MSG.format(s=server_name, detail=_auth_error_detail(exc)),
@@ -363,6 +383,8 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
         return _strike(server_name, _STDIO_NO_RESPAWN_MSG.format(s=server_name, t=_core._STDIO_RESPAWN_WAIT_SEC))
     try:
         return _record_call_outcome(server_name, retry_call())
+    except _loop._CallerBudgetTimeout:
+        raise
     except _StdioChildExited as retry_exc:
         # Died again right after respawn: broken server; run()'s budget takes it to the park.
         logger.warning("MCP server '%s': %s stdio subprocess exited again right after respawn (%s); not retrying "
@@ -382,7 +404,8 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
 
 
 def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float, recoverers,
-              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False) -> str:
+              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False,
+              caller_timeout_neutral: bool = False) -> str:
     """Mark the call started on *server* (doubles may lack ``mark_tool_call``), run coroutine function *call*
     on the MCP loop and, on failure, walk ``recoverers`` (``(server_name, exc, retry_call, op) -> Optional[str]``,
     None = not its kind; order matters). Unrecovered exceptions go through ``on_final_failure`` and become the
@@ -399,10 +422,18 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
     except InterruptedError:
         return tool_error("MCP call interrupted: user sent a new message")
     except Exception as exc:
-        for recover in recoverers:
-            recovered = recover(server_name, exc, call_once, op)
-            if recovered is not None:
-                return recovered
+        if not isinstance(exc, _loop._CallerBudgetTimeout):
+            try:
+                for recover in recoverers:
+                    recovered = recover(server_name, exc, call_once, op)
+                    if recovered is not None:
+                        return recovered
+            except _loop._CallerBudgetTimeout as retry_exc:
+                exc = retry_exc
+        if caller_timeout_neutral and isinstance(exc, _loop._CallerBudgetTimeout):
+            # Ambient reads use a caller budget shorter than the server timeout.
+            # They may have dispatched, so do not refund or change server health.
+            return tool_error("mcp_timeout")
         on_final_failure(exc)
         return tool_error(_mcp_call_failed_message(exc))
 
@@ -492,11 +523,38 @@ async def _call_tool_racing_stdio_death(server, server_name: str, tool_name: str
 
 # ---------------------------------------------------------- result rendering
 
-def _error_result_text(result) -> str:
-    """Concatenated text of an ``isError`` result's blocks (EmbeddedResource error payloads
+def _error_result_blocks(result) -> list[str]:
+    """Text of each block of an ``isError`` result (EmbeddedResource error payloads
     carry text under ``.resource.text``)."""
     texts = (getattr(b, "text", None) or getattr(getattr(b, "resource", None), "text", None) for b in (result.content or []))
-    return "".join(str(t) for t in texts if t)
+    return [str(t) for t in texts if t]
+
+
+def _error_result_text(result) -> str:
+    """Concatenated text of an ``isError`` result's blocks."""
+    return "".join(_error_result_blocks(result))
+
+
+def _render_typed_error(result, meta_exclude: frozenset[str] = frozenset()) -> str:
+    """An ``isError`` result for ``ctx.call_mcp``, unprojected: ``error`` is the list of sanitized text
+    blocks (the plugin envelope projects each one, so a prose prefix cannot hide a JSON diagnostics
+    block), plus ``structuredContent`` (or a JSON text body) and ``_meta`` minus reserved and
+    ``meta_exclude`` keys."""
+    blocks = _error_result_blocks(result)
+    payload: dict[str, Any] = {"error": [_sanitize_error(_truncate_mcp_text_result(b)) for b in blocks]
+                               or ["MCP tool returned an error"]}
+    structured = _capped_structured_content(result)
+    if structured is None:
+        try:
+            structured = json.loads(_truncate_mcp_text_result("".join(blocks)))
+        except ValueError:
+            structured = None
+    if isinstance(structured, (dict, list)):
+        payload["structuredContent"] = structured
+    meta = _strip_reserved_meta_keys(mcp_field(result, "meta", "meta"), meta_exclude)
+    if meta:
+        payload["_meta"] = meta
+    return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def _render_content_blocks(result, server_name: str) -> tuple[str, int, list[str]]:
@@ -583,7 +641,7 @@ def _content_dual_emits_structured(result, structured) -> bool:
 
 
 def _render_call_tool_result(result, server_name: str, image_paths: Optional[list[str]] = None,
-                             meta_exclude: frozenset[str] = frozenset()) -> str:
+                             meta_exclude: frozenset[str] = frozenset(), *, typed_errors: bool = False) -> str:
     """Pure: ``CallToolResult`` -> handler JSON (``image_paths``, when given, receives the files this
     call's image blocks were cached to). ``content`` and ``structuredContent`` are both
     forwarded, except that a ``structuredContent`` whose JSON also sits verbatim in a text block
@@ -595,8 +653,11 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
     reorganisation costs only tokens, so data-preservation wins. No richness or size heuristic is
     used. ``structuredContent`` fills ``result`` when the blocks rendered effectively empty
     (structuredContent-only servers); ``_meta`` minus reserved keys and the server's
-    ``meta_exclude`` keys is always surfaced."""
+    ``meta_exclude`` keys is always surfaced. An ``isError`` result is the server's sanitized text,
+    or with ``typed_errors`` the unprojected failure ``ctx.call_mcp`` projects."""
     if mcp_field(result, "is_error", "isError", False):
+        if typed_errors:
+            return _render_typed_error(result, meta_exclude)
         return tool_error(_sanitize_error(_truncate_mcp_text_result(_error_result_text(result) or "MCP tool returned an error")))
     text_result, usable_parts, cached_images = _render_content_blocks(result, server_name)
     if image_paths is not None:
@@ -625,11 +686,14 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
-def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
+def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False,
+                       skip_if_busy: bool = False, typed_errors: bool = False):
     """Sync handler (``handler(args_dict, **kwargs)``) calling an MCP tool via the background loop. Always a JSON
     string, except with ``native_images`` (the registry handler the agent loop dispatches): a result carrying
     images then becomes the ``_multimodal`` envelope when the active route takes images in tool results.
-    Direct callers (plugins' ``ctx.call_mcp``) keep the string contract and the ``MEDIA:`` paths."""
+    Direct callers (plugins' ``ctx.call_mcp``) keep the string contract and the ``MEDIA:`` paths, and pass
+    ``typed_errors`` for an unprojected failure. ``skip_if_busy`` returns ``mcp_busy`` instead of queueing
+    behind a call that holds the server's RPC slot."""
     op = f"tools/call {tool_name}"
 
     def _handler(args: dict, **kwargs) -> Any:
@@ -659,6 +723,9 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
                 report(progress, total, message)
 
         async def _call():
+            # Check and acquire on the same event loop. Ambient reads must not queue behind a long tool.
+            if skip_if_busy and server._rpc_lock.locked():
+                return _MCP_BUSY
             async with server._rpc_lock, _track_inflight_rpc(server, server_name, op, retry_safe=read_only):
                 server._pending_call_context = contextvars.copy_context()  # for the elicitation callback
                 try:
@@ -669,7 +736,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy
                 server._mark_session_proven()
             image_paths.clear()
-            return _render_call_tool_result(result, server_name, image_paths, meta_exclude)
+            return _render_call_tool_result(result, server_name, image_paths, meta_exclude, typed_errors=typed_errors)
 
         def _on_failure(exc):
             _core._bump_server_error(server_name)
@@ -678,7 +745,10 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         text = _dispatch(
             server_name, server, op, _call, tool_timeout,
             (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
-            _on_failure, record_outcome=True)
+            _on_failure, record_outcome=True, caller_timeout_neutral=skip_if_busy)
+        if isinstance(text, _NotDispatched):
+            for charge in booked:
+                charge.refund()
         # Off the MCP loop on purpose: image prep is CPU work (bounded vision pool) that must not stall other servers' I/O.
         return _mcp_result_with_native_images(text, image_paths) if native_images and not _result_is_error(text) else text
     return _handler

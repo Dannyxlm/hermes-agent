@@ -1132,7 +1132,7 @@ else:
 
 **Signature:** `ctx.call_mcp(server: str, tool: str, arguments: dict | None = None, timeout: float = 30) -> dict`
 
-Returns a stable envelope: `{"ok": True, "result": ...}` (plus `structuredContent` when the server provides it) or `{"ok": False, "error": "..."}`. Results over ~64 KB are truncated and flagged with `"truncated": True`.
+Returns a stable envelope: `{"ok": True, "result": ...}` (plus `structuredContent` and `_meta` when the server provides them) or `{"ok": False, "error": "..."}`. A failure's `error` text keeps only generic typed fields (an `error`/`code` token, `retryable`, `retry_after_ms`); its `structuredContent` is passed through as sent. Results over ~64 KB are truncated and flagged with `"truncated": True`.
 
 ### Security: default-off, per-server allowlist
 

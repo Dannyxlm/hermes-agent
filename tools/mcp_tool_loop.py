@@ -145,6 +145,10 @@ def _running_loop() -> Optional[asyncio.AbstractEventLoop]:
     return loop if loop is not None and loop.is_running() else None
 
 
+class _CallerBudgetTimeout(TimeoutError):
+    """The caller's wait expired, not a timeout reported by the remote tool."""
+
+
 def _run_on_mcp_loop(coro_or_factory, timeout: float = 30):
     """Schedule a coroutine (or zero-arg factory — avoids leaking a never-awaited coroutine when the
     loop is down) on the MCP loop and block until done, polling so user interrupts are honored."""
@@ -172,7 +176,7 @@ def _run_on_mcp_loop(coro_or_factory, timeout: float = 30):
         remaining = 0.1 if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             future.cancel()
-            raise TimeoutError(f"MCP call timed out after {time.monotonic() - start_time:.1f}s "
+            raise _CallerBudgetTimeout(f"MCP call timed out after {time.monotonic() - start_time:.1f}s "
                                f"(configured timeout: {float(timeout):.1f}s)")
         try:
             return future.result(timeout=min(0.1, remaining))
