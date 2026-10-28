@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from agent.api_value_pricing import estimate_aggregate_api_value_decimal, get_api_value_rates
 from agent.usage_pricing import CanonicalUsage
-from hermes_state_rollup import _COUNTERS, _PROVIDER, _SUMS, _DecimalSum, _metrics, follows_usage_parent
+from hermes_state_rollup import _COUNTERS, _PROVIDER, _SUMS, _metrics, _usd_sum, follows_usage_parent
 from hermes_state_usage import AUXILIARY_USAGE_TASKS
 
 _SESSION_COUNTERS = """WITH RECURSIVE routes AS MATERIALIZED (
@@ -42,8 +42,8 @@ _PRICED_USAGE = """, priced AS MATERIALIZED (
         json_extract(price, '$.source_url') AS source_url FROM priced
 ) """
 _AGGREGATES = (_SUMS + ", NULL AS turn_count, NULL AS event_count, NULL AS unattributed_turn_events, "
-               "decimal_sum(e.estimated_cost_usd) AS known_estimated_cost_usd, "
-               "decimal_sum(e.minimum_estimated_cost_usd) AS minimum_estimated_cost_usd, "
+               f"{_usd_sum('e.estimated_cost_usd')} AS known_estimated_cost_usd, "
+               f"{_usd_sum('e.minimum_estimated_cost_usd')} AS minimum_estimated_cost_usd, "
                "SUM(e.estimated_cost_usd IS NULL) AS unknown_price_events, "
                "SUM(e.estimated_cost_usd IS NULL AND e.minimum_estimated_cost_usd IS NOT NULL) AS minimum_price_events, "
                "GROUP_CONCAT(DISTINCT e.price_reason) AS cost_reason, "
@@ -84,10 +84,11 @@ def session_counter_cte(*, session_id=None, cohort=False):
 
 def read_alltime_usage(conn, *, end, profile, session_id=None, limit=20, timezone_name="UTC"):
     """Counted session and disjoint auxiliary usage in one read snapshot."""
-    cached_value = lru_cache(maxsize=8192)(_session_value)
+    # One request prices each distinct row once across all its queries; a bound below the row count
+    # (8192 vs ~9k sessions here) made the in-order rescans evict every entry before reuse.
+    cached_value = lru_cache(maxsize=None)(_session_value)
     conn.create_function("session_api_value", 7, cached_value, deterministic=True)
     conn.create_function("usage_follows_parent", 3, follows_usage_parent, deterministic=True)
-    conn.create_aggregate("decimal_sum", 1, _DecimalSum)
     cte = session_counter_cte(session_id=session_id) + _PRICED_USAGE.format(
         provider=_PROVIDER, counters=", ".join(_COUNTERS),
         arguments=", ".join(_COUNTERS[:4]) + ", api_call_count")

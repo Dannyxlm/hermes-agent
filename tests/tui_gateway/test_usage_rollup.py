@@ -130,6 +130,25 @@ def test_calendar_day_uses_requested_timezone(tmp_path):
         assert result["days"][0]["day"] == "2026-10-18"
 
 
+def test_every_day_bucket_matches_the_local_date_across_a_dst_change(tmp_path):
+    from collections import Counter
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from hermes_state_rollup import read_usage_rollup
+    zone = ZoneInfo("America/Toronto")
+    start = datetime(2026, 10, 20, tzinfo=zone).timestamp()
+    end = datetime(2026, 11, 12, tzinfo=zone).timestamp()
+    stamps = [start + hour * 3600 for hour in range(0, int((end - start) // 3600), 7)]
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("chat", "desktop")
+        for stamp in stamps:
+            db.update_token_counts("chat", input_tokens=1, usage_timestamp=stamp)
+        result = read_usage_rollup(db._conn, start=start, end=end, profile="default",
+                                   timezone_name="America/Toronto")
+        expected = Counter(datetime.fromtimestamp(stamp, zone).date().isoformat() for stamp in stamps)
+        assert {row["day"]: row["input_tokens"] for row in result["days"]} == expected
+
+
 def test_absent_store_is_not_created_by_request(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_hermes_home", tmp_path)
     assert rpc()["error"]["code"] == 5036

@@ -36,6 +36,8 @@ def _(rid, params):
         conn.row_factory = sqlite3.Row
         with conn:
             conn.execute("PRAGMA query_only=ON")
+            # The five groupings materialize and sort every call in the window (70k+ a week here).
+            conn.execute("PRAGMA temp_store=MEMORY")
             conn.execute("BEGIN")
             common = {"end": now.timestamp(), "profile": params.get("profile") or _current_profile_name(),
                       "session_id": params.get("session_id"), "limit": params.get("limit", 20),
