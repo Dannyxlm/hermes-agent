@@ -62,7 +62,7 @@ class TestDoorBoundary:
         parts = {
             'host': parts._replace(netloc='other.example:8443'),
             'credentials': parts._replace(netloc='user@' + parts.netloc),
-            'path': parts._replace(path='/ava-desktop/v/other/viewer/'),
+            'path': parts._replace(path='/desktop/v/other/viewer/'),
         }.get(change, parts)
         if change == 'input_policy':
             fragment.pop('view_only')
