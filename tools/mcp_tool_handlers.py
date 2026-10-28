@@ -394,7 +394,8 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
 
 
 def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float, recoverers,
-              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False) -> str:
+              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False,
+              caller_timeout_neutral: bool = False) -> str:
     """Mark the call started on *server* (doubles may lack ``mark_tool_call``), run coroutine function *call*
     on the MCP loop and, on failure, walk ``recoverers`` (``(server_name, exc, retry_call, op) -> Optional[str]``,
     None = not its kind; order matters). Unrecovered exceptions go through ``on_final_failure`` and become the
@@ -411,6 +412,10 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
     except InterruptedError:
         return tool_error("MCP call interrupted: user sent a new message")
     except Exception as exc:
+        if caller_timeout_neutral and isinstance(exc, _loop._CallerBudgetTimeout):
+            # Ambient reads use a caller budget shorter than the server timeout.
+            # They may have dispatched, so do not refund or change server health.
+            return tool_error("mcp_timeout")
         for recover in recoverers:
             recovered = recover(server_name, exc, call_once, op)
             if recovered is not None:
@@ -726,7 +731,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         text = _dispatch(
             server_name, server, op, _call, tool_timeout,
             (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
-            _on_failure, record_outcome=True)
+            _on_failure, record_outcome=True, caller_timeout_neutral=skip_if_busy)
         if isinstance(text, _NotDispatched):
             for charge in booked:
                 charge.refund()
