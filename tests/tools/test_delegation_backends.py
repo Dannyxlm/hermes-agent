@@ -67,7 +67,8 @@ def _home(tmp_path, monkeypatch, delegation: dict, plugins=("probe-options",), d
     # Bundled plugins: only the delegation category (the default strategy is a bundled plugin).
     bundled = tmp_path / "bundled"
     bundled.mkdir()
-    (bundled / "delegation").symlink_to(REPO_PLUGINS / "delegation", target_is_directory=True)
+    (bundled / "delegation").mkdir()
+    (bundled / "delegation" / "default").symlink_to(REPO_PLUGINS / "delegation" / "default", target_is_directory=True)
     monkeypatch.setenv("HOME", str(tmp_path / "os-home"))
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setattr(plugins_mod, "get_bundled_plugins_dir", lambda: bundled)

@@ -362,6 +362,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_list_cache_meta",
         "_max_lifetime_seconds",
         "_park_reason",
+        "_parked_retry_interval",
         "_pending_call_context",
         "_pending_refresh_tasks",
         "_permanent_grace_used",
@@ -403,6 +404,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._tools: list = []
         self._registered_tool_names: list[str] = []
         self._config: dict = {}
+        self._parked_retry_interval = _resolve_parked_retry_interval(self._config)
         self._error: Optional[Exception] = None
         self._sampling: Optional[SamplingHandler] = None
         self._elicitation: Optional[ElicitationHandler] = None

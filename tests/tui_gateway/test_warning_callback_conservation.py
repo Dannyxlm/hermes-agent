@@ -19,7 +19,7 @@ class Agent(StatusOutputMixin):
     platform = "tui"
     _print_fn = None
 
-    def _touch_activity(self, *args):
+    def _touch_activity(self, *args, **_kwargs):
         pass
 
 

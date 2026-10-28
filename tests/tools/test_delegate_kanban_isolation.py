@@ -302,7 +302,7 @@ def test_child_attempting_default_complete_does_not_finish_parent_or_delete_work
     class Parent:
         _current_task_id = tid
 
-        def _touch_activity(self, _desc):
+        def _touch_activity(self, _desc, **_kwargs):
             return None
 
     class Child:

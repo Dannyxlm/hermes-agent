@@ -1,0 +1,54 @@
+name: Fork tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    if: github.repository != 'NousResearch/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        path: [tests/agent, tests/hermes_cli, tests/tools, tests/gateway]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: '3.14'
+      - name: Install locked development and test dependencies
+        run: uv sync --locked --group dev --group test
+      - name: Run isolated test shard
+        env:
+          HERMES_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: scripts/run_tests.sh '${{ matrix.path }}' --slice '${{ matrix.shard }}/4' -j 2 -q
+
+  ruff:
+    if: github.repository != 'NousResearch/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          python-version: '3.14'
+      - run: uv sync --locked --group dev --group test
+      - run: .venv/bin/ruff check --output-format github .

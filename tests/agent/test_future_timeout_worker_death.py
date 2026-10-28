@@ -99,7 +99,7 @@ def test_sequential_tool_poll_surfaces_worker_timeout_instead_of_looping():
     a worker that died with TimeoutError kept it spinning until the deadline. With a 2s deadline
     on base this returns ("timeout", None) after 2s — post-fix the worker's error propagates at
     once."""
-    agent = SimpleNamespace(_interrupt_requested=False, _touch_activity=lambda msg: None)
+    agent = SimpleNamespace(_interrupt_requested=False, _touch_activity=lambda msg, **_kwargs: None)
     gate = SimpleNamespace(excluded_seconds=lambda: 0.0)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         future = _settled_dead_future(pool, TimeoutError("tool stream stalled"))

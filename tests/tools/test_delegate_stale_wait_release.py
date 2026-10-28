@@ -41,7 +41,7 @@ def test_stale_heartbeat_ends_the_wait_without_a_configured_timeout(monkeypatch)
     child = _WedgedAfterFinalAnswer()
     parent = SimpleNamespace(
         session_id="parent", _current_task_id=None, _active_children=[child],
-        _active_children_lock=threading.Lock(), _touch_activity=lambda _d: None, _interrupt_requested=False,
+        _active_children_lock=threading.Lock(), _touch_activity=lambda _d, **_kwargs: None, _interrupt_requested=False,
     )
     monkeypatch.setattr(delegate_tool, "_HEARTBEAT_INTERVAL", 0.01)
     monkeypatch.setattr(delegate_tool, "_HEARTBEAT_STALE_CYCLES_IDLE", 2)
@@ -68,7 +68,7 @@ def test_stale_verdict_under_a_configured_cap_reports_the_stale_threshold_not_th
     child = _WedgedAfterFinalAnswer()
     parent = SimpleNamespace(
         session_id="parent", _current_task_id=None, _active_children=[child],
-        _active_children_lock=threading.Lock(), _touch_activity=lambda _d: None, _interrupt_requested=False,
+        _active_children_lock=threading.Lock(), _touch_activity=lambda _d, **_kwargs: None, _interrupt_requested=False,
     )
     monkeypatch.setattr(delegate_tool, "_HEARTBEAT_INTERVAL", 0.01)
     monkeypatch.setattr(delegate_tool, "_HEARTBEAT_STALE_CYCLES_IDLE", 2)
