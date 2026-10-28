@@ -104,3 +104,34 @@ def test_native_interrupt_diagnostic_respects_output_stream(local_env, tmp_path,
 
     assert result.exit_code == 130
     assert result.stdout == ("\n[Command interrupted]" if merge_stderr else "")
+
+
+_SHELL_NOTICES = [
+    ("/repo/a.py\n[Command interrupted]", 130),
+    ("[Command interrupted - Modal sandbox exec cancelled]", 130),
+    ("/repo/a.py\n/repo/b.py", 137),
+]
+
+
+@pytest.mark.parametrize("stdout,exit_code", _SHELL_NOTICES)
+def test_shell_transport_failure_is_never_partial_file_results(local_env, tmp_path, monkeypatch, stdout, exit_code):
+    """Shell transports append notices to stdout; only rg's own exit 2 is partial."""
+    from tools.file_operations_common import ExecuteResult
+
+    ops = ShellFileOperations(local_env, cwd=str(tmp_path))
+    monkeypatch.setattr(ops, "_run_rg_bounded", lambda *a, **k: ExecuteResult(stdout=stdout, exit_code=exit_code))
+    result = ops._search_files_rg("*.py", "/repo", 50, 0, rg_executable="rg")
+    assert result.error
+    assert not result.files
+    assert not any("[Command" in f for f in (result.files or []))
+
+
+@pytest.mark.parametrize("output_mode", ["files_only", "content", "count"])
+def test_interrupted_content_search_is_an_error_not_a_result(output_mode):
+    from tools.file_operations_common import ExecuteResult
+    from tools.file_operations_search import _parse_search_output
+
+    result = _parse_search_output(
+        ExecuteResult(stdout="/repo/a.py:1:hit\n[Command interrupted]", exit_code=130), output_mode, 50, 0, 0)
+    assert result.error and "interrupted" in result.error.lower()
+    assert not result.files and not result.matches and not result.counts

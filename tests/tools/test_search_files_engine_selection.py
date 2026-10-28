@@ -238,19 +238,17 @@ def test_rg_sigpipe_is_benign_only_after_fetch_limit_paths(order):
 
 
 @pytest.mark.parametrize("order", ["discovery", "modified"])
-def test_rg_sigpipe_with_fewer_than_fetch_limit_paths_reports_partial_page(order):
+def test_rg_sigpipe_with_fewer_than_fetch_limit_paths_fails_closed(order):
     env = RecordingEnvironment(rg_output="/repo/partial.py\n", rg_code=141)
 
     result = ShellFileOperations(env).search(
         "*.py", path="/repo", target="files", limit=2, offset=1, order=order
     )
 
-    assert result.error is None
-    assert result.files == []  # the one available match precedes the requested offset
-    assert result.total_count == 1
-    assert result.truncated is True
-    assert result.limit_reason == "search_error"
-    assert "exit code 141" in (result.warning or "")
+    # Only rg's own exit 2 may return partial results; a short-payload SIGPIPE is a failure.
+    assert result.error is not None
+    assert result.files == []
+    assert result.total_count == 0
 
 
 def test_invalid_direct_file_order_returns_structured_error():

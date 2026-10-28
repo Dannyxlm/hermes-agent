@@ -110,6 +110,11 @@ _ADMISSION_INTERRUPTED_ERROR = (
 
 _SEARCH_TIMEOUT_MARKER_RE = re.compile(r"\n?\[Command timed out after \d+s\]\s*$")
 
+# Native and shell transports both report an interrupt as exit 130, the shell ones
+# with an "[Command interrupted ...]" notice appended to stdout. It is never a result.
+_INTERRUPTED_EXIT = 130
+_SEARCH_INTERRUPTED_ERROR = "Search was interrupted before it finished."
+
 
 def _search_stdout_and_limit(result: ExecuteResult) -> tuple[str, Optional[str]]:
     """Return stdout cleaned for parsing and a limit reason for search timeouts."""
@@ -214,6 +219,8 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
     Exit codes: 0=matches, 1=none, 2=error — but both tools return 2 on PARTIAL
     errors (one unreadable file), so an error is surfaced only when exit==2 AND no
     usable payload remains. ``warning`` is attached to files_only/content results."""
+    if result.exit_code == _INTERRUPTED_EXIT:
+        return SearchResult(error=_SEARCH_INTERRUPTED_ERROR, total_count=0)
     stdout, limit_reason = _search_stdout_and_limit(result)
     diagnostics, payload = _split_tool_diagnostics(stdout)
     if result.exit_code == 2 and not payload.strip():
@@ -969,8 +976,13 @@ class SearchMixin:
                 for f in all_files]
         bounded_sigpipe = result.exit_code == 141 and len(all_files) >= fetch_limit
         warning = None
+        if result.exit_code == _INTERRUPTED_EXIT:
+            return SearchResult(error=_SEARCH_INTERRUPTED_ERROR)
         if result.exit_code not in {0, 1, 124} and not bounded_sigpipe:
-            if not all_files:
+            # Only rg's own error exit (2) means "printed what it could read";
+            # any other code (a signal, a shell/transport failure) may have mixed
+            # transport notices into stdout, so it is a failure, never partial.
+            if result.exit_code != 2 or not all_files:
                 return SearchResult(error=f"File search failed while running ripgrep (exit code {result.exit_code}).")
             warning = (
                 f"Partial file search results: ripgrep reported an error (exit code {result.exit_code}); "
