@@ -249,6 +249,30 @@ class _LineageIndex:
     generation: str
 
 
+_LINEAGE_INDEXES = OrderedDict()
+_LINEAGE_INDEX_LOCK = threading.Lock()
+
+
+def _lineage_index(db, conn, home, chain):
+    """Row-to-logical map for one lineage, reused until that lineage changes.
+
+    Long legacy chats take seconds to map, so search-as-you-type would otherwise
+    rebuild the same map on every keystroke and run out of its budget."""
+    generation = lineage_generation(conn, chain)
+    key = (tuple(_store_identity(home)), tuple(chain), generation)
+    with _LINEAGE_INDEX_LOCK:
+        cached = _LINEAGE_INDEXES.get(key)
+        if cached is not None:
+            _LINEAGE_INDEXES.move_to_end(key)
+            return cached
+    index = _LineageIndex({r["row_id"]: str(r["logical_id"]) for r in _lineage_rows(db, conn, chain)}, generation)
+    with _LINEAGE_INDEX_LOCK:
+        _LINEAGE_INDEXES[key] = index
+        while len(_LINEAGE_INDEXES) > 64:
+            _LINEAGE_INDEXES.popitem(last=False)
+    return index
+
+
 def _display_messages(db, rows, home):
     from hermes_cli.web_routers.sessions import _project_for_display
     messages = [db._row_to_message_dict(row, warn_context="Hermex window", summary_flag=True) for row in rows]
@@ -286,9 +310,7 @@ def _search_batch(db, conn, home, hits, profile, cache, representatives, query):
     selected = {}
     for chain, candidates in batches.items():
         if chain not in representatives:
-            representatives[chain] = _LineageIndex(
-                {r["row_id"]: str(r["logical_id"]) for r in _lineage_rows(db, conn, chain)},
-                lineage_generation(conn, chain))
+            representatives[chain] = _lineage_index(db, conn, home, chain)
         logical_ids = representatives[chain].logical_ids
         ids = [hit["id"] for hit in candidates if hit["id"] in logical_ids]
         if not ids:
@@ -374,7 +396,7 @@ def search(db, home, params, principal):
 
 
 def _search_page(db, conn, home, params, principal, deadline, cancelled):
-    from hermex_search_pages import candidates
+    from hermex_search_pages import candidates, start_position
     profile, query = params["profile"], params["query"]
     target = params.get("session_id")
     target_chain = owned_lineage(db, target, profile, conn=conn) if target else None
@@ -383,7 +405,8 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
     if params.get("cursor"):
         phase, high_water, after, search_id = cursor_decode(params["cursor"], scope)
     else:
-        phase, high_water, after = "messages", conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0], 0
+        high_water = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+        phase, after = "messages", start_position(target_chain, high_water)
         search_id = secrets.token_hex(16)
     revision_scope = _revision_scope(principal, profile, home)
     revision = digest([revision_scope, query, target, high_water, search_id])

@@ -284,6 +284,18 @@ def test_per_chat_search_first_page_ignores_global_distractors(live_home):
     assert [m["message_id"] for g in page["results"] for m in g["matches"]] == [str(target)]
 
 
+def test_global_search_first_page_is_newest_and_pages_back(live_home):
+    with SessionDB(db_path=live_home / "state.db") as db:
+        oldest = db.append_message("chat", "assistant", "needle from long ago")
+        for i in range(1100):
+            db.append_message("chat", "user", f"filler {i}")
+        newest = db.append_message("other", "assistant", "needle from today")
+    first = result("session.search", query="needle", limit=1)
+    assert [m["message_id"] for g in first["results"] for m in g["matches"]] == [str(newest)]
+    second = result("session.search", query="needle", limit=1, cursor=first["next_cursor"])
+    assert [m["message_id"] for g in second["results"] for m in g["matches"]] == [str(oldest)]
+
+
 def test_older_window_partial_page_never_overlaps(live_home):
     ids = [append(live_home, "chat", "assistant", f"needle {i}") for i in range(6)]
     page = result("session.search", query="needle", session_id="chat")
