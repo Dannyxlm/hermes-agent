@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pm.environments
 import pytest
@@ -45,6 +46,78 @@ def test_startup_prune_reclaims_only_provably_deleted_checkouts(tmp_path, monkey
     _prune_stale_worktrees(str(repo))
     assert not gone_scratch.exists() and not gone_worktree.exists()
     assert all(p.is_dir() for p in (live, unknown, host_install, container_install))
+
+
+def test_broker_worktree_orphan_requires_a_visible_repo_parent(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    installs = tmp_path / "data" / "installs"
+    repo = tmp_path / "worktrees" / "hermes-agent"
+    repo.mkdir(parents=True)
+    gone = _state(installs, "aaaa", repo / "deleted-task")
+    unmounted = _state(installs, "bbbb", repo.parent / "missing-repo" / "task")
+    elsewhere = tmp_path / "elsewhere" / "worktrees" / "repo"
+    elsewhere.mkdir(parents=True)
+    unknown = _state(installs, "cccc", elsewhere / "missing-task")
+    live_root = repo / "live-task"
+    live_root.mkdir()
+    live = _state(installs, "dddd", live_root)
+
+    # External parents are never inferred from the user's home directory.
+    assert orphan_install_states(installs) == []
+    from hermes_cli.config import atomic_config_write
+    from hermes_constants import get_hermes_home
+    info = repo.lstat()
+    atomic_config_write(get_hermes_home() / "config.yaml", {
+        "worktrees": {"install_state_gc_parents": [
+            {"path": str(repo), "device": info.st_dev, "inode": info.st_ino}
+        ]}
+    })
+    assert orphan_install_states(installs) == [gone]
+    assert collect_orphan_install_states(installs) == [gone]
+    assert not gone.exists()
+    assert all(p.is_dir() for p in (unmounted, unknown, live))
+
+
+@pytest.mark.parametrize("change", ["device", "inode", "symlink", "dangling", "home"])
+def test_external_parent_identity_changes_keep_state(tmp_path, monkeypatch, change):
+    from hermes_cli.config import atomic_config_write
+    from hermes_constants import get_hermes_home
+
+    installs = tmp_path / "data" / "installs"
+    repo = tmp_path / "trees" / "repo"
+    repo.mkdir(parents=True)
+    root = repo / "deleted"
+    state = _state(installs, "aaaa", root)
+    info = repo.lstat()
+    parent_path = str(repo)
+    if change == "home":
+        parent_path = "~/trees/repo"
+        monkeypatch.setattr(Path, "home", lambda: (_ for _ in ()).throw(RuntimeError("no home")))
+    atomic_config_write(get_hermes_home() / "config.yaml", {
+        "worktrees": {"install_state_gc_parents": [{
+            "path": parent_path, "device": info.st_dev, "inode": info.st_ino,
+        }]}
+    })
+    if change in ("device", "inode"):
+        original = Path.lstat
+
+        def changed(path):
+            result = original(path)
+            if path == repo:
+                fields = list(result)
+                fields[2 if change == "device" else 1] += 1
+                return os.stat_result(fields)
+            return result
+
+        monkeypatch.setattr(Path, "lstat", changed)
+    elif change == "symlink":
+        target = repo.with_name("other")
+        repo.rename(target)
+        repo.symlink_to(target, target_is_directory=True)
+    elif change == "dangling":
+        root.symlink_to(repo / "missing")
+    assert collect_orphan_install_states(installs) == []
+    assert state.is_dir()
 
 
 def test_held_orphan_is_kept(tmp_path):

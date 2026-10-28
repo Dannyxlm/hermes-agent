@@ -496,6 +496,9 @@ DEFAULT_CONFIG = {
     # and merged are removed; dirty or unpushed ones are archived to refs/hermes/archive/<tree>
     # first (`hermes worktree restore <name>`). Live trees and Kanban t_<hex> trees are never touched.
     "worktrees": {
+        # Opt-in external checkout parents. Pin each existing directory's path, device (st_dev)
+        # and inode (st_ino); replacement, unmount and namespace changes fail closed.
+        "install_state_gc_parents": [],
         # false = never remove a dirty/unpushed tree (the pre-archive behaviour, exactly).
         "archive_dirty": True,
         # Untracked files larger than this (MB) are not archived, so a tree holding one is kept.

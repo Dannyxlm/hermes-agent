@@ -23,6 +23,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -138,22 +139,65 @@ def load_skips(root: Path, *, persist: bool = True) -> frozenset[str]:
     return frozenset(live)
 
 
+def _restore_owned_directory(entry: Path, path: str) -> bool:
+    """Restore owner rwx inside *entry*, never traversing a symlink or changing another uid's dir."""
+    if not tracking_supported():
+        return False
+    try:
+        relative = Path(os.path.abspath(path)).relative_to(entry)
+    except ValueError:
+        return False
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        fd = os.open(entry, flags)
+    except OSError:
+        return False
+    try:
+        # Anchor every lookup at an open directory: a symlink swap between a path check
+        # and chmod must not grant write access to a target outside the entry.
+        for part in relative.parts:
+            child_fd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child_fd
+        st = os.fstat(fd)
+        if st.st_uid != os.geteuid() or not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o700 == 0o700:
+            return False
+        os.fchmod(fd, st.st_mode | 0o700)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def rmtree_collecting_permission_errors(entry: Path) -> list[str]:
-    """``rmtree`` that keeps going past errors (like ``ignore_errors=True``) and returns the
-    directories that refused access with EACCES/EPERM (empty: nothing was denied)."""
+    """Remove idle trees, repairing owned read-only directories before recording real blockers."""
+    entry = Path(os.path.abspath(entry))
     blockers: list[str] = []
+    repaired = False
 
     def _onexc(func, path, exc):
+        nonlocal repaired
         if is_permission_error(exc):
-            # scandir/open of a dir fails on the dir itself; unlink/rmdir on its parent's perms.
+            # Unlink/rmdir need write access on the parent, not on the read-only file.
+            for directory in (path, os.path.dirname(path)):
+                if _restore_owned_directory(entry, directory):
+                    repaired = True
             blocker = path if func in (os.scandir, os.open, os.lstat) else os.path.dirname(path)
             if blocker not in blockers:
                 blockers.append(blocker)
 
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(entry, onexc=_onexc)
-    else:  # pragma: no cover - 3.11
-        shutil.rmtree(entry, onerror=lambda f, p, info: _onexc(f, p, info[1]))
+    # Retry the tree, not func(path): rmtree's open/scandir callbacks may require dir_fd
+    # or flags we do not have. The cap also bounds retries for ACLs and concurrent writers.
+    for _ in range(3):
+        blockers.clear()
+        repaired = False
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(entry, onexc=_onexc)
+        else:  # pragma: no cover - 3.11
+            shutil.rmtree(entry, onerror=lambda f, p, info: _onexc(f, p, info[1]))
+        if not repaired:
+            break
     return blockers
 
 

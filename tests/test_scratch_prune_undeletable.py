@@ -8,6 +8,7 @@ import time
 import pytest
 
 import hermes_constants_scratch as scratch
+import hermes_constants_scratch_stuck as stuck
 
 pytestmark = [
     pytest.mark.platforms("posix"),
@@ -57,9 +58,75 @@ def _walked(walked, entry):
     return any(p == str(entry) or p.startswith(str(entry) + os.sep) for p in walked)
 
 
+def _foreign_owned_dirs(monkeypatch, *dirs):
+    """Keep real permission failures, but model a container uid without needing chown."""
+    inodes = {os.lstat(d).st_ino for d in dirs}
+    real_fstat = os.fstat
+
+    def fstat(fd):
+        st = real_fstat(fd)
+        if st.st_ino in inodes:
+            fields = list(st)
+            fields[4] = os.geteuid() + 1
+            return os.stat_result(fields)
+        return st
+
+    monkeypatch.setattr(stuck.os, "fstat", fstat)
+
+
+@pytest.mark.parametrize("entry_mode", [0o755, 0o555])
+def test_owned_read_only_subtree_is_removed_without_stuck_record(tmp_path, monkeypatch, entry_mode):
+    root = tmp_path / "scratch"
+    entry, ro = _undeletable_entry(root)
+    (ro / "blob").chmod(0o444)
+    ro.chmod(0o555)
+    entry.chmod(entry_mode)
+    _walk_spy(monkeypatch, root)
+    try:
+        assert scratch.prune_idle_entries(root, 24, frozenset()) == 1
+        assert not entry.exists()
+        assert not (root / stuck.STUCK_STATE_NAME).exists()
+    finally:
+        for d in (entry, ro):
+            if d.exists():
+                d.chmod(0o700)
+
+
+def test_read_only_symlink_target_outside_entry_is_untouched(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    blob = outside / "blob"
+    blob.write_text("keep", encoding="utf-8")
+    blob.chmod(0o444)
+    outside.chmod(0o555)
+    root = tmp_path / "scratch"
+    entry, ro = _undeletable_entry(root)
+    link = ro / "outside"
+    ro.chmod(0o700)
+    link.symlink_to(outside, target_is_directory=True)
+    os.utime(link, (OLD, OLD), follow_symlinks=False)
+    os.utime(ro, (OLD, OLD))
+    ro.chmod(0o555)
+    _walk_spy(monkeypatch, root)
+    before = os.lstat(outside)
+    try:
+        assert scratch.prune_idle_entries(root, 24, frozenset()) == 1
+        assert not entry.exists()
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o555
+        assert outside.stat().st_ctime_ns == before.st_ctime_ns
+        assert blob.read_text(encoding="utf-8") == "keep"
+        assert stat.S_IMODE(blob.stat().st_mode) == 0o444
+        assert not (root / stuck.STUCK_STATE_NAME).exists()
+    finally:
+        outside.chmod(0o700)
+        if ro.exists():
+            ro.chmod(0o700)
+
+
 def test_undeletable_or_unreadable_entry_logged_once_then_skipped_without_walk(tmp_path, monkeypatch):
     root = tmp_path / "scratch"
     entry, ro = _undeletable_entry(root)
+    _foreign_owned_dirs(monkeypatch, ro)
     # A dir this user may not even list (root-owned 0700): the idle scan itself fails.
     sealed = root / "sealed"
     locked = sealed / "locked"
@@ -94,6 +161,7 @@ def test_fixed_expired_or_other_uid_entry_is_judged_again(tmp_path, monkeypatch)
     root = tmp_path / "scratch"
     entry, ro = _undeletable_entry(root)
     other, other_ro = _undeletable_entry(root, "other")
+    _foreign_owned_dirs(monkeypatch, ro, other_ro)
     log_file = tmp_path / "logs" / "scratch-prune.log"
     walked = _walk_spy(monkeypatch, root)
     now = time.time()
