@@ -42,7 +42,7 @@ def _agent(supersede_after_checks: int):
         _fire_stream_delta=live["deltas"].append, _fire_reasoning_delta=live["reasoning"].append,
         _fire_streamed_codex_commentary=live["commentary"].append,
         interim_assistant_callback=lambda *a, **k: None,
-        _touch_activity=lambda _message: None, _client_log_context=lambda: "test-context",
+        _touch_activity=lambda _message, **_kwargs: None, _client_log_context=lambda: "test-context",
     )
     return agent, live
 
