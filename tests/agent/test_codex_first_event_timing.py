@@ -13,7 +13,7 @@ def _agent() -> SimpleNamespace:
         model="timing-fixture",
         _interrupt_requested=False,
         _last_api_first_chunk_at=None,
-        _touch_activity=lambda *_: None,
+        _touch_activity=lambda *_, **_kwargs: None,
         _fire_stream_delta=lambda *_: None,
         _fire_reasoning_delta=lambda *_: None,
         _client_log_context=lambda: "",

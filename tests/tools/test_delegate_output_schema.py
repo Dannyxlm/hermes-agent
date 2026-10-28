@@ -155,7 +155,7 @@ class _StubParent:
     _current_task_id = None
     _delegate_depth = 0
 
-    def _touch_activity(self, _desc):
+    def _touch_activity(self, _desc, **_kwargs):
         return None
 
 

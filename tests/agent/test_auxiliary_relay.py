@@ -690,7 +690,7 @@ def test_moa_responses_reference_reaches_provider_through_managed_relay(
     events = []
     agent = SimpleNamespace(
         provider="moa", model="default", _interrupt_requested=False,
-        _touch_activity=lambda *a: None, tool_progress_callback=lambda *a, **k: events.append(a),
+        _touch_activity=lambda *a, **_kwargs: None, tool_progress_callback=lambda *a, **k: events.append(a),
     )
     moa_loop.bind_moa_runtime(agent, "default")
     try:
