@@ -19,7 +19,7 @@ INSTALL = str(uuid.UUID('7a1c0de5-0000-4000-8000-00000000abcd'))
 OTHER = str(uuid.UUID(int=8))
 T = 1_791_400_000_000
 JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 64 + b'\xff\xd9'
-SENTINEL = 'Shannon pricing hi'
+SENTINEL = 'Example pricing hi'
 
 
 @pytest.fixture
@@ -314,7 +314,7 @@ def test_allowlists_match_the_app_schema_exactly():
     (0, {'attrs': {'state': {'nested': 'x'}}}),
     (0, {'attrs': ['state']}),
     (0, {'screen': 'compose'}),
-    (9, {'session_id': 'shannon-pricing-notes'}),
+    (9, {'session_id': 'example-pricing-notes'}),
 ])
 def test_r53_unknown_kinds_values_and_keys_drop_only_the_event(client, index, mutation):
     c, root = client

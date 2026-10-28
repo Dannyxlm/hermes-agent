@@ -31,7 +31,7 @@ PRIMARY_YAML = {
             {
                 "name": "grant-topic",
                 "platform": "telegram",
-                "chat_id": "-1004306455751",
+                "chat_id": "-1001234567890",
                 "thread_id": "14",
                 "profile": "grant",
             }
@@ -74,7 +74,7 @@ class TestRoutedSatellitePreflight:
         with patch("gateway.config.load_gateway_config",
                    return_value=_gateway_config(set())):
             assert _preflight_check_delivery(
-                {"deliver": "telegram:-1004306455751:14"}) is None
+                {"deliver": "telegram:-1001234567890:14"}) is None
 
     def test_unrouted_platform_still_blocked(self, multiplex_homes):
         """The route rescues telegram only — discord stays blocked."""
@@ -122,7 +122,7 @@ class TestRoutedSatellitePreflight:
             with patch("gateway.config.load_gateway_config",
                        return_value=_gateway_config(set())):
                 reason = _preflight_check_delivery(
-                    {"deliver": "telegram:-1004306455751:14"})
+                    {"deliver": "telegram:-1001234567890:14"})
                 assert reason is not None
                 assert "telegram" in reason
         finally:

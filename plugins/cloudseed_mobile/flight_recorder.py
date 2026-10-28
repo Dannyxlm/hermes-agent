@@ -1,7 +1,7 @@
 """Hermex flight recorder: owner-private, content-free app telemetry on this box.
 
 The phone sends batches of typed events (screens, named taps, RPC/REST timing,
-errors, smoothness spans, MetricKit payloads) and, only when Danny taps Send,
+errors, smoothness spans, MetricKit payloads) and, only when the user taps Send,
 bug flags with a screenshot and a note. Everything is validated against a closed
 allowlist that mirrors the Swift `FlightRecorderEvent` enum, so free text cannot
 ride along in a stored event. Invalid events are omitted and counted, not

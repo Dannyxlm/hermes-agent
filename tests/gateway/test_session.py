@@ -597,20 +597,20 @@ class TestWhatsAppSessionKeyConsistency:
         """Threads default to shared sessions — user_id is NOT appended."""
         alice = SessionSource(
             platform=Platform.TELEGRAM,
-            chat_id="-1002285219667",
+            chat_id="-1001234567890",
             chat_type="group",
             thread_id="17585",
             user_id="alice",
         )
         bob = SessionSource(
             platform=Platform.TELEGRAM,
-            chat_id="-1002285219667",
+            chat_id="-1001234567890",
             chat_type="group",
             thread_id="17585",
             user_id="bob",
         )
-        assert build_session_key(alice) == "agent:main:telegram:group:-1002285219667:17585"
-        assert build_session_key(bob) == "agent:main:telegram:group:-1002285219667:17585"
+        assert build_session_key(alice) == "agent:main:telegram:group:-1001234567890:17585"
+        assert build_session_key(bob) == "agent:main:telegram:group:-1001234567890:17585"
         assert build_session_key(alice) == build_session_key(bob)
 
 
@@ -702,18 +702,18 @@ class TestWhatsAppSessionKeyConsistency:
         """Regular group messages (no thread_id) remain per-user by default."""
         alice = SessionSource(
             platform=Platform.TELEGRAM,
-            chat_id="-1002285219667",
+            chat_id="-1001234567890",
             chat_type="group",
             user_id="alice",
         )
         bob = SessionSource(
             platform=Platform.TELEGRAM,
-            chat_id="-1002285219667",
+            chat_id="-1001234567890",
             chat_type="group",
             user_id="bob",
         )
-        assert build_session_key(alice) == "agent:main:telegram:group:-1002285219667:alice"
-        assert build_session_key(bob) == "agent:main:telegram:group:-1002285219667:bob"
+        assert build_session_key(alice) == "agent:main:telegram:group:-1001234567890:alice"
+        assert build_session_key(bob) == "agent:main:telegram:group:-1001234567890:bob"
         assert build_session_key(alice) != build_session_key(bob)
 
 

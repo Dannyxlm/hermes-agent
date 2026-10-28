@@ -70,7 +70,7 @@ class TestSlackSyntheticThreadCapture:
         """Telegram forum topics legitimately reuse ids; the rule is Slack-scoped."""
         env = {
             "HERMES_SESSION_PLATFORM": "telegram",
-            "HERMES_SESSION_CHAT_ID": "-1003941067111",
+            "HERMES_SESSION_CHAT_ID": "-1001234567890",
             "HERMES_SESSION_THREAD_ID": "2203",
             "HERMES_SESSION_MESSAGE_ID": "2203",
         }

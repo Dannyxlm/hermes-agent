@@ -45,7 +45,7 @@ def _workspace_aliases(projects: list) -> dict:
     """Old folder names per project root, for client-side name search only.
 
     A workspace folder renamed to a short name often keeps its old long name as a symlink in the
-    same parent (``CloudSeed Strategy -> CloudSeed``). Clients can't see symlink targets through
+    same parent (``Example Workspace -> Project``). Clients can't see symlink targets through
     ``fs/list``, so list them here: symlinks placed directly in the parent of a project folder
     whose ``realpath`` is that folder. Read-only, names only: no new paths, no grant change, no
     file contents. Unreadable parents are skipped; at most ``_ALIAS_SCAN_LIMIT`` entries are

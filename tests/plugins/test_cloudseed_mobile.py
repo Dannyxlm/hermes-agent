@@ -211,8 +211,8 @@ def test_memory_closed_names_size_and_symlinks(client):
     assert c.post(P+'/memory/write', json={'section': 'soul', 'content': ''}).status_code == 400
 
 
-@pytest.mark.parametrize('label', ['DANNY-ANT', 'SJ-ANT', 'SYB-Codex', 'Work Max', 'Personal (Max) 2._-', 'W ' * 19 + 'WW'],
-                         ids=['danny-ant', 'sj-ant', 'syb-codex', 'spaces', 'alphabet', 'nickname-limit'])
+@pytest.mark.parametrize('label', ['PRIMARY-ANT', 'SECONDARY-ANT', 'WORK-Codex', 'Work Max', 'Personal (Max) 2._-', 'W ' * 19 + 'WW'],
+                         ids=['primary-ant', 'secondary-ant', 'work-codex', 'spaces', 'alphabet', 'nickname-limit'])
 def test_account_display_saved_key_name(label):
     from plugins.cloudseed_mobile.account_render import _safe_entry_label
     entry = SimpleNamespace(label=label, auth_type='oauth', access_token='')
@@ -230,7 +230,7 @@ def _display_test_jwt(claims):
     'a' * 20, 'a' * 19 + '/', 'a' * 19 + '=', 'x ' * 21,
     'Work\nMax', 'Work\x00Max', 'Work\x7fMax', 'Work\x85Max',
     ' ', '', None, 12, 'Work <Max>',
-    'ada@example.com', 'synthetic@example.invalid', 'DANNY@ANT',
+    'ada@example.com', 'synthetic@example.invalid', 'PRIMARY@ANT',
 ], ids=[f'case-{i}' for i in range(20)])
 def test_account_display_rejects_unsafe_or_email_labels(label):
     from plugins.cloudseed_mobile.account_render import _safe_entry_label

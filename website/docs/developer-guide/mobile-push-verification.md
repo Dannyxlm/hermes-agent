@@ -11,7 +11,7 @@ completion deduplication, principal-scoped removal, and exact native destination
 Final focused run:
 
 ```sh
-HERMES_PYTHON=/Users/dannym/Developer/test-envs/project-link-20260908/bin/python \
+HERMES_PYTHON=/path/to/hermes-agent/.venv/bin/python \
   scripts/run_tests.sh tests/tui_gateway/test_mobile_push.py \
   tests/tui_gateway/test_methods_mobile_push.py \
   tests/tui_gateway/test_bot_live_owner_delivery.py --file-timeout 120

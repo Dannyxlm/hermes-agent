@@ -358,15 +358,10 @@ from hermes_cli.web_server_boundary import (  # re-exported: web_server.<name> s
 )
 
 
-_MANAGED_UPDATE_STATUS_PATH = Path(
-    "/home/ubuntu/.local/state/cloudseed/hermes-update-status.json"
-)
-_MANAGED_UPDATE_REFRESH_REQUEST_PATH = Path(
-    "/home/ubuntu/.local/state/cloudseed/update-requests/refresh.json"
-)
-_MANAGED_UPDATE_CANDIDATE_REQUEST_PATH = Path(
-    "/home/ubuntu/.local/state/cloudseed/update-requests/candidate.json"
-)
+_MANAGED_UPDATE_STATE_DIR = Path.home() / ".local" / "state" / "cloudseed"
+_MANAGED_UPDATE_STATUS_PATH = _MANAGED_UPDATE_STATE_DIR / "hermes-update-status.json"
+_MANAGED_UPDATE_REFRESH_REQUEST_PATH = _MANAGED_UPDATE_STATE_DIR / "update-requests" / "refresh.json"
+_MANAGED_UPDATE_CANDIDATE_REQUEST_PATH = _MANAGED_UPDATE_STATE_DIR / "update-requests" / "candidate.json"
 _MANAGED_UPDATE_SCHEMA = "hermes-update-status.v2"
 _MANAGED_UPDATE_COUNT_BASES = {
     "recorded_official_base",

@@ -304,7 +304,7 @@ python train.py --checkpoint-dir /lambda/nfs/my-storage/checkpoints
   └── outputs/
 
 # 本地 SSD（更快，临时）
-/home/ubuntu/
+/home/example/
   └── working/  # 临时文件
 ```
 <!-- ascii-guard-ignore-end -->

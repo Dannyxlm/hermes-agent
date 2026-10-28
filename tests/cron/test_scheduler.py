@@ -271,10 +271,10 @@ class TestResolveDeliveryTarget:
         """Explicit ``telegram:chat:thread`` targets bypass TELEGRAM_CRON_THREAD_ID."""
         monkeypatch.setenv("TELEGRAM_CRON_THREAD_ID", "999")
 
-        job = {"deliver": "telegram:-1003724596514:17"}
+        job = {"deliver": "telegram:-1001234567890:17"}
         assert _resolve_delivery_target(job) == {
             "platform": "telegram",
-            "chat_id": "-1003724596514",
+            "chat_id": "-1001234567890",
             "thread_id": "17",
             "_resolved_from": "explicit",
         }

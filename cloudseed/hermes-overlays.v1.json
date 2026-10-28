@@ -1,6 +1,6 @@
 {
   "schema_version": "cloudseed-hermes-overlays.v1",
-  "description": "CloudSeed-owned Hermes behaviors. This semantic ledger, not Git commit topology, defines the maintained overlay count.",
+  "description": "Maintained fork behaviors. This semantic ledger, not Git commit topology, defines the maintained overlay count.",
   "known_differences": [
     {
       "id": "lineage-stored-identity-order",
@@ -19,7 +19,7 @@
     },
     {
       "id": "managed-desktop-publication",
-      "summary": "Desktop build provenance and trusted CloudSeed publication updates"
+      "summary": "Desktop build provenance and trusted managed publication updates"
     },
     {
       "id": "external-memory-provider",
@@ -27,11 +27,11 @@
     },
     {
       "id": "managed-claude-credentials",
-      "summary": "Managed Claude Code credential paths for Ava profiles"
+      "summary": "Managed Claude Code credential paths for managed profiles"
     },
     {
       "id": "public-dashboard-hardening",
-      "summary": "CloudSeed dashboard authentication and health behavior"
+      "summary": "Managed dashboard authentication and health behavior"
     },
     {
       "id": "telegram-approval-cockpit",
@@ -39,7 +39,7 @@
     },
     {
       "id": "runtime-review-hardening",
-      "summary": "CloudSeed runtime safety and integration review fixes, including selector-only rollback deletion of terminal runtime-ledger history while refusing unresolved work"
+      "summary": "Managed runtime safety and integration review fixes, including selector-only rollback deletion of terminal runtime-ledger history while refusing unresolved work"
     },
     {
       "id": "hermex-shared-state",

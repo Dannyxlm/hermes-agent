@@ -329,7 +329,7 @@ async def test_payload_less_split_does_not_suppress_complete_response(
     runner = _make_runner(adapter)
     source = SessionSource(
         platform=Platform.TELEGRAM,
-        chat_id="-1004492624436",
+        chat_id="-1001234567890",
         chat_type="group",
         thread_id="1",
     )
@@ -339,7 +339,7 @@ async def test_payload_less_split_does_not_suppress_complete_response(
         history=[],
         source=source,
         session_id="sess-78541-payload-less-split",
-        session_key="agent:main:telegram:group:-1004492624436:1",
+        session_key="agent:main:telegram:group:-1001234567890:1",
     )
 
     assert result["final_response"] == FULL_RESPONSE

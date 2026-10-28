@@ -25,7 +25,7 @@ def _entry_pool_retry_after(entry):
 
 
 def _valid_display_label(value):
-    """A saved key name such as "DANNY-ANT": short, plain, never an email or token."""
+    """A saved key name such as "PRIMARY-ANT": short, plain, never an email or token."""
     if not isinstance(value, str) or not value.strip():
         return False
     if (len(value) > 40

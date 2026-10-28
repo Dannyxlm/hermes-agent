@@ -15,7 +15,7 @@ import pytest
 
 from hermes_cli.cron import _run_outcome
 
-ROUTED_TARGET = "telegram:-1004306455751:14"
+ROUTED_TARGET = "telegram:-1001234567890:14"
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def keeper_job(tmp_path, monkeypatch):
     keeper_home.mkdir(parents=True)
     (root / "config.yaml").write_text(json.dumps({"gateway": {  # YAML is a JSON superset; the test env ships no pyyaml
         "multiplex_profiles": True,
-        "profile_routes": [{"name": "ops", "platform": "telegram", "chat_id": "-1004306455751",
+        "profile_routes": [{"name": "ops", "platform": "telegram", "chat_id": "-1001234567890",
                             "thread_id": "14", "profile": "keeper"}],
     }}), encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(keeper_home))  # what `hermes -p keeper` sets

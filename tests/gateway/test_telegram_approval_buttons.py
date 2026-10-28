@@ -366,14 +366,14 @@ class TestTelegramSlackApprovalCockpit:
         query = MagicMock()
         query.data = data
         query.message = MagicMock()
-        query.message.chat_id = -1003963755551
+        query.message.chat_id = -1001234567890
         query.message.chat.type = "supergroup"
         query.message.message_thread_id = 3252
         query.message.text = "Slack draft card"
         query.message.reply_markup = "keyboard"
         query.from_user = MagicMock()
         query.from_user.id = 123
-        query.from_user.first_name = "Danny"
+        query.from_user.first_name = "Alex"
         query.answer = AsyncMock()
         query.edit_message_text = AsyncMock()
         return query
@@ -554,7 +554,7 @@ class TestTelegramSlackApprovalCockpit:
         msg.text = "/ssend s288e675f7b"
         msg.from_user.id = 222
         msg.from_user.username = "blocked"
-        msg.chat.id = -1003963755551
+        msg.chat.id = -1001234567890
         msg.chat.type = "supergroup"
         msg.chat.is_forum = True
         msg.message_thread_id = 3252

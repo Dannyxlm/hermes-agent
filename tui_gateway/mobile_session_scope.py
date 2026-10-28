@@ -93,7 +93,7 @@ UNLISTED_SOURCES = frozenset({
 
 
 def listed_chat(home, root_id):
-    """True when a lineage root is a human chat Danny's Chats list shows (R2).
+    """True when a lineage root is a human chat the user's Chats list shows (R2).
 
     Messaging platforms, cron, Kanban workers, tool sessions and delegate children never are;
     a delegate child is recognised by its source or by the ``_delegate_from`` creation marker,

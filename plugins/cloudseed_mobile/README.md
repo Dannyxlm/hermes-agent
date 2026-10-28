@@ -494,6 +494,19 @@ missing/ill-typed query fields; 503 storage/project-registry unavailable, with e
 sanitized `{error:"Mobile storage unavailable"}`. Preserve last client snapshot on
 errors. There are no write, archive extraction, execution or arbitrary URL routes.
 
+## Desktop door endpoint configuration
+
+The default profile's `cloudseed_mobile.desktop_door` mapping accepts an absolute
+`credential_file`, a loopback HTTP `port` (default `8080`), and an HTTPS
+`viewer_base_url` (default `https://desktop.example/desktop`). The viewer base
+includes the route prefix without a trailing slash. Set both endpoint fields
+explicitly for an existing installation before adopting these defaults. Credentials
+stay in their separate file; do not put tokens in the viewer URL.
+
+Responses must match that client's exact configured host, port and route prefix,
+including the absolute fragment base. Changing the configuration does not permit
+arbitrary viewer hosts or weaken ticket, mode, expiry or credential checks.
+
 ## Hermex flight recorder (round 9 lane E)
 
 Content-free app telemetry from Hermex to this box only. Plan:
@@ -510,7 +523,7 @@ JSON body limit, and the body `profile` must equal the native request profile.
   - When the day's file reaches its cap, the server returns 507 `storage_full`.
 - `POST /flight-recorder/flag` takes `{…envelope, flag_id, t, screen, note (≤2000), events[≤1000], screenshot_jpeg_b64?}`.
   - The screenshot is a JPEG of at most 600 KiB.
-  - The phone sends a flag only when Danny taps Send.
+  - The phone sends a flag only when the user taps Send.
   - Same duplicate and 409 rules as batches.
 - `POST /flight-recorder/delete` takes `{profile, install_id}` and removes every batch line and flag for that installation.
 
@@ -537,13 +550,13 @@ R3 Files & Deliverables verification uses the requested immutable interpreter an
 scratch FastAPI dependency path, with safety guards enabled:
 
 ```sh
-HERMES_HOME=/home/ubuntu/.hermes/cache/scratch/u8-test-venv/hxr3-files-home \
-TMPDIR=/home/ubuntu/.hermes/cache/scratch \
-PYTHONPATH="$PWD:/home/ubuntu/.hermes/cache/scratch/u8-test-venv/lib/python3.14/site-packages" \
+HERMES_HOME=/home/example/.hermes/cache/scratch/u8-test-venv/hxr3-files-home \
+TMPDIR=/home/example/.hermes/cache/scratch \
+PYTHONPATH="$PWD:/home/example/.hermes/cache/scratch/u8-test-venv/lib/python3.14/site-packages" \
 PYTHONDONTWRITEBYTECODE=1 \
 /opt/cloudseed-immutable/hermes-venv/current/bin/python -m pytest -q \
 -p no:cacheprovider \
---basetemp=/home/ubuntu/.hermes/cache/scratch/u8-test-venv/hxr3-files-pytest \
+--basetemp=/home/example/.hermes/cache/scratch/u8-test-venv/hxr3-files-pytest \
 tests/plugins/cloudseed_mobile tests/plugins/test_cloudseed_mobile.py
 ```
 
@@ -567,12 +580,12 @@ contents are read. Runtime Python lacks pytest/FastAPI in this environment, so a
 venv supplies test packages via PYTHONPATH without modifying immutable runtime:
 
 ```
-HERMES_HOME=/home/ubuntu/.hermes/cache/scratch/u8-test-venv/session-home \
-PYTHONPATH="$PWD:/home/ubuntu/.hermes/cache/scratch/u8-test-venv/lib/python3.14/site-packages" \
+HERMES_HOME=/home/example/.hermes/cache/scratch/u8-test-venv/session-home \
+PYTHONPATH="$PWD:/home/example/.hermes/cache/scratch/u8-test-venv/lib/python3.14/site-packages" \
 PYTHONDONTWRITEBYTECODE=1 \
 /opt/cloudseed-immutable/hermes-venv/current/bin/python -m pytest \
  tests/plugins/test_cloudseed_mobile.py \
- --basetemp=/home/ubuntu/.hermes/cache/scratch/u8-test-venv/fixtures \
+ --basetemp=/home/example/.hermes/cache/scratch/u8-test-venv/fixtures \
  -p no:cacheprovider -q
 ```
 

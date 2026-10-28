@@ -21,7 +21,7 @@ def signin(desktop, monkeypatch, tmp_path):
 
     secret = 'fixture-signin-password-not-real'
     store = VaultStore(tmp_path / 'vault')
-    meta = store.add_item('login', 'Fixture', {'identifier_type': 'email', 'identifier': 'danny@example.com',
+    meta = store.add_item('login', 'Fixture', {'identifier_type': 'email', 'identifier': 'alex@example.com',
                                              'password': secret}, origin='https://example.com')
     store.add_item('login', 'Foreign', {'identifier_type': 'email', 'identifier': 'other@example.com',
                                       'password': 'fixture-other'}, origin='https://other.example.com')
@@ -140,7 +140,7 @@ class TestSavedLoginProducer:
         state = wait_until(published, what='sign-in published')
         assert 'producer' not in state['unavailable']
         assert state['signin']['login_handle'] == signin.meta.id
-        assert state['signin']['masked_identifier'] == 'd•••@example.com'
+        assert state['signin']['masked_identifier'] == 'a•••@example.com'
         assert 'saved_login' in state['signin']['allowed_actions']
         assert d.call('desktop.snapshot', profile='secondary' if profile == 'default' else 'default')['result']['signin'] is None
         if decision in ('hand_back', 'heartbeat'):
