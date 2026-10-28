@@ -12,27 +12,29 @@ from agent.usage_pricing import CanonicalUsage
 _COUNTERS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "api_call_count")
 _PROVIDER = "COALESCE(NULLIF(provider,''),'unknown')"
 _SUMS = ", ".join(f"COALESCE(SUM(e.{key}),0) AS {key}" for key in _COUNTERS)
+
+
+def _usd_sum(column):
+    """An exact money sum inside SQLite. Prices are per-token rates times whole tokens, so every
+    cost has at most 12 decimal places: summing whole picodollars is exact and order-independent,
+    like a Decimal sum, without a Python call per row (a week of usage is 70k+ rows here, and the
+    old per-row Decimal aggregate held the GIL for most of a second)."""
+    return f"SUM(CAST(ROUND({column}*1e12) AS INTEGER))"
+
+
+def _usd(picodollars):
+    return Decimal(int(picodollars or 0)).scaleb(-12)
+
+
 _AGGREGATES = (_SUMS + ", COUNT(DISTINCT e.turn_id) AS turn_count, COALESCE(SUM(e.is_event),0) AS event_count, "
                "SUM(e.is_event AND e.turn_id IS NULL AND e.task='') AS unattributed_turn_events, "
-               "decimal_sum(e.estimated_cost_usd) AS known_estimated_cost_usd, "
-               "decimal_sum(e.minimum_estimated_cost_usd) AS minimum_estimated_cost_usd, "
+               f"{_usd_sum('e.estimated_cost_usd')} AS known_estimated_cost_usd, "
+               f"{_usd_sum('e.minimum_estimated_cost_usd')} AS minimum_estimated_cost_usd, "
                "SUM(e.estimated_cost_usd IS NULL) AS unknown_price_events, "
                "SUM(e.estimated_cost_usd IS NULL AND e.minimum_estimated_cost_usd IS NOT NULL) AS minimum_price_events, "
                "GROUP_CONCAT(DISTINCT e.price_reason) AS cost_reason, "
                "GROUP_CONCAT(DISTINCT e.pricing_date) AS pricing_dates, "
                "GROUP_CONCAT(DISTINCT e.source_url) AS price_sources")
-
-
-class _DecimalSum:
-    def __init__(self):
-        self.total = Decimal(0)
-
-    def step(self, value):
-        if value is not None:
-            self.total += Decimal(str(value)) if isinstance(value, float) else Decimal(value)
-
-    def finalize(self):
-        return str(self.total)
 
 
 def _minimum_float(value):
@@ -100,8 +102,8 @@ def _metrics(row):
     minimum_events = int(result.pop("minimum_price_events") or 0)
     for key in ("unknown_price_events", "unattributed_turn_events"):
         result[key] = int(result[key] or 0)
-    result["known_estimated_cost_usd"] = float(result["known_estimated_cost_usd"] or 0)
-    result["minimum_estimated_cost_usd"] = _minimum_float(Decimal(result["minimum_estimated_cost_usd"] or 0))
+    result["known_estimated_cost_usd"] = float(_usd(result["known_estimated_cost_usd"]))
+    result["minimum_estimated_cost_usd"] = _minimum_float(_usd(result["minimum_estimated_cost_usd"]))
     for key in ("pricing_dates", "price_sources"):
         result[key] = sorted((result[key] or "").split(",")) if result[key] else []
     result["total_tokens"] = sum(result[k] for k in _COUNTERS[:4])
@@ -111,6 +113,20 @@ def _metrics(row):
     result["cost_status"] = ("unknown" if result["unknown_price_events"] > minimum_events
                              else "minimum" if minimum_events else "est")
     return result
+
+
+def _local_day_sql(zone, start, end):
+    """The local day of ``e.occurred_at`` as one SQL CASE over the window's local midnights, newest
+    first, so SQLite buckets days without a Python call per row. Anything before the window keeps
+    the exact ``usage_day`` function."""
+    from datetime import datetime, time as clock, timedelta
+    day, last = datetime.fromtimestamp(start, zone).date(), datetime.fromtimestamp(end, zone).date()
+    branches = []
+    while day <= last:
+        midnight = datetime.combine(day, clock.min, tzinfo=zone).timestamp()
+        branches.append(f"WHEN e.occurred_at>={midnight!r} THEN '{day.isoformat()}'")
+        day += timedelta(days=1)
+    return "CASE " + " ".join(reversed(branches)) + " ELSE usage_day(e.occurred_at) END"
 
 
 def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, timezone_name="UTC"):
@@ -125,7 +141,6 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
     conn.create_function("usage_day", 1, lambda stamp: datetime.fromtimestamp(stamp, zone).date().isoformat(),
                          deterministic=True)
     conn.create_function("event_api_value", 7, _event_value, deterministic=True)
-    conn.create_aggregate("decimal_sum", 1, _DecimalSum)
     since = conn.execute("SELECT value FROM state_meta WHERE key='usage_events_since'").fetchone()
     coverage_since = float(since[0]) if since else None
     backfilled = coverage_since is not None and start < coverage_since <= end
@@ -159,6 +174,7 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
            "json_extract(price, '$.pricing_date') END AS pricing_date, "
            "CASE WHEN price IS NULL THEN source_url ELSE "
            "json_extract(price, '$.source_url') END AS source_url FROM priced) ")
+    day = _local_day_sql(zone, start, end)
     projections = (
         ("totals", "json_object('backfill_session_count', COUNT(DISTINCT CASE WHEN e.is_event=0 THEN e.session_id END))", ""),
         ("top_chats", "json_object('session_id', e.chat_id)",
@@ -167,8 +183,8 @@ def read_usage_rollup(conn, *, start, end, profile, session_id=None, limit=20, t
          "GROUP BY e.model, e.provider ORDER BY total_tokens DESC"),
         ("providers", "json_object('provider', e.provider)",
          "GROUP BY e.provider ORDER BY total_tokens DESC"),
-        ("days", "json_object('day', usage_day(e.occurred_at), 'provider', e.provider)",
-         "GROUP BY usage_day(e.occurred_at), e.provider ORDER BY usage_day(e.occurred_at), e.provider"),
+        ("days", f"json_object('day', {day}, 'provider', e.provider)",
+         f"GROUP BY {day}, e.provider ORDER BY {day}, e.provider"),
     )
     # One statement shares materialization across every grouping, even above the old cache limit.
     queries = [f"SELECT * FROM (SELECT '{kind}' AS kind, {dimensions} AS dimensions, {_AGGREGATES}, "
