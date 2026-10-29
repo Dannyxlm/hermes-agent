@@ -1133,6 +1133,9 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         if api is not None:
             return api['settings'].get('ephemeral_system_prompt') or ''
         combined = ctx.context_prompt or ""
+        from gateway.guest_channels import is_guest_source
+        if is_guest_source(self._runner, ctx.source):
+            return combined
         for extra in (
             (ctx.channel_prompt or "").strip(),
             self._runner._get_system_prompt_for_channel(

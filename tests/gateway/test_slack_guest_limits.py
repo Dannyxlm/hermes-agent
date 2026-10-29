@@ -184,7 +184,9 @@ async def test_configured_image_cap_and_actual_bytes_are_enforced(desk, monkeypa
     monkeypatch.setattr(adapter, "_download_slack_file_bytes", download)
     event = mention(files=[file("image/png", 21), file("image/png", 10)])
     result = await collect_guest_media(adapter, event, CHANNEL, TEAM, "question", {"max_image_bytes": 20})
-    assert result == ([], [], [], "question")
+    assert result[:3] == ([], [], [])
+    assert result[3].startswith("question\n")
+    assert result[3].count("[attachment not read:") == 2
     assert download.await_count == 1 and download.await_args.kwargs["max_bytes"] == 20
 
 

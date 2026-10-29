@@ -42,6 +42,8 @@ approval:
     second_one: "{count} 秒"
     second_other: "{count} 秒"
 gateway:
+  guest:
+    slash_denied: "此訪客頻道不支援斜線指令。請以訊息形式傳送您的問題。"
   approval_expired: "⚠️ 批准已逾期（代理不再等待）。請讓代理重試。"
   draining: "⏳ 正在等待 {count} 個活躍代理結束後重新啟動..."
   goal_cleared: "✓ 目標已清除。"

@@ -81,9 +81,13 @@ disabled. Reply text is not interpreted as
 local-file or image-fetch instructions. This is a capability restriction, not
 OS-level containment of the Python process: see [the security guide](../security.md).
 Guest session context contains no connected-platform list, home destinations, or cron
-targets. Guest uploads accept known-size PNG/JPEG/GIF/WebP images only, enforce the
+targets; receiving-bot `channel_prompts` and `channel_overrides` system prompts are
+not inherited. Guest uploads accept known-size PNG/JPEG/GIF/WebP images only, enforce the
 configured byte cap on metadata and the streamed response before caching, and never
-inline documents or send audio to STT (including thread-root files). A per-sender
+inline documents or send audio to STT (including thread-root files). Thread-root
+images are recovered only on a thread session's cold start, not on every reply.
+Each dropped attachment adds a neutral not-read marker to the message text.
+A per-sender
 cooldown silently drops repeat events before enrichment; native slash intake shares
 the same window. Owners and other channels retain normal behavior. This is an
 in-process cooldown, not a durable daily spending limit.

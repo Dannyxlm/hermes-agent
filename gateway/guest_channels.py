@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-import yaml
+from hermes_yaml import YAMLError
 
 from agent.i18n import t
 
@@ -69,7 +69,14 @@ def guest_channel_authorized(runner, source):
         expected = get_profile_dir(target).resolve()
         if identity.runtime_home.resolve() != expected or not expected.is_dir():
             return False
-        config = yaml.safe_load((expected / "config.yaml").read_text(encoding="utf-8-sig"))
+        from hermes_cli.config_effective import load_user_config_effective
+        from gateway.run import _profile_runtime_scope
+        config_path = expected / "config.yaml"
+        if not config_path.is_file():
+            return False
+        # Admission must not expand the receiving profile's env into guest policy.
+        with _profile_runtime_scope(expected, prepared_secret_scope={}):
+            config = load_user_config_effective(config_path, fail_closed=True)
         memory = config.get("memory", {})
         return (config.get("platform_toolsets", {}).get("slack") == []
                 and memory.get("memory_enabled") is False
@@ -78,7 +85,7 @@ def guest_channel_authorized(runner, source):
                 and not config.get("mcp_servers")
                 and config.get("skills", {}).get("external_dirs") == []
                 and config.get("plugins", {}).get("enabled") == [])
-    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+    except (OSError, ValueError, TypeError, AttributeError, YAMLError):
         return False
 
 
@@ -103,7 +110,8 @@ def guest_slash_denial(runner, source):
 
 def restrict_guest_context(runner, context):
     """Remove owner infrastructure before tools/env or the prompt pin can see it."""
-    if not is_guest_source(runner, context.source):
+    source = getattr(context, "source", None)
+    if source is None or not is_guest_source(runner, source):
         return context
     from dataclasses import replace
     return replace(context, connected_platforms=[], home_channels={}, guest_restricted=True)

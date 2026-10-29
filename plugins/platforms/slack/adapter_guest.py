@@ -72,22 +72,29 @@ async def collect_guest_media(adapter, event, channel_id, team_id, text, policy)
     """No documents, audio/STT, videos or text inlining, including on a hydrated thread root."""
     files = list(event.get("files") or [])
     thread_ts = event.get("thread_ts")
-    if thread_ts and thread_ts != event.get("ts"):
+    if thread_ts and thread_ts != event.get("ts") and not adapter._has_active_session_for_thread(
+        channel_id=channel_id, thread_ts=thread_ts, user_id=event.get("user"), team_id=team_id,
+        chat_type="dm" if event.get("channel_type") in {"im", "mpim"} else "group",
+    ):
         cached = adapter._thread_context_cache.get(adapter._thread_cache_key(channel_id, thread_ts, team_id))
         root = adapter._thread_root_message(cached.messages, thread_ts) if cached else None
         files = list(root.get("files") or []) + files if root else files
     urls, types = [], []
     # Bound aggregate disk/vision work too: the channel cap is a per-turn byte budget.
     remaining = int(positive_limit(policy, "max_image_bytes", 5 * 1024 * 1024))
+    note = ("[attachment not read: only PNG/JPEG/GIF/WebP screenshots "
+            f"up to {remaining} bytes per turn are accepted here]")
     for file in files:
-        if not isinstance(file, dict) or remaining <= 0:
-            continue
-        try:
-            image = await cache_guest_image(adapter, file, team_id, {"max_image_bytes": remaining})
-            if image:
-                urls.append(image[0])
-                types.append(image[1])
-                remaining -= image[2]
-        except (OSError, ValueError, httpx.HTTPError):
-            continue
+        image = None
+        if isinstance(file, dict) and remaining > 0:
+            try:
+                image = await cache_guest_image(adapter, file, team_id, {"max_image_bytes": remaining})
+            except (OSError, ValueError, httpx.HTTPError):
+                image = None
+        if image:
+            urls.append(image[0])
+            types.append(image[1])
+            remaining -= image[2]
+        else:
+            text = f"{text}\n{note}".strip()
     return urls, types, [False] * len(urls), text
