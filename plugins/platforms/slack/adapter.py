@@ -6117,7 +6117,7 @@ class SlackAdapter(BasePlatformAdapter):
         # A sender the gateway rejects must not cost Slack lookups first (the message path's rule).
         # In a channel the runner only drops them; in a DM it answers per unauthorized_dm_behavior
         # (pairing code or decline), so it still gets the event, without names.
-        rejected = self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_id)
+        rejected = self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_id, team_id=team_id)
         if rejected and not is_dm:
             return
         source = self.build_source(

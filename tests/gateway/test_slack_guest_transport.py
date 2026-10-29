@@ -54,3 +54,25 @@ async def test_native_slack_event_preserves_scope_and_routes_before_one_thread_r
         assert len(received) == 1
         assert len(replies) == 1
         assert replies[0].extra["thread_ts"] == "100.001"
+
+
+@pytest.mark.asyncio
+async def test_owner_native_slash_keeps_workspace_scope_and_normal_profile(desk):
+    runner, adapter, _ = desk
+    received = []
+
+    async def capture(event):
+        assert runner._is_user_authorized_for_source(event.source)
+        received.append(event)
+        return None
+
+    with SlackStandin() as slack:
+        client = AsyncWebClient(token=slack.bot_token, base_url=slack.api_base)
+        adapter._app = SimpleNamespace(client=client)
+        adapter._team_clients[TEAM] = client
+        adapter.set_message_handler(capture)
+        await adapter._handle_slash_command({"command": "/whoami", "user_id": OWNER,
+                                            "channel_id": CHANNEL, "team_id": TEAM, "text": ""})
+        await async_wait_until(lambda: received, what="owner native slash handoff")
+        assert received[0].source.scope_id == TEAM
+        assert received[0].source.profile == "default"
