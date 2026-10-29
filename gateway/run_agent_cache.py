@@ -818,7 +818,7 @@ class GatewayAgentCacheMixin:
                 (p.value, _s(getattr(hc, "name", "")), _s(getattr(hc, "chat_id", "")))
                 for p, hc in context.home_channels.items()
             ),
-            bool(redact_pii), home_display,
+            bool(redact_pii), home_display, getattr(context, "guest_restricted", False),
         )
         return hashlib.sha256(repr(key_tuple).encode("utf-8")).hexdigest()
 

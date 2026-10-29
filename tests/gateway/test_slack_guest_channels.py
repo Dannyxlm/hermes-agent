@@ -29,19 +29,19 @@ def make_desk(tmp_path, monkeypatch):
     monkeypatch.setenv("SLACK_ALLOWED_USERS", OWNER)
     # Scope-aware auth rereads the transport home's allowlist, not another profile's.
     (root / ".env").write_text(f"SLACK_ALLOWED_USERS={OWNER}\n")
-    home = root / "profiles" / "bugdesk"
+    home = root / "profiles" / "guest-support"
     home.mkdir(parents=True)
     (home / "config.yaml").write_text(yaml.safe_dump(PROFILE_CONFIG))
-    (home / "SOUL.md").write_text("Bug and product help only. — Ava")
+    (home / "SOUL.md").write_text("Bug and product help only.")
     pc = PlatformConfig(enabled=True, extra={
-        "guest_channels": {f"{TEAM}:{CHANNEL}": {"profile": "bugdesk", "owner_user_id": OWNER}},
+        "guest_channels": {f"{TEAM}:{CHANNEL}": {"profile": "guest-support", "owner_user_id": OWNER}},
     })
     config = GatewayConfig()
     config.multiplex_profiles = True
-    config._runtime_profile_homes = (("default", root), ("bugdesk", home))
+    config._runtime_profile_homes = (("default", root), ("guest-support", home))
     config.platforms = {Platform.SLACK: pc}
     config.profile_routes = parse_profile_routes([
-        {"name": "guest", "platform": "slack", "guild_id": TEAM, "chat_id": CHANNEL, "profile": "bugdesk"},
+        {"name": "guest", "platform": "slack", "guild_id": TEAM, "chat_id": CHANNEL, "profile": "guest-support"},
         {"name": "owner", "platform": "slack", "guild_id": TEAM, "chat_id": CHANNEL,
          "user_id": OWNER, "profile": "default"},
     ])
@@ -49,7 +49,7 @@ def make_desk(tmp_path, monkeypatch):
     adapter = SlackAdapter(pc)
     adapter.gateway_runner = runner
     runner.adapters = {Platform.SLACK: adapter}
-    runner._profile_adapters = {"bugdesk": {}}
+    runner._profile_adapters = {"guest-support": {}}
     adapter.set_authorization_check(runner._make_adapter_auth_check(Platform.SLACK))
     return runner, adapter, home
 
@@ -67,9 +67,9 @@ def source(desk, user=GUEST, team=TEAM, channel=CHANNEL, kind="group", thread=No
     return src
 
 
-@pytest.mark.parametrize("user,name,profile", [(GUEST, "Guest", "bugdesk"),
+@pytest.mark.parametrize("user,name,profile", [(GUEST, "Guest", "guest-support"),
                                               (OWNER, "Owner", "default"),
-                                              (GUEST, "Danny", "bugdesk")])
+                                              (GUEST, "Owner", "guest-support")])
 @pytest.mark.parametrize("thread", [None, "123.456"])
 def test_guest_and_owner_routes_use_ids_in_channel_and_threads(desk, user, name, profile, thread):
     runner, adapter, _ = desk
@@ -86,7 +86,7 @@ def test_guest_and_owner_routes_use_ids_in_channel_and_threads(desk, user, name,
 def test_guests_are_rejected_outside_the_exact_workspace_channel(desk, team, channel, kind):
     runner, adapter, _ = desk
     src = source(desk, team=team, channel=channel, kind=kind)
-    assert src.profile != "bugdesk"
+    assert src.profile != "guest-support"
     assert not runner._is_user_authorized_for_source(src)
     assert adapter._early_reject_unauthorized(GUEST, channel, kind == "dm", team_id=team)
 
@@ -106,7 +106,7 @@ def test_guest_admission_fails_closed_even_for_other_allowlisted_users(desk, mon
     }
     operations = {
         "unserved": lambda: setattr(runner.config, "_runtime_profile_homes", runner.config._runtime_profile_homes[:1]),
-        "missing": lambda: home.rename(home.with_name("removed-bugdesk")),
+        "missing": lambda: home.rename(home.with_name("removed-guest-support")),
         "no-config": lambda: (home / "config.yaml").unlink(),
         "bad-yaml": lambda: (home / "config.yaml").write_text("memory: [unterminated"),
         "no-route": lambda: setattr(runner.config, "profile_routes", []),
@@ -158,7 +158,7 @@ def test_actual_agent_construction_has_no_tools_memory_context_or_owner_prefill(
     runner._service_tier = None
     runner._refresh_fallback_model = lambda: None
     ctx = TurnContext(source=src, user_config=config, enabled_toolsets=enabled, disabled_toolsets=disabled,
-                      session_key="agent:bugdesk:slack:group:CTEST", session_id="guest-test")
+                      session_key="agent:guest-support:slack:group:CTEST", session_id="guest-test")
     captured = {}
     ctx.AIAgent = lambda **kwargs: captured.update(kwargs) or SimpleNamespace(**kwargs)
     executor = GatewaySessionAgentMixin()

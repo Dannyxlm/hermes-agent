@@ -17,7 +17,7 @@ def desk(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("user,channel,kind,team,expected", [
-    (GUEST, CHANNEL, "channel", TEAM, "bugdesk"),
+    (GUEST, CHANNEL, "channel", TEAM, "guest-support"),
     (OWNER, CHANNEL, "channel", TEAM, "default"),
     (GUEST, "COTHER", "channel", TEAM, None),
     (GUEST, "DOTHER", "im", TEAM, None),
@@ -37,7 +37,7 @@ async def test_native_slack_event_preserves_scope_and_routes_before_one_thread_r
         async def reply(event):
             assert runner._is_user_authorized_for_source(event.source)
             received.append(event)
-            return "What steps reproduce it? — Ava"
+            return "What steps reproduce it?"
 
         adapter.set_message_handler(reply)
         await adapter._handle_slack_message_impl({
@@ -64,7 +64,6 @@ async def test_owner_native_slash_keeps_workspace_scope_and_normal_profile(desk)
     async def capture(event):
         assert runner._is_user_authorized_for_source(event.source)
         received.append(event)
-        return None
 
     with SlackStandin() as slack:
         client = AsyncWebClient(token=slack.bot_token, base_url=slack.api_base)

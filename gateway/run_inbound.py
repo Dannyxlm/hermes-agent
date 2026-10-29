@@ -586,6 +586,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         _cmd_def_inner = _resolve_cmd_inner(_evt_cmd) if _evt_cmd else None
 
         if _cmd_def_inner:
+            from gateway.guest_channels import guest_slash_denial
+            if (denied := guest_slash_denial(self, source)) is not None:
+                return True, denied
             # /status and /context are intentionally pre-gate so users always see session state.
             if _cmd_def_inner.name == "status":
                 return True, await self._handle_status_command(event)

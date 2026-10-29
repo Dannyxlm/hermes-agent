@@ -31,14 +31,17 @@ platforms:
     extra:
       guest_channels:
         TWORKSPACE:CREPORTS:
-          profile: bugdesk
+          profile: guest-support
           owner_user_id: UOWNER
+          max_image_bytes: 5242880  # default 5 MiB; also the per-turn upload budget
+          min_seconds_between_turns: 20  # default; per user across threads
+          # slash_denied: "Please send a message instead of a slash command."
 profile_routes:
   - name: reports
     platform: slack
     guild_id: TWORKSPACE  # Slack's workspace scope_id
     chat_id: CREPORTS
-    profile: bugdesk
+    profile: guest-support
   - name: reports-owner
     platform: slack
     guild_id: TWORKSPACE
@@ -47,7 +50,7 @@ profile_routes:
     profile: default
 ```
 
-Enable `gateway.multiplex_profiles` and create the `bugdesk` profile with this
+Enable `gateway.multiplex_profiles` and create the `guest-support` profile with this
 minimum config, its own bounded `SOUL.md`, and empty skills/plugins directories:
 
 ```yaml
@@ -77,6 +80,13 @@ denied, as are interactive approval/model controls; streaming/interim consumers 
 disabled. Reply text is not interpreted as
 local-file or image-fetch instructions. This is a capability restriction, not
 OS-level containment of the Python process: see [the security guide](../security.md).
+Guest session context contains no connected-platform list, home destinations, or cron
+targets. Guest uploads accept known-size PNG/JPEG/GIF/WebP images only, enforce the
+configured byte cap on metadata and the streamed response before caching, and never
+inline documents or send audio to STT (including thread-root files). A per-sender
+cooldown silently drops repeat events before enrichment; native slash intake shares
+the same window. Owners and other channels retain normal behavior. This is an
+in-process cooldown, not a durable daily spending limit.
 Restart the gateway after adding this configuration or changing code.
 
 ## Overview
