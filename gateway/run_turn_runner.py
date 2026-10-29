@@ -213,6 +213,9 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
 
     def _setup_stream_consumer(self, platform_key):
         ctx = self._ctx
+        from gateway.guest_channels import is_guest_source
+        if is_guest_source(self._runner, ctx.source):
+            return None, None, None, False
         if ctx.mute_notification_reply:
             return None, None, None, False
         stream_consumer = None

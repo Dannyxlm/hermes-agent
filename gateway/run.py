@@ -4190,7 +4190,7 @@ class GatewayRunner(
         from gateway.profile_routing import ProfileRouteRejected, match_profile_route
         try:
             matched = match_profile_route(
-                routes, platform=source.platform.value, guild_id=getattr(source, "guild_id", None),
+                routes, platform=source.platform.value, guild_id=source.guild_id or source.scope_id,
                 chat_id=source.chat_id, thread_id=getattr(source, "thread_id", None),
                 parent_chat_id=getattr(source, "parent_chat_id", None),
                 adapter_profile=adapter_profile, user_id=getattr(source, "user_id", None))

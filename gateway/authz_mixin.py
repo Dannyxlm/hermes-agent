@@ -645,6 +645,10 @@ class GatewayAuthorizationMixin:
 
     def _principal_authorized(self, source: SessionSource, *, allow_adapter_delegation: bool) -> bool:
         """The allowlist verdict alone, before the bot loop guard."""
+        from gateway.guest_channels import guest_channel_authorized
+        guest_verdict = guest_channel_authorized(self, source)
+        if guest_verdict is not None:
+            return guest_verdict
         from gateway.session_local import authorize_local_source
         local_verdict = authorize_local_source(self, source)
         if local_verdict is not None:

@@ -16,6 +16,69 @@ Bolt SDK with Socket Mode. If you have an old classic app, you must create a new
 the steps below.
 :::
 
+## Tool-free guest channel
+
+For a shared bot, `platforms.slack.extra.guest_channels` can admit members of one
+workspace/channel into a dedicated **tool-free** profile. Do not use
+`group_allowed_chats` for this: that is a full-agent authorization grant independent
+of routing. Guest admission instead requires a resolved, served profile with a
+readable restricted config. Missing routes, missing profiles and invalid configs
+are denied, including for other allowlisted users.
+
+```yaml
+platforms:
+  slack:
+    extra:
+      guest_channels:
+        TWORKSPACE:CREPORTS:
+          profile: bugdesk
+          owner_user_id: UOWNER
+profile_routes:
+  - name: reports
+    platform: slack
+    guild_id: TWORKSPACE  # Slack's workspace scope_id
+    chat_id: CREPORTS
+    profile: bugdesk
+  - name: reports-owner
+    platform: slack
+    guild_id: TWORKSPACE
+    chat_id: CREPORTS
+    user_id: UOWNER
+    profile: default
+```
+
+Enable `gateway.multiplex_profiles` and create the `bugdesk` profile with this
+minimum config, its own bounded `SOUL.md`, and empty skills/plugins directories:
+
+```yaml
+platform_toolsets:
+  slack: []
+memory:
+  provider: none
+  memory_enabled: false
+  user_profile_enabled: false
+plugins:
+  enabled: []
+skills:
+  external_dirs: []
+mcp_servers: {}
+```
+
+Configure inference separately using the profile's normal provider setup; do not
+copy the owner's whole environment, memory, skills, plugins, or prefill into it.
+The owner exception bypasses **only** guest admission and still needs ordinary
+sender authorization. Match IDs, never display names. A channel route covers its
+threads; other workspaces, channels and DMs keep their existing policies. Existing
+mention/thread wake rules still apply.
+
+Guest turns expose zero tools, skip memory and workspace context files, retain
+only their own SOUL identity, and do not inherit owner prefill. Slash commands are
+denied, as are interactive approval/model controls; streaming/interim consumers are
+disabled. Reply text is not interpreted as
+local-file or image-fetch instructions. This is a capability restriction, not
+OS-level containment of the Python process: see [the security guide](../security.md).
+Restart the gateway after adding this configuration or changing code.
+
 ## Overview
 
 | Component | Value |

@@ -56,10 +56,12 @@ from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 
 try:  # sibling modules; support both package and flat plugin-dir import
     from .block_kit import render_blocks, sanitize_blocks
+    from .adapter_auth import early_reject_unauthorized
     from .adapter_slash_lane import SlashHandoffLanes
     from .adapter_slash_payload import slash_command_text, slash_thread_id
 except ImportError:  # pragma: no cover - plugin loaded outside package context
     from block_kit import render_blocks, sanitize_blocks  # type: ignore
+    from adapter_auth import early_reject_unauthorized
     from adapter_slash_lane import SlashHandoffLanes  # type: ignore
     from adapter_slash_payload import slash_command_text, slash_thread_id  # type: ignore
 
@@ -4200,26 +4202,9 @@ class SlackAdapter(BasePlatformAdapter):
         runner = getattr(getattr(self, "_message_handler", None), "__self__", None)
         return getattr(runner, "_is_user_authorized", None)
 
-    def _early_reject_unauthorized(
-            self, user_id: str, channel_id: str, is_dm: bool, *, thread_id: Optional[str] = None) -> bool:
-        """True (logged) when the sender is definitively unauthorized. Injected profile-bound check
-        first (works under multiplex, where the handler has no ``__self__``), then runner
-        introspection. Unknown (None) is NOT a rejection. ``thread_id``: thread-scoped profile_routes."""
-        chat_type = "dm" if is_dm else "group"
-        decision = (
-            self._is_sender_authorized(user_id, chat_type, channel_id, thread_id=thread_id)
-            if user_id and getattr(self, "_authorization_check", None) is not None
-            else None)
-        auth_fn = self._runner_auth_fn()
-        if decision is None and user_id and callable(auth_fn):
-            source = self.build_source(
-                chat_id=channel_id, chat_name="", chat_type=chat_type, user_id=user_id, user_name="",
-                thread_id=thread_id)
-            decision = bool(auth_fn(source))
-        if decision is False:
-            logger.warning(
-                "[Slack] Early reject of unauthorized user %s in channel %s", user_id, channel_id)
-        return decision is False
+    def _early_reject_unauthorized(self, user_id: str, channel_id: str, is_dm: bool, *,
+                                   thread_id: Optional[str] = None, team_id: Optional[str] = None) -> bool:
+        return early_reject_unauthorized(self, user_id, channel_id, is_dm, thread_id=thread_id, team_id=team_id)
 
     async def _channel_gate_allows(
         self, *, channel_id: str, routing_text: str, bot_uid: str, is_mentioned: bool,
@@ -4663,7 +4648,7 @@ class SlackAdapter(BasePlatformAdapter):
         # Reject unauthorized users before the expensive lookups/downloads;
         # the runner's own auth check only runs after MessageEvent is built.
         thread_ts = self._session_thread_ts(event, ts, is_dm, assistant_meta)
-        if self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_ts):
+        if self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_ts, team_id=team_id):
             return
         bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
         # Mentions may live only in Block Kit blocks.
@@ -5511,6 +5496,11 @@ class SlackAdapter(BasePlatformAdapter):
         if not normalized_user_id:
             return False
         chat_type = "dm" if str(channel_id or "").startswith("D") else "group"
+        from gateway.guest_channels import is_guest_source
+        runner = getattr(self, "gateway_runner", None)
+        if runner is not None and is_guest_source(runner, self.build_source(
+                chat_id=channel_id, chat_type=chat_type, user_id=normalized_user_id, scope_id=team_id)):
+            return False  # A guest must never operate an owner's approval/model buttons.
         # Preferred: the injected profile-bound check (``set_authorization_check``); unlike the
         # ``__self__`` introspection below it works under multiplex (handler is a closure).
         # getattr: object.__new__ test doubles never ran BasePlatformAdapter.__init__.
@@ -5520,7 +5510,7 @@ class SlackAdapter(BasePlatformAdapter):
         # handler is a profile closure with no ``__self__`` (#72657, same class as Telegram's #86296).
         if getattr(self, "_authorization_check", None) is not None:
             injected = self._is_sender_authorized(
-                normalized_user_id, chat_type, str(channel_id or ""))
+                normalized_user_id, chat_type, str(channel_id or ""), scope_id=team_id or None)
             if injected is not None:
                 return injected
         auth_fn = self._runner_auth_fn()

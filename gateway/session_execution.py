@@ -43,6 +43,9 @@ class GatewaySessionAgentMixin:
         """gateway.platforms.<plat>.skip_context_files: messaging platforms may opt out of
         filesystem-heavy context-file discovery (SOUL.md, AGENTS.md, .cursorrules)."""
         from gateway.session_policy import policy_for_source
+        from gateway.guest_channels import is_guest_source
+        if is_guest_source(self._runner, self._ctx.source):
+            return True
         policy = policy_for_source(self._runner, self._ctx.source)
         if policy:
             return policy.ignore_rules
@@ -158,13 +161,17 @@ class GatewaySessionAgentMixin:
         from gateway.session_policy import policy_for_source
         from gateway.session_worker_construct import session_prefill
         policy = policy_for_source(runner, src)
+        from gateway.guest_channels import is_guest_source, guest_turn_toolsets
+        guest = is_guest_source(runner, src)
+        if guest:
+            guest_turn_toolsets(runner, src, ctx.user_config)
         return ctx.AIAgent(
             model=turn_route["model"], **turn_route["runtime"], **_checkpoint_agent_kwargs(ctx.user_config),
             max_iterations=max_iterations, quiet_mode=not bool(policy and policy.verbose), verbose_logging=False,
             enabled_toolsets=ctx.enabled_toolsets, disabled_toolsets=ctx.disabled_toolsets,
             ephemeral_system_prompt=combined_ephemeral or None,
-            prefill_messages=(session_prefill(active_authority(runner), policy, src.chat_id) if policy
-                              else runner._prefill_messages) or None,
+            prefill_messages=None if guest else (session_prefill(active_authority(runner), policy, src.chat_id) if policy
+                                                 else runner._prefill_messages) or None,
             reasoning_config=reasoning_config, service_tier=runner._service_tier,
             request_overrides=turn_route.get("request_overrides"),
             providers_allowed=pr.get("only"), providers_ignored=pr.get("ignore"), providers_order=pr.get("order"),
@@ -178,10 +185,10 @@ class GatewaySessionAgentMixin:
             # Reload from disk — do not reuse the startup snapshot.
             # See #60955.
             fallback_model=None if api_runtime_locked() else self._runner._refresh_fallback_model(),
-            skip_context_files=skip_context_files,
+            skip_context_files=guest or skip_context_files,
             # Keep the persona even with minimal context: soul identity is one small file.
             load_soul_identity=not bool(policy and policy.ignore_rules),
-            skip_memory=bool(policy and policy.ignore_rules),
+            skip_memory=guest or bool(policy and policy.ignore_rules),
             pass_session_id=bool(policy and policy.pass_session_id),
             # A local session's frozen budget (`--run-budget` / its profile's agent.run_budget_seconds);
             # None leaves the agent reading the owner's config, as before.

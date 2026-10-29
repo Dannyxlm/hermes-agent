@@ -1948,13 +1948,14 @@ class GatewayAdapterLifecycleMixin:
 
         def check(
             user_id: str, chat_type: Optional[str] = None, chat_id: Optional[str] = None, *,
-            is_bot: bool = False, thread_id: Optional[str] = None,
+            is_bot: bool = False, thread_id: Optional[str] = None, scope_id: Optional[str] = None,
         ) -> bool:
             if not user_id:
                 return False
             source = SessionSource(
                 platform=platform, chat_id=chat_id or "", chat_type=chat_type or "group",
                 user_id=user_id, thread_id=thread_id, is_bot=bool(is_bot), profile=profile_name,
+                scope_id=scope_id,
             )
             # Same transport provenance as ``build_source``, so policy reads resolve the receiving adapter.
             registry = (
