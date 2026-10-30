@@ -157,7 +157,7 @@ def test_boot_never_activates_the_pre_pm_venv(tmp_path, monkeypatch, interpreter
     import sys
     from pm import environments as runtime_paths
 
-    base_python = getattr(sys, "_base_executable", sys.executable)
+    base_python = str(Path(getattr(sys, "_base_executable", sys.executable)).resolve())
     base_prefix = Path(sys.base_prefix).resolve()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
     # The store interpreter is PM's: a non-venv Python living under the runtime dir.

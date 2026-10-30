@@ -8,8 +8,8 @@ import pytest
 from hermes_cli import web_server_sessions
 from hermes_cli.web_routers import sessions
 from hermes_state import SessionDB
-from tests.tui_gateway.test_inbox_summaries import inbox  # noqa: F401  (fixture)
-from tests.tui_gateway.test_methods_mobile import mobile_home  # noqa: F401  (fixture)
+from tests.tui_gateway.test_inbox_summaries import inbox  # fixture
+from tests.tui_gateway.test_methods_mobile import mobile_home  # fixture
 from tests.tui_gateway.test_session_change_cursor import PHONE_EXCLUDES
 from tui_gateway import server, session_change_cursor
 
@@ -48,7 +48,7 @@ def _write(mobile_home, fn):
         fn(db)
 
 
-def test_nothing_changed_opens_no_store_and_answers_like_a_read(inbox, mobile_home, opened):  # noqa: F811
+def test_nothing_changed_opens_no_store_and_answers_like_a_read(inbox, mobile_home, opened):
     full = _list(inbox, change_cursor=1)
     cursor = full["change_cursor"]
     opened.clear()
@@ -64,7 +64,7 @@ def test_nothing_changed_opens_no_store_and_answers_like_a_read(inbox, mobile_ho
         assert answer["inbox_summary_scope"] == full["inbox_summary_scope"]
 
 
-def test_totals_follow_every_change_and_never_outlive_it(inbox, mobile_home):  # noqa: F811
+def test_totals_follow_every_change_and_never_outlive_it(inbox, mobile_home):
     cursor = _list(inbox, change_cursor=1)["change_cursor"]
     for change in (
         lambda db: (db.create_session("fresh", "desktop"), db.set_session_title("fresh", "Fresh")),
@@ -82,7 +82,7 @@ def test_totals_follow_every_change_and_never_outlive_it(inbox, mobile_home):  #
         assert (moved["total"], moved["archived_count"]) == (fresh["total"], fresh["archived_count"])
 
 
-def test_a_filter_that_was_never_read_is_read_from_the_store(inbox, mobile_home, opened):  # noqa: F811
+def test_a_filter_that_was_never_read_is_read_from_the_store(inbox, mobile_home, opened):
     cursor = _list(inbox, change_cursor=1)["change_cursor"]
     opened.clear()
     archived = _list(inbox, changed_since=cursor, archived="only")

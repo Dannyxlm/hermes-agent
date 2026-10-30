@@ -4,6 +4,7 @@ behind, which guests keep the free model, and that a connector guest never asks 
 import contextlib
 
 import pytest
+import hermes_yaml as yaml
 
 from hermes_cli import anon_auth, install_state, welcome_trial
 from tests.hermes_cli.anon_portal import as_local_desktop_backend, claimed_trial, install_portal, off_local_desktop
@@ -326,6 +327,12 @@ def _kanban_worker_model(monkeypatch, tmp_path) -> str:
     monkeypatch.setattr("hermes_cli.profiles.resolve_profile_env", lambda name: home)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    # This contract exercises the documented legacy/unpinned fallback, not new-board model admission.
+    config_path = get_hermes_home() / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    config = config or {}
+    config.setdefault("kanban", {})["require_model"] = False
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     kb.create_board("trial")
     with closing(connect(board="trial")) as conn:
         task_id = kb.create_task(conn, title="t", assignee="default", workspace_kind="dir", workspace_path=str(workspace))

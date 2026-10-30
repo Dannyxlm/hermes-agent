@@ -350,6 +350,10 @@ class SessionUsagePayload(Payload):
     model: str | None = None
     provider: str | None = None
     fallback_model: str | None = None
+    cache_read: int | None = None
+    cache_write: int | None = None
+    cost_usd: float | None = None
+    cost_status: str | None = None
     plan_gauge: PlanGauge | None = None
 
 

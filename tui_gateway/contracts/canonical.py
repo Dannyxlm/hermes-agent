@@ -237,6 +237,10 @@ class SessionStats(Result):
     model: str
     provider: str
     fallback_model: str | None = None
+    cache_read: int | None = None
+    cache_write: int | None = None
+    cost_usd: float | None = None
+    cost_status: str | None = None
     plan_gauge: PlanGauge | None = None
 
 

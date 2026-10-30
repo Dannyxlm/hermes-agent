@@ -365,12 +365,17 @@ def fleet_public_fields(value):
 
 def read_fleet_state():
     from pathlib import Path
+
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    if uid is None:
+        raise OSError("Fleet collector requires a POSIX account")
     import pwd
 
     # HOME is profile-scoped; the shared collector belongs to the OS user.
-    path = Path(pwd.getpwuid(os.getuid()).pw_dir) / '.local/state/cloudseed/fleet/latest.json'
+    path = Path(pwd.getpwuid(uid).pw_dir) / '.local/state/cloudseed/fleet/latest.json'
     limit = 256 * 1024
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
             raise ValueError('Invalid fleet file')

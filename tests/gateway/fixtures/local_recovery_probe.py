@@ -13,7 +13,7 @@ import threading
 import time
 
 from websockets.asyncio.client import connect
-from tests.gateway.test_normal_runtime_boot import control
+from tests.gateway.fixtures.runtime_control import control
 from tests.waiting import async_wait_until
 
 

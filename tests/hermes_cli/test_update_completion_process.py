@@ -14,7 +14,9 @@ from hermes_cli import update_completion
 
 
 @pytest.fixture
-def transition(tmp_path):
+def transition(tmp_path, monkeypatch):
+    # venv's `home` must name the real base binary's directory, not an activation symlink.
+    monkeypatch.setattr(sys, "_base_executable", str(Path(getattr(sys, "_base_executable", sys.executable)).resolve()))
     root = tmp_path / "checkout"
     root.mkdir()
     home = tmp_path / "home"
@@ -25,10 +27,8 @@ def transition(tmp_path):
     pm_package = root / "pm"
     pm_package.mkdir()
     (pm_package / "__init__.py").write_text("OLD_API = True\n")
-
     def git(*args):
         return subprocess.run(["git", *args], cwd=root, text=True, capture_output=True, check=True).stdout.strip()
-
     git("init", "-b", "main")
     git("config", "user.name", "Completion test")
     git("config", "user.email", "completion@example.invalid")
