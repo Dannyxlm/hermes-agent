@@ -4,6 +4,7 @@ file-serving helpers shared with the local-skill path. Helpers tests patch on th
 
 import json
 import logging
+import os
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, List
@@ -44,11 +45,30 @@ def _truncate_description(description: str) -> str:
 
 def _safe_frontmatter(path: Path | None = None, *, content: str | None = None) -> dict[str, Any]:
     """Frontmatter of *path* (or of *content*), ``{}`` on any read/parse failure.
-    Parses via ``tools.skills_tool._parse_frontmatter`` so test patches are honored."""
+    Parses via ``tools.skills_tool._parse_frontmatter`` so test patches are honored.
+
+    A *path* parse is memoized on the file's stat identity: ``skill_view`` resolves a name by
+    checking the frontmatter of every SKILL.md (~440 here), and re-parsing them all in pure
+    Python on each call made batched skill loads queue on the GIL (p50 3.4 s, p90 13 s)."""
     from tools import skills_tool as _st
+    if content is None and path is not None:
+        with suppress(OSError):
+            st = os.stat(path)
+            key = (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino, _st._parse_frontmatter)
+            hit = _FRONTMATTER_MEMO.get(str(path))
+            if hit is not None and hit[0] == key:
+                return dict(hit[1])
+            parsed = {}
+            with suppress(Exception):
+                parsed = _st._parse_frontmatter(_read_skill_text(path))[0]
+            _FRONTMATTER_MEMO[str(path)] = (key, parsed)
+            return dict(parsed)
     with suppress(Exception):
         return _st._parse_frontmatter(_read_skill_text(path) if content is None else content)[0]
     return {}
+
+
+_FRONTMATTER_MEMO: dict[str, tuple[tuple, dict[str, Any]]] = {}
 
 
 def _available_skill_files(skill_dir: Path) -> dict[str, list[str]]:
