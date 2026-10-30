@@ -108,6 +108,9 @@ def test_unit_builds_exact_systemd_command_and_records_first(launch_env, tmp_pat
     ("success", "killed", "TERM", "user_stop"), ("success", "killed", "INT", "user_stop"),
     ("success", "killed", "KILL", "user_stop"), ("timeout", "killed", "TERM", "error"),
     ("signal", "dumped", "SEGV", "error"),
+    # Observed live on systemd 255: `systemctl stop` of a running oneshot unit.
+    ("signal", "killed", "TERM", "user_stop"), ("signal", "killed", "INT", "user_stop"),
+    ("oom-kill", "killed", "KILL", "error"),
 ])
 def test_recorded_finisher_works_with_empty_environment(launch_env, tmp_path, result, code, status, cause):
     home, argv_file, env = launch_env
@@ -154,3 +157,12 @@ def test_finisher_targets_named_launcher_profile_not_execution_home(launch_env, 
     launch, = rows(launcher)
     assert launch["launcher_profile"] == "atlas"
     assert launch["terminal_cause"] == "success"
+
+
+def test_finisher_keeps_percent_literal_for_transient_units():
+    # systemd 255 does not expand specifiers in a transient unit's ExecStopPost (observed live:
+    # "50%%" stayed "50%%"), so the argv must carry "%" unescaped.
+    from hermes_cli.launch_unit import _finisher
+    stop = _finisher(Path("/srv/a%b/.hermes"), "launch-id")
+    assert "/srv/a%b/.hermes" in shlex.split(stop.removeprefix("ExecStopPost=+"))
+    assert "%%" not in stop

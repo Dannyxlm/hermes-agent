@@ -75,7 +75,9 @@ def _finisher(home, launch_id):
             os.path.abspath(sys.executable), str(Path(__file__).resolve()), "launch", "finish",
             "--home", str(home), "--launch-id", launch_id,
             "--result", "${SERVICE_RESULT}", "--exit-code", "${EXIT_CODE}", "--exit-status", "${EXIT_STATUS}"]
-    return "ExecStopPost=+" + shlex.join(argv).replace("%", "%%")
+    # Transient units set over D-Bus take Exec lines without specifier expansion: systemd 255 keeps
+    # "%%" literal here (observed live), so escaping would corrupt any "%" in the argv.
+    return "ExecStopPost=+" + shlex.join(argv)
 
 
 def _unit_argv(args, fields, home, launch_id, command):
@@ -132,11 +134,13 @@ def cmd_finish(args):
         print("hermes launch finish: --home must be absolute", file=sys.stderr)
         return 2
     cause = "error"
-    if args.result == "success":
-        if args.exit_code == "exited":
-            cause = "success"
-        elif args.exit_code == "killed" and args.exit_status in {"TERM", "INT", "KILL", "15", "2", "9"}:
-            cause = "user_stop"
+    if args.result == "success" and args.exit_code == "exited":
+        cause = "success"
+    # `systemctl stop` on a running oneshot reports SERVICE_RESULT=signal, EXIT_CODE=killed,
+    # EXIT_STATUS=TERM on systemd 255 (observed live); timeout and oom-kill stay errors.
+    elif (args.result in {"success", "signal"} and args.exit_code == "killed"
+          and args.exit_status in {"TERM", "INT", "KILL", "15", "2", "9"}):
+        cause = "user_stop"
     _write(args.home, "finish_launch", args.launch_id, cause)
     return 0
 
