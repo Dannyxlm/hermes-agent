@@ -402,7 +402,8 @@ def test_search_budget_interruption_outside_batch_requires_page_retry(live_home,
     }
 
 
-def test_search_budget_interruption_inside_batch_keeps_a_cursor(live_home, monkeypatch):
+def test_search_interrupted_seek_before_batch_keeps_a_cursor(live_home, monkeypatch):
+    """A seek interrupted before fetching keeps its cursor; fetched batches must finish."""
     import hermex_search_pages as pages
 
     operation = pages.candidates
@@ -457,6 +458,37 @@ def test_new_search_cancels_stale_search_for_the_same_principal(live_home, monke
             release.set()
     assert "result" in second_response, second_response
     assert first_response["error"]["code"] == 4091
+
+
+@pytest.mark.parametrize("session_id", [None, "chat"])
+def test_search_over_budget_batch_advances_and_terminates(live_home, monkeypatch, session_id):
+    """A lineage build crossing the page deadline must not lose the fetched hit."""
+    import time
+    import hermex_live_reads as reads
+
+    with SessionDB(db_path=live_home / "state.db") as db:
+        needle = db.append_message("chat", "assistant", "needle")
+        for i in range(200):
+            db.append_message("chat", "user", f"filler {i}")
+    clock = SimpleNamespace(offset=0.0)
+    monkeypatch.setattr(reads, "time", SimpleNamespace(monotonic=lambda: time.monotonic() + clock.offset))
+    operation = reads._lineage_rows
+
+    def over_budget(*args, **kwargs):
+        # Real lineage SQL exceeds the 1000-op progress interval after the deadline.
+        clock.offset = 10.0
+        return operation(*args, **kwargs)
+
+    monkeypatch.setattr(reads, "_lineage_rows", over_budget)
+    first = result("session.search", query="needle", session_id=session_id, limit=1)
+    assert [m["message_id"] for g in first["results"] for m in g["matches"]] == [str(needle)]
+    assert first["next_cursor"] is not None
+    clock.offset = 0.0
+    second = result("session.search", query="needle", session_id=session_id, limit=1,
+                    cursor=first["next_cursor"])
+    assert second["revision"] == first["revision"]
+    assert second["results"] == []
+    assert second["next_cursor"] is None
 
 
 def test_freshness_only_failure_keeps_the_legacy_catalog(live_home, monkeypatch):

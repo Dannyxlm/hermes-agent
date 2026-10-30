@@ -431,12 +431,17 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
                 hits, examined, exhausted = candidates(
                     db, conn, prefix, target_chain, after, high_water,
                     deadline=deadline, cancelled=cancelled, batch=batch)
-                selected = _search_batch(db, conn, home, hits, profile, cache, representatives, query)
             except sqlite3.OperationalError as exc:
                 if str(exc) != "interrupted" or cancelled.is_set():
                     raise
                 next_position = ["messages", high_water, after, search_id]
                 break
+            # Finish fetched work so its lineage indexes and scan position survive the deadline.
+            conn.set_progress_handler(cancelled.is_set, 1000)
+            try:
+                selected = _search_batch(db, conn, home, hits, profile, cache, representatives, query)
+            finally:
+                conn.set_progress_handler(lambda: cancelled.is_set() or time.monotonic() >= deadline, 1000)
             for hit in hits:
                 after = hit["id"]
                 value = selected.get(hit["id"])
