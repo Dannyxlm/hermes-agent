@@ -89,6 +89,7 @@ def _plugin_home(tmp_path, source):
         'gateway': {'multiplex_profiles': False},
         'model': {'provider': 'custom', 'default': 'plugin-model', 'base_url': url},
         'auxiliary': {'title_generation': {'enabled': False}}, 'platform_toolsets': {'cli': []},
+        # Bundled plugins load regardless of `enabled`; this fixture asserts an empty Plugin commands category.
         'plugins': {'enabled': ['probe-cmd'], 'disabled': ['advanced-delegation'],
                     'entries': {'probe-cmd': {'mcp_allowlist': ['probe-mcp']}}},
     }))

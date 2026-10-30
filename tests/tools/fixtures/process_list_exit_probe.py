@@ -8,7 +8,6 @@ import signal
 import subprocess
 import sys
 import time
-import threading
 
 def _probe(root):
     import tools.process_registry as module
@@ -89,14 +88,14 @@ def _child(gate):
     )
     deadline = time.monotonic() + 15
     while not Path(str(gate) + "-exit").exists() and time.monotonic() < deadline:
-        threading.Event().wait(0.01)  # This scrubbed child cannot import the test helper package.
+        time.sleep(0.01)
 
 
 def _writer(gate):
     deadline = time.monotonic() + 15
     while not Path(str(gate) + "-stop").exists() and time.monotonic() < deadline:
         print(gate.name + "-output", flush=True)
-        threading.Event().wait(0.02)  # Pace the real writer; this is not an assertion's readiness delay.
+        time.sleep(0.02)
 
 
 if __name__ == "__main__":

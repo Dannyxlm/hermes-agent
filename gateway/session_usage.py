@@ -214,7 +214,9 @@ def usage_frame(stats: dict) -> dict:
     ``session.stats`` for the counters). Before they can be dropped, these readers must move off
     them: the classic CLI's ``SessionState.apply_event`` → ``GatewayAgent.apply_session_usage``,
     ACP's ``_project_usage`` (``usage_update`` / ``turn_usage``), and the flat branch of
-    ``usageFromTick`` (Desktop and Ink).
+    ``usageFromTick`` (Desktop and Ink). The same rule covers the ``cache_read_tokens`` /
+    ``cache_write_tokens`` counters: ``usage.cache_read`` / ``usage.cache_write`` carry the same
+    numbers, and new viewers read those.
     """
     return {"usage": tui_usage(stats), **stats}
 
