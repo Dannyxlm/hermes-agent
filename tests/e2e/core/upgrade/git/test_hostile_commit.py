@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -68,15 +69,45 @@ def provider():
         yield srv
 
 
-@pytest.fixture()
-def world(tmp_path_factory, provider):
+@pytest.fixture(scope="module")
+def installed(tmp_path_factory, provider):
+    """ONE real install of HEAD (~2.5 min: clone, toolchains, deps, web build), configured, then
+    frozen beside itself. Every cell starts from a byte-identical copy restored at the SAME path
+    (venv shebangs, the install key and facts.json name it), so no cell inherits another's wreck."""
     root = tmp_path_factory.mktemp("hostile-commit")
     sb, origin = P.install_head(root)
     P.configure(sb, provider.base_url)
+    golden = root.with_name(root.name + "-golden")
+    subprocess.run(["cp", "-a", str(root), str(golden)], check=True)
+    state = {"root": root, "golden": golden, "sb": sb, "origin": origin, "fresh": True, "sweepers": []}
+    yield state
+    for sweeper in state["sweepers"]:
+        sweeper.join()
+
+
+def _force_rmtree(root: Path) -> None:
+    def make_parent_writable(func, path, _exc):
+        Path(path).parent.chmod(0o755)
+        func(path)
+    shutil.rmtree(root, onexc=make_parent_writable)
+
+
+@pytest.fixture()
+def world(installed):
+    root, sb = installed["root"], installed["sb"]
+    if not installed["fresh"]:
+        # The last cell's sandbox processes died with it (bwrap --die-with-parent). Move its wreck
+        # aside and delete it while this cell runs; only the copy is on the critical path.
+        wreck = root.with_name(f"{root.name}-wreck{len(installed['sweepers'])}")
+        root.rename(wreck)
+        sweeper = threading.Thread(target=_force_rmtree, args=(wreck,))
+        sweeper.start()
+        installed["sweepers"].append(sweeper)
+        subprocess.run(["cp", "-a", str(installed["golden"]), str(root)], check=True)
+    installed["fresh"] = False
     shim = sb.root / "wrap" / "git"
-    world = {"sb": sb, "origin": origin, "root": root, "shim": shim, "shim_text": shim.read_text(encoding="utf-8-sig"), "n": 0}
-    yield world
-    shim.write_text(world["shim_text"], encoding="utf-8")
+    return {"sb": sb, "origin": installed["origin"], "root": root, "shim": shim,
+            "shim_text": shim.read_text(encoding="utf-8-sig"), "n": 0}
 
 
 def _hostile_git(world, body: str) -> None:
