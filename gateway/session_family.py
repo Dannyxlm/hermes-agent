@@ -138,6 +138,8 @@ def _live_signals(connections, profiles, residents):
         elif resident.get("running") is True:
             signal["running"] = True
         resident.update(signal)
+    from hermes_family_systemd import systemd_signals
+    signals.update(systemd_signals(profiles))
     return signals
 
 

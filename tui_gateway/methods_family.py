@@ -75,6 +75,8 @@ def _family_live(profiles, unavailable):
             continue
         running = True if signal.get("running") is True else session.get("agent_running")
         signal.update(running=running, pending_kind=pending, can_answer=owner is session)
+    from hermes_family_systemd import systemd_signals
+    signals.update(systemd_signals(profiles))
     return signals
 
 
