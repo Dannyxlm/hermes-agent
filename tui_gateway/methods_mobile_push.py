@@ -46,13 +46,17 @@ def _mobile_push_service():
 
 
 def _raise_site(exc):
-    """``module.function:line`` of the frame that raised: names the refusing branch, never request content."""
-    from pathlib import PurePath
+    """``module.function:line`` of the innermost Hermes frame on the raise path: names the refusing branch
+    (a stdlib frame such as ``uuid`` would not), never request content."""
+    from pathlib import Path, PurePath
+    root = Path(__file__).resolve().parent.parent
+    frames = []
     tb = exc.__traceback__
-    while tb.tb_next is not None:
+    while tb is not None:
+        frames.append((tb.tb_frame.f_code, tb.tb_lineno))
         tb = tb.tb_next
-    code = tb.tb_frame.f_code
-    return f"{PurePath(code.co_filename).stem}.{code.co_name}:{tb.tb_lineno}"
+    code, line = next(((c, n) for c, n in reversed(frames) if PurePath(c.co_filename).is_relative_to(root)), frames[-1])
+    return f"{PurePath(code.co_filename).stem}.{code.co_name}:{line}"
 
 
 def _mobile_push_handler(name):

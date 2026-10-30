@@ -42,3 +42,10 @@ def test_refused_registration_names_the_branch_that_refused(push_service, ordina
     assert line.startswith("mobile_notification_refused method=mobile.session_push.register reason=ValueError "
                            "site=mobile_session_scope.resolve_destination:")
     assert "not-yet-persisted" not in caplog.text
+
+
+def test_refusal_site_is_hermes_code_not_the_stdlib_frame_that_raised(push_service, ordinary, caplog):
+    with caplog.at_level("WARNING"):
+        assert rpc("mobile.session_push.register", **{**ordinary, "installation_id": "not-a-uuid"})["error"]["code"] == 4400
+    [line] = [r.message for r in caplog.records if "mobile_notification_refused" in r.message]
+    assert " site=mobile_push_store.normalized_uuid:" in line
