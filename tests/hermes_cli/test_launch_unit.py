@@ -29,7 +29,7 @@ def launch_env(tmp_path):
     sudo = fake / "sudo"
     sudo.write_text(f"#!{sys.executable}\n" +
                     "import json,os,sqlite3,sys\nfrom pathlib import Path\n" +
-                    f"home=Path({str(home)!r})\n" +
+                    f"home=Path(os.environ.get('EXPECTED_LAUNCH_HOME',{str(home)!r}))\n" +
                     "with sqlite3.connect('file:'+str(home/'state.db')+'?mode=ro',uri=True) as db:\n" +
                     " assert db.execute(\"SELECT count(*) FROM work_launches WHERE kind='process'\").fetchone()[0]==1\n" +
                     f"Path({str(argv_file)!r}).write_text(json.dumps(sys.argv[1:]))\n" +
@@ -133,3 +133,24 @@ def test_failed_systemd_start_finishes_and_returns_exit_code(launch_env):
     assert argv_file.exists()
     launch, = rows(home)
     assert launch["terminal_cause"] == "failed_start"
+
+
+def test_finisher_targets_named_launcher_profile_not_execution_home(launch_env, tmp_path):
+    home, argv_file, env = launch_env
+    launcher = home / "profiles/atlas"
+    launcher.mkdir(parents=True)
+    with SessionDB(launcher / "state.db") as db:
+        db.create_session("launcher", "cli", profile_name="atlas")
+    env.update(HERMES_STARTED_BY_PROFILE="atlas", EXPECTED_LAUNCH_HOME=str(launcher))
+    result = cli(env, "unit", "--unit", "atlas-example", "--", "/bin/true")
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    stop = next(p for p in json.loads(argv_file.read_text()) if p.startswith("ExecStopPost="))
+    command = shlex.split(stop.removeprefix("ExecStopPost=+"))[4:]
+    values = {"${SERVICE_RESULT}": "success", "${EXIT_CODE}": "exited", "${EXIT_STATUS}": "0"}
+    ended = subprocess.run([values.get(p, p) for p in command], cwd=tmp_path, env={},
+                           capture_output=True, text=True, timeout=30, check=False)
+    assert ended.returncode == 0, (ended.stdout, ended.stderr)
+    assert rows(home) == []
+    launch, = rows(launcher)
+    assert launch["launcher_profile"] == "atlas"
+    assert launch["terminal_cause"] == "success"

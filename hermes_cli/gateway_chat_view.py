@@ -497,6 +497,8 @@ class GatewayChatView:
 
     async def _close_finite_viewer(self):
         """Use the owner's terminal admission to close this launch, never the process exit code."""
+        if not self.subscription_id:
+            return  # no viewer subscription to close (e.g. a non-subscribing adapter)
         try:
             await self.client.rpc("session.detach", session_id=self.session_id,
                                   subscription_id=self.subscription_id, end_reason="cli_close")
