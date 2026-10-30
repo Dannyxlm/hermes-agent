@@ -1,8 +1,10 @@
 """An exact GET capability handler, not an authentication bypass or token provider."""
+import hashlib
+import json
 import sqlite3
 
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 SNAPSHOT_PATH = "/api/mobile/widgets/snapshot"
 
@@ -36,4 +38,11 @@ async def widget_snapshot_response(request, *, service=None):
         return JSONResponse({"detail": "Invalid widget query"}, status_code=400, headers=headers)
     except (OSError, RuntimeError, sqlite3.Error):
         return JSONResponse({"detail": "Unavailable"}, status_code=503, headers=headers)
+    if query:
+        # The page minus its timestamp: unchanged Inbox, same grant and page = same tag.
+        body = {k: v for k, v in snapshot.items() if k != "generated_at"}
+        tag = '"' + hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32] + '"'
+        headers["ETag"] = tag
+        if tag in {t.strip() for t in request.headers.get("if-none-match", "").split(",")}:
+            return Response(status_code=304, headers=headers)
     return JSONResponse(snapshot, headers=headers)
