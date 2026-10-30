@@ -71,7 +71,7 @@ def status_for(row: dict, live: dict, now: float) -> str:
         return TERMINAL[cause]
     if live.get("pending_kind") in {"approval", "clarify"}:
         return "needs_you"
-    if live.get("running") is True:
+    if live.get("running") is True or (not live and cause not in TERMINAL and row.get("turn_leased")):
         threshold = 1200 if row["kind"] in {"lane", "teammate"} else 600
         activity = activity_at(row, live)
         return "quiet" if activity is not None and now - activity >= threshold else "working"
@@ -113,7 +113,8 @@ class Family:
 
     def _index(self):
         for profile, snapshot in self.profiles.items():
-            for launch in snapshot.launches:
+            for launch in sorted(snapshot.launches, key=lambda row: (
+                    row.get("finished_at") is None, row.get("created_at") or 0, row["launch_id"])):
                 # The child's store is authoritative. A deleted bound session stays deleted.
                 sid = launch["child_session_id"]
                 if launch["child_profile"] != profile or (sid and sid not in snapshot.sessions):
@@ -142,7 +143,7 @@ class Family:
             if row.get("launch_id"):
                 if row.get("parent_launch_id"):
                     parent = self.by_launch.get((profile, row["parent_launch_id"]))
-                else:
+                if parent is None:
                     parent = self.by_session.get((row["launcher_profile"], row["launcher_session_id"]))
             row["parent"] = parent
             if parent and parent != key:

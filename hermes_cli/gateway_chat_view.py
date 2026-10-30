@@ -40,6 +40,7 @@ class GatewayChatView:
         self.usage_file = usage_file
         self.client = client
         self.session_id = snapshot["stored_session_id"]
+        self.subscription_id = snapshot.get("subscription_id")
         self.generation = snapshot.get("execution_generation", 0)
         self.prompts = {p["prompt_id"]: p for p in snapshot.get("prompts", [])}
         self.pending = snapshot.get("pending", [])
@@ -48,6 +49,7 @@ class GatewayChatView:
         # replaced by an emitter event and the terminal record carries the exit code.
         self.emitter = emitter
         self.quiet = quiet or emitter is not None
+        self.close_on_finite = False  # the launcher knows whether this invocation created the session
         self.finite = False
         self.unattended = False  # `-z`: the classic one-shot auto-approves; `-q` stays single-query
         self.resume_footer = False  # `chat -q` without -Q: main's "Resume this session with:" block
@@ -150,6 +152,7 @@ class GatewayChatView:
                 return
             if self.session_id != sid:
                 return  # /new or /branch moved this view meanwhile
+            self.subscription_id = snapshot.get("subscription_id", self.subscription_id)
             self.generation = snapshot.get("execution_generation", self.generation)
             self.pending, prompts = snapshot.get("pending", self.pending), {p["prompt_id"]: p for p in snapshot.get("prompts", [])}
             for prompt_id in prompts.keys() - self.prompts.keys() if not self.finite else ():
@@ -493,6 +496,17 @@ class GatewayChatView:
         failure = None if outcome in ("completed", "cancelled") else (result.get("error") or outcome or "failed")
         _write_usage_file(self.usage_file, result, failure=failure)
 
+    async def _close_finite_viewer(self):
+        """Use the owner's terminal admission to close this launch, never the process exit code."""
+        if not self.subscription_id:
+            return  # no viewer subscription to close (e.g. a non-subscribing adapter)
+        try:
+            await self.client.rpc("session.detach", session_id=self.session_id,
+                                  subscription_id=self.subscription_id,
+                                  **({"end_reason": "cli_close"} if self.close_on_finite else {}))
+        except Exception:
+            logger.exception("Finite session close failed for %s", self.session_id)
+
     async def run(self, query=None, *, oneshot=False):
         self.quiet = self.quiet or oneshot
         self.finite = oneshot
@@ -542,6 +556,7 @@ class GatewayChatView:
                               interrupted=bool(result.get("interrupted")) or outcome == "cancelled")
                 exit_code = (_oneshot_exit_code(text, result) if self.unattended
                              else turn_exit_code(result, kanban_worker=False))
+                await self._close_finite_viewer()
                 if self.usage_file:
                     self._write_usage_file(result, outcome)
                 if self.emitter is not None:

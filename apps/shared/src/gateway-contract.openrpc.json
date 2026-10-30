@@ -11282,6 +11282,18 @@
             "default": null,
             "title": "Launch Id"
           },
+          "parent_launch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Launch Id"
+          },
           "request_id": {
             "anyOf": [
               {
@@ -12406,6 +12418,18 @@
             ],
             "default": null,
             "title": "Launch Id"
+          },
+          "parent_launch_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Launch Id"
           },
           "session_id": {
             "default": "",
@@ -13686,6 +13710,18 @@
             ],
             "default": null,
             "title": "Source"
+          },
+          "created": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created"
           },
           "model": {
             "anyOf": [

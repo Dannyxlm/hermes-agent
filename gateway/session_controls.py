@@ -454,6 +454,7 @@ class AuthorityConnection:
             # or ignore-user-config launch never reads the profile, so it stays frozen. An exact
             # retry of a creation staged without the flag keeps that frozen request.
             params.setdefault('follow_profile_config', True)
+        created = not ref
         if not ref:
             skills_prompt = None
             if 'skills' in params:
@@ -486,7 +487,9 @@ class AuthorityConnection:
                 await tracked_write(self.authority, partial(title_new_session, self.authority, ref, title))
             if hidden:
                 await tracked_write(self.authority, partial(self.authority.db.set_session_hidden, ref.session_id, True))
-        return await self.resume(ref, {})
+        snapshot = await self.resume(ref, {})
+        snapshot['info']['created'] = created
+        return snapshot
 
     async def ping(self, ref, params):
         if not self.actor.capabilities:

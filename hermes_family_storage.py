@@ -1,14 +1,17 @@
 """Indexed, read-only selection of Family launch graphs."""
 import json
 import sqlite3
+import time
 from contextlib import closing
 from pathlib import Path
 
 
-def compression_edge(columns, child="child", parent="parent"):
+def compression_edge(columns, child="child", parent="parent", *, lease=False):
     if "end_reason" not in columns:
         return "0"
-    clause = (f"{parent}.end_reason='compression' AND COALESCE({child}.source,'') NOT IN ('subagent','tool')")
+    # The lease writer allows subagent continuations; Family display aliases do not.
+    sources = "('tool')" if lease else "('subagent','tool')"
+    clause = (f"{parent}.end_reason='compression' AND COALESCE({child}.source,'') NOT IN {sources}")
     if "model_config" in columns:
         for marker in ("_branched_from", "_delegate_from", "_reset_from"):
             clause += (f" AND COALESCE(CASE WHEN json_valid({child}.model_config) THEN "
@@ -71,8 +74,18 @@ def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None
     cte, params, where = selection(name, columns, has_launches, seeds, since, walk)
     launch_where = "launch_id IN (SELECT lid FROM reached WHERE profile=?)" if cte else "1"
     selected_params = (*params, name) if cte else ()
-    launches = [dict(r) for r in conn.execute(cte + "SELECT * FROM work_launches WHERE " + launch_where,
-                                             selected_params)] if has_launches else []
+    hints = (",(SELECT m.content FROM messages m WHERE m.session_id=w.child_session_id "
+             "AND m.role='assistant' AND m.content IS NOT NULL AND m.content<>'' "
+             "AND (m.tool_calls IS NULL OR m.tool_calls='[]') AND w.kind='lane' "
+             "AND w.terminal_cause IN ('success','error','user_stop','parent_stop') "
+             "AND w.finished_at>=? ORDER BY m.id DESC LIMIT 1) AS report_hint"
+             if "messages" in tables and has_launches else "")
+    launch_params = ((-1e300 if since is None else since,) if hints else ())
+    launches = [dict(r) for r in conn.execute(cte + "SELECT w.*" + hints + " FROM work_launches w WHERE " + launch_where,
+                                             (*params, *launch_params, name) if cte else launch_params)] if has_launches else []
+    for row in launches:
+        text = row.get("report_hint")
+        row["report_hint"] = text.splitlines()[0] if isinstance(text, str) and text else None
     session_where, session_params = ("s." + where, selected_params) if cte else ("1", ())
     turn = (",(SELECT MAX(status IN ('started','unknown')) FROM session_admissions WHERE target_session_id=s.id) AS turn_unresolved"
             ",(SELECT MAX(status='terminal') FROM session_admissions WHERE target_session_id=s.id) AS turn_terminal"
@@ -89,18 +102,31 @@ def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None
                                 (len(prefix) + 1, prefix + "*", json.dumps(list(sessions)))):
             aliases[row[0]] = row[1]
             owners[row[0]] = owners[row[1]] = row[2]
-    if "messages" in tables and has_launches:
-        hints = dict(conn.execute("SELECT w.child_session_id, (SELECT m.content FROM messages m "
-            "WHERE m.session_id=w.child_session_id AND m.role='assistant' AND m.content IS NOT NULL AND m.content<>'' "
-            "AND (m.tool_calls IS NULL OR m.tool_calls='[]') ORDER BY m.id DESC LIMIT 1) "
-            "FROM work_launches w WHERE w.kind='lane' AND w.terminal_cause IN "
-            "('success','error','user_stop','parent_stop') AND w.finished_at>=? "
-            "AND w.launch_id IN (SELECT value FROM json_each(?))",
-            (-1e300 if since is None else since, json.dumps([r['launch_id'] for r in launches]))))
-        for row in launches:
-            text = hints.get(row["child_session_id"])
-            row["report_hint"] = text.splitlines()[0] if isinstance(text, str) and text else None
+    if "session_turn_leases" in tables and sessions:
+        read_turn_leases(conn, sessions, columns)
     return sessions, launches, aliases, owners
+
+
+def read_turn_leases(conn, sessions, columns):
+    """One bounded lease read, using the writer's compression-root (not display) walk."""
+    from hermes_state import _compression_lock_holder_process_is_dead
+    edge = compression_edge(columns, lease=True)
+    leased = set()
+    rows = conn.execute(f"""WITH RECURSIVE lineage(sid,id) AS (
+        SELECT value,value FROM json_each(?)
+        UNION
+        SELECT r.sid,parent.id FROM lineage r JOIN sessions child ON child.id=r.id
+        JOIN sessions parent ON parent.id=child.parent_session_id WHERE {edge}
+    ) SELECT r.sid,l.holder FROM lineage r
+      JOIN session_turn_leases l ON l.conversation_id=r.id
+      WHERE l.expires_at>? AND NOT EXISTS (
+        SELECT 1 FROM sessions child JOIN sessions parent ON parent.id=child.parent_session_id
+        WHERE child.id=r.id AND {edge})""", (json.dumps(list(sessions)), time.time()))
+    for row in rows:
+        if not _compression_lock_holder_process_is_dead(row["holder"]):
+            leased.add(row["sid"])
+    for sid, row in sessions.items():
+        row["turn_leased"] = sid in leased
 
 
 def launch_probe(conn, seeds):

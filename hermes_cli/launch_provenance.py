@@ -5,7 +5,8 @@ from uuid import uuid4
 
 ENV_FIELDS = {'HERMES_STARTED_BY_SESSION_ID': 'started_by_session',
               'HERMES_STARTED_BY_PROFILE': 'started_by_profile', 'HERMES_LAUNCH_TITLE': 'launch_title',
-              'HERMES_LAUNCH_KIND': 'launch_kind', 'HERMES_LAUNCH_ID': 'launch_id'}
+              'HERMES_LAUNCH_KIND': 'launch_kind', 'HERMES_LAUNCH_ID': 'launch_id',
+              'HERMES_LAUNCH_PARENT_ID': 'parent_launch_id'}
 FIELDS = frozenset(ENV_FIELDS.values())
 _pending = {}
 
@@ -53,7 +54,8 @@ def launch_record(fields, child_profile, *, launch_id=None):
     return dict(launch_id=fields.get('launch_id') or launch_id or str(uuid4()),
                 kind=fields.get('launch_kind') or ('teammate' if launcher != child_profile else 'lane'),
                 launcher_profile=launcher, launcher_session_id=fields['started_by_session'],
-                child_profile=child_profile, title=fields.get('launch_title'))
+                child_profile=child_profile, title=fields.get('launch_title'),
+                parent_launch_id=fields.get('parent_launch_id'))
 
 
 @best_effort

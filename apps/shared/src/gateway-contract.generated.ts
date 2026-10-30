@@ -6533,6 +6533,7 @@ export interface CanonicalCreateParams {
   launch_title?: string | null
   launch_kind?: string | null
   launch_id?: string | null
+  parent_launch_id?: string | null
   request_id?: string | null
   source?: 'cli' | 'tui' | 'gui' | 'acp' | 'tool' | 'oneshot'
   cwd?: string | null
@@ -6626,6 +6627,7 @@ export interface CanonicalSnapshotInfo {
   unknown_toolsets?: string[] | null
   desktop_protocol: 'hermes-gateway-v1'
   source?: string | null
+  created?: boolean | null
   model?: string | null
   lazy?: boolean | null
   profile_id?: string | null
@@ -6653,6 +6655,7 @@ export interface CanonicalResumeParams {
   launch_title?: string | null
   launch_kind?: string | null
   launch_id?: string | null
+  parent_launch_id?: string | null
   session_id?: string
   title?: string | null
   latest?: 'cli' | 'tui' | null

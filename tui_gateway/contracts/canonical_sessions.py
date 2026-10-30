@@ -24,6 +24,7 @@ class CanonicalLaunchParams(ProfileParams):
     launch_title: str | None = None
     launch_kind: str | None = None
     launch_id: str | None = None
+    parent_launch_id: str | None = None
 
 
 class CanonicalCreateParams(CanonicalLaunchParams):
@@ -120,6 +121,8 @@ class CanonicalPendingPrompt(Result):
 class CanonicalSnapshotInfo(SessionInventoryFields):
     desktop_protocol: Literal['hermes-gateway-v1']
     source: str | None = None
+    # A titled session.create may attach an existing chat rather than create one.
+    created: bool | None = None
     model: str | None = None
     lazy: bool | None = None
     profile_id: str | None = None
