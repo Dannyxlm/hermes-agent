@@ -13711,6 +13711,18 @@
             "default": null,
             "title": "Source"
           },
+          "created": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created"
+          },
           "model": {
             "anyOf": [
               {

@@ -34,6 +34,8 @@ def bind_resumed_launch(db, *, epoch, session_id, fields):
         if launch:
             record_launch(conn, **launch)
             bind_launch(conn, launch['launch_id'], child_session_id=session_id)
+            conn.execute('UPDATE work_launches SET finished_at=NULL,terminal_cause=NULL WHERE launch_id=?',
+                         (launch['launch_id'],))
     from hermes_state_optional_launch import optional_launch
     with optional_launch("resume.launch"):
         db._execute_write(write, patience_s=0)

@@ -49,6 +49,7 @@ class GatewayChatView:
         # replaced by an emitter event and the terminal record carries the exit code.
         self.emitter = emitter
         self.quiet = quiet or emitter is not None
+        self.close_on_finite = False  # the launcher knows whether this invocation created the session
         self.finite = False
         self.unattended = False  # `-z`: the classic one-shot auto-approves; `-q` stays single-query
         self.resume_footer = False  # `chat -q` without -Q: main's "Resume this session with:" block
@@ -501,7 +502,8 @@ class GatewayChatView:
             return  # no viewer subscription to close (e.g. a non-subscribing adapter)
         try:
             await self.client.rpc("session.detach", session_id=self.session_id,
-                                  subscription_id=self.subscription_id, end_reason="cli_close")
+                                  subscription_id=self.subscription_id,
+                                  **({"end_reason": "cli_close"} if self.close_on_finite else {}))
         except Exception:
             logger.exception("Finite session close failed for %s", self.session_id)
 

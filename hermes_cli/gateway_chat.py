@@ -129,9 +129,15 @@ async def _resume(client, args, **params):
     """``session.resume``; ``--api-key`` re-supplies a launch-only key an owner restart revoked.
     The owner binds it only to a session launched with that same key (never durable); anything
     else is a route override and refused like every other creation flag on resume."""
+    from hermes_cli.launch_provenance import FIELDS
+    launch = {name: params.pop(name) for name in FIELDS if name in params}
     key = getattr(args, "api_key", None)
     try:
-        return await client.rpc("session.resume", **params, **({"api_key": key} if key else {}))
+        snapshot = await client.rpc("session.resume", **params, **({"api_key": key} if key else {}))
+        if launch and (snapshot.get("info") or {}).get("source") in {"oneshot", "tool"}:
+            check_resume_policy(args, snapshot)
+            snapshot = await client.rpc("session.resume", session_id=snapshot["stored_session_id"], **launch)
+        return snapshot
     except GatewayClientError as exc:
         if key and str(exc) == "admission_conflict":
             raise GatewayClientError(RESUME_KEY_MISMATCH) from None
@@ -176,6 +182,7 @@ async def run_gateway_chat(args, emitter=None):
         title = continue_title(args)
         create_if_missing = bool(title and getattr(args, "create_if_missing", False))
         latest = wants_latest(args)
+        created_session = False
         if latest:
             snapshot = await _resume_latest(client, args, family_launch)
             check_resume_policy(args, snapshot)
@@ -223,6 +230,7 @@ async def run_gateway_chat(args, emitter=None):
             if missing:
                 raise GatewayClientError("Gateway does not support creation options: " + ", ".join(missing))
             snapshot = await client.rpc("session.create", request_id=uuid.uuid4().hex, source=source, **policy)
+            created_session = (snapshot.get("info") or {}).get("created", not create_if_missing)
             if (warning := (snapshot.get("info") or {}).get("config_warning")) and not isinstance(oneshot_prompt, str):
                 print(f"Warning: {warning}", file=sys.stderr)
         if not isinstance(oneshot_prompt, str):  # main's -z writes nothing to stderr on success
@@ -234,6 +242,7 @@ async def run_gateway_chat(args, emitter=None):
             emitter.bind_session(snapshot["stored_session_id"])
         view = GatewayChatView(client, snapshot, quiet=quiet, emitter=emitter,
                                usage_file=getattr(args, "usage_file", None))
+        view.close_on_finite = created_session or (snapshot.get("info") or {}).get("source") in {"oneshot", "tool"}
         view.launch_api_key = getattr(args, "api_key", None)  # /new keeps this launch's key
         view.unattended = isinstance(oneshot_prompt, str)
         view.resume_footer = oneshot and not quiet

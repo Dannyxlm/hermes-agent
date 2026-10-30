@@ -36,7 +36,7 @@ def _timeout(value):
     seconds = float(value)
     if not math.isfinite(seconds) or seconds <= 0:
         raise argparse.ArgumentTypeError("timeout must be positive finite seconds")
-    return value
+    return str(math.ceil(seconds))
 
 
 def _validate_unit(args, fields, command):
@@ -48,7 +48,9 @@ def _validate_unit(args, fields, command):
         raise ValueError("empty command; pass -- followed by the command argv")
     for prop in args.properties:
         key, sep, value = prop.partition("=")
-        if not sep or key == "RemainAfterExit" or (key == "Type" and value not in {"oneshot", "exec", "simple"}):
+        if (not sep or key not in {"Type", "TimeoutStartSec", "WorkingDirectory", "Nice", "MemoryMax", "MemoryHigh",
+                                   "CPUQuota", "KillMode", "StandardOutput", "StandardError", "RuntimeMaxSec"}
+                or (key == "Type" and value not in {"oneshot", "exec", "simple"})):
             raise ValueError(f"unsupported unit property: {key}")
     if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", item, re.DOTALL) for item in args.setenv):
         raise ValueError("--setenv requires NAME=VALUE")
@@ -67,12 +69,18 @@ def _write(home, method, *args, **kwargs):
             reset_hermes_home_override(token)
 
 
+CURRENT_FINISHER = Path("/opt/cloudseed-immutable/hermes/current/hermes_cli/launch_unit.py")
+
+
 def _finisher(home, launch_id):
     import pwd
-    # Venvs contain dependencies, not the source package. Pin an absolute release entry as well
-    # as its interpreter: ExecStopPost must work from any WorkingDirectory with an empty env.
+    # The pinned source may be pruned before a long-running unit stops. The current release
+    # is the fallback; neither source present (e.g. rollback before this feature) is a no-op.
+    script = ('python=$1; pinned=$2; current=$3; shift 3; '
+              'for f in "$pinned" "$current"; do [ -r "$f" ] && exec "$python" "$f" "$@"; done; exit 0')
     argv = ["/usr/sbin/runuser", "-u", pwd.getpwuid(os.getuid()).pw_name, "--",  # windows-footgun: ok — cmd_unit is Linux-only
-            os.path.abspath(sys.executable), str(Path(__file__).resolve()), "launch", "finish",
+            "/bin/sh", "-c", script, "hermes-launch-finisher",
+            os.path.abspath(sys.executable), str(Path(__file__).resolve()), str(CURRENT_FINISHER), "launch", "finish",
             "--home", str(home), "--launch-id", launch_id,
             "--result", "${SERVICE_RESULT}", "--exit-code", "${EXIT_CODE}", "--exit-status", "${EXIT_STATUS}"]
     # Transient units set over D-Bus take Exec lines without specifier expansion: systemd 255 keeps

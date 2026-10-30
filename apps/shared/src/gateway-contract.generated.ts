@@ -6627,6 +6627,7 @@ export interface CanonicalSnapshotInfo {
   unknown_toolsets?: string[] | null
   desktop_protocol: 'hermes-gateway-v1'
   source?: string | null
+  created?: boolean | null
   model?: string | null
   lazy?: boolean | null
   profile_id?: string | null

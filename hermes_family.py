@@ -113,7 +113,8 @@ class Family:
 
     def _index(self):
         for profile, snapshot in self.profiles.items():
-            for launch in snapshot.launches:
+            for launch in sorted(snapshot.launches, key=lambda row: (
+                    row.get("finished_at") is None, row.get("created_at") or 0, row["launch_id"])):
                 # The child's store is authoritative. A deleted bound session stays deleted.
                 sid = launch["child_session_id"]
                 if launch["child_profile"] != profile or (sid and sid not in snapshot.sessions):
