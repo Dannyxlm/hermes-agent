@@ -56,10 +56,12 @@ from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 
 try:  # sibling modules; support both package and flat plugin-dir import
     from .block_kit import render_blocks, sanitize_blocks
+    from .adapter_auth import early_reject_unauthorized
     from .adapter_slash_lane import SlashHandoffLanes
     from .adapter_slash_payload import slash_command_text, slash_thread_id
 except ImportError:  # pragma: no cover - plugin loaded outside package context
     from block_kit import render_blocks, sanitize_blocks  # type: ignore
+    from adapter_auth import early_reject_unauthorized
     from adapter_slash_lane import SlashHandoffLanes  # type: ignore
     from adapter_slash_payload import slash_command_text, slash_thread_id  # type: ignore
 
@@ -4200,26 +4202,9 @@ class SlackAdapter(BasePlatformAdapter):
         runner = getattr(getattr(self, "_message_handler", None), "__self__", None)
         return getattr(runner, "_is_user_authorized", None)
 
-    def _early_reject_unauthorized(
-            self, user_id: str, channel_id: str, is_dm: bool, *, thread_id: Optional[str] = None) -> bool:
-        """True (logged) when the sender is definitively unauthorized. Injected profile-bound check
-        first (works under multiplex, where the handler has no ``__self__``), then runner
-        introspection. Unknown (None) is NOT a rejection. ``thread_id``: thread-scoped profile_routes."""
-        chat_type = "dm" if is_dm else "group"
-        decision = (
-            self._is_sender_authorized(user_id, chat_type, channel_id, thread_id=thread_id)
-            if user_id and getattr(self, "_authorization_check", None) is not None
-            else None)
-        auth_fn = self._runner_auth_fn()
-        if decision is None and user_id and callable(auth_fn):
-            source = self.build_source(
-                chat_id=channel_id, chat_name="", chat_type=chat_type, user_id=user_id, user_name="",
-                thread_id=thread_id)
-            decision = bool(auth_fn(source))
-        if decision is False:
-            logger.warning(
-                "[Slack] Early reject of unauthorized user %s in channel %s", user_id, channel_id)
-        return decision is False
+    def _early_reject_unauthorized(self, user_id: str, channel_id: str, is_dm: bool, *,
+                                   thread_id: Optional[str] = None, team_id: Optional[str] = None) -> bool:
+        return early_reject_unauthorized(self, user_id, channel_id, is_dm, thread_id=thread_id, team_id=team_id)
 
     async def _channel_gate_allows(
         self, *, channel_id: str, routing_text: str, bot_uid: str, is_mentioned: bool,
@@ -4372,7 +4357,7 @@ class SlackAdapter(BasePlatformAdapter):
 
     async def _hydrate_thread_context(
         self, *, channel_id: str, event_thread_ts, ts: str, user_id: str, team_id: str,
-        is_thread_reply: bool, is_mentioned: bool, is_dm: bool,
+        is_thread_reply: bool, is_mentioned: bool, is_dm: bool, recover_root_media: bool = True,
     ) -> tuple[Optional[str], list[str], list[str]]:
         """``(channel_context, root_media_urls, root_media_types)`` for a thread reply. No session:
         full thread + root images once, set watermark. Session + @mention: delta past watermark
@@ -4410,10 +4395,11 @@ class SlackAdapter(BasePlatformAdapter):
             channel_id=channel_id, thread_ts=event_thread_ts, user_id=user_id, team_id=team_id)
         if not has_active_thread_session:
             await _fetch()
-            (
-                thread_root_media_urls, thread_root_media_types,
-            ) = await self._collect_thread_root_images(
-                channel_id=channel_id, thread_ts=event_thread_ts, team_id=team_id)
+            if recover_root_media:
+                (
+                    thread_root_media_urls, thread_root_media_types,
+                ) = await self._collect_thread_root_images(
+                    channel_id=channel_id, thread_ts=event_thread_ts, team_id=team_id)
         elif is_mentioned:
             await _fetch(after_ts=self._get_thread_watermark(**watermark_args), force_refresh=True)
         else:
@@ -4663,7 +4649,7 @@ class SlackAdapter(BasePlatformAdapter):
         # Reject unauthorized users before the expensive lookups/downloads;
         # the runner's own auth check only runs after MessageEvent is built.
         thread_ts = self._session_thread_ts(event, ts, is_dm, assistant_meta)
-        if self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_ts):
+        if self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_ts, team_id=team_id):
             return
         bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
         # Mentions may live only in Block Kit blocks.
@@ -4686,6 +4672,10 @@ class SlackAdapter(BasePlatformAdapter):
             event_thread_ts=event_thread_ts, user_id=user_id, team_id=team_id, is_dm=is_dm,
             force_process=force_process)):
             return
+        from plugins.platforms.slack.adapter_guest import admit_guest_event, policy_for_event
+        if not admit_guest_event(self, user_id, channel_id, team_id, is_dm):
+            return
+        guest_policy = policy_for_event(self, user_id, channel_id, team_id, is_dm)
         # Claim the message ts HERE: a link unfurl emits `message_changed` with a different event
         # ts, so only the `_processed_message_ts` guard stops a duplicate turn, and it must be set
         # before the slow enrichment awaits. Claiming before the filters would let an ignored
@@ -4703,10 +4693,15 @@ class SlackAdapter(BasePlatformAdapter):
         ) = await self._hydrate_thread_context(
             channel_id=channel_id, event_thread_ts=event_thread_ts, ts=ts, user_id=user_id,
             team_id=team_id, is_thread_reply=is_thread_reply, is_mentioned=is_mentioned,
-            is_dm=is_dm)
+            is_dm=is_dm, **({"recover_root_media": False} if guest_policy is not None else {}))
         # Thread-root media is delivered ahead of the trigger message's own files.
-        media_urls, media_types, media_text_inlined, text = await self._collect_inbound_media(
-            event, channel_id, team_id, text, thread_root_media_urls, thread_root_media_types)
+        if guest_policy is not None:
+            from plugins.platforms.slack.adapter_guest import collect_guest_media
+            media_urls, media_types, media_text_inlined, text = await collect_guest_media(
+                self, event, channel_id, team_id, text, guest_policy)
+        else:
+            media_urls, media_types, media_text_inlined, text = await self._collect_inbound_media(
+                event, channel_id, team_id, text, thread_root_media_urls, thread_root_media_types)
         msg_event = await self._build_message_event(
             event, text=text, original_text=original_text, command_probe_text=command_probe_text,
             is_command_text=is_command_text, channel_id=channel_id, team_id=team_id, ts=ts,
@@ -5511,6 +5506,11 @@ class SlackAdapter(BasePlatformAdapter):
         if not normalized_user_id:
             return False
         chat_type = "dm" if str(channel_id or "").startswith("D") else "group"
+        from gateway.guest_channels import is_guest_source
+        runner = getattr(self, "gateway_runner", None)
+        if runner is not None and is_guest_source(runner, self.build_source(
+                chat_id=channel_id, chat_type=chat_type, user_id=normalized_user_id, scope_id=team_id)):
+            return False  # A guest must never operate an owner's approval/model buttons.
         # Preferred: the injected profile-bound check (``set_authorization_check``); unlike the
         # ``__self__`` introspection below it works under multiplex (handler is a closure).
         # getattr: object.__new__ test doubles never ran BasePlatformAdapter.__init__.
@@ -5520,7 +5520,7 @@ class SlackAdapter(BasePlatformAdapter):
         # handler is a profile closure with no ``__self__`` (#72657, same class as Telegram's #86296).
         if getattr(self, "_authorization_check", None) is not None:
             injected = self._is_sender_authorized(
-                normalized_user_id, chat_type, str(channel_id or ""))
+                normalized_user_id, chat_type, str(channel_id or ""), scope_id=team_id or None)
             if injected is not None:
                 return injected
         auth_fn = self._runner_auth_fn()
@@ -6127,8 +6127,11 @@ class SlackAdapter(BasePlatformAdapter):
         # A sender the gateway rejects must not cost Slack lookups first (the message path's rule).
         # In a channel the runner only drops them; in a DM it answers per unauthorized_dm_behavior
         # (pairing code or decline), so it still gets the event, without names.
-        rejected = self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_id)
+        rejected = self._early_reject_unauthorized(user_id, channel_id, is_dm, thread_id=thread_id, team_id=team_id)
         if rejected and not is_dm:
+            return
+        from plugins.platforms.slack.adapter_guest import admit_guest_event
+        if not admit_guest_event(self, user_id, channel_id, team_id, is_dm):
             return
         source = self.build_source(
             chat_id=channel_id, chat_type="dm" if is_dm else "group", user_id=user_id,
@@ -6326,68 +6329,10 @@ class SlackAdapter(BasePlatformAdapter):
         return self.config.token or ""
 
     async def _download_slack_file_bytes(
-        self, url: str, team_id: str = "", *, html_label: str = "file bytes") -> bytes:
-        """Download a Slack file with the bot token (3 attempts on 429/5xx/timeout). URL must pass
-        ``is_safe_url`` AND the Slack-CDN allowlist (token exfiltration); redirects are
-        re-validated; an HTML body (sign-in page) is rejected so bogus bytes are never cached."""
-        import httpx
-        from tools.url_safety import (
-            create_ssrf_safe_async_client, is_safe_url, redirect_target_from_response,
-        )
-        if not is_safe_url(url):
-            raise ValueError(
-                f"Blocked unsafe Slack file URL (SSRF protection): {safe_url_for_log(url)}")
-        if not self._is_slack_cdn_url(url):
-            raise ValueError(
-                "Blocked non-Slack-CDN file URL (token-exfiltration protection): "
-                f"{safe_url_for_log(url)}")
-        bot_token = self._resolve_download_token(url, team_id)
-        async with create_ssrf_safe_async_client(
-            timeout=30.0, follow_redirects=False, event_hooks={"response": [ssrf_redirect_guard]}
-        ) as client:
-            for attempt in range(3):
-                try:
-                    download_url = url
-                    redirect_count = 0
-                    while True:
-                        # httpx drops Authorization across origins. Enterprise Grid
-                        # needs it on files-origin, but never send it off Slack's CDN.
-                        response = await client.get(
-                            download_url, headers={"Authorization": f"Bearer {bot_token}"})
-                        if response.status_code not in (301, 302, 303, 307, 308):
-                            break
-                        target = redirect_target_from_response(response)
-                        if not target:
-                            break  # raise_for_status reports the malformed redirect.
-                        if not is_safe_url(target):
-                            raise ValueError(
-                                "Blocked unsafe Slack file redirect (SSRF protection): "
-                                f"{safe_url_for_log(target)}")
-                        if not self._is_slack_cdn_url(target):
-                            raise ValueError(
-                                "Blocked non-Slack-CDN file redirect (token-exfiltration protection): "
-                                f"{safe_url_for_log(target)}")
-                        if redirect_count == 3:
-                            raise ValueError("Too many Slack file redirects (maximum 3)")
-                        download_url = target
-                        redirect_count += 1
-                    response.raise_for_status()
-                    ct = response.headers.get("content-type", "")
-                    if "text/html" in ct:
-                        raise ValueError(
-                            f"Slack returned HTML instead of {html_label} (content-type: {ct}); "
-                            "check bot token scopes and file permissions, or a cross-origin "
-                            "redirect dropped the token (Enterprise Grid files-origin)")
-                    return response.content
-                except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
-                    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 429:
-                        raise
-                    if attempt < 2:
-                        logger.debug(
-                            "Slack file download retry %d/2 for %s: %s", attempt + 1, url[:80], exc)
-                        await asyncio.sleep(1.5 * (attempt + 1))
-                        continue
-                    raise
+        self, url: str, team_id: str = "", *, html_label: str = "file bytes", max_bytes=None) -> bytes:
+        from plugins.platforms.slack.adapter_files import _download_slack_file_bytes
+        return await _download_slack_file_bytes(self, url, team_id, html_label=html_label, max_bytes=max_bytes)
+
 
     async def _download_slack_file(
         self, url: str, ext: str, audio: bool = False, team_id: str = "") -> str:

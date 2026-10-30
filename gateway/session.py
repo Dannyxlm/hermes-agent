@@ -174,6 +174,7 @@ class SessionContext:
     session_id: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    guest_restricted: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -434,6 +435,9 @@ def build_session_context_prompt(context: SessionContext, *, redact_pii: bool = 
     elif src.user_id:
         uid = _hash_sender_id(src.user_id) if redact_pii else src.user_id
         lines.append(f"**User ID:** {_format_untrusted_prompt_value(uid)}")
+
+    if getattr(context, "guest_restricted", False):
+        return "\n".join(lines)
 
     lines.extend(_PLATFORM_NOTES.get(src.platform, lambda ctx: [])(context))
     platforms_list = ["local (files on this machine)"] + [

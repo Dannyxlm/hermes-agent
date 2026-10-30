@@ -757,6 +757,9 @@ gateway:
     unknown_mode: "Unknown mode `{arg}`. Use `/busy queue`, `/busy steer`, or `/busy interrupt`."
     save_failed: "Busy input mode could not be saved to config. Mode unchanged."
     set: "Busy input mode set to **`{mode}`** (saved).\n_{behavior}_"
+  guest:
+    slash_denied: "Slash commands are not available in this guest channel. Please send your question as a message."
+
   pause:
     resumed: "▶️ Resumed — new work is accepted again."
     not_paused: "Hermes wasn't paused."

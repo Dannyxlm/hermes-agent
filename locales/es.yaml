@@ -42,6 +42,8 @@ approval:
     second_one: "{count} segundo"
     second_other: "{count} segundos"
 gateway:
+  guest:
+    slash_denied: "Los comandos de barra no están disponibles en este canal para invitados. Envía tu pregunta como un mensaje."
   approval_expired: "⚠️ La aprobación ha caducado (el agente ya no está esperando). Pida al agente que lo intente de nuevo."
   draining: "⏳ Esperando a que terminen {count} agente(s) activo(s) antes de reiniciar..."
   goal_cleared: "✓ Objetivo eliminado."

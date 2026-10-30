@@ -42,6 +42,8 @@ approval:
     second_one: "{count} soicind"
     second_other: "{count} soicind"
 gateway:
+  guest:
+    slash_denied: "Níl orduithe slaise ar fáil sa chainéal aoi seo. Seol do cheist mar theachtaireacht, le do thoil."
   approval_expired: "⚠️ Tá an cead imithe in éag (níl an gníomhaire ag fanacht níos mó). Iarr ar an ngníomhaire iarracht eile a dhéanamh."
   draining: "⏳ Ag fanacht le {count} gníomhaire(í) gníomhach roimh atosú..."
   goal_cleared: "✓ Sprioc glanta."

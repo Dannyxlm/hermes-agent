@@ -42,6 +42,8 @@ approval:
     second_one: "{count} másodperc"
     second_other: "{count} másodperc"
 gateway:
+  guest:
+    slash_denied: "A perjeles parancsok nem érhetők el ebben a vendégcsatornában. Kérjük, küldd el a kérdésedet üzenetként."
   approval_expired: "⚠️ A jóváhagyás lejárt (az ügynök már nem vár). Kérd meg az ügynököt, hogy próbálja újra."
   draining: "⏳ {count} aktív ügynök befejezésére várunk az újraindítás előtt..."
   goal_cleared: "✓ A cél törölve."

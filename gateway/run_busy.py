@@ -1336,6 +1336,9 @@ class GatewayBusySessionMixin:
         """Denial message if ``source`` cannot run ``canonical_cmd``, else None (both dispatch paths
         use it so an in-flight agent can't bypass admin gating; no ``allow_admin_from`` → None)."""
         from gateway.slash_access import policy_for_runner_source
+        from gateway.guest_channels import guest_slash_denial
+        if canonical_cmd and (denied := guest_slash_denial(self, source)) is not None:
+            return denied
         if not canonical_cmd:
             return None
         policy = policy_for_runner_source(self, source)
