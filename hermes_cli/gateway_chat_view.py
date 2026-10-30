@@ -40,6 +40,7 @@ class GatewayChatView:
         self.usage_file = usage_file
         self.client = client
         self.session_id = snapshot["stored_session_id"]
+        self.subscription_id = snapshot.get("subscription_id")
         self.generation = snapshot.get("execution_generation", 0)
         self.prompts = {p["prompt_id"]: p for p in snapshot.get("prompts", [])}
         self.pending = snapshot.get("pending", [])
@@ -542,6 +543,14 @@ class GatewayChatView:
                               interrupted=bool(result.get("interrupted")) or outcome == "cancelled")
                 exit_code = (_oneshot_exit_code(text, result) if self.unattended
                              else turn_exit_code(result, kanban_worker=False))
+                # Close the finite viewer with the same receipt-derived lifecycle as classic CLI.
+                # The owner derives the launch cause from its committed terminal admission, not
+                # this client's exit status (and keeps other viewers' durable sessions alive).
+                try:
+                    await self.client.rpc("session.detach", session_id=self.session_id,
+                                          subscription_id=self.subscription_id, end_reason="cli_close")
+                except Exception as exc:
+                    logger.warning("Finite session close failed for %s: %s", self.session_id, exc)
                 if self.usage_file:
                     self._write_usage_file(result, outcome)
                 if self.emitter is not None:
