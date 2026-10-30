@@ -13,7 +13,6 @@ def test_concurrent_observers_share_one_store_scan(tmp_path, monkeypatch):
         conn.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, source TEXT)")
         conn.execute("INSERT INTO sessions VALUES ('one', 'Original', 'desktop')")
     monkeypatch.setattr(server, "_sessions_db_sig_cache", {})
-    monkeypatch.setattr(server, "_settled_mtime", lambda stamp: stamp)
     first_read = threading.Event()
     duplicate_read = threading.Event()
     second_started = threading.Event()

@@ -216,7 +216,7 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
             now: float | None = None) -> Change | None:
     """Diff one full read of a store's ``sessions`` rows against the last one.
 
-    ``observed`` maps session id → (encoded row bytes, row values in ``fields`` order). The first
+    ``observed`` maps session id → (row digest, row values in ``fields`` order). The first
     observation of a scope seeds silently. ``delegate_ids(ids)`` classifies NEW child rows as
     delegated runs (their ``_delegate_from`` marker is not a signature field); a row's class
     never changes, so it is asked once per row."""
@@ -331,15 +331,23 @@ def note_runtime_session(sid: str) -> None:
     note(home / "state.db", [server._session_lookup_key(session, fallback=sid)])
 
 
+#: A live watcher's observation this young is as good as one made now: the journal is at-least-once,
+#: so a change it has not seen yet reaches the next cursor, never gets lost.
+WATCHER_FRESH_S = 0.25
+
+
 def refresh(db_path) -> bool:
-    """Bring a scope up to date before a cursor is issued or answered: the watcher's own stat-guarded
-    read (a cache hit costs one stat). False when no in-process gateway can read it."""
+    """Bring a scope up to date before a cursor is issued or answered: the watcher's own version-guarded
+    read (a quiet store costs one stat and one PRAGMA), skipped while a live watcher observed it within
+    ``WATCHER_FRESH_S``. False when no in-process gateway can read it."""
     import sys
     server = sys.modules.get("tui_gateway.server")
     probe = getattr(server, "_session_db_content_sig", None) if server is not None else None
     if probe is None:
         return False
     try:
+        if server._session_db_is_fresh(Path(db_path), WATCHER_FRESH_S):
+            return True
         probe(Path(db_path))
     except Exception:
         logger.debug("session change refresh failed", exc_info=True)
