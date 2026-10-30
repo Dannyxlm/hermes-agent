@@ -103,6 +103,10 @@ def test_rebuilt_system_prompt_is_a_fresh_build_not_nested(tmp_path, monkeypatch
         rebuilt = session["agent"]._cached_system_prompt
         assert rebuilt.count(fresh[:200]) == 1
         assert len(rebuilt) < 1.5 * len(fresh)
+        # A resume restores the persisted row, not the in-memory copy.
+        row = db.get_session(session["agent"].session_id)
+        assert row is not None
+        assert row["system_prompt"] == rebuilt
     finally:
         agent.close()
         db.close()
