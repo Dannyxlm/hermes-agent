@@ -396,6 +396,14 @@ def changes_since(db_path, cursor) -> tuple[set | None, str | None]:
         return touched, current
 
 
+def unchanged_cursor(db_path, cursor) -> str | None:
+    """The scope's current cursor when ``cursor`` is valid and nothing has changed since it, else None
+    (a change to deliver, or a cursor to repair): the whole answer to an empty ``changed_since`` read."""
+    refresh(db_path)
+    touched, current = changes_since(db_path, cursor)
+    return current if touched == set() else None
+
+
 def lineage_candidates(db, session_ids: Iterable[str]) -> set | None:
     """Every id of every compression lineage touching ``session_ids`` (the canonical edge rule),
     so a delta returns the lineage's projected row and tombstones every other id of it. None when

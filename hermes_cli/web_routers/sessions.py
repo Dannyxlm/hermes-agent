@@ -8,6 +8,7 @@ helpers are reached via the late-binding seam so monkeypatching keeps working.
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
 import time
@@ -178,6 +179,55 @@ def _resolve_session_id(db, session_id: str) -> Optional[str]:
             raise
 
 
+def _list_scope(home: Path, *, source, sources, exclude_sources, cwd_prefix, min_messages, archived) -> dict:
+    """The ``list_sessions_rich`` / ``listing_counts`` filters of one list request."""
+    # Source scoping: the desktop splits recents (exclude=cron) from
+    # the cron-jobs section (source=cron) into two independent lists.
+    source_list = _csv(sources)
+    include_subagents, exclude_list = subagent_listing_scope(
+        home, source=source or None, sources=source_list or None, exclude_sources=_csv(exclude_sources) or None)
+    return dict(
+        source=source or None, sources=source_list or None,
+        exclude_sources=exclude_list or None, cwd_prefix=(cwd_prefix or None),
+        min_message_count=max(0, min_messages), include_archived=archived == "include",
+        archived_only=archived == "only", include_subagents=include_subagents)
+
+
+# (store, filters) -> (journal cursor, total, archived_count) of the last answer. A list's totals move
+# only when a journaled session row does, so an empty ``changed_since`` read at that same cursor can
+# answer from here without opening the store.
+_LIST_TOTALS: dict[tuple, tuple[str, int, int]] = {}
+
+
+def _totals_key(db_path, scope: dict) -> tuple:
+    return os.path.realpath(db_path), json.dumps(scope, sort_keys=True)
+
+
+def _list_payload(db_path, row_profile, sessions, total, archived_count, limit, offset, extra):
+    # ``storage`` tells an empty page apart from an unreadable store (#72046); same
+    # ``{profile: "corrupt"}`` shape as the /api/profiles/sessions* lists.
+    storage = {row_profile: STORAGE_CORRUPT} if storage_state(db_path) == STORAGE_CORRUPT else {}
+    from tui_gateway.inbox_summaries import summary_scope
+    return {"sessions": sessions, "total": total, "limit": limit, "offset": offset,
+            "archived_count": archived_count, "storage": storage,
+            "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage), **extra}
+
+
+def _unchanged_delta(db_path, scope: dict, changed_since: str, limit: int, row_profile: str):
+    """The answer to a ``changed_since`` read when nothing changed, or None to read the store."""
+    from tui_gateway import session_change_cursor as changes
+    if not changes.listing_is_tracked(source=scope["source"], sources=scope["sources"],
+                                      exclude_sources=scope["exclude_sources"],
+                                      include_subagents=scope["include_subagents"]):
+        return None
+    cursor = changes.unchanged_cursor(db_path, changed_since)
+    last = _LIST_TOTALS.get(_totals_key(db_path, scope))
+    if cursor is None or last is None or last[0] != cursor:
+        return None
+    return _list_payload(db_path, row_profile, [], last[1], last[2], limit, 0,
+                         {"delta": True, "repair": False, "tombstones": [], "change_cursor": cursor})
+
+
 # ``le=100`` on limit: an unbounded limit lets one request drag every session
 # row (plus correlated-subquery preview work) out of SQLite in a single hit.
 @list_router.get("/api/sessions")
@@ -205,29 +255,26 @@ def get_sessions(
     if order not in ("created", "recent"):
         raise HTTPException(status_code=400, detail="order must be one of: created, recent")
     profile_name = _cron_profile_home(profile)[0] if profile else None
+    query = dict(source=source, sources=sources, exclude_sources=exclude_sources, cwd_prefix=cwd_prefix,
+                 min_messages=min_messages, archived=archived)
     try:
         from hermes_state_local import listing_lineage_scope
+        scope = None
+        if changed_since is not None:
+            db_path = _session_db_path_for_profile(profile)
+            scope = _list_scope(db_path.parent, **query)
+            unchanged = _unchanged_delta(db_path, scope, changed_since, limit, profile_name or _cron_default_profile())
+            if unchanged is not None:
+                return unchanged
         db = _open_session_db_for_profile(profile, read_only=True)
         with closing(db), listing_lineage_scope(db):
-            min_message_count = max(0, min_messages)
-            archived_only = archived == "only"
-            include_archived = archived == "include"
-            # Source scoping: the desktop splits recents (exclude=cron) from
-            # the cron-jobs section (source=cron) into two independent lists.
-            source_list = _csv(sources)
-            include_subagents, exclude_list = subagent_listing_scope(
-                Path(db.db_path).parent, source=source or None, sources=source_list or None,
-                exclude_sources=_csv(exclude_sources) or None)
-            scope = dict(
-                source=source or None, sources=source_list or None,
-                exclude_sources=exclude_list or None, cwd_prefix=(cwd_prefix or None),
-                min_message_count=min_message_count, include_archived=include_archived,
-                archived_only=archived_only, include_subagents=include_subagents)
+            scope = scope or _list_scope(Path(db.db_path).parent, **query)
             cursor_fields: dict = {}
             if changed_since is not None:
                 from tui_gateway import session_change_cursor as changes
-                if changes.listing_is_tracked(source=source, sources=source_list, exclude_sources=exclude_list,
-                                              include_subagents=include_subagents):
+                if changes.listing_is_tracked(source=scope["source"], sources=scope["sources"],
+                                              exclude_sources=scope["exclude_sources"],
+                                              include_subagents=scope["include_subagents"]):
                     answer = changes.delta(db, changed_since, lambda ids: db.list_sessions_rich(
                         limit=len(ids), offset=0, order_by_last_active=order == "recent",
                         compact_rows=not full, include_pinned=True, root_ids=ids, **scope))
@@ -255,9 +302,13 @@ def get_sessions(
                     **scope)
             from hermes_state_listing_counts import listing_counts
             total, archived_count = listing_counts(db, exclude_children=True, **scope)
+            if cursor_fields.get("change_cursor"):  # taken before the rows and counts were read
+                if len(_LIST_TOTALS) >= 64:
+                    _LIST_TOTALS.clear()
+                _LIST_TOTALS[_totals_key(db.db_path, scope)] = (cursor_fields["change_cursor"], total, archived_count)
             now = time.time()
             row_profile = profile_name or _cron_default_profile()
-            from tui_gateway.inbox_summaries import page_attention, page_replies, summary_scope
+            from tui_gateway.inbox_summaries import page_attention, page_replies
             attention = page_attention(sessions, Path(db.db_path).parent)
             replies = page_replies(db, sessions)
             for s in sessions:
@@ -273,13 +324,7 @@ def get_sessions(
                 s["pinned"] = bool(s.get("pinned"))
             if not full:
                 _strip_session_list_rows(sessions)
-            # ``storage`` tells an empty page apart from an unreadable store (#72046); same
-            # ``{profile: "corrupt"}`` shape as the /api/profiles/sessions* lists.
-            storage = {row_profile: STORAGE_CORRUPT} if storage_state(db.db_path) == STORAGE_CORRUPT else {}
-            return {"sessions": sessions, "total": total, "limit": limit, "offset": offset,
-                    "archived_count": archived_count, "storage": storage,
-                    "inbox_summary_scope": summary_scope(row_profile, replies_complete=not storage),
-                    **cursor_fields}
+            return _list_payload(db.db_path, row_profile, sessions, total, archived_count, limit, offset, cursor_fields)
     except HTTPException:
         raise
     except sqlite3.OperationalError as exc:
