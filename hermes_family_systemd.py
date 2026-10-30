@@ -47,8 +47,8 @@ def systemd_signals(profiles):
     refs = [(p, ref) for p, ref in refs if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_:@.-]{0,249}", ref[8:])]
     if not refs:
         return {}
-    from tools.environments.local import build_subprocess_env
-    env = build_subprocess_env()
+    from tools.environments.local import hermes_subprocess_env
+    env = hermes_subprocess_env()
     path = env.get("PATH", os.defpath)
     units = sorted({ref[8:] for _, ref in refs})
     # Coalesce concurrent phone/desktop polls, including missing/timed-out systemctl results.

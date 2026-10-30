@@ -71,7 +71,7 @@ def status_for(row: dict, live: dict, now: float) -> str:
         return TERMINAL[cause]
     if live.get("pending_kind") in {"approval", "clarify"}:
         return "needs_you"
-    if live.get("running") is True or (not live and row.get("turn_leased")):
+    if live.get("running") is True or (not live and cause not in TERMINAL and row.get("turn_leased")):
         threshold = 1200 if row["kind"] in {"lane", "teammate"} else 600
         activity = activity_at(row, live)
         return "quiet" if activity is not None and now - activity >= threshold else "working"

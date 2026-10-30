@@ -12,7 +12,7 @@ from hermes_state import SessionDB
 @pytest.mark.parametrize("case,expected", [
     ("live", "working"), ("quiet", "quiet"), ("expired", "unknown"),
     ("dead", "unknown"), ("resident_idle", "unknown"), ("pending", "needs_you"),
-    ("terminal", "done"), ("compressed", "working"), ("subagent_compressed", "working"),
+    ("terminal", "done"), ("restart", "paused_by_restart"), ("compressed", "working"), ("subagent_compressed", "working"),
     ("reset", "unknown"),
 ])
 def test_family_turn_lease(tmp_path, case, expected):
@@ -33,8 +33,8 @@ def test_family_turn_lease(tmp_path, case, expected):
         db.bind_launch("lane", child_session_id=tip if case in {"reset", "subagent_compressed"} else "root")
         if case == "quiet":
             db._write_sql("UPDATE sessions SET last_activity_at=? WHERE id=?", (now - 1300, tip))
-        if case == "terminal":
-            db.finish_launch("lane", "success")
+        if case in {"terminal", "restart"}:
+            db.finish_launch("lane", "owner_restart" if case == "restart" else "success")
         from hermes_state_pidns import holder_namespace_token
         holder = f"pid={os.getpid()}{holder_namespace_token()}:family-reader"
         if case == "dead":
