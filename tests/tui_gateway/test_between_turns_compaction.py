@@ -88,6 +88,26 @@ def test_completed_turn_compacts_and_next_turn_uses_committed_history(tmp_path, 
         db.close()
 
 
+def test_rebuilt_system_prompt_is_a_fresh_build_not_nested(tmp_path, monkeypatch):
+    """The commit-boundary rebuild must equal a fresh build. Handing the cached prompt to
+    _compress_context as the caller system message nested the whole old prompt inside the
+    new one, so each between-turns compaction doubled it (identity, skills, AGENTS.md twice)."""
+    db, agent, session, _before = _fixture(tmp_path, monkeypatch)
+    monkeypatch.delattr(agent, "_build_system_prompt")  # the real builder, not the fixture's constant
+    fresh = agent._cached_system_prompt = agent._build_system_prompt(None)
+    try:
+        job = server._start_between_turns_compaction("sid", session, {"completed": True})
+        assert job is not None
+        assert job.done.wait(10)
+        assert session["history_version"] == 2
+        rebuilt = session["agent"]._cached_system_prompt
+        assert rebuilt.count(fresh[:200]) == 1
+        assert len(rebuilt) < 1.5 * len(fresh)
+    finally:
+        agent.close()
+        db.close()
+
+
 @pytest.mark.parametrize("guard", ["disabled", "compression_disabled", "interrupted", "failed", "incomplete", "cooldown", "latch", "native", "below", "threshold", "floor", "unanchored", "running", "queue", "lock", "compute_host"])
 def test_does_not_start_when_ineligible(tmp_path, monkeypatch, guard):
     db, agent, session, before = _fixture(tmp_path, monkeypatch)

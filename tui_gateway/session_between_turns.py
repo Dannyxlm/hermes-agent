@@ -77,8 +77,10 @@ def _run_between_turns_compaction(sid: str, session: dict, job, messages: list, 
                     with session["history_lock"]:
                         return (not job.fence.is_cancelled and not session.get("running")
                                 and int(session.get("history_version", 0)) == version)
+                # None, not the cached prompt: the caller system_message is folded into
+                # the rebuild, so passing the old prompt nested it (doubled per compaction).
                 after, _ = agent._compress_context(
-                    messages, agent._cached_system_prompt or "", approx_tokens=pressure,
+                    messages, None, approx_tokens=pressure,
                     task_id=session.get("session_key") or "default", trigger="between_turns",
                     commit_fence=job.fence, snapshot_is_current=current,
                 )
