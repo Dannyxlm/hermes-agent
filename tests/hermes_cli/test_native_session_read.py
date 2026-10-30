@@ -124,3 +124,19 @@ def test_marking_unread_ignores_read_through(read_client, replied_family):
     assert patch_sidebar(read_client, "tip", request_id="unread", unread=True,
                          read_through_row_id=rows["seen"]).status_code == 200
     assert _stamps(home)["tip"] == 0
+
+
+def test_a_read_never_lowers_the_watermark(read_client, replied_family, monkeypatch):
+    """Two devices (or a cached open) read through an older reply after a newer one was read: still read."""
+    home, rows = replied_family
+    with SessionDB(db_path=home / "state.db") as db:
+        newest = db.append_message("tip", "assistant", "newest", timestamp=260)
+    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 300)
+    for index, row_id in enumerate((newest, rows["seen"])):
+        assert patch_sidebar(read_client, "tip", request_id=f"through-{index}", unread=False,
+                             read_through_row_id=row_id).status_code == 200
+        assert _stamps(home) == {"same": 260, "tip": 260, "branch": None}
+    replies = read_client.get("/api/sessions", params={"profile": "ops"}).json()["sessions"]
+    assert next(r for r in replies if r["id"] == "tip")["last_assistant_reply"]["unread"] is False
+    assert patch_sidebar(read_client, "tip", request_id="unread", unread=True).status_code == 200
+    assert _stamps(home)["tip"] == 0  # marking unread still lowers it

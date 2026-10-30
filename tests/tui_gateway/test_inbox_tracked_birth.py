@@ -117,3 +117,15 @@ def test_minted_key_materialized_on_resume_by_the_phone_is_tracked(real_db, loop
         reset_transport(token)
     assert "error" not in resp, resp
     assert real_db.get_session(MINTED_KEY)["last_read_at"] == 0.0
+
+
+@pytest.mark.parametrize("user_agent", [PHONE, DESKTOP])
+def test_resuming_an_existing_untracked_chat_leaves_it_untracked(real_db, loop, user_agent):
+    real_db.create_session(MINTED_KEY, source="tui", model="test-model")
+    token = bind_transport(connection(loop, user_agent))
+    try:
+        resp = server.handle_request({"id": "1", "method": "session.resume", "params": {"session_id": MINTED_KEY}})
+    finally:
+        reset_transport(token)
+    assert "error" not in resp, resp
+    assert real_db.get_session(MINTED_KEY)["last_read_at"] is None
