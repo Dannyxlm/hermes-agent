@@ -142,7 +142,7 @@ class Family:
             if row.get("launch_id"):
                 if row.get("parent_launch_id"):
                     parent = self.by_launch.get((profile, row["parent_launch_id"]))
-                else:
+                if parent is None:
                     parent = self.by_session.get((row["launcher_profile"], row["launcher_session_id"]))
             row["parent"] = parent
             if parent and parent != key:

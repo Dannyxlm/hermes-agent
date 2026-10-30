@@ -24,6 +24,7 @@ class CanonicalLaunchParams(ProfileParams):
     launch_title: str | None = None
     launch_kind: str | None = None
     launch_id: str | None = None
+    parent_launch_id: str | None = None
 
 
 class CanonicalCreateParams(CanonicalLaunchParams):

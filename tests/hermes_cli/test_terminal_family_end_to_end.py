@@ -20,7 +20,7 @@ from tools.environments.local import _make_run_env
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("shape", ["query_file", "quiet", "unattended", "thin_error", "teammate"])
+@pytest.mark.parametrize("shape", ["query_file", "quiet", "unattended", "thin_error", "teammate", "nested"])
 def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
     class Provider(Model):
         def do_POST(self):
@@ -47,6 +47,9 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
     (target / "config.yaml").write_text(json.dumps(config))
     with SessionDB(home / "state.db") as db:
         db.create_session("family-parent", "cli", profile_name="default")
+        if shape == "nested":
+            db.record_launch("unit-parent", kind="process", launcher_profile="default",
+                             launcher_session_id="family-parent", child_profile="default", backend_ref="systemd:example")
     env = child_env()
     env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(target),
                OPENAI_API_KEY="loopback-only", OPENAI_BASE_URL=url, PYTHONPATH=str(ROOT),
@@ -59,6 +62,8 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
         clear_session_vars(tokens)
     # Keep the isolated daemon's explicit env; attribution is entirely from the real builder.
     env.update({k: v for k, v in terminal_env.items() if k.startswith("HERMES_STARTED_BY_")})
+    if shape == "nested":
+        env["HERMES_LAUNCH_PARENT_ID"] = "unit-parent"
     args = ["chat", "-q", "hello", "-Q"]
     if shape == "query_file":
         query = tmp_path / "query.txt"
@@ -83,6 +88,13 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
             with closing(sqlite3.connect(f"file:{target / 'state.db'}?mode=ro", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 launches = [dict(r) for r in db.execute("SELECT * FROM work_launches")]
+            if shape == "nested":
+                from hermes_family import Family, read_profile
+                family = Family({"default": read_profile("default", home / "state.db")}).session_family("default", "family-parent")
+                by_kind = {n["kind"]: n for n in family["nodes"]}
+                assert by_kind["lane"]["parent_node_id"] == by_kind["process"]["node_id"]
+                launches = [r for r in launches if r["kind"] == "lane"]
+                assert launches[0]["parent_launch_id"] == "unit-parent"
             assert len(launches) == 1, (launches, result.stdout, result.stderr)
             launch, = launches
             assert launch["kind"] == ("teammate" if shape == "teammate" else "lane")
