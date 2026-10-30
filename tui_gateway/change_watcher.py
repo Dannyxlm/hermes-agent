@@ -55,14 +55,6 @@ def _watcher_mtime_ns(path: Path):
         return None
 
 
-def _watcher_size(path: Path):
-    """``st_size`` of ``path``, or None when it cannot be stat'ed."""
-    try:
-        return path.stat().st_size
-    except OSError:
-        return None
-
-
 def _home_mtime_ns(*parts: str):
     return _watcher_mtime_ns(_watcher_home().joinpath(*parts))
 
@@ -205,10 +197,21 @@ _SESSION_SIGNATURE_FIELDS = (
     "cwd", "git_branch", "git_repo_root", "title", "title_source", "profile_name",
     "archived", "pinned", "hidden", "last_read_at", "handoff_state",
 )
-# path -> ((database/WAL mtime, db size, WAL size), session-table digest). The stat guard keeps the
-# normal 0.5 s watch pass stat-only; SQLite is read only after another process
-# actually commits (and for ``utils.RACY_MTIME_WINDOW_NS`` after it, see _settled_mtime).
+# path -> (store version, session-table digest). The version is the file identity plus
+# ``PRAGMA data_version`` of the store's kept probe connection: it moves on every commit (and WAL
+# restart) another connection makes, so the normal watch pass is one stat and one PRAGMA, and a quiet
+# store is never re-read. (File timestamps and the WAL size cannot do that: they are jiffy-coarse, and
+# the WAL is overwritten in place at a fixed size.) ``data_version`` restarts on a new connection, so
+# dropping a probe also drops the digest cached under it.
 _sessions_db_sig_cache: dict[str, tuple[object, tuple | None]] = {}
+# path -> (read-only connection kept only to ask data_version, file identity it was opened on)
+_store_probes: dict[str, tuple[Any, tuple[int, int]]] = {}
+# While a recovery raw-copies a store its probe is closed and not reopened until this time (path -> monotonic).
+_PROBE_HOLDOFF_S = 60.0
+_probe_holdoff_until: dict[str, float] = {}
+# path -> monotonic time of the watcher thread's last successful observation, and that thread.
+_session_observed_at: dict[str, float] = {}
+_change_watcher_thread: threading.Thread | None = None
 _session_observation_locks: dict[str, Any] = {}
 _session_observation_lock = threading.Lock()
 
@@ -222,59 +225,119 @@ def _session_db_content_sig(db_path: Path):
         return _read_session_db_content_sig(db_path)
 
 
+def _session_db_is_fresh(db_path: Path, max_age_s: float) -> bool:
+    """True while the watcher thread is alive and it observed the store less than ``max_age_s`` ago.
+    A dead or stalled watcher stops vouching, so readers go back to observing inline."""
+    seen = _session_observed_at.get(os.path.realpath(db_path))
+    thread = _change_watcher_thread
+    return (seen is not None and thread is not None and thread.is_alive()
+            and time.monotonic() - seen < max_age_s)
+
+
+def _connect_probe(key: str):
+    from hermes_state import _connect_tracked_db
+    from hermes_state_holders import read_only_db_uri
+    return _connect_tracked_db(read_only_db_uri(Path(key)), tracking_path=Path(key), uri=True, timeout=0.05,
+                               check_same_thread=False)
+
+
+def _open_store(key: str):
+    """``(connection, version)`` for the store at ``key`` (a real path). The read-only connection is
+    kept per store, so a pass over a quiet store is one stat and one ``PRAGMA data_version``.
+    ``version`` is None, and the connection a throwaway the caller closes, when this pass cannot trust a
+    kept one: no file identity, a probe the recovery path released, or a failing PRAGMA.
+    Callers hold the store's observation lock."""
+    from hermes_state_common import stat_db_file_identity
+    identity = stat_db_file_identity(key)
+    held = _store_probes.get(key)
+    if held is not None and held[1] != identity:  # replaced or removed: that connection is on the old file
+        _drop_store(key)
+        held = None
+    if identity is None or _probe_holdoff_until.get(key, 0.0) > time.monotonic():
+        return _connect_probe(key), None
+    if held is None:
+        from hermes_cli.sqlite_safe_read import register_evictor
+        held = _store_probes[key] = (_connect_probe(key), identity)
+        register_evictor(key, lambda: _release_probe(key))
+    try:
+        return held[0], (identity, held[0].execute("PRAGMA data_version").fetchone()[0])
+    except Exception:  # health: allow BLE001 -- any failure of the kept connection: this pass reads on a fresh one
+        _drop_store(key)
+        return _connect_probe(key), None
+
+
+def _drop_store(key: str) -> None:
+    _sessions_db_sig_cache.pop(key, None)
+    held = _store_probes.pop(key, None)
+    if held is not None:
+        held[0].close()
+
+
+def _release_probe(key: str) -> None:
+    """Close the store's probe for a recovery that must raw-copy the file, and keep it closed for a while.
+    Waits briefly for a pass in flight (never longer: that pass may itself be waiting on the caller)."""
+    lock = _session_observation_locks.get(key)
+    if lock is None or not lock.acquire(timeout=0.5):
+        return
+    try:
+        _probe_holdoff_until[key] = time.monotonic() + _PROBE_HOLDOFF_S
+        _drop_store(key)
+    finally:
+        lock.release()
+
+
+def _note_observed(key: str) -> None:
+    """Only the watcher thread's own observations vouch for a store: a request's inline read says
+    nothing about a store the watcher does not visit."""
+    if threading.current_thread() is _change_watcher_thread:
+        _session_observed_at[key] = time.monotonic()
+
+
 def _read_session_db_content_sig(db_path: Path):
     """Digest list/transcript-relevant session rows, excluding unrelated tables.
 
     ``gateway_heartbeats`` shares state.db and writes every minute. Using the
     database mtime directly therefore emits sessions.changed while no session
-    changed (#98005). Cache behind the DB/WAL mtime, then inspect only the
+    changed (#98005). Cache behind the store version, then inspect only the
     sessions columns that drive Desktop projections. Legacy stores safely use
     the subset of columns they have.
     """
-    mtime = _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal")))
-    # Sizes join the guard: mtimes are jiffy-coarse, so two commits a few ms apart can share one,
-    # and the cursor journal must not miss the second. A WAL append always grows the file.
-    stamp = (mtime, *(_watcher_size(p) for p in (db_path, db_path.with_name(f"{db_path.name}-wal"))))
     # One entry per real file: the watcher, list reads and the push worker spell homes differently.
     cache_key = os.path.realpath(db_path)
     cached = _sessions_db_sig_cache.get(cache_key)
-
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
     if not db_path.exists():
-        _sessions_db_sig_cache[cache_key] = (stamp, None)
-
+        _drop_store(cache_key)
+        _note_observed(cache_key)
         return None
 
     conn = None
     try:
-        import hashlib
-        from hermes_state import _connect_tracked_db
-        from hermes_state_holders import read_only_db_uri
-
-        conn = _connect_tracked_db(read_only_db_uri(db_path), tracking_path=db_path,
-                                   uri=True, timeout=0.05)
+        # The version is sampled BEFORE the rows are read: a commit landing in between is read now and
+        # moves the version again on the next pass (one extra read), never the other way round.
+        conn, version = _open_store(cache_key)
+        if version is not None and cached is not None and cached[0] == version:
+            _note_observed(cache_key)
+            return cached[1]
         available = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         fields = tuple(field for field in _SESSION_SIGNATURE_FIELDS if field in available)
         if not fields:
             # A state.db without a readable sessions table (foreign schema, legacy
             # or transient file): keep the old mtime contract so any move still
             # wakes the sidebar instead of silently never broadcasting.
-            signature = ("mtime-fallback", mtime)
+            signature = ("mtime-fallback", _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
         else:
             order = " ORDER BY id" if "id" in available else ""
             rows = conn.execute(f"SELECT {', '.join(fields)} FROM sessions{order}")
-            digest = hashlib.blake2b(digest_size=16)
             # The same read feeds the per-scope change journal behind the sessions.changed cursor.
             observed, id_at = {}, fields.index("id") if "id" in fields else None
+            row_hashes = []
             for row in rows:
                 values = tuple(row)
-                encoded = repr(values).encode("utf-8", "backslashreplace")
-                digest.update(encoded)
-                digest.update(b"\0")
+                row_hash = hash(values)  # in-process only: never persisted or compared across restarts
+                row_hashes.append(row_hash)
                 if id_at is not None:
-                    observed[values[id_at]] = (encoded, values)
-            signature = (fields, digest.digest())
+                    observed[values[id_at]] = (row_hash, values)
+            signature = (fields, hash(tuple(row_hashes)))
             if id_at is not None:
                 from tui_gateway import session_change_cursor
                 try:
@@ -284,16 +347,20 @@ def _read_session_db_content_sig(db_path: Path):
                 except Exception:
                     logger.debug("session change journal update failed", exc_info=True)
     except Exception:
-        # A busy/locked read after a good one keeps the last digest and leaves the cached mtime
+        _drop_store(cache_key)  # never keep a connection that failed mid-read
+        # A busy/locked read after a good one keeps the last digest and leaves the cached version
         # stale so the next pass re-reads: digest -> mtime -> digest would broadcast twice.
         if cached is not None and cached[1] is not None and cached[1][0] != "mtime-fallback":
             return cached[1]
-        signature = ("mtime-fallback", mtime)
+        return ("mtime-fallback", _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
     finally:
-        if conn is not None:
-            conn.close()
+        kept = _store_probes.get(cache_key)
+        if conn is not None and (kept is None or kept[0] is not conn):
+            conn.close()  # not the kept connection: a throwaway (no file identity) or one just dropped
 
-    _sessions_db_sig_cache[cache_key] = ((_settled_mtime(mtime), *stamp[1:]), signature)
+    _note_observed(cache_key)
+    if version is not None:
+        _sessions_db_sig_cache[cache_key] = (version, signature)
 
     return signature
 
@@ -311,21 +378,6 @@ def _delegate_session_ids(conn, ids: list, available: set) -> set:
             f"SELECT id FROM sessions WHERE id IN ({_placeholders(chunk)}) "
             f"AND {_delegate_from_json()} IS NOT NULL", chunk))
     return found
-
-# Filesystem timestamps come from a coarse clock (~4 ms ticks; whole seconds on some filesystems) and
-# SQLite commits in place, so a commit landing in the tick of a read leaves the DB/WAL mtime unchanged.
-# A digest read while the mtime is that fresh must not become a cache hit ("racily clean", as in git's
-# index): it is cached under a key no mtime equals, so the next tick re-reads the rows.
-_RACY_MTIME = object()
-
-
-def _settled_mtime(mtime):
-    """``mtime`` when it is old enough to trust as a cache key, else a never-matching sentinel."""
-    from utils import mtime_is_racy  # function-local: bodies are rebound onto server.py's globals
-    if mtime is None or mtime_is_racy(mtime):
-        return _RACY_MTIME
-    return mtime
-
 
 def _sessions_sig():
     """Session-table content across the active and served profile stores.
@@ -519,7 +571,9 @@ def _ensure_skin_watcher() -> None:
             time.sleep(session_change_cursor.watch_interval(0.5))
             _broadcast_skin_if_changed()
             _broadcast_watched_changes()
-    threading.Thread(target=_loop, name="hermes-change-watcher", daemon=True).start()
+    global _change_watcher_thread
+    _change_watcher_thread = threading.Thread(target=_loop, name="hermes-change-watcher", daemon=True)
+    _change_watcher_thread.start()
 
 
 def register(server) -> None:

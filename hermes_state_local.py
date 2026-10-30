@@ -1,5 +1,6 @@
 """Private local creation receipts in the canonical runtime transaction owner."""
 import json
+import sqlite3
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -245,6 +246,38 @@ def local_conversation_ids(conn, session_id):
     return list(dict.fromkeys([owner, *(sid for sid in lineage if isinstance(sid, str))]))
 
 
+# store path -> (receipt stamp, the receipts with a lineage of more than one segment, parsed). Receipts are
+# inserted, deleted, or grow by one segment id (a reset or compression) via UPDATE, so their count, newest
+# rowid and total size name every such change without reading their ~43 KB values (parsing them is the
+# cost). Not exact: a lineage/session_id rewrite of unchanged length would not be seen, and no writer does
+# one; a new writer that could must bump something in this stamp.
+_LINEAGE_RECEIPTS: dict[str, tuple[tuple, list]] = {}
+
+
+def _lineage_receipts(conn):
+    """``[(owner, lineage)]`` for every receipt holding more than one segment."""
+    glob = POLICY_PREFIX + '*'
+    try:
+        stamp = tuple(conn.execute("SELECT COUNT(*), MAX(rowid), TOTAL(octet_length(value)) "
+                                   "FROM state_meta WHERE key GLOB ?", (glob,)).fetchone())
+    except sqlite3.OperationalError:  # SQLite before 3.43 has no octet_length: parse every time
+        stamp = None
+    path = conn.execute('PRAGMA database_list').fetchone()[2]
+    cached = _LINEAGE_RECEIPTS.get(path) if stamp is not None and path else None
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    receipts = []
+    for (raw,) in conn.execute("SELECT value FROM state_meta WHERE key GLOB ? AND json_valid(value) "
+                               "AND json_array_length(value, '$.lineage') > 1", (glob,)).fetchall():
+        receipt = json.loads(raw)
+        owner, lineage = receipt.get('session_id'), receipt.get('lineage')
+        if isinstance(owner, str) and all(isinstance(sid, str) for sid in lineage):
+            receipts.append((owner, lineage))
+    if stamp is not None and path:
+        _LINEAGE_RECEIPTS[path] = (stamp, receipts)
+    return receipts
+
+
 def local_lineage_index(conn):
     """``(superseded, heads)`` for listing a local conversation as one row, as
     ``acp_adapter.catalog`` does: a canonical reset keeps the creation id as the owner and moves the
@@ -253,13 +286,7 @@ def local_lineage_index(conn):
     reset segment to ``(owner, lineage)`` for the row that represents the conversation. A delete
     of that row removes the whole lineage (``hermes_state_mutation_guards.delete_targets``)."""
     superseded, heads = set(), {}
-    rows = conn.execute("SELECT value FROM state_meta WHERE key GLOB ? AND json_valid(value) "
-                        "AND json_array_length(value, '$.lineage') > 1", (POLICY_PREFIX + '*',)).fetchall()
-    for (raw,) in rows:
-        receipt = json.loads(raw)
-        owner, lineage = receipt.get('session_id'), receipt.get('lineage')
-        if not isinstance(owner, str) or not all(isinstance(sid, str) for sid in lineage):
-            continue
+    for owner, lineage in _lineage_receipts(conn):
         marks = ','.join('?' * len(lineage))
         ended = dict(conn.execute(f'SELECT id,end_reason FROM sessions WHERE id IN ({marks})', lineage).fetchall())
         starts = [sid for i, sid in enumerate(lineage) if i == 0 or ended.get(lineage[i - 1]) == 'session_reset']

@@ -495,7 +495,8 @@ def _backup_db_file(db_path: Path) -> tuple[Optional[Path], Optional[str]]:
     See #69603.
     """
     with contextlib.suppress(ImportError):  # scaffold/embed installs without hermes_cli track no connections
-        from hermes_cli.sqlite_safe_read import has_live_connection
+        from hermes_cli.sqlite_safe_read import has_live_connection, release_evictable
+        release_evictable(db_path)  # the change watcher's idle probe is not a handle anyone could close
         if has_live_connection(db_path):
             reason = (f"a connection to {db_path} is still open in this process; raw-copying it would cancel that "
                       "connection's POSIX advisory locks. Close all SessionDB handles first.")
