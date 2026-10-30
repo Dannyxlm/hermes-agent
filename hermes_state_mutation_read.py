@@ -57,7 +57,10 @@ def set_read_in_transaction(db, conn, session_id, unread, read_through_row_id=No
     # (or a missing one) is ignored, which is the plain "read now" an older client sends.
     if read_through_row_id is not None and (reply_at := _reply_time(conn, family, read_through_row_id)) is not None:
         stamp = min(stamp, reply_at)
+    # A read only ever moves the watermark forward (another device, or a cached open that displayed an older
+    # reply, must not re-open a chat that was read further); marking unread writes 0.0.
+    value = "0.0" if unread else "MAX(COALESCE(last_read_at, 0.0), ?)"
     return [row[0] for row in conn.execute(
-        f"UPDATE sessions SET last_read_at=? WHERE id IN ({','.join('?' for _ in family)}) RETURNING id",
-        (0.0 if unread else stamp, *family),
+        f"UPDATE sessions SET last_read_at={value} WHERE id IN ({','.join('?' for _ in family)}) RETURNING id",
+        (*(() if unread else (stamp,)), *family),
     ).fetchall()]
