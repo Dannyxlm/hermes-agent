@@ -803,11 +803,22 @@ def _make_run_env(env: dict) -> dict:
 
 
 def _stamp_terminal_launcher(env: dict) -> None:
-    """Attribute only terminal commands, after the task-local session bridge."""
-    sid, profile = env.get("HERMES_SESSION_ID"), env.get("HERMES_SESSION_PROFILE")
-    if sid and profile:
-        env["HERMES_STARTED_BY_SESSION_ID"] = sid
-        env["HERMES_STARTED_BY_PROFILE"] = profile
+    """Attribute only terminal commands, after the task-local session bridge. A session bound with no
+    profile name (every default-profile chat: the gateway binds ``source.profile or ""``) is the launch
+    profile's, the same rule ``tools.terminal_tool._container_profile`` applies."""
+    sid = env.get("HERMES_SESSION_ID")
+    if not sid:
+        return
+    profile = env.get("HERMES_SESSION_PROFILE") or _launch_profile_name()
+    env["HERMES_STARTED_BY_SESSION_ID"] = sid
+    env["HERMES_STARTED_BY_PROFILE"] = profile
+
+
+def _launch_profile_name() -> str:
+    import hermes_constants
+    # The routing launch home (pinned home, else the process home): gateway/AGENTS.md "One launch-home
+    # identity", the resolver _container_profile reaches through _is_routed_home.
+    return hermes_constants.profile_name_for_home(hermes_constants.get_routing_process_hermes_home()) or "default"
 
 
 # --- Hermes venv / repo-root detection (module-level, computed once) ---
