@@ -114,13 +114,15 @@ def test_execute_code_scrubs_after_merging_the_sessions_toolchain(daemon_env, tm
 
 @pytest.mark.platforms('linux', 'macos')
 @pytest.mark.usefixtures('child_env')  # yields tmp_path: an isolated environment for the real kernel
-def test_execute_code_runs_each_sessions_own_interpreter(tmp_path):
+def test_execute_code_runs_each_sessions_own_interpreter(tmp_path, monkeypatch):
     """Project mode picks the interpreter from the session's toolchain: each client's venv, and for a
     client with no venv the gateway's own Python, never the venv of the client that started the daemon."""
     import sys
     import venv
     from pathlib import Path
     from agent.session_client_env import client_env_scope
+    # A copied Python locates its stdlib using this base directory, not an activation symlink.
+    monkeypatch.setattr(sys, '_base_executable', str(Path(getattr(sys, '_base_executable', sys.executable)).resolve()))
     roots = {name: tmp_path / name for name in ('alpha', 'beta', 'daemon')}
     for root in roots.values():
         venv.EnvBuilder(with_pip=False, symlinks=False).create(root)
