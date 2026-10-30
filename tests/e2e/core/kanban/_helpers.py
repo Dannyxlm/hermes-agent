@@ -124,7 +124,8 @@ class Board:
         return json.loads(out[out.index("{"):] if "{" in out else out)
 
     def create(self, title: str, *extra: str) -> str:
-        return self.cli_json("create", title, "--assignee", "default", *extra)["id"]
+        return self.cli_json("create", title, "--assignee", "default",
+                             "--model", "fake-model", "--provider", "custom", *extra)["id"]
 
     def dispatch(self, *extra: str) -> dict:
         res = self.cli_json("dispatch", *extra)

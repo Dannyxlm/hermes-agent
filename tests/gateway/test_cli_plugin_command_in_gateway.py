@@ -89,7 +89,8 @@ def _plugin_home(tmp_path, source):
         'gateway': {'multiplex_profiles': False},
         'model': {'provider': 'custom', 'default': 'plugin-model', 'base_url': url},
         'auxiliary': {'title_generation': {'enabled': False}}, 'platform_toolsets': {'cli': []},
-        'plugins': {'enabled': ['probe-cmd'], 'entries': {'probe-cmd': {'mcp_allowlist': ['probe-mcp']}}},
+        'plugins': {'enabled': ['probe-cmd'], 'disabled': ['advanced-delegation'],
+                    'entries': {'probe-cmd': {'mcp_allowlist': ['probe-mcp']}}},
     }))
     env = child_env()
     env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), PYTHONPATH=str(root),

@@ -51,13 +51,13 @@ def _fits_sun_path(path: Path) -> bool:
 
 
 def _private_runtime_dir() -> Optional[Path]:
-    """``$XDG_RUNTIME_DIR`` when it is what the spec promises: an absolute directory owned by this
-    user with no group/other access. Other users cannot pre-create names inside it."""
+    """A private, writable ``$XDG_RUNTIME_DIR``; a sandbox can mount the user's 0700 directory read-only.
+    Other users cannot pre-create names inside it."""
     raw = os.environ.get("XDG_RUNTIME_DIR", "")
     if _IS_WINDOWS or not raw or not os.path.isabs(raw):
         return None
     with contextlib.suppress(OSError):
-        if _private_directory(Path(raw)):
+        if _private_directory(Path(raw)) and os.access(raw, os.W_OK):
             return Path(raw)
     return None
 

@@ -76,7 +76,8 @@ def _iter_source_files():
     for d in SCAN_DIRS:
         root = REPO_ROOT / d
         if root.is_dir():
-            yield from root.rglob("*.py")
+            # Bundled plugins can ship their own tests; those are not spawn sites in the product.
+            yield from (path for path in root.rglob("*.py") if "tests" not in path.relative_to(root).parts)
     for f in SCAN_ROOT_FILES:
         p = REPO_ROOT / f
         if p.is_file():

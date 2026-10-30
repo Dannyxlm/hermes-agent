@@ -13,7 +13,7 @@ FIELDS = {'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tok
           'completion_tokens', 'total_tokens', 'reasoning_tokens', 'api_calls', 'last_prompt_tokens',
           'context_tokens', 'context_length', 'config_context_length', 'context_source', 'compression_count',
           'avg_latency_s', 'tokens_per_s', 'last_turn_tokens', 'rate_limit', 'active_subagents', 'model',
-          'provider', 'fallback_model'}
+          'provider', 'fallback_model', 'cache_read', 'cache_write', 'cost_status'}
 
 
 def _agent():

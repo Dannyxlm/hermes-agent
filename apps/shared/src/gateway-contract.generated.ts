@@ -6284,6 +6284,10 @@ export interface SessionStats {
   model: string
   provider: string
   fallback_model?: string | null
+  cache_read?: number | null
+  cache_write?: number | null
+  cost_usd?: number | null
+  cost_status?: string | null
   plan_gauge?: PlanGauge | null
 }
 export interface RollbackSessionDiffParams {
@@ -7502,6 +7506,10 @@ export interface SessionUsagePayload {
   model?: string | null
   provider?: string | null
   fallback_model?: string | null
+  cache_read?: number | null
+  cache_write?: number | null
+  cost_usd?: number | null
+  cost_status?: string | null
   plan_gauge?: PlanGauge | null
 }
 /** ``prompt_turn._invoke_agent`` ``_on_session_title`` hook. */

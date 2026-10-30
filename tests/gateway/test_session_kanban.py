@@ -88,7 +88,8 @@ def test_late_launcher_cannot_stamp_replacement_claim(tmp_path, monkeypatch):
     monkeypatch.delenv('HERMES_DELEGATED_CHILD', raising=False)
     kb.create_board('owned')  # explicit creation; connect() never creates a board (#43243)
     with closing(connect(board='owned')) as conn:
-        tid = kb.create_task(conn, title='Owned race', assignee='default')
+        tid = kb.create_task(conn, title='Owned race', assignee='default',
+                             model_override='loop-model', provider_override='custom')
         old = kb.claim_task(conn, tid)
         kb.block_task(conn, tid, reason='replace claim', expected_run_id=old.current_run_id)
         kb.unblock_task(conn, tid)
@@ -117,7 +118,8 @@ def test_claim_reclaimed_before_admission_marker_is_refused(tmp_path, monkeypatc
     workspace.mkdir()
     kb.create_board('owned')  # explicit creation; connect() never creates a board (#43243)
     with closing(connect(board='owned')) as conn:
-        task_id = kb.create_task(conn, title='Owned race', assignee='default', workspace_kind='dir', workspace_path=str(workspace))
+        task_id = kb.create_task(conn, title='Owned race', assignee='default',
+                             model_override='loop-model', provider_override='custom', workspace_kind='dir', workspace_path=str(workspace))
         kb.recompute_ready(conn)
         old = kb.claim_task(conn, task_id)
     config = {'model': {'default': 'loop-model', 'provider': 'custom'}, 'platform_toolsets': {'cli': ['terminal']}}

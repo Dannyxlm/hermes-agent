@@ -43,7 +43,8 @@ def test_delegated_child_kanban_cli_refusal_returns_nonzero_exit_status(tmp_path
     home = tmp_path / "hermes"
     home.mkdir()
 
-    created = _run_hermes(home, "kanban", "create", "exit status probe", "--json")
+    created = _run_hermes(home, "kanban", "create", "exit status probe",
+                          "--model", "test-model", "--provider", "custom", "--json")
     assert created.returncode == 0, created.stderr
     task_id = json.loads(created.stdout)["id"]
 

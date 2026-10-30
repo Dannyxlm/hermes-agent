@@ -107,7 +107,7 @@ def test_oneshot_wires_session_db_for_recall(monkeypatch):
     from hermes_cli.oneshot import _run_agent
 
     captured = {}
-    sentinel_db = object()
+    sentinel_db = types.SimpleNamespace(close=lambda: None)
 
     class FakeAgent:
         def __init__(self, **kwargs):

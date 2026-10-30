@@ -75,10 +75,40 @@ def plan_gauge(agent) -> dict | None:
     return None
 
 
+def billing_usage(agent) -> dict:
+    """Measured cache counts and billed/estimated cost, shared by both usage transports."""
+    usage = {}
+    for field in ("cache_read", "cache_write"):
+        value = getattr(agent, f"session_{field}_tokens", None)
+        if value is not None:
+            usage[field] = value
+    # Live estimates remain current during a turn; persisted billing wins.
+    cost = {field: getattr(agent, f"session_{field}", None)
+            for field in ("estimated_cost_usd", "actual_cost_usd", "cost_status")}
+    with contextlib.suppress(Exception):
+        db = getattr(agent, "_session_db", None)
+        sid = getattr(agent, "session_id", None)
+        row = db._read_one(
+            "SELECT estimated_cost_usd, actual_cost_usd, cost_status FROM sessions WHERE id = ?",
+            (sid,)) if db is not None and sid else None
+        row = dict(row) if row is not None else None
+        if row and (row.get("actual_cost_usd") is not None
+                    or cost["cost_status"] in (None, "unknown")):
+            cost = {field: row.get(field) for field in cost}
+    usage["cost_status"] = cost["cost_status"] or "unknown"
+    amount = cost["actual_cost_usd"]
+    if amount is None and cost["cost_status"] not in (None, "unknown"):
+        amount = cost["estimated_cost_usd"]
+    if amount is not None:
+        usage["cost_usd"] = amount
+    return usage
+
+
 def usage_stats(agent) -> dict:
     """The frozen ``session.usage`` / ``session.stats`` dict; zeros before the first turn built an agent."""
     stats: dict = {key: int(getattr(agent, attr, 0) or 0) for key, attr in _COUNTERS}
     stats.update(_context(agent, getattr(agent, "context_compressor", None)))
+    stats.update(billing_usage(agent))
     avg_latency = tps = None
     with contextlib.suppress(Exception):
         latencies = list(getattr(agent, "_api_latency_history", None) or [])
@@ -154,6 +184,9 @@ def tui_usage(stats: dict) -> dict:
             usage[key] = round(float(stats[source_key]), 1)
     if isinstance(stats.get("active_subagents"), int):
         usage["active_subagents"] = stats["active_subagents"]
+    for key in ("cache_read", "cache_write", "cost_status", "cost_usd"):
+        if key in stats:
+            usage[key] = stats[key]
     if isinstance(stats.get("plan_gauge"), dict):
         usage["plan_gauge"] = stats["plan_gauge"]
     return usage

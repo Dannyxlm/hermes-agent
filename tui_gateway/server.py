@@ -1457,29 +1457,8 @@ def _get_usage(agent) -> dict:
         "completion": g("session_completion_tokens"), "total": g("session_total_tokens"),
         "calls": g("session_api_calls"),
     }
-    for field in ("cache_read", "cache_write"):
-        value = getattr(agent, f"session_{field}_tokens", None)
-        if value is not None:
-            usage[field] = value
-    # Live estimates remain current during a turn; persisted billing wins.
-    cost = {field: getattr(agent, f"session_{field}", None)
-            for field in ("estimated_cost_usd", "actual_cost_usd", "cost_status")}
-    with contextlib.suppress(Exception):
-        db = getattr(agent, "_session_db", None)
-        sid = getattr(agent, "session_id", None)
-        row = db._read_one(
-            "SELECT estimated_cost_usd, actual_cost_usd, cost_status FROM sessions WHERE id = ?",
-            (sid,)) if db is not None and sid else None
-        row = dict(row) if row is not None else None
-        if row and (row.get("actual_cost_usd") is not None
-                    or cost["cost_status"] in (None, "unknown")):
-            cost = {field: row.get(field) for field in cost}
-    usage["cost_status"] = cost["cost_status"] or "unknown"
-    amount = cost["actual_cost_usd"]
-    if amount is None and cost["cost_status"] not in (None, "unknown"):
-        amount = cost["estimated_cost_usd"]
-    if amount is not None:
-        usage["cost_usd"] = amount
+    from gateway.session_usage import billing_usage
+    usage.update(billing_usage(agent))
     comp = getattr(agent, "context_compressor", None)
     if comp:
         from agent.context_breakdown import context_usage_fields
