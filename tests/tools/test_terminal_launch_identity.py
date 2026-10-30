@@ -51,3 +51,18 @@ def test_background_export_snapshot_excludes_provenance(tmp_path):
     saved = snapshot.read_text()
     assert "HERMES_STARTED_BY_" not in saved
     assert "HERMES_LAUNCH_" not in saved
+
+
+@pytest.mark.parametrize("builder", [_make_run_env, ProcessRegistry._spawn_env])
+def test_default_profile_chat_is_attributed_to_launch_profile(monkeypatch, builder):
+    # The gateway binds ``profile=source.profile or ""``: every default-profile chat has an empty
+    # session profile, and it still launched the work (observed live 2026-10-30: no stamp at all).
+    import hermes_constants
+    monkeypatch.setattr(hermes_constants, "get_process_hermes_home", hermes_constants.get_default_hermes_root)
+    tokens = set_session_vars(session_id="launcher", profile="")
+    try:
+        env = builder({})
+        assert env["HERMES_STARTED_BY_SESSION_ID"] == "launcher"
+        assert env["HERMES_STARTED_BY_PROFILE"] == "default"
+    finally:
+        clear_session_vars(tokens)
