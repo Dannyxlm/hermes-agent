@@ -69,7 +69,7 @@ def test_continuation_after_phone_input_push_starts_one_activity(push_service, o
     assert aps["attributes"]["chatsDestination"] == {
         "version": 1, "surface": "native_session", **device(ordinary), "profile": "ops",
         "session_id": "ordinary-root", "run_id": run_id}
-    assert aps["content-state"]["status"] == "starting" and aps["alert"]["body"]
+    assert aps["content-state"]["status"] == "starting" and "alert" not in aps  # appears silently
     assert jobs[0]["token"] == "ee" * 32
     assert len(scope_runs(push_service, ORDINARY)) == 2  # one per turn, not per announcement
 
@@ -239,7 +239,7 @@ def test_start_respects_previews_at_enqueue_and_dispatch(store_delivery):
     service.drain_once()
     aps = next(job for job in service.sender.jobs if job["kind"] == "activity_start")["payload"]["aps"]
     assert "Private" not in json.dumps(aps)
-    assert aps["attributes"]["sessionTitle"] == "Hermex Ava" and aps["alert"]["title"] == "Ava"
+    assert aps["attributes"]["sessionTitle"] == "Hermex Ava" and "alert" not in aps
 
 
 # ── U13 closure through the gateway ────────────────────────────────────────────

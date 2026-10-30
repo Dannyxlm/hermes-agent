@@ -64,7 +64,9 @@ SCREENS = frozenset({'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview
 ERROR_DOMAINS = frozenset({'url', 'posix', 'cocoa', 'transport', 'auth', 'http', 'decoding', 'rpc', 'app'})
 SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenContent', 'ComposerFocusToSettled',
                         'TabFirstContent', 'ScrollInteraction', 'app.foreground_fresh',
-                        'chat.history_complete', 'chat.send_first_delta', 'NotificationOpenToContent'})
+                        'chat.history_complete', 'chat.send_first_delta', 'NotificationOpenToContent',
+                        'InboxFreshAfterForeground', 'ChatOpenToBody', 'ChatOpenBodyToTranscript',
+                        'ChatOpenDocParse'})
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
 SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',
@@ -72,7 +74,8 @@ SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready
                         'will_show_ms', 'did_show_ms', 'kb_anim_ms', 'tail', 'source', 'launch'})
 SPAN_ATTR_VALUES = {
     'tail': frozenset({'memory', 'disk', 'none'}),
-    'source': frozenset({'banner', 'live_activity', 'url', 'widget', 'attention_row'}),
+    # banner..attention_row: NotificationOpenToContent; head/delta: InboxFreshAfterForeground.
+    'source': frozenset({'banner', 'live_activity', 'url', 'widget', 'attention_row', 'head', 'delta'}),
     'launch': frozenset({'cold', 'warm', 'foreground'}),
 }
 BG_TRIGGERS = frozenset({'scheduled', 'silent_push'})

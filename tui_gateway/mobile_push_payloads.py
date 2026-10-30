@@ -296,12 +296,12 @@ def start_payload(subscription, run, scope, now, *, preview=None, previews=False
                   "startedAt": run["started_at"] - SWIFT_EPOCH}
     attributes["nativeDestination" if scope.surface == "native" else "chatsDestination"] = destination(
         subscription, scope, run["run_id"])
-    name = agent_name(scope.profile)
-    alert = {"title": title if previews else name, "body": f"{name} is working"}
+    # No ``alert``: the activity appears silently. A run the user did not start is not worth a banner,
+    # and the "Done" alert follows when it finishes.
     aps = {"timestamp": int(now), "event": "start",
            "content-state": content_state(run, scope, preview=preview, previews=previews),
            "attributes-type": "AgentRunActivityAttributes", "attributes": attributes,
-           "alert": alert, "relevance-score": 10, "stale-date": int(now + 120)}
+           "relevance-score": 10, "stale-date": int(now + 120)}
     return {"aps": aps}
 
 
@@ -311,4 +311,3 @@ def redact_start(aps, profile):
     redact_content_state(aps["content-state"], profile)
     if isinstance(aps.get("attributes"), dict):
         aps["attributes"]["sessionTitle"] = GENERIC_TITLE
-    aps["alert"] = {"title": agent_name(profile), "body": f"{agent_name(profile)} is working"}

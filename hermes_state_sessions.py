@@ -1008,6 +1008,11 @@ class SessionSessionsMixin(SessionActivityMixin):
             (time.time() if read else 0.0, *family),
         ) > 0
 
+    def track_read_from_birth(self, session_id: str) -> None:
+        """A chat created by a read-stamping client (phone, Desktop) is tracked from birth: ``0.0`` makes its
+        first reply unread, where NULL (never tracked) would hide it from the Inbox. Never moves a watermark."""
+        self._write_sql("UPDATE sessions SET last_read_at = 0.0 WHERE id = ? AND last_read_at IS NULL", (session_id,))
+
     @staticmethod
     def session_unread(session_row: dict[str, Any]) -> bool:
         """Unread = activity postdates the ``last_read_at`` watermark (NULL = read)."""

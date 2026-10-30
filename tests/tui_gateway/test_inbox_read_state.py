@@ -39,3 +39,6 @@ def test_reply_unread_uses_root_watermark_not_later_activity(inbox, mobile_home,
 def test_inbox_v2_capability(mobile_home, peer):
     capabilities = rpc("mobile.capabilities")["result"]
     assert capabilities["feature_versions"]["inbox_summaries"] == 2
+
+def test_read_through_capability(mobile_home, peer):
+    assert "read_through" in rpc("mobile.capabilities")["result"]["features"]

@@ -45,6 +45,20 @@ def _mobile_push_service():
     return service_for_home(_hermes_home)
 
 
+def _raise_site(exc):
+    """``module.function:line`` of the innermost Hermes frame on the raise path: names the refusing branch
+    (a stdlib frame such as ``uuid`` would not), never request content."""
+    from pathlib import Path, PurePath
+    root = Path(__file__).parent.parent  # import-path form: the live box imports through the `current` symlink
+    frames = []
+    tb = exc.__traceback__
+    while tb is not None:
+        frames.append((tb.tb_frame.f_code, tb.tb_lineno))
+        tb = tb.tb_next
+    code, line = next(((c, n) for c, n in reversed(frames) if PurePath(c.co_filename).is_relative_to(root)), frames[-1])
+    return f"{PurePath(code.co_filename).stem}.{code.co_name}:{line}"
+
+
 def _mobile_push_handler(name):
     def decorate(fn):
         def handle(rid, params):
@@ -61,7 +75,7 @@ def _mobile_push_handler(name):
                 return fn(rid, params, principal)
             except (ValueError, FileNotFoundError, TypeError) as exc:
                 reason = next(cls.__name__ for cls in (ValueError, FileNotFoundError, TypeError) if isinstance(exc, cls))
-                logger.warning("mobile_notification_refused method=%s reason=%s", name, reason)
+                logger.warning("mobile_notification_refused method=%s reason=%s site=%s", name, reason, _raise_site(exc))
                 return _err(rid, 4400, "invalid mobile notification scope or registration")
             except (sqlite3.Error, RuntimeError, OSError):
                 return _err(rid, 4401, "mobile notifications temporarily unavailable")

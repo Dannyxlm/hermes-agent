@@ -7,7 +7,8 @@ from tests.plugins.cloudseed_mobile.test_flight_recorder import (
     client as client, assert_event_dropped, batch, events, flag, P, T,  # noqa: PLC0414 - pytest fixture
 )
 
-NEW_SPANS = ('app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta')
+NEW_SPANS = ('app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta', 'InboxFreshAfterForeground',
+             'ChatOpenToBody', 'ChatOpenBodyToTranscript', 'ChatOpenDocParse')
 
 
 def span(name):
@@ -32,6 +33,17 @@ def test_new_app_span_is_stored_with_co_batched_events(client, name):
 def test_notification_open_span_contract_through_ingest(client, source, launch, tail):
     c, root = client
     event = span('NotificationOpenToContent') | {'attrs': {'source': source, 'launch': launch, 'tail': tail}}
+    response = c.post(P + '/batch', json=batch(evs=[events()[0], event]))
+    assert response.status_code == 200, response.text
+    assert response.json()['accepted'] == 2
+    [day] = (root / 'events').iterdir()
+    assert json.loads(day.read_text())['events'] == [events()[0], event]
+
+
+@pytest.mark.parametrize('source', ['head', 'delta'])
+def test_inbox_fresh_span_keeps_its_source_attribute(client, source):
+    c, root = client
+    event = span('InboxFreshAfterForeground') | {'attrs': {'source': source}}
     response = c.post(P + '/batch', json=batch(evs=[events()[0], event]))
     assert response.status_code == 200, response.text
     assert response.json()['accepted'] == 2

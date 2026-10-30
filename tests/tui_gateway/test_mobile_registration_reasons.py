@@ -1,4 +1,6 @@
 """Mobile enrollment failures are classified without retaining request content."""
+import re
+
 import pytest
 
 from tests.tui_gateway.test_mobile_session_parity import ordinary as ordinary  # noqa: PLC0414 - pytest fixture
@@ -23,7 +25,27 @@ def test_registration_refusal_logs_only_bounded_reason(push_service, ordinary, m
     assert response["error"]["code"] == 4400
     reasons = [r.message for r in caplog.records if "mobile_notification_refused" in r.message]
     assert reasons, "registration scope failures need a content-free reason"
-    assert reasons == [f"mobile_notification_refused method={method} reason={exception.__name__}"]
+    # The raise site (module.function:line) names the refusing branch; it is code, never request content.
+    assert re.fullmatch(rf"mobile_notification_refused method={method} reason={exception.__name__} "
+                        r"site=test_mobile_registration_reasons\.unavailable:\d+", reasons[0])
     assert "PRIVATE_SCOPE_TOKEN_SENTINEL" not in caplog.text
     assert ordinary["stored_session_id"] not in reasons[0]
     assert ordinary["device_token"] not in reasons[0]
+
+
+def test_refused_registration_names_the_branch_that_refused(push_service, ordinary, caplog):
+    """A chat whose row is not in state.db yet (a new chat registering before its first prompt)."""
+    with caplog.at_level("WARNING"):
+        response = rpc("mobile.session_push.register", **{**ordinary, "stored_session_id": "not-yet-persisted"})
+    assert response["error"]["code"] == 4400
+    [line] = [r.message for r in caplog.records if "mobile_notification_refused" in r.message]
+    assert line.startswith("mobile_notification_refused method=mobile.session_push.register reason=ValueError "
+                           "site=mobile_session_scope.resolve_destination:")
+    assert "not-yet-persisted" not in caplog.text
+
+
+def test_refusal_site_is_hermes_code_not_the_stdlib_frame_that_raised(push_service, ordinary, caplog):
+    with caplog.at_level("WARNING"):
+        assert rpc("mobile.session_push.register", **{**ordinary, "installation_id": "not-a-uuid"})["error"]["code"] == 4400
+    [line] = [r.message for r in caplog.records if "mobile_notification_refused" in r.message]
+    assert " site=mobile_push_store.normalized_uuid:" in line

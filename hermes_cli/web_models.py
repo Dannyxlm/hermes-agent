@@ -278,6 +278,9 @@ class SessionRename(BaseModel):
     pinned: Optional[StrictBool] = None  # durable "keep" (Desktop pins); exempt from auto_archive
     # Read-state watermark (sessions.last_read_at): True = unread, False = read now, None = leave.
     unread: Optional[StrictBool] = None
+    # With ``unread: false``: the newest reply row the client displayed. The stamp is that reply's time (never
+    # later than now), so a reply that landed meanwhile stays unread. Advertised as the ``read_through`` feature.
+    read_through_row_id: Optional[StrictInt] = Field(None, gt=0)
     profile: Optional[str] = None  # session owned by another profile (opens its state.db)
 
 class SessionOwnerBackfill(BaseModel):

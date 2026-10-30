@@ -27,7 +27,15 @@ def _same_read_owner(conn, anchor, session_id):
             and _owner_user(row) in (None, '', subject, _login_label(subject)))
 
 
-def set_read_in_transaction(db, conn, session_id, unread):
+def _reply_time(conn, family, row_id):
+    """Timestamp of assistant row ``row_id`` when it belongs to this compression family, else None."""
+    row = conn.execute(
+        f"SELECT timestamp FROM messages WHERE id=? AND role='assistant' AND session_id IN ({','.join('?' for _ in family)})",
+        (row_id, *family)).fetchone()
+    return row[0] if row is not None else None
+
+
+def set_read_in_transaction(db, conn, session_id, unread, read_through_row_id=None):
     from hermes_constants import profile_name_for_home
 
     family = db._compression_family_on(conn, session_id)
@@ -44,7 +52,15 @@ def set_read_in_transaction(db, conn, session_id, unread):
             raise RuntimeStoreError('permission_denied')
     # RETURNING supplies the exact IDs whose revisions the enclosing receipt advances.
     # A failed ownership check or receipt insert rolls back the entire sidebar edit.
+    stamp = time.time()
+    # Read through the displayed reply: a reply that landed after it stays unread. A row outside the family
+    # (or a missing one) is ignored, which is the plain "read now" an older client sends.
+    if read_through_row_id is not None and (reply_at := _reply_time(conn, family, read_through_row_id)) is not None:
+        stamp = min(stamp, reply_at)
+    # A read only ever moves the watermark forward (another device, or a cached open that displayed an older
+    # reply, must not re-open a chat that was read further); marking unread writes 0.0.
+    value = "0.0" if unread else "MAX(COALESCE(last_read_at, 0.0), ?)"
     return [row[0] for row in conn.execute(
-        f"UPDATE sessions SET last_read_at=? WHERE id IN ({','.join('?' for _ in family)}) RETURNING id",
-        (0.0 if unread else time.time(), *family),
+        f"UPDATE sessions SET last_read_at={value} WHERE id IN ({','.join('?' for _ in family)}) RETURNING id",
+        (*(() if unread else (stamp,)), *family),
     ).fetchall()]
