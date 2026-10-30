@@ -816,7 +816,9 @@ def _stamp_terminal_launcher(env: dict) -> None:
 
 def _launch_profile_name() -> str:
     import hermes_constants
-    return hermes_constants.profile_name_for_home(hermes_constants.get_process_hermes_home()) or "default"
+    # The routing launch home (pinned home, else the process home): gateway/AGENTS.md "One launch-home
+    # identity", the resolver _container_profile reaches through _is_routed_home.
+    return hermes_constants.profile_name_for_home(hermes_constants.get_routing_process_hermes_home()) or "default"
 
 
 # --- Hermes venv / repo-root detection (module-level, computed once) ---

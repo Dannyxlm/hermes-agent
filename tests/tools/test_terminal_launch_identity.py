@@ -1,5 +1,6 @@
 """Terminal-only launch attribution is task-local and never enters shared snapshots."""
 import os
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -54,15 +55,18 @@ def test_background_export_snapshot_excludes_provenance(tmp_path):
 
 
 @pytest.mark.parametrize("builder", [_make_run_env, ProcessRegistry._spawn_env])
-def test_default_profile_chat_is_attributed_to_launch_profile(monkeypatch, builder):
-    # The gateway binds ``profile=source.profile or ""``: every default-profile chat has an empty
+@pytest.mark.parametrize("launch_home,expected", [(".hermes", "default"), (".hermes/profiles/atlas", "atlas")])
+def test_empty_session_profile_is_attributed_to_launch_profile(tmp_path, monkeypatch, builder, launch_home, expected):
+    # The gateway binds ``profile=source.profile or ""``: every chat of the launch profile has an empty
     # session profile, and it still launched the work (observed live 2026-10-30: no stamp at all).
-    import hermes_constants
-    monkeypatch.setattr(hermes_constants, "get_process_hermes_home", hermes_constants.get_default_hermes_root)
+    home = tmp_path / launch_home
+    home.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(home))
     tokens = set_session_vars(session_id="launcher", profile="")
     try:
         env = builder({})
         assert env["HERMES_STARTED_BY_SESSION_ID"] == "launcher"
-        assert env["HERMES_STARTED_BY_PROFILE"] == "default"
+        assert env["HERMES_STARTED_BY_PROFILE"] == expected
     finally:
         clear_session_vars(tokens)
