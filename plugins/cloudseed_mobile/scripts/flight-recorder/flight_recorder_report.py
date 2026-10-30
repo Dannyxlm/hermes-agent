@@ -42,6 +42,9 @@ BUDGETS = {
     'chat.send_first_delta': ('chat.send_first_delta', None),
     'NotificationOpenToContent': ('NotificationOpenToContent', None),
     'InboxFreshAfterForeground': ('InboxFreshAfterForeground', None),
+    'ChatOpenToBody': ('ChatOpenToBody', None),
+    'ChatOpenBodyToTranscript': ('ChatOpenBodyToTranscript', None),
+    'ChatOpenDocParse': ('ChatOpenDocParse', None),
 }
 TIMED_OUTCOMES = frozenset({'ok'})
 DEFAULT_LOGS = ('gui.log', 'errors.log', 'agent.log')
