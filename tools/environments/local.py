@@ -297,6 +297,10 @@ def _finalize_child_env(env: dict) -> dict:
     """Guards shared by every spawn surface: profile-home propagation, session-context
     bridging, Hermes-owned PYTHONPATH + venv-marker strip, MSYS defaults, delegate_task
     Kanban scrub. Returns the (possibly new) dict."""
+    # Inbound CLI attribution belongs to that CLI only, never to arbitrary children.
+    for key in list(env):
+        if key.startswith("HERMES_STARTED_BY_"):
+            env.pop(key)
     _apply_profile_home(env)
     _inject_session_context_env(env)
     _strip_hermes_owned_pythonpath_and_runtime_markers(env)
@@ -794,7 +798,16 @@ def _make_run_env(env: dict) -> dict:
     if published:
         run_env.update(published)
         run_env.pop("WAYLAND_DISPLAY", None)  # X11 desktop; a leaked Wayland socket flips GTK/Chromium backends
+    _stamp_terminal_launcher(run_env)
     return run_env
+
+
+def _stamp_terminal_launcher(env: dict) -> None:
+    """Attribute only terminal commands, after the task-local session bridge."""
+    sid, profile = env.get("HERMES_SESSION_ID"), env.get("HERMES_SESSION_PROFILE")
+    if sid and profile:
+        env["HERMES_STARTED_BY_SESSION_ID"] = sid
+        env["HERMES_STARTED_BY_PROFILE"] = profile
 
 
 # --- Hermes venv / repo-root detection (module-level, computed once) ---

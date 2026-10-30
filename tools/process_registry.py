@@ -1084,7 +1084,9 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
     def _spawn_env(env_vars: dict) -> dict:
         """Sanitized child env from the session's client toolchain; PYTHONUNBUFFERED so poll sees progress."""
         from agent.session_client_env import toolchain_environ
+        from tools.environments.local import _stamp_terminal_launcher
         env = _terminal_env(_sanitize_subprocess_env(toolchain_environ(), env_vars))
+        _stamp_terminal_launcher(env)
         env["PYTHONUNBUFFERED"] = "1"
         return env
 
