@@ -55,14 +55,6 @@ def _watcher_mtime_ns(path: Path):
         return None
 
 
-def _watcher_size(path: Path):
-    """``st_size`` of ``path``, or None when it cannot be stat'ed."""
-    try:
-        return path.stat().st_size
-    except OSError:
-        return None
-
-
 def _home_mtime_ns(*parts: str):
     return _watcher_mtime_ns(_watcher_home().joinpath(*parts))
 
