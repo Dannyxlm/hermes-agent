@@ -3391,6 +3391,8 @@ def _build_cli_parser():
     # must be the name --help shows); "gui" is a deprecated alias.
     build_gui_parser(subparsers, cmd_gui=cmd_gui)
     build_logs_parser(subparsers, cmd_logs=cmd_logs)
+    from hermes_cli.launch_unit import build_launch_parser
+    build_launch_parser(subparsers)
     build_prompt_size_parser(subparsers, cmd_prompt_size=cmd_prompt_size)
     return parser, subparsers
 
