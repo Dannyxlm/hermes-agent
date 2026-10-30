@@ -19,7 +19,7 @@ from tui_gateway import server
 from agent.message_sanitization import _sanitize_surrogates
 from tui_gateway.event_replay import replay_epoch
 from tui_gateway.transport import serialize_frame
-from hermes_cli.route_metrics import rpc_dispatch_metrics
+from hermes_cli.route_metrics import client_label, rpc_dispatch_metrics
 
 from tui_gateway.ws_legacy_fallback import dispatch_legacy, legacy_fallback_allowed
 
@@ -145,6 +145,8 @@ class WSTransport:
         #: for legacy-token/stdio. RPC params can never populate it: sole identity authority for browser controllers
         #: and for the ``user_id`` the agent is built with (``server._session_auth_user_id``).
         self.auth_identity = auth_identity
+        #: ``phone``/``desktop``/``widget``/``unknown`` from the upgrade request's user agent (route_metrics' labels).
+        self.client = client_label((getattr(ws, "scope", None) or {}).get("headers", ()))[0]
         self.desktop_local = False
         #: The served profile home whose skin this peer follows (None = the launch home); see change_watcher.
         self.skin_home: str | None = None

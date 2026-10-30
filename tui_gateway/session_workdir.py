@@ -615,6 +615,13 @@ def _ensure_session_db_row(session: dict) -> bool:
                         session.pop("pending_hidden", None)
                 except Exception:
                     logger.debug("failed to apply pending hidden flag", exc_info=True)
+            # Created by a read-stamping client: tracked from birth, else a reply it left before never reaches the Inbox.
+            if session.get("pending_tracked_read"):
+                try:
+                    db.track_read_from_birth(key)
+                    session.pop("pending_tracked_read", None)
+                except Exception:
+                    logger.debug("failed to track read state from birth", exc_info=True)
             # Same deferral for session.archive before the row existed (mirrors pending_hidden).
             if session.get("pending_archived"):
                 try:

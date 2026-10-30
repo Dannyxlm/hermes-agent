@@ -1,7 +1,8 @@
 """Closed action handlers inside the runtime mutation receipt transaction."""
 from hermes_state_runtime import RuntimeStoreError
 
-METADATA_FIELDS = {'title': str, 'archived': bool, 'hidden': bool, 'pinned': bool, 'unread': bool}
+METADATA_FIELDS = {'title': str, 'archived': bool, 'hidden': bool, 'pinned': bool, 'unread': bool,
+                   'read_through_row_id': int}
 
 
 def validate_action(operation, payload):
@@ -47,7 +48,8 @@ def validate_action(operation, payload):
         return
     required = {'rename': {'title'}, 'archive': {'archived'}}
     if operation == 'sidebar':
-        valid = bool(payload) and not set(payload) - METADATA_FIELDS.keys()
+        valid = bool(payload) and not set(payload) - METADATA_FIELDS.keys() and (
+            'read_through_row_id' not in payload or 'unread' in payload)
     else:
         valid = operation in required and set(payload) == required[operation]
     if not valid or any(type(value) is not METADATA_FIELDS[key] for key, value in payload.items()):
@@ -108,8 +110,10 @@ def apply_action(db, conn, session_id, operation, payload, *, prepared=None):
             result[key] = conn.execute('SELECT title FROM sessions WHERE id=?', (session_id,)).fetchone()[0]
         elif key == 'unread':
             from hermes_state_mutation_read import set_read_in_transaction
-            affected.update(set_read_in_transaction(db, conn, session_id, value))
+            affected.update(set_read_in_transaction(db, conn, session_id, value, payload.get('read_through_row_id')))
             result[key] = value
+        elif key == 'read_through_row_id':
+            continue  # consumed with ``unread``
         else:
             affected.update(db._set_lineage_column_in_transaction(conn, key, session_id, int(value)))
             result[key] = value

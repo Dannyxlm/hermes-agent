@@ -1003,7 +1003,7 @@ async def rename_session_endpoint(session_id: str, body: SessionRename, request:
         # Read stamps cover the whole compression family, never a foreign segment.
         # The owner below still performs the sole revision-fenced write.
         await asyncio.to_thread(_with_db, body.profile, _check_read_family, read_only=True)
-    payload = {key: getattr(body, key) for key in ('title', 'archived', 'hidden', 'pinned', 'unread')
+    payload = {key: getattr(body, key) for key in ('title', 'archived', 'hidden', 'pinned', 'unread', 'read_through_row_id')
                if getattr(body, key) is not None}
     return await _mutate_session_request(request, body.profile, session_id,
         request_id=body.request_id, expected_revision=body.expected_revision,

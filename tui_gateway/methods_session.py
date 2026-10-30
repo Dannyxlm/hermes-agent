@@ -327,6 +327,16 @@ def _seed_row(record: dict) -> None:
         logger.debug("seeded-session title write failed for %s; pending_title stays queued", key, exc_info=True)
 
 
+# Clients that PATCH the read watermark themselves: a chat one of them creates is tracked from birth. Never
+# keyed on ``source``: the phone sends none, so its chats are stored as ``tui`` like terminal chats (which
+# never PATCH and must stay out of the Inbox).
+_READ_STAMPING_CLIENTS = frozenset({"phone", "desktop"})
+
+
+def _transport_tracks_read(transport) -> bool:
+    return getattr(transport, "client", None) in _READ_STAMPING_CLIENTS
+
+
 def _create_session(rid, params: dict, *, copy_parent_history: bool = False) -> dict:
     """``session.create``; ``copy_parent_history`` (``session.branch_stored``) reads the parent's
     transcript server-side and omits it from the reply."""
@@ -426,7 +436,8 @@ def _create_session(rid, params: dict, *, copy_parent_history: bool = False) -> 
             "create_reasoning_override": create_reasoning_override,
             "create_service_tier_override": create_service_tier_override,
             "parent_session_id": parent_session_id, "pending_title": _str_param(params, "title") or None,
-            "pending_hidden": _flag(params, "hidden"), "room_plumbing": _flag(params, "room_plumbing"),
+            "pending_hidden": _flag(params, "hidden"), "pending_tracked_read": _transport_tracks_read(current_transport()),
+            "room_plumbing": _flag(params, "room_plumbing"),
             "follow_profile_config": _flag(params, "follow_profile_config"),
             "profile_home": str(profile_home) if profile_home is not None else None,
             "running": False, "session_key": key, "show_reasoning": _load_show_reasoning(), "source": source,
@@ -813,6 +824,8 @@ def _resume_materialize_minted(ctx: _Resume) -> None:
             model=_resolve_model(),
             profile_name=profile_name_for_home(ctx.profile_home) or _response_profile_name(ctx.profile),
         )
+        if _transport_tracks_read(current_transport()):
+            ctx.db.track_read_from_birth(ctx.target)
         ctx.found = ctx.db.get_session(ctx.target)
         logger.info(
             "materialized session row for minted-but-unpersisted key %s (resume no longer 4007s)",

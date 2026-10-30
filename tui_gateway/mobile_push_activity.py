@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS activity_cleanup (
 """
 
 
+_ATTENTION_SOUND_S = 60
+
+
 def _device_event(sub, run_id, purpose):
     identity = (sub["principal"], sub["installation_id"], sub["connection_id"], sub["scope"], run_id, purpose)
     return hashlib.sha256("\0".join(identity).encode()).hexdigest()
@@ -57,10 +60,27 @@ class ActivityPushStore:
              now, now, now + 120, now)).fetchone()
         return registered is not None
 
+    @staticmethod
+    def _claim_attention_sound(db, job, now):
+        """One audible attention alert per device and chat per minute; the rest are delivered silently.
+        The job that took the minute keeps its sound across retries."""
+        device = {**job, "principal": "", "connection_id": ""}
+        taken = _device_event(device, job["event_id"], "attention-sound")
+        if db.execute("SELECT 1 FROM events WHERE event_id=?", (taken,)).fetchone():
+            return
+        minute = _device_event(device, "", "attention-sound")
+        last = db.execute("SELECT created_at FROM events WHERE event_id=?", (minute,)).fetchone()
+        if last is not None and now - last[0] < _ATTENTION_SOUND_S:
+            job["payload"]["aps"].pop("sound", None)
+            return
+        db.execute("INSERT OR REPLACE INTO events VALUES (?,?)", (minute, now))
+        db.execute("INSERT INTO events VALUES (?,?)", (taken, now))
+
     def _claim_completion_alert(self, db, job, now):
         payload = job["payload"]
         if payload.get("hermex.status") in ATTENTION:
             _reserve_alert(db, job, f"attention:{job['event_id']}", now)
+            self._claim_attention_sound(db, job, now)
             return
         if payload.get("hermex.status") != "complete":
             return

@@ -222,21 +222,26 @@ def _enqueue(db, sub, now) -> None:
     db.execute("UPDATE inbox_hints SET last_sent_at=?, dirty=0 WHERE subscription_id=?", (now, sub["id"]))
 
 
-_LEASES = """SELECT s.id, s.expires_at, h.scope_token, h.last_sent_at, h.dirty FROM subscriptions s
-    JOIN inbox_hints h ON h.subscription_id=s.id
+# ``foreground``: the installation holds a live presence lease. The app reports presence(false) the moment it
+# backgrounds, while its socket may stay up for a grace period, so a hint keys on presence, never on the socket.
+_LEASES = """SELECT s.id, s.expires_at, h.scope_token, h.last_sent_at, h.dirty,
+    EXISTS (SELECT 1 FROM mobile_presence p WHERE p.principal=s.principal
+            AND p.installation_id=s.installation_id AND p.expires_at>?) AS foreground
+    FROM subscriptions s JOIN inbox_hints h ON h.subscription_id=s.id
     WHERE s.kind='background' AND s.surface='inbox' AND s.expires_at>? AND s.token!=''"""
 
 
 def schedule(store, profiles, now=None) -> int:
-    """Send a hint now for each lease of ``profiles`` whose window is open; mark the rest dirty."""
+    """Send a hint now for each lease of ``profiles`` whose window is open and whose app is in the background;
+    mark the rest dirty, and :func:`flush_trailing` sends the one trailing hint when it can."""
     now = store.clock() if now is None else now
     sent = 0
     with store.transaction() as db:
         if not _has_table(db, "inbox_hints"):
             return 0
         for profile in sorted(profiles):
-            for sub in db.execute(_LEASES + " AND s.profile=?", (now, profile)).fetchall():
-                if now - sub["last_sent_at"] >= MIN_INTERVAL_S:
+            for sub in db.execute(_LEASES + " AND s.profile=?", (now, now, profile)).fetchall():
+                if now - sub["last_sent_at"] >= MIN_INTERVAL_S and not sub["foreground"]:
                     _enqueue(db, sub, now)
                     sent += 1
                 else:
@@ -249,12 +254,14 @@ def flush_trailing(store, now=None) -> int:
     now = store.clock() if now is None else now
     with store._lock:  # read first: the common pass has nothing due and takes no write lock
         if not _has_table(store._db, "inbox_hints") or not store._db.execute(
-                _LEASES + " AND h.dirty=1 AND h.last_sent_at<=? LIMIT 1", (now, now - MIN_INTERVAL_S)).fetchone():
+                _LEASES + " AND h.dirty=1 AND NOT foreground AND h.last_sent_at<=? LIMIT 1",
+                (now, now, now - MIN_INTERVAL_S)).fetchone():
             return 0
     with store.transaction() as db:
         if not _has_table(db, "inbox_hints"):
             return 0
-        due = db.execute(_LEASES + " AND h.dirty=1 AND h.last_sent_at<=?", (now, now - MIN_INTERVAL_S)).fetchall()
+        due = db.execute(_LEASES + " AND h.dirty=1 AND NOT foreground AND h.last_sent_at<=?",
+                         (now, now, now - MIN_INTERVAL_S)).fetchall()
         for sub in due:
             _enqueue(db, sub, now)
     return len(due)
