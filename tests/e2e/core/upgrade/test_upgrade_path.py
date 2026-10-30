@@ -247,7 +247,12 @@ def user_config(base_url: str, version: int) -> str:
 
 def _base_config_version(leg: Leg) -> int:
     """The N-1 schema version, as N-1's own code reports it (imported in the N-1 install's venv)."""
-    cp = leg.run("-c", "from hermes_cli.config_defaults import DEFAULT_CONFIG; print(DEFAULT_CONFIG['_config_version'])",
+    cp = leg.run("-c", "try:\n"
+                 "    from hermes_cli.config_defaults import DEFAULT_CONFIG\n"
+                 "except ModuleNotFoundError as exc:\n"
+                 "    if exc.name != 'hermes_cli.config_defaults': raise\n"
+                 "    from hermes_cli.config import DEFAULT_CONFIG\n"
+                 "print(DEFAULT_CONFIG['_config_version'])",
                  argv0=leg.python)
     assert cp.returncode == 0, "could not import the N-1 DEFAULT_CONFIG:\n" + H.describe(cp)
     return int(cp.stdout.strip().splitlines()[-1])
@@ -339,7 +344,7 @@ def _write_wrappers(leg_root: Path, install: Path, hermes_home: Path) -> Path:
         # `git remote get-url` expands insteadOf before the updater classifies a
         # fork. Report the configured official URL; only transport is redirected.
         f'if [ "$1" = remote ] && [ "$2" = get-url ] && [ "$3" = origin ]; then printf "%s\\n" "{OFFICIAL_URL}"; exit 0; fi\n'
-        f'if [ -f "{leg_root}/arm-pull" ] && echo " $* " | grep -q " merge --ff-only "; then\n'
+        f'if [ -f "{leg_root}/arm-pull" ] && echo " $* " | grep -Eq " (pull|merge) --ff-only "; then\n'
         f'  rm -f "{leg_root}/arm-pull"\n'
         # Model a SIGKILL half-way through the fast-forward: git writes the tree in index order,
         # so a prefix of the changed paths is already new, HEAD still names N-1, and the index
