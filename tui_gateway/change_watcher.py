@@ -198,13 +198,18 @@ _SESSION_SIGNATURE_FIELDS = (
     "archived", "pinned", "hidden", "last_read_at", "handoff_state",
 )
 # path -> (store version, session-table digest). The version is the file identity plus
-# ``PRAGMA data_version``: it moves on exactly the commits other connections make, so the normal
-# watch pass is one stat and one PRAGMA, and a quiet store is never re-read. (File timestamps and the
-# WAL size cannot do that: they are jiffy-coarse, and the WAL is overwritten in place at a fixed size.)
+# ``PRAGMA data_version`` of the store's kept probe connection: it moves on every commit (and WAL
+# restart) another connection makes, so the normal watch pass is one stat and one PRAGMA, and a quiet
+# store is never re-read. (File timestamps and the WAL size cannot do that: they are jiffy-coarse, and
+# the WAL is overwritten in place at a fixed size.) ``data_version`` restarts on a new connection, so
+# dropping a probe also drops the digest cached under it.
 _sessions_db_sig_cache: dict[str, tuple[object, tuple | None]] = {}
 # path -> (read-only connection kept only to ask data_version, file identity it was opened on)
 _store_probes: dict[str, tuple[Any, tuple[int, int]]] = {}
-# path -> monotonic time of the last successful observation, and the thread that owns the cadence.
+# While a recovery raw-copies a store its probe is closed and not reopened until this time (path -> monotonic).
+_PROBE_HOLDOFF_S = 60.0
+_probe_holdoff_until: dict[str, float] = {}
+# path -> monotonic time of the watcher thread's last successful observation, and that thread.
 _session_observed_at: dict[str, float] = {}
 _change_watcher_thread: threading.Thread | None = None
 _session_observation_locks: dict[str, Any] = {}
@@ -221,7 +226,7 @@ def _session_db_content_sig(db_path: Path):
 
 
 def _session_db_is_fresh(db_path: Path, max_age_s: float) -> bool:
-    """True while the watcher thread is alive and the store was observed less than ``max_age_s`` ago.
+    """True while the watcher thread is alive and it observed the store less than ``max_age_s`` ago.
     A dead or stalled watcher stops vouching, so readers go back to observing inline."""
     seen = _session_observed_at.get(os.path.realpath(db_path))
     thread = _change_watcher_thread
@@ -229,35 +234,63 @@ def _session_db_is_fresh(db_path: Path, max_age_s: float) -> bool:
             and time.monotonic() - seen < max_age_s)
 
 
+def _connect_probe(key: str):
+    from hermes_state import _connect_tracked_db
+    from hermes_state_holders import read_only_db_uri
+    return _connect_tracked_db(read_only_db_uri(Path(key)), tracking_path=Path(key), uri=True, timeout=0.05,
+                               check_same_thread=False)
+
+
 def _open_store(key: str):
     """``(connection, version)`` for the store at ``key`` (a real path). The read-only connection is
-    kept per store, so a pass over a quiet store is one stat and one ``PRAGMA data_version``;
-    ``version`` is None, and the connection a throwaway, when the file has no usable identity.
+    kept per store, so a pass over a quiet store is one stat and one ``PRAGMA data_version``.
+    ``version`` is None, and the connection a throwaway the caller closes, when this pass cannot trust a
+    kept one: no file identity, a probe the recovery path released, or a failing PRAGMA.
     Callers hold the store's observation lock."""
-    from hermes_state import _connect_tracked_db
     from hermes_state_common import stat_db_file_identity
-    from hermes_state_holders import read_only_db_uri
     identity = stat_db_file_identity(key)
     held = _store_probes.get(key)
     if held is not None and held[1] != identity:  # replaced or removed: that connection is on the old file
         _drop_store(key)
         held = None
-    conn = held[0] if held is not None else _connect_tracked_db(
-        read_only_db_uri(Path(key)), tracking_path=Path(key), uri=True, timeout=0.05, check_same_thread=False)
-    if identity is None:
-        return conn, None
-    _store_probes[key] = (conn, identity)
+    if identity is None or _probe_holdoff_until.get(key, 0.0) > time.monotonic():
+        return _connect_probe(key), None
+    if held is None:
+        from hermes_cli.sqlite_safe_read import register_evictor
+        held = _store_probes[key] = (_connect_probe(key), identity)
+        register_evictor(key, lambda: _release_probe(key))
     try:
-        return conn, (identity, conn.execute("PRAGMA data_version").fetchone()[0])
-    except Exception:  # health: allow BLE001 -- the probe failed: read the rows from a fresh connection next pass
+        return held[0], (identity, held[0].execute("PRAGMA data_version").fetchone()[0])
+    except Exception:  # health: allow BLE001 -- any failure of the kept connection: this pass reads on a fresh one
         _drop_store(key)
-        return conn, None
+        return _connect_probe(key), None
 
 
 def _drop_store(key: str) -> None:
+    _sessions_db_sig_cache.pop(key, None)
     held = _store_probes.pop(key, None)
     if held is not None:
         held[0].close()
+
+
+def _release_probe(key: str) -> None:
+    """Close the store's probe for a recovery that must raw-copy the file, and keep it closed for a while.
+    Waits briefly for a pass in flight (never longer: that pass may itself be waiting on the caller)."""
+    lock = _session_observation_locks.get(key)
+    if lock is None or not lock.acquire(timeout=0.5):
+        return
+    try:
+        _probe_holdoff_until[key] = time.monotonic() + _PROBE_HOLDOFF_S
+        _drop_store(key)
+    finally:
+        lock.release()
+
+
+def _note_observed(key: str) -> None:
+    """Only the watcher thread's own observations vouch for a store: a request's inline read says
+    nothing about a store the watcher does not visit."""
+    if threading.current_thread() is _change_watcher_thread:
+        _session_observed_at[key] = time.monotonic()
 
 
 def _read_session_db_content_sig(db_path: Path):
@@ -274,7 +307,7 @@ def _read_session_db_content_sig(db_path: Path):
     cached = _sessions_db_sig_cache.get(cache_key)
     if not db_path.exists():
         _drop_store(cache_key)
-        _session_observed_at[cache_key] = time.monotonic()
+        _note_observed(cache_key)
         return None
 
     conn = None
@@ -283,7 +316,7 @@ def _read_session_db_content_sig(db_path: Path):
         # moves the version again on the next pass (one extra read), never the other way round.
         conn, version = _open_store(cache_key)
         if version is not None and cached is not None and cached[0] == version:
-            _session_observed_at[cache_key] = time.monotonic()
+            _note_observed(cache_key)
             return cached[1]
         available = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
         fields = tuple(field for field in _SESSION_SIGNATURE_FIELDS if field in available)
@@ -325,7 +358,7 @@ def _read_session_db_content_sig(db_path: Path):
         if conn is not None and (kept is None or kept[0] is not conn):
             conn.close()  # not the kept connection: a throwaway (no file identity) or one just dropped
 
-    _session_observed_at[cache_key] = time.monotonic()
+    _note_observed(cache_key)
     if version is not None:
         _sessions_db_sig_cache[cache_key] = (version, signature)
 

@@ -246,9 +246,11 @@ def local_conversation_ids(conn, session_id):
     return list(dict.fromkeys([owner, *(sid for sid in lineage if isinstance(sid, str))]))
 
 
-# store path -> (receipt stamp, the receipts with a lineage of more than one segment, parsed). Receipts
-# are inserted, deleted, or grow by one segment (a reset or compression), so their count, newest rowid
-# and total size name every change without reading their ~43 KB values (parsing them is the cost).
+# store path -> (receipt stamp, the receipts with a lineage of more than one segment, parsed). Receipts are
+# inserted, deleted, or grow by one segment id (a reset or compression) via UPDATE, so their count, newest
+# rowid and total size name every such change without reading their ~43 KB values (parsing them is the
+# cost). Not exact: a lineage/session_id rewrite of unchanged length would not be seen, and no writer does
+# one; a new writer that could must bump something in this stamp.
 _LINEAGE_RECEIPTS: dict[str, tuple[tuple, list]] = {}
 
 

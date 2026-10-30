@@ -14,7 +14,7 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,25 @@ def _live_main_key(key: str) -> Optional[str]:
         if key.endswith(suffix) and key[:-len(suffix)] in _live_connections:
             return key[:-len(suffix)]
     return None
+
+
+# canonical main-db key -> release(): closes a connection this process keeps only as an idle background
+# probe (the session change watcher's). A recovery that must raw-copy the file calls
+# :func:`release_evictable` first, so the probe never turns its "no live connection" guard into a refusal.
+_evictors: dict[str, Callable[[], None]] = {}
+
+
+def register_evictor(path: Path | str, release: Callable[[], None]) -> None:
+    with _live_lock:
+        _evictors[_key(path)] = release
+
+
+def release_evictable(path: Path | str) -> None:
+    """Close the evictable probe on *path*, if any. Every other connection is untouched and still counts."""
+    with _live_lock:
+        release = _evictors.get(_key(path))
+        if release is not None:
+            release()
 
 
 def has_live_connection(path: Path | str) -> bool:
