@@ -28,10 +28,19 @@ def bind_resumed_launch(db, *, epoch, session_id, fields):
     from hermes_state_launches import record_launch, bind_launch
     def write(conn):
         _epoch(conn, epoch)
-        if not conn.execute('SELECT 1 FROM sessions WHERE id=?', (session_id,)).fetchone():
+        row = conn.execute('SELECT source FROM sessions WHERE id=?', (session_id,)).fetchone()
+        if not row:
             raise RuntimeStoreError('not_found')
         launch = launch_record(fields, db._own_profile_name() or 'default', launch_id='session:' + session_id)
         if launch:
+            # Every client resumes through here (classic CLI and thin client alike). Only launched work
+            # (an existing launch row) or a script-created session (cli/oneshot/tool) may be bound on
+            # resume; a human chat (tui, desktop, mobile, messaging) resumed by a script is never
+            # re-labelled as a lane of the resuming chat.
+            known = conn.execute('SELECT 1 FROM work_launches WHERE launch_id=? OR child_session_id=?',
+                                 (launch['launch_id'], session_id)).fetchone()
+            if not known and row[0] not in ('cli', 'oneshot', 'tool'):
+                return
             record_launch(conn, **launch)
             bind_launch(conn, launch['launch_id'], child_session_id=session_id)
             conn.execute('UPDATE work_launches SET finished_at=NULL,terminal_cause=NULL WHERE launch_id=?',

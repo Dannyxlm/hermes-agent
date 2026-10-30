@@ -88,11 +88,14 @@ def test_unit_builds_exact_systemd_command_and_records_first(launch_env, tmp_pat
     actual = json.loads(argv_file.read_text())
     stop = next(p for p in actual if p.startswith("ExecStopPost="))
     finisher = shlex.split(stop.removeprefix("ExecStopPost=+"))
-    assert finisher[:5] == ["/usr/sbin/runuser", "-u", pwd.getpwuid(os.getuid()).pw_name, "--", sys.executable]
-    # An absolute source entry is required: the immutable venv does not install the source package.
-    assert Path(finisher[5]).is_absolute()
-    assert finisher[6:] == ["launch", "finish", "--home", str(home.resolve()), "--launch-id", launch["launch_id"],
-                            "--result", "${SERVICE_RESULT}", "--exit-code", "${EXIT_CODE}", "--exit-status", "${EXIT_STATUS}"]
+    assert finisher[:7] == ["/usr/sbin/runuser", "-u", pwd.getpwuid(os.getuid()).pw_name, "--", "/bin/sh", "-c",
+                            finisher[6]]
+    # Interpreter, then the pinned release entry with the current-release fallback (both absolute:
+    # the immutable venv does not install the source package, and releases get pruned).
+    assert finisher[7:9] == ["hermes-launch-finisher", sys.executable]
+    assert Path(finisher[9]).is_absolute() and finisher[10] == "/opt/cloudseed-immutable/hermes/current/hermes_cli/launch_unit.py"
+    assert finisher[11:] == ["launch", "finish", "--home", str(home.resolve()), "--launch-id", launch["launch_id"],
+                             "--result", "${SERVICE_RESULT}", "--exit-code", "${EXIT_CODE}", "--exit-status", "${EXIT_STATUS}"]
     assert actual == ["-n", "systemd-run", "--unit=family-example",
                       *([] if root else [f"--uid={os.getuid()}", f"--gid={os.getgid()}"]),
                       "--property=Type=oneshot", "--no-block", "--collect", "--property=TimeoutStartSec=30",

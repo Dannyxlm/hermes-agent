@@ -85,3 +85,28 @@ def test_plain_websocket_orphan_is_unknown_not_owner_restart(tmp_path):
         db.bind_launch('launch', child_session_id='child')
         db.end_session('child', 'ws_orphan_reap')
         assert state(db)[1] == 'unknown'
+
+
+@pytest.mark.parametrize('source,launched,bound', [
+    ('tui', False, False),      # a human chat resumed by a script is never re-labelled as a lane
+    ('desktop', False, False),
+    ('telegram', False, False),
+    ('cli', False, True),       # script/lane-created sessions may be adopted by their resumer
+    ('oneshot', False, True),
+    ('tool', False, True),
+    ('cli', True, True),        # an existing lane (e.g. a durable owner thread) is reopened
+])
+def test_resume_binds_only_launched_or_ephemeral_sessions(tmp_path, source, launched, bound):
+    with SessionDB(tmp_path / 'state.db') as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='fixture')
+        db.create_session('child', source)
+        if launched:
+            db.record_launch('first', **FIELDS)
+            db.bind_launch('first', child_session_id='child')
+            db.finish_launch('first', 'success')
+        # A real CLI resume mints a fresh launch id on every run.
+        bind_resumed_launch(db, epoch=epoch, session_id='child', fields=dict(
+            started_by_session='parent', started_by_profile='default', launch_id='fresh-uuid'))
+        rows = db._read_all('SELECT launch_id,finished_at FROM work_launches WHERE child_session_id=?', ('child',))
+        live = [r for r in rows if r[1] is None]
+        assert bool(live) is bound, rows
