@@ -49,7 +49,7 @@ def _raise_site(exc):
     """``module.function:line`` of the innermost Hermes frame on the raise path: names the refusing branch
     (a stdlib frame such as ``uuid`` would not), never request content."""
     from pathlib import Path, PurePath
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).parent.parent  # import-path form: the live box imports through the `current` symlink
     frames = []
     tb = exc.__traceback__
     while tb is not None:
