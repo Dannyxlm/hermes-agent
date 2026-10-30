@@ -293,3 +293,39 @@ def test_connector_owner_and_setup_count_without_apns(push, mobile_home, monkeyp
     finally:
         live.close(op)
         server._sessions.pop(sid, None)
+
+
+def _install_presence(service, ids, *, foreground):
+    scope = Scope("native_session", "ops", "same")
+    service.register(PRINCIPAL, scope, **ids, token="cd" * 32, environment="production")
+    service.store.presence(PRINCIPAL, scope, **ids, foreground=foreground)
+    return scope
+
+
+def test_no_hint_while_the_installation_is_foreground_and_one_when_it_backgrounds(push):
+    """Presence, not an open socket: the app reports foreground=false the moment it backgrounds."""
+    service, now, ids, _lease, _db = push
+    scope = _install_presence(service, ids, foreground=True)
+    hints.note_profile("ops")
+    assert _pass(service, now, 1.0) == 0
+    hints.note_profile("ops")
+    assert _pass(service, now, 20.0) == 0  # still foreground; the change stays pending
+    service.store.presence(PRINCIPAL, scope, **ids, foreground=False)
+    assert _pass(service, now, 1.0) == 1  # the first background moment gets the one hint
+    assert _pass(service, now, 1.0) == 1  # nothing left over
+
+
+def test_a_lapsed_foreground_lease_releases_the_pending_hint(push):
+    service, now, ids, _lease, _db = push
+    _install_presence(service, ids, foreground=True)
+    hints.note_profile("ops")
+    assert _pass(service, now, 1.0) == 0
+    assert _pass(service, now, 61.0) == 1  # the app was killed: its 60 s lease ran out
+
+
+def test_another_installations_presence_does_not_hold_the_hint(push):
+    service, now, _ids, _lease, _db = push
+    other = {"installation_id": str(uuid.uuid4()), "connection_id": str(uuid.uuid4())}
+    _install_presence(service, other, foreground=True)
+    hints.note_profile("ops")
+    assert _pass(service, now, 1.0) == 1

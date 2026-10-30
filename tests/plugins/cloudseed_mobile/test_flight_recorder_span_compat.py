@@ -7,7 +7,7 @@ from tests.plugins.cloudseed_mobile.test_flight_recorder import (
     client as client, assert_event_dropped, batch, events, flag, P, T,  # noqa: PLC0414 - pytest fixture
 )
 
-NEW_SPANS = ('app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta')
+NEW_SPANS = ('app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta', 'InboxFreshAfterForeground')
 
 
 def span(name):

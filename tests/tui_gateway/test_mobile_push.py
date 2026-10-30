@@ -591,3 +591,42 @@ def test_activity_attention_cue_honors_current_scoped_alert_preference(delivery,
     latest = [job for job in sender.jobs if job['kind'] == 'activity'][-1]['payload']['aps']
     assert 'alert' not in latest
     assert latest['relevance-score'] < aps['relevance-score']
+
+
+def _approval_sounds(service, sender, now, scope, run, events, gap):
+    """``{device token: [sound per delivered alert]}`` for approvals recorded ``gap`` seconds apart."""
+    sounds = {}
+    for event in events:
+        service.record(scope, run["run_id"], event, "waitingForApproval")
+        now[0] += gap
+        before = len(sender.jobs)
+        service.drain_once()
+        for job in sender.jobs[before:]:
+            sounds.setdefault(job["token"][:2], []).append(job["payload"]["aps"].get("sound"))
+    return sounds
+
+
+def test_a_chat_asking_for_approval_again_buzzes_once_a_minute_per_device(delivery):
+    service, sender, now, ids, scope = delivery
+    other = {**ids, "installation_id": str(uuid.uuid4())}
+    service.register("p", scope, **ids, token="aa" * 32, environment="production", categories=["attention"])
+    run = service.start_run(scope)
+    assert _approval_sounds(service, sender, now, scope, run, ["q1", "q2", "q3"], 7) == {"aa": ["default", None, None]}
+    # A second phone has its own minute: its first alert for the same chat is audible.
+    service.register("p", scope, **other, token="bb" * 32, environment="production", categories=["attention"])
+    assert _approval_sounds(service, sender, now, scope, run, ["q4"], 1) == {"aa": [None], "bb": ["default"]}
+    # A minute after the last audible alert the chat may buzz again (all earlier ones were still delivered).
+    now[0] += 60
+    assert _approval_sounds(service, sender, now, scope, run, ["q5"], 1) == {"aa": ["default"], "bb": ["default"]}
+
+
+def test_a_retried_audible_attention_alert_keeps_its_sound(delivery):
+    service, sender, now, ids, scope = delivery
+    service.register("p", scope, **ids, token="aa" * 32, environment="production", categories=["attention"])
+    run = service.start_run(scope)
+    service.record(scope, run["run_id"], "q1", "waitingForApproval")
+    first = service.store.claim()
+    service.store.finish(first, DeliveryResult("retry"))
+    now[0] += 30
+    retried = service.store.claim()
+    assert retried["job_id"] == first["job_id"] and retried["payload"]["aps"]["sound"] == "default"
