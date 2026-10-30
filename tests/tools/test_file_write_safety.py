@@ -834,7 +834,7 @@ class TestProtectedInstructionFiles:
         assert inner.read_text(encoding="utf-8") == "original"
 
     def test_exempt_roots_config_rejects_relative_root_and_junk(self, tmp_path, monkeypatch):
-        import hermes_cli.config as config
+        from hermes_cli import config
         import tools.file_tools_write_guards as ft
         root = tmp_path / "worktrees"
         root.mkdir()
@@ -843,11 +843,11 @@ class TestProtectedInstructionFiles:
         assert ft._protected_instruction_exempt_roots() == (os.path.realpath(root),)
         monkeypatch.setattr(config, "load_config", lambda: {"security": {"protected_instruction_exempt_roots": "/tmp"}})
         assert ft._protected_instruction_exempt_roots() == ()
-        monkeypatch.setattr(config, "load_config", lambda: {})
+        monkeypatch.setattr(config, "load_config", dict)
         assert ft._protected_instruction_exempt_roots() == ()
 
     def test_exempt_roots_never_cover_home_or_hermes_home(self, tmp_path, monkeypatch):
-        import hermes_cli.config as config
+        from hermes_cli import config
         import tools.file_tools_write_guards as ft
         home = tmp_path / "home"
         hermes_home = home / ".hermes"

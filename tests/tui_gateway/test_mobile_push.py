@@ -621,7 +621,7 @@ def test_a_chat_asking_for_approval_again_buzzes_once_a_minute_per_device(delive
 
 
 def test_a_retried_audible_attention_alert_keeps_its_sound(delivery):
-    service, sender, now, ids, scope = delivery
+    service, _sender, now, ids, scope = delivery
     service.register("p", scope, **ids, token="aa" * 32, environment="production", categories=["attention"])
     run = service.start_run(scope)
     service.record(scope, run["run_id"], "q1", "waitingForApproval")

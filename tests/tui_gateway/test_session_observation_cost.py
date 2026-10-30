@@ -12,8 +12,8 @@ import threading
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_inbox_summaries import inbox  # noqa: F401  (fixture)
-from tests.tui_gateway.test_methods_mobile import mobile_home  # noqa: F401  (fixture)
+from tests.tui_gateway.test_inbox_summaries import inbox  # fixture
+from tests.tui_gateway.test_methods_mobile import mobile_home  # fixture
 from tests.tui_gateway.test_session_change_cursor import PHONE_EXCLUDES
 from tui_gateway import server, session_change_cursor
 
@@ -130,7 +130,7 @@ def _list(client, **params):
     return response.json()
 
 
-def test_list_request_trusts_a_live_watcher_for_250ms_and_loses_nothing(inbox, mobile_home, scans, live_watcher):  # noqa: F811
+def test_list_request_trusts_a_live_watcher_for_250ms_and_loses_nothing(inbox, mobile_home, scans, live_watcher):
     db_path = mobile_home / "profiles" / "ops" / "state.db"
     cursor = _list(inbox, change_cursor=1)["change_cursor"]
     server._session_db_content_sig(db_path)  # the watcher's own pass: the store is now vouched for
@@ -145,7 +145,7 @@ def test_list_request_trusts_a_live_watcher_for_250ms_and_loses_nothing(inbox, m
     assert [row["id"] for row in _list(inbox, changed_since=cursor)["sessions"]] == ["same"]
 
 
-def test_list_request_observes_inline_when_the_watcher_stalled(inbox, mobile_home, scans, live_watcher):  # noqa: F811
+def test_list_request_observes_inline_when_the_watcher_stalled(inbox, mobile_home, scans, live_watcher):
     """A guard: green on base too, where every request observes inline."""
     db_path = mobile_home / "profiles" / "ops" / "state.db"
     cursor = _list(inbox, change_cursor=1)["change_cursor"]
@@ -158,7 +158,7 @@ def test_list_request_observes_inline_when_the_watcher_stalled(inbox, mobile_hom
     assert scans
 
 
-def test_list_request_observes_inline_when_the_watcher_thread_is_dead(inbox, mobile_home, scans, live_watcher, monkeypatch):  # noqa: F811
+def test_list_request_observes_inline_when_the_watcher_thread_is_dead(inbox, mobile_home, scans, live_watcher, monkeypatch):
     db_path = mobile_home / "profiles" / "ops" / "state.db"
     cursor = _list(inbox, change_cursor=1)["change_cursor"]
     server._session_db_content_sig(db_path)  # the watcher's pass...
@@ -173,7 +173,7 @@ def test_list_request_observes_inline_when_the_watcher_thread_is_dead(inbox, mob
     assert scans
 
 
-def test_an_inline_read_never_vouches_for_the_next_one(inbox, mobile_home, scans, live_watcher):  # noqa: F811
+def test_an_inline_read_never_vouches_for_the_next_one(inbox, mobile_home, scans, live_watcher):
     """A store the watcher does not visit (a profile outside its set): only the watcher's own pass may
     make a request skip its observation, never another request's."""
     db_path = mobile_home / "profiles" / "ops" / "state.db"
