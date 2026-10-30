@@ -398,4 +398,6 @@ def build_top_level_parser():
     # metavar keeps the usage line to ``hermes [...] <command>`` instead of the brace list of
     # every subcommand name; ``hermes --help`` still lists each command with its help row.
     subparsers = parser.add_subparsers(dest="command", help="Command to run", metavar="<command>")
+    from hermes_cli.launch_unit import build_launch_parser
+    build_launch_parser(subparsers)
     return parser, subparsers, _build_chat_parser(subparsers)

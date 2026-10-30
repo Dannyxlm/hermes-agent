@@ -14,13 +14,13 @@ import pytest
 
 from gateway.session_context import clear_session_vars, set_session_vars
 from hermes_state import SessionDB
-from tests.gateway.fixtures.local_recovery_probe import Model, child_env, daemon
+from tests.gateway.fixtures.local_recovery_probe import Model, child_env, daemon, rpc, websocket
 from tools.environments.local import _make_run_env
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("shape", ["query_file", "quiet", "unattended", "thin_error", "teammate", "nested"])
+@pytest.mark.parametrize("shape", ["query_file", "quiet", "unattended", "thin_error", "teammate", "nested", "thin_stop"])
 def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
     class Provider(Model):
         def do_POST(self):
@@ -31,6 +31,7 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
 
     peer = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     peer.requests = []
+    peer.blocked, peer.release = threading.Event(), threading.Event()
     thread = threading.Thread(target=peer.serve_forever, daemon=True)
     thread.start()
     user = tmp_path / "user"
@@ -69,8 +70,8 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
         query = tmp_path / "query.txt"
         query.write_text("hello")
         args = ["chat", "--query-file", str(query), "--oneshot", "-Q"]
-    elif shape in {"unattended", "thin_error"}:
-        args = ["-z", "hello"]
+    elif shape in {"unattended", "thin_error", "thin_stop"}:
+        args = ["-z", "BLOCK_STARTED" if shape == "thin_stop" else "hello"]
     elif shape == "teammate":
         args = ["-p", "atlas", *args]
     # Explicit profile selection must resolve under the caller's HOME.
@@ -80,11 +81,10 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
         if key.startswith("HERMES_STARTED_BY_"):
             daemon_env.pop(key)
     try:
-        with daemon(ROOT, target, daemon_env, barrier=False):
-            result = subprocess.run([sys.executable, "-c", "from hermes_cli.main import main; main()", *args],
-                                    cwd=ROOT, env=cli_env, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=90)
-            assert result.returncode == (2 if shape == "thin_error" else 0), (result.stdout, result.stderr)
+        with daemon(ROOT, target, daemon_env, barrier=False) as (_, desc):
+            command = [sys.executable, "-c", "from hermes_cli.main import main; main()", *args]
+            result = _run_cli(command, cli_env, target, peer, desc, stop=shape == "thin_stop")
+            assert result.returncode == {"thin_error": 2, "thin_stop": 130}.get(shape, 0), (result.stdout, result.stderr)
             with closing(sqlite3.connect(f"file:{target / 'state.db'}?mode=ro", uri=True)) as db:
                 db.row_factory = sqlite3.Row
                 launches = [dict(r) for r in db.execute("SELECT * FROM work_launches")]
@@ -101,9 +101,35 @@ def test_terminal_finite_cli_launch(tmp_path, monkeypatch, shape):
             assert launch["launcher_session_id"] == "family-parent"
             assert launch["launcher_profile"] == "default"
             assert launch["child_session_id"]
-            assert launch["terminal_cause"] == ("error" if shape == "thin_error" else "success"), (launch, result.stdout, result.stderr)
+            assert launch["terminal_cause"] == {"thin_error": "error", "thin_stop": "user_stop"}.get(shape, "success"), (launch, result.stdout, result.stderr)
             assert launch["finished_at"] is not None
     finally:
+        peer.release.set()
         peer.shutdown()
         peer.server_close()
         thread.join(timeout=5)
+
+
+def _run_cli(command, env, home, peer, desc, *, stop=False):
+    if not stop:
+        return subprocess.run(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=90, check=False)
+    with subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+        try:
+            assert peer.blocked.wait(30), "finite CLI did not reach inference"
+            with closing(sqlite3.connect(f"file:{home / 'state.db'}?mode=ro", uri=True)) as db:
+                sid, generation = db.execute("SELECT target_session_id,generation FROM session_admissions WHERE status='started'").fetchone()
+            async def interrupt():
+                async with websocket(home, desc) as ws:
+                    reply = await rpc(ws, "session.interrupt", session_id=sid, execution_generation=generation)
+                    assert "result" in reply, reply
+            asyncio.run(interrupt())
+            peer.release.set()
+            stdout, stderr = proc.communicate(timeout=30)
+            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+        finally:
+            peer.release.set()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)

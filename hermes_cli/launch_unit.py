@@ -71,7 +71,7 @@ def _finisher(home, launch_id):
     import pwd
     # Venvs contain dependencies, not the source package. Pin an absolute release entry as well
     # as its interpreter: ExecStopPost must work from any WorkingDirectory with an empty env.
-    argv = ["/usr/sbin/runuser", "-u", pwd.getpwuid(os.getuid()).pw_name, "--",
+    argv = ["/usr/sbin/runuser", "-u", pwd.getpwuid(os.getuid()).pw_name, "--",  # windows-footgun: ok — cmd_unit is Linux-only
             os.path.abspath(sys.executable), str(Path(__file__).resolve()), "launch", "finish",
             "--home", str(home), "--launch-id", launch_id,
             "--result", "${SERVICE_RESULT}", "--exit-code", "${EXIT_CODE}", "--exit-status", "${EXIT_STATUS}"]
@@ -81,7 +81,7 @@ def _finisher(home, launch_id):
 def _unit_argv(args, fields, home, launch_id, command):
     argv = ["sudo", "-n", "systemd-run", "--unit=" + args.unit]
     if not args.root:
-        argv += [f"--uid={os.getuid()}", f"--gid={os.getgid()}"]
+        argv += [f"--uid={os.getuid()}", f"--gid={os.getgid()}"]  # windows-footgun: ok — cmd_unit is Linux-only
     argv += ["--property=Type=oneshot", "--no-block", "--collect",
              "--property=TimeoutStartSec=" + (args.timeout or "infinity"),
              "--working-directory=" + str(Path(args.workdir or os.getcwd()).resolve()),
@@ -99,6 +99,9 @@ def _unit_argv(args, fields, home, launch_id, command):
 def cmd_unit(args):
     from hermes_cli.launch_provenance import take_launch
     from hermes_cli.profiles import resolve_profile_env
+    if sys.platform != "linux":
+        print("hermes launch unit requires Linux systemd", file=sys.stderr)
+        return 2
     fields = take_launch()
     command = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
     try:
@@ -114,8 +117,8 @@ def cmd_unit(args):
            title=args.title or args.unit, backend_ref="systemd:" + args.unit,
            parent_launch_id=fields.get("parent_launch_id"))
     try:
-        code = subprocess.run(argv, check=False).returncode
-    except OSError as exc:
+        code = subprocess.run(argv, timeout=30, check=False).returncode
+    except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"hermes launch unit: {exc}", file=sys.stderr)
         code = 127
     if code:

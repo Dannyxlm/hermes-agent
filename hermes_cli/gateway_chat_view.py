@@ -151,6 +151,7 @@ class GatewayChatView:
                 return
             if self.session_id != sid:
                 return  # /new or /branch moved this view meanwhile
+            self.subscription_id = snapshot.get("subscription_id", self.subscription_id)
             self.generation = snapshot.get("execution_generation", self.generation)
             self.pending, prompts = snapshot.get("pending", self.pending), {p["prompt_id"]: p for p in snapshot.get("prompts", [])}
             for prompt_id in prompts.keys() - self.prompts.keys() if not self.finite else ():
@@ -494,6 +495,14 @@ class GatewayChatView:
         failure = None if outcome in ("completed", "cancelled") else (result.get("error") or outcome or "failed")
         _write_usage_file(self.usage_file, result, failure=failure)
 
+    async def _close_finite_viewer(self):
+        """Use the owner's terminal admission to close this launch, never the process exit code."""
+        try:
+            await self.client.rpc("session.detach", session_id=self.session_id,
+                                  subscription_id=self.subscription_id, end_reason="cli_close")
+        except Exception:
+            logger.exception("Finite session close failed for %s", self.session_id)
+
     async def run(self, query=None, *, oneshot=False):
         self.quiet = self.quiet or oneshot
         self.finite = oneshot
@@ -543,14 +552,7 @@ class GatewayChatView:
                               interrupted=bool(result.get("interrupted")) or outcome == "cancelled")
                 exit_code = (_oneshot_exit_code(text, result) if self.unattended
                              else turn_exit_code(result, kanban_worker=False))
-                # Close the finite viewer with the same receipt-derived lifecycle as classic CLI.
-                # The owner derives the launch cause from its committed terminal admission, not
-                # this client's exit status (and keeps other viewers' durable sessions alive).
-                try:
-                    await self.client.rpc("session.detach", session_id=self.session_id,
-                                          subscription_id=self.subscription_id, end_reason="cli_close")
-                except Exception as exc:
-                    logger.warning("Finite session close failed for %s: %s", self.session_id, exc)
+                await self._close_finite_viewer()
                 if self.usage_file:
                     self._write_usage_file(result, outcome)
                 if self.emitter is not None:

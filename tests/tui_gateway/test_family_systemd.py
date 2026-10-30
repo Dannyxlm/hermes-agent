@@ -2,12 +2,13 @@
 import pytest
 
 from hermes_state import SessionDB
-from tests.gateway.test_family_systemd import fake_systemctl  # noqa: F401
+from tests.gateway import test_family_systemd as systemd_fixtures
 from tests.tui_gateway.test_methods_mobile import rpc
 from tui_gateway import server
 
 pytest_plugins = ["tests.tui_gateway.test_methods_mobile"]
 pytestmark = pytest.mark.platforms("linux")
+fake_systemctl = systemd_fixtures.fake_systemctl
 
 
 @pytest.mark.parametrize("state,status", [("active", "working"), ("failed", "failed"), ("not-found", "unknown")])

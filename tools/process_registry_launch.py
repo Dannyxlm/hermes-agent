@@ -7,6 +7,17 @@ if TYPE_CHECKING:
 
 
 class ProcessLaunchMixin:
+    @staticmethod
+    def _spawn_env(env_vars: dict) -> dict:
+        """Sanitized terminal child env with task-local attribution, also used by PTY launches."""
+        from agent.session_client_env import toolchain_environ
+        from tools.process_registry import _terminal_env, _sanitize_subprocess_env
+        from tools.environments.local import _stamp_terminal_launcher
+        env = _terminal_env(_sanitize_subprocess_env(toolchain_environ(), env_vars))
+        _stamp_terminal_launcher(env)
+        env["PYTHONUNBUFFERED"] = "1"
+        return env
+
     def spawn_local(
         self, command: str, cwd: str | None = None, task_id: str = "", session_key: str = "",
         env_vars: dict | None = None, use_pty: bool = False, owner_task_id: str = "",

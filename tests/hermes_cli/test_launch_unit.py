@@ -45,7 +45,7 @@ def launch_env(tmp_path):
 
 def cli(env, *args):
     return subprocess.run([sys.executable, "-c", "from hermes_cli.main import main; main()", "launch", *args],
-                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=30)
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=30, check=False)
 
 
 def rows(home):
@@ -67,7 +67,8 @@ def test_unit_refuses_before_record_or_spawn(launch_env, case, args):
         env.pop("HERMES_STARTED_BY_SESSION_ID")
     result = cli(env, "unit", *args)
     assert result.returncode == 2, (result.stdout, result.stderr)
-    assert result.stderr.strip()
+    assert {"identity": "launcher identity", "name": "unit name", "empty": "empty command",
+            "remain": "RemainAfterExit", "type": "Type"}[case] in result.stderr
     assert not argv_file.exists()
     assert rows(home) == []
 
@@ -117,7 +118,7 @@ def test_recorded_finisher_works_with_empty_environment(launch_env, tmp_path, re
     substitutions = {"${SERVICE_RESULT}": result, "${EXIT_CODE}": code, "${EXIT_STATUS}": status}
     # Exercise the exact unprivileged command runuser executes, not root's privileged prefix.
     argv = [substitutions.get(p, p) for p in finisher[4:]]
-    ended = subprocess.run(argv, cwd=tmp_path, env={}, capture_output=True, text=True, timeout=30)
+    ended = subprocess.run(argv, cwd=tmp_path, env={}, capture_output=True, text=True, timeout=30, check=False)
     assert ended.returncode == 0, (ended.stdout, ended.stderr)
     launch, = rows(home)
     assert launch["terminal_cause"] == cause
