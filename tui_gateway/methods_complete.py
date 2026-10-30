@@ -316,6 +316,25 @@ def _model_skew_err(rid) -> dict | None:
         "gateway.model.err_skew", boot_rev=boot_rev, disk_rev=disk_rev)))
 
 
+# (profile home, credential-file stamps, picker context, flags) -> (monotonic time, payload). Building
+# the picker is ~1 s of credential-pool and provider probes; the same open within the TTL of unchanged
+# config and credential files is the same answer. ``refresh`` always rebuilds, and stores the result.
+_MODEL_OPTIONS_CACHE: dict = {}
+_MODEL_OPTIONS_TTL_S = 60.0
+
+
+def _credential_stamp(path: Path):
+    try:
+        return file_signature(path.stat())
+    except OSError:
+        return None
+
+
+def _model_options_key(home, ctx, params: dict) -> tuple:
+    stamps = tuple(_credential_stamp(Path(home) / name) for name in (".env", "auth.json"))
+    return (str(home), stamps, repr(ctx), bool(params.get("explicit_only")), bool(params.get("include_unconfigured")))
+
+
 @method("model.options")
 @_profile_scoped
 @_catch(5033)
@@ -326,9 +345,19 @@ def _(rid, params: dict) -> dict:
     from hermes_cli.inventory import build_model_options_payload
     # A spawned agent owns the live provider/model/base_url; empty attributes must
     # NOT clobber disk config (with_overrides is truthy-only).
-    return _ok(rid, build_model_options_payload(
-        _model_picker_context(_session_agent(params)), explicit_only=bool(params.get("explicit_only")),
-        include_unconfigured=bool(params.get("include_unconfigured")), refresh=bool(params.get("refresh"))))
+    ctx = _model_picker_context(_session_agent(params))
+    refresh = bool(params.get("refresh"))
+    key = _model_options_key(get_hermes_home(), ctx, params)
+    cached = _MODEL_OPTIONS_CACHE.get(key)
+    if cached is not None and not refresh and time.monotonic() - cached[0] < _MODEL_OPTIONS_TTL_S:
+        return _ok(rid, copy.deepcopy(cached[1]))
+    payload = build_model_options_payload(
+        ctx, explicit_only=bool(params.get("explicit_only")),
+        include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
+    if len(_MODEL_OPTIONS_CACHE) >= 16:
+        _MODEL_OPTIONS_CACHE.clear()
+    _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), copy.deepcopy(payload))
+    return _ok(rid, payload)
 
 
 @method("model.save_key")
