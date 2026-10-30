@@ -863,10 +863,14 @@ async def get_session_messages(
         from hermes_cli.web_routers.session_display import project_display_rows
         projected_messages = await asyncio.to_thread(project_display_rows, projected_messages)
         if not inline_images:
-            # Phone display decoders do not consume these storage/replay fields.
+            # Phone display decoders do not consume these storage/replay fields, nor the reasoning
+            # copies while ``reasoning`` is readable (they fall back to them only when it is blank).
             for message in projected_messages:
                 for field in ("message_uid", "platform_message_id", "effect_disposition", "finish_reason", "token_count"):
                     message.pop(field, None)
+                if isinstance(message.get("reasoning"), str) and message["reasoning"].strip():
+                    message.pop("reasoning_content", None)
+                    message.pop("reasoning_details", None)
     return {
         "session_id": sid,
         # The same stamp list rows carry, so the Desktop keys a page under the
