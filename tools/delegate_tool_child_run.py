@@ -823,10 +823,14 @@ class _ChildRun:
             register_container_alias(self.child_task_id, self.parent_task_id)
 
         with _quiet("Child environment seed failed: %s"):
+            from tools.approval import get_current_session_key
             from tools.terminal_tool import _qualify_task_key
             from tools.terminal_tool_session_env import capture_session_environment, seed_session_environment
             parent_scope = _qualify_task_key("default")
-            parent_snapshot = capture_session_environment(self.parent_task_id)
+            # Read the file the parent actually writes: same key derivation as
+            # terminal_tool (approval session key, else the parent's task_id).
+            parent_session_key = get_current_session_key(default="") or (self.parent_task_id or "")
+            parent_snapshot = capture_session_environment(self.parent_task_id, parent_session_key)
             with child_profile_scope(self.child):
                 # Routed profiles have their own HOME/credentials; do not seed them
                 # with the launch profile's shell state.

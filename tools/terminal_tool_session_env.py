@@ -60,7 +60,23 @@ def command_snapshot_path(env) -> str:
     return binding[1] if binding is not None and binding[0] is env else env._snapshot_path
 
 
-def capture_session_environment(task_id):
+def snapshot_key(task_id, session_key) -> str:
+    """Qualified snapshot key for a terminal call.
+
+    A delegate_task child (a registered container alias) keys by its own task_id:
+    in gateway/cron turns it inherits the parent's approval session key through
+    copy_context(), so keying by that would share the parent's file again. Every
+    other session keeps the session-stable key, so a gateway chat's exports survive
+    the session_id rotation that context compression performs.
+    """
+    from tools import terminal_tool as tt
+
+    with tt._container_alias_lock:
+        is_child = bool(task_id) and task_id in tt._container_aliases
+    return tt._qualify_task_key(str(task_id if is_child else (session_key or task_id or "default")))
+
+
+def capture_session_environment(task_id, session_key=""):
     """Read the parent's last atomic publication, without creating an environment."""
     from tools import terminal_tool as tt
     from tools.environments.local import LocalEnvironment
@@ -69,7 +85,7 @@ def capture_session_environment(task_id):
         env = tt._active_environments.get(tt._resolve_container_task_id(task_id))
     if not isinstance(env, LocalEnvironment) or not env._snapshot_ready:
         return None
-    path = _local_snapshot(env, tt._qualify_task_key(str(task_id or "default")))
+    path = _local_snapshot(env, snapshot_key(task_id, session_key))
     return Path(path).read_bytes()
 
 

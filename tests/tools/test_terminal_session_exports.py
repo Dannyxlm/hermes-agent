@@ -92,3 +92,55 @@ def test_unset_of_launch_environment_persists_only_in_its_session(terminal_sessi
     run("export-a", "unset HERMES_EXPORT_BASELINE")
     assert run("export-a", 'printf %s "${HERMES_EXPORT_BASELINE-unset}"') == "unset"
     assert run("export-parent", 'printf %s "$HERMES_EXPORT_BASELINE"') == "baseline"
+
+
+def _in_gateway_turn(session_key, fn):
+    """Run *fn* the way a gateway/cron turn does: approval session key set in a context
+    that delegate_task children inherit through copy_context()."""
+    import contextvars
+    from tools.approval_context import reset_current_session_key, set_current_session_key
+
+    def _inner():
+        token = set_current_session_key(session_key)
+        try:
+            return fn()
+        finally:
+            reset_current_session_key(token)
+    return contextvars.copy_context().run(_inner)
+
+
+@pytest.mark.platforms("linux", "macos")
+def test_gateway_child_shares_the_parent_session_key_but_not_its_exports(terminal_sessions):
+    run, spawn, root = terminal_sessions
+    child_home = root / "gw-child-home"
+    child_home.mkdir()
+
+    def turn():
+        run("export-parent", "export HERMES_EXPORT_VALUE=parent")
+        parent_home = run("export-parent", 'printf %s "$HOME"')
+        spawn("export-a")
+
+        def child():  # the child inherits the parent's approval session key
+            assert run("export-a", 'printf %s "$HERMES_EXPORT_VALUE"') == "parent"
+            run("export-a", f"export HOME={shlex.quote(str(child_home))}; export HERMES_EXPORT_VALUE=child")
+        import contextvars
+        contextvars.copy_context().run(child)
+        assert run("export-parent", 'printf "%s:%s" "$HOME" "$HERMES_EXPORT_VALUE"') == f"{parent_home}:parent"
+        assert run("export-a", 'printf "%s:%s" "$HOME" "$HERMES_EXPORT_VALUE"') == f"{child_home}:child"
+    _in_gateway_turn("agent:main:telegram:dm:1", turn)
+
+
+@pytest.mark.platforms("linux", "macos")
+def test_gateway_exports_survive_compression_session_id_rotation(terminal_sessions):
+    run, _, _ = terminal_sessions
+    # Gateway turns pass task_id=session_id, which rotates on context compression;
+    # the chat's session key does not, and its exports must not reset with it.
+    _in_gateway_turn("agent:main:telegram:dm:1", lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+    import tools.terminal_tool as tt
+    tt._active_environments[tt._resolve_container_task_id("export-rotated")] = \
+        tt._active_environments[tt._resolve_container_task_id("export-parent")]
+    try:
+        assert _in_gateway_turn("agent:main:telegram:dm:1",
+                                lambda: run("export-rotated", 'printf %s "$HERMES_EXPORT_VALUE"')) == "kept"
+    finally:
+        tt.clear_task_env_overrides("export-rotated")

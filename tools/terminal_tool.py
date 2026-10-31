@@ -1356,8 +1356,8 @@ def _run_foreground(
             # bounded_capture: model-facing output keeps a head/tail window
             # while streaming so a verbose command can't OOM the gateway;
             # internal env.execute() consumers stay unbounded.
-            from tools.terminal_tool_session_env import session_environment
-            with session_environment(env, _qualify_task_key(session_key or "default")):
+            from tools.terminal_tool_session_env import session_environment, snapshot_key
+            with session_environment(env, snapshot_key(task_id, session_key)):
                 result = env.execute(
                     command, timeout=effective_timeout, cwd=command_cwd, bounded_capture=True,
                     **_yield_kwargs(command, env_type=env_type, cwd=command_cwd, effective_task_id=eff,
