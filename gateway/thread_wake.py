@@ -210,12 +210,14 @@ def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admiss
     elif status == "unknown" or status == "terminal":
         # Cut off by a restart (nobody but this sweeper sent it), or cancelled before it ran: send it again.
         resends = record.get("resends", 0) + 1
+        cut = {"admission_id": admission["admission_id"], "generation": admission["generation"]}
         if resends > MAX_RESENDS:
             logger.warning("thread update %s dropped after %d resends", record["key"], MAX_RESENDS)
+            if status == "unknown":
+                _clear(home, tip, cut)  # don't leave the lead parked on our own cut-off turn
             _finish(home, root, record, delivered=True)
             return False
         text = record["text"] if record["text"].endswith(RESENT) else record["text"] + RESENT
-        cut = {"admission_id": admission["admission_id"], "generation": admission["generation"]}
         _save(home, root, {**record, "key": _key(record["items"], admission["admission_id"]), "text": text,
                            "resends": resends, **({"cut": cut} if status == "unknown" else {})})
     return False

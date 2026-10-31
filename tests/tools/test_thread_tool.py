@@ -631,6 +631,21 @@ def test_a_cancelled_update_is_sent_again_a_bounded_number_of_times(home, owner)
     assert len(owner.submits()) == 1 + MAX_RESENDS and ts.delivered(home, "a1", "done")
 
 
+def test_giving_up_on_a_cut_off_update_leaves_the_lead_unparked(home, owner):
+    from gateway.thread_wake import MAX_RESENDS, deliver
+    from tools import thread_state as ts
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+    owner.update_outcome = "unknown"  # every copy is cut off by a restart
+    for _ in range(6 * (MAX_RESENDS + 2)):
+        deliver(home, "default", "parent")
+    assert len(owner.submits()) == 1 + MAX_RESENDS and ts.delivered(home, "a1", "done")
+    with ts_reader(home) as conn:
+        assert not conn.execute("SELECT 1 FROM session_admissions WHERE target_session_id='parent' "
+                                "AND status='unknown'").fetchone()
+
+
 def test_a_lead_parked_on_its_users_cut_off_turn_waits_for_them(home, owner):
     from gateway.thread_wake import deliver
     with _db(home) as db:
