@@ -328,6 +328,38 @@ class TestSkillsList:
 
 
 class TestSkillView:
+    def test_repeat_view_reuses_frontmatter_and_sees_an_edited_name(self, tmp_path):
+        """Name resolution reads every SKILL.md's frontmatter; a warm view must not re-parse the
+        unchanged ones (pure-Python YAML × the whole library made batched loads queue on the
+        GIL), and an edited file (new stat identity) must be re-parsed at once."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            for i in range(5):
+                _make_skill(tmp_path, f"filler-{i}")
+            alias_dir = tmp_path / "alias-dir"
+            alias_dir.mkdir()
+            skill_md = alias_dir / "SKILL.md"
+            skill_md.write_text("---\nname: first-name\ndescription: d\n---\n\nBody one.\n")
+            real_parse = skills_tool_module._parse_frontmatter
+            calls = []
+
+            def counting_parse(text):
+                calls.append(text)
+                return real_parse(text)
+
+            with patch("tools.skills_tool._parse_frontmatter", counting_parse):
+                assert json.loads(skill_view("first-name"))["success"] is True
+                cold = len(calls)
+                assert json.loads(skill_view("first-name"))["success"] is True
+                warm = len(calls) - cold
+                skill_md.write_text("---\nname: second-name\ndescription: d\n---\n\nBody two, edited.\n")
+                renamed = json.loads(skill_view("second-name"))
+                old_name = json.loads(skill_view("first-name"))
+
+        assert cold >= 6, "the cold view checks every skill's frontmatter"
+        assert warm <= 2, f"a warm view re-parsed {warm} frontmatters; unchanged skills must come from the memo"
+        assert renamed["success"] is True and "Body two" in renamed["content"]
+        assert old_name["success"] is False
+
     def test_view_resolves_by_dir_name_and_frontmatter_name(self, tmp_path):
         with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
             _make_skill(
