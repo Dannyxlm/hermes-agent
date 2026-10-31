@@ -549,3 +549,38 @@ def test_a_repeated_send_replays_the_first_and_touches_nothing(home):
             ("first-send", f"thread-send-{key}", DANNY, "t1", "[]", "{}", "d", "queue", "queued"))
     out = call(action="send", thread_id="t1", message="new plan", mode="interrupt")  # _run would fail loudly
     assert (out["reused"], out["admission_id"], out["status"]) == (True, "first-send", "queued")
+
+
+def test_the_agent_loop_hands_thread_its_own_agent(home):
+    """Live regression (release 20261031-threads): the registry handler read kw["parent_agent"], which
+    only intercepted tools get, so every call from a real chat failed with no_session."""
+    from agent.inline_tool_executors import INLINE_TOOL_EXECUTORS, InlineToolContext, resolve_invoke_tool_executor
+    agent = SimpleNamespace(session_id="parent", enabled_toolsets=["terminal", "threads"])
+    assert resolve_invoke_tool_executor(agent, "thread") is INLINE_TOOL_EXECUTORS["thread"]  # concurrent path
+    out = json.loads(INLINE_TOOL_EXECUTORS["thread"](agent, {"action": "list"}, InlineToolContext("task", "call_1")))
+    assert out == {"success": True, "action": "list", "threads": []}
+
+
+def test_a_registry_dispatch_names_the_chat_by_its_session_id(home):
+    from tools.registry import registry
+    out = json.loads(registry.dispatch("thread", {"action": "list"}, task_id="task", session_id="parent"))
+    assert out["success"] is True, out
+    assert json.loads(registry.dispatch("thread", {"action": "list"}, task_id="task"))["error"] == "no_session"
+
+
+def test_no_registry_tool_expects_an_agent_it_is_never_given():
+    """A registry handler gets task_id/session_id/user_task. A tool that needs ``parent_agent`` must run
+    inline (agent/inline_tool_executors.py) or be intercepted by the agent loop (model_tools)."""
+    import inspect
+    import model_tools  # registers every tool
+    from agent.inline_tool_executors import INLINE_TOOL_EXECUTORS
+    from model_tools import _AGENT_LOOP_TOOLS
+    from tools.registry import registry
+    agent_level = set(INLINE_TOOL_EXECUTORS) | set(_AGENT_LOOP_TOOLS)
+    for name, entry in registry._tools.items():
+        try:
+            source = inspect.getsource(entry.handler)
+        except (OSError, TypeError):
+            continue
+        if 'kw.get("parent_agent")' in source or "kwargs.get(\"parent_agent\")" in source:
+            assert name in agent_level, f"{name} reads parent_agent from registry kwargs, which never carry it"

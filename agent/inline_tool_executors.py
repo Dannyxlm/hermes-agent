@@ -240,6 +240,13 @@ def _setup_beat(agent, args: dict, ctx: InlineToolContext) -> Any:
     )
 
 
+def _thread(agent, args: dict, ctx: InlineToolContext) -> Any:
+    # The thread tool acts for this agent's own chat (its session row, its toolsets), so it runs
+    # inline: a registry handler only gets task_id/session_id/user_task, never the agent.
+    from tools.thread_tool import thread_tool
+    return thread_tool(args, parent_agent=agent)
+
+
 def _setup_mcp_shim(agent, args: dict, ctx: InlineToolContext) -> Any:
     # Replay shim for conversations whose cached prompt still names setup_mcp.
     # Not in _LEGACY_TOOL_ALIASES: inline tools bypass handle_function_call.
@@ -299,6 +306,7 @@ _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
     "manage_catalog": _manage_catalog,
     "setup_mcp": _setup_mcp_shim,
     "delegate_task": lambda agent, args, ctx: agent._dispatch_delegate_task(args),
+    "thread": _thread,
 }
 
 
