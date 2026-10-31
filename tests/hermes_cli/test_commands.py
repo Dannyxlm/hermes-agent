@@ -204,6 +204,27 @@ class TestSlackNativeSlashes:
                 assert ch.isalnum() or ch in "-_", f"invalid char {ch!r} in {name!r}"
 
 
+    def test_plugin_command_keeps_native_slot_before_aliases(self, monkeypatch):
+        """Aliases must not consume a plugin's only native slash slot."""
+        monkeypatch.setattr("hermes_cli.commands_platforms._SLACK_MAX_SLASH_COMMANDS", 3)
+        monkeypatch.setattr(
+            "hermes_cli.commands_platforms._gateway_available_commands",
+            lambda: [CommandDef("core", "Core", "Session", aliases=("alias",))],
+        )
+        monkeypatch.setattr(
+            "hermes_cli.plugins.get_plugin_commands",
+            lambda: {"plugin": {"description": "Plugin", "args_hint": "[mode]"}},
+        )
+
+        slashes = slack_native_slashes()
+
+        assert len(slashes) == 3
+        assert slashes[0][0] == "hermes"
+        assert slashes[1:] == [("core", "Core", ""), ("plugin", "Plugin", "[mode]")]
+        assert [entry["command"] for entry in slack_app_manifest()["features"]["slash_commands"]] == [
+            "/hermes", "/core", "/plugin",
+        ]
+
     def test_telegram_parity(self):
         """Every Telegram bot command must be registerable on Slack too.
 
@@ -556,6 +577,7 @@ class TestGatewaySkillCollector:
         with (
             patch("agent.skill_commands.get_skill_commands", return_value=fake_cmds),
             patch("tools.skills_tool.SKILLS_DIR", skills_dir),
+            patch("hermes_cli.plugins.get_plugin_commands", return_value={}),
             patch("agent.skill_utils.get_external_skills_dirs", return_value=[]),
         ):
             entries, hidden = _collect_gateway_skill_entries(
@@ -809,6 +831,7 @@ class TestTelegramMenuCommands:
         with (
             patch("hermes_cli.commands_platforms.telegram_bot_commands", return_value=fake_core),
             patch("agent.skill_commands.get_skill_commands", return_value=fake_cmds),
+            patch("hermes_cli.plugins.get_plugin_commands", return_value={}),
             patch("tools.skills_tool.SKILLS_DIR", local_dir),
             patch("hermes_cli.commands_platforms._telegram_command_menu_config", return_value=menu_cfg),
         ):
@@ -845,6 +868,7 @@ class TestTelegramMenuCommands:
         with (
             patch("hermes_cli.commands_platforms.telegram_bot_commands", return_value=fake_core),
             patch("agent.skill_commands.get_skill_commands", return_value=fake_cmds),
+            patch("hermes_cli.plugins.get_plugin_commands", return_value={}),
             patch("tools.skills_tool.SKILLS_DIR", local_dir),
             patch("hermes_cli.commands_platforms._telegram_command_menu_config", return_value=menu_cfg),
         ):

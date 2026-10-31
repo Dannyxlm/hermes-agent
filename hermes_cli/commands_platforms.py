@@ -387,7 +387,9 @@ _SLACK_VIA_HERMES_ONLY = frozenset({
     # Recovery-only, after a restart lost a turn: `/hermes discard` reaches it.
     "discard",
     # One-time answer to the low-disk prompt; `/hermes autoprune on` reaches it.
-    "autoprune"})
+    "autoprune",
+    # Silent platform-start acknowledgment; leave the native slot for /delegation.
+    "start"})
 
 
 def _sanitize_slack_name(raw: str) -> str:
@@ -397,14 +399,15 @@ def _sanitize_slack_name(raw: str) -> str:
 
 def slack_native_slashes() -> list[tuple[str, str, str]]:
     """(slash_name, description, usage_hint) triples for Slack: every gateway-available command
-    (canonical names first so they win slots at the cap, then aliases, then plugins) becomes a
+    (canonical names first, then plugins, then aliases) becomes a
     standalone slash, deduped and clamped to the 50-command cap; Slack built-ins and
     _SLACK_VIA_HERMES_ONLY are skipped. ``/hermes`` is always first for anything dropped."""
     available = _gateway_available_commands()
     wanted = [(cmd.name, cmd.describe(), cmd.args_hint or "") for cmd in available]
+    # A plugin's only native name must not lose its slot to a built-in's extra alias.
+    wanted += [(name, desc, hint or "") for name, desc, hint in _iter_plugin_command_entries()]
     wanted += [(alias, t("slash.shared.slack_alias_for", name=cmd.name, description=cmd.describe()),
                 cmd.args_hint or "") for cmd in available for alias in cmd.aliases]
-    wanted += [(name, desc, hint or "") for name, desc, hint in _iter_plugin_command_entries()]
 
     entries: list[tuple[str, str, str]] = [
         ("hermes", t("slash.hermes.description"), "[subcommand] [args]")]
