@@ -154,6 +154,10 @@ TOOLSETS = {
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),
     "delegation": _ts("Spawn subagents with isolated context for complex subtasks", ["delegate_task"]),
+    # Local surfaces only (the hermes-cli bundle): a thread is one of the user's own visible chats, so a
+    # messaging, cron or API session never gets it, and delegate_task children never do
+    # (DELEGATE_BLOCKED_TOOLS).
+    "threads": _ts("Lead threads: open, message, wait on and read the user's own chats", ["thread"]),
     "kanban": _ts(
         "Kanban multi-agent coordination — only active when the agent is spawned by "
         "the kanban dispatcher (HERMES_KANBAN_TASK env set). The dispatcher runs "
@@ -198,7 +202,7 @@ TOOLSETS = {
         "interactive UI tools like clarify or send_message)",
         _core_without("text_to_speech", "clarify", "computer_use", kanban=False),
     ),
-    "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
+    "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management", ["thread"]),
 
     # Mirrors hermes-cli; `hermes tools` platform config filters it down and
     # _get_platform_tools() drops _DEFAULT_OFF_TOOLSETS unless user-enabled.

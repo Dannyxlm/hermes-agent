@@ -322,6 +322,15 @@ def _session_owns_live_wakeup_schedule(session: dict) -> bool:
         return False
 
 
+def _session_owns_pending_thread_wake(session: dict) -> bool:
+    """True while threads this chat opened still owe it a result: a turn the ``thread`` tool sent is
+    running there, or settled and not yet handed back. Only this session's poller delivers it
+    (``tui_gateway/thread_notifications``), so the reapers keep the chat. Bounded by delivery, and
+    released after the user's Stop (no notification turn starts until their next prompt)."""
+    from tui_gateway.thread_notifications import owns_pending_thread_wake
+    return owns_pending_thread_wake(session)
+
+
 def _session_owns_pending_process_notification(session: dict) -> bool:
     """True while a background process this session started will still report back into it (``notify_on_complete``
     or ``watch_patterns``): running, or its notice not yet routed (see ``tools.process_registry_awaiting``). The notice
@@ -532,6 +541,14 @@ def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
         _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, "\n".join(batch),
                       "kanban notification dispatch failed",
                       **({"display_metadata": {"notification_category": "diagnostic"}} if diagnostic else {}))
+
+
+def _notif_poll_threads(sid: str, session: dict) -> None:
+    """Results of threads this chat opened (the ``thread`` tool), on the Kanban cadence and idle claim.
+    The helpers go in from here: they are this module's functions rebound into the server namespace."""
+    from tui_gateway import thread_notifications
+    thread_notifications.poll(sid, session, scope=_session_profile_runtime_scope, claim_turn=_notif_claim_turn,
+                              release_turn=_notif_release_turn, submit=_notif_submit)
 
 
 def _notif_defer_event(evt, claim, put=None):
@@ -771,6 +788,7 @@ def _notification_poller_scoped_loop(stop_event: threading.Event, sid: str, sess
         if now - last_kanban_poll >= _KANBAN_POLL_SECONDS:
             last_kanban_poll = now
             _notif_poll_kanban(sid, session)
+            _notif_poll_threads(sid, session)
         # Dequeue and in-flight hold are one step: until routing admits a turn, requeues or drops each event, its
         # owner session stays protected from the reapers (it is in neither the queue nor ``running`` meanwhile).
         ready = take_ready(queue, 0.5)

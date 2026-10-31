@@ -68,7 +68,8 @@ def selection(name, columns, has_launches, seeds, since, walk):
     return sql + ") ", params, "id IN (SELECT sid FROM reached WHERE profile=?)"
 
 
-def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None, walk="descendants"):
+def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None, walk="descendants",
+                  admission_columns=frozenset()):
     has_launches = "work_launches" in tables and walk != "lineage"
     walk = "ancestors" if seeds is None and since is not None else walk
     cte, params, where = selection(name, columns, has_launches, seeds, since, walk)
@@ -76,9 +77,10 @@ def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None
     selected_params = (*params, name) if cte else ()
     hints = (",(SELECT m.content FROM messages m WHERE m.session_id=w.child_session_id "
              "AND m.role='assistant' AND m.content IS NOT NULL AND m.content<>'' "
-             "AND (m.tool_calls IS NULL OR m.tool_calls='[]') AND w.kind='lane' "
-             "AND w.terminal_cause IN ('success','error','user_stop','parent_stop') "
-             "AND w.finished_at>=? ORDER BY m.id DESC LIMIT 1) AS report_hint"
+             "AND (m.tool_calls IS NULL OR m.tool_calls='[]') "
+             "AND (w.kind='lane' AND w.terminal_cause IN ('success','error','user_stop','parent_stop') AND w.finished_at>=? "
+             # A thread (a chat the thread tool opened) has no process to finish; its last reply is its report.
+             "OR w.terminal_cause IS NULL AND substr(w.launch_id,1,7)='thread:') ORDER BY m.id DESC LIMIT 1) AS report_hint"
              if "messages" in tables and has_launches else "")
     launch_params = ((-1e300 if since is None else since,) if hints else ())
     launches = [dict(r) for r in conn.execute(cte + "SELECT w.*" + hints + " FROM work_launches w WHERE " + launch_where,
@@ -87,9 +89,13 @@ def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None
         text = row.get("report_hint")
         row["report_hint"] = text.splitlines()[0] if isinstance(text, str) and text else None
     session_where, session_params = ("s." + where, selected_params) if cte else ("1", ())
+    # A thread is owner-hosted and never exits: its newest admission says what it is doing or last did.
+    last = (",(SELECT CASE WHEN status='terminal' THEN outcome ELSE status END FROM session_admissions "
+            "WHERE target_session_id=s.id ORDER BY seq DESC LIMIT 1) AS turn_last"
+            if {"outcome", "seq"} <= admission_columns else ",NULL AS turn_last")
     turn = (",(SELECT MAX(status IN ('started','unknown')) FROM session_admissions WHERE target_session_id=s.id) AS turn_unresolved"
-            ",(SELECT MAX(status='terminal') FROM session_admissions WHERE target_session_id=s.id) AS turn_terminal"
-            if "session_admissions" in tables else ",NULL AS turn_unresolved,NULL AS turn_terminal")
+            ",(SELECT MAX(status='terminal') FROM session_admissions WHERE target_session_id=s.id) AS turn_terminal" + last
+            if "session_admissions" in tables else ",NULL AS turn_unresolved,NULL AS turn_terminal,NULL AS turn_last")
     sessions = {r["id"]: dict(r) for r in conn.execute(
         cte + f"SELECT {fields}{turn} FROM sessions s WHERE {session_where}", session_params)}
     aliases, owners = {}, {}

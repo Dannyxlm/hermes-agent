@@ -9,6 +9,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+import re
 import sqlite3
 import time
 
@@ -21,6 +22,9 @@ STEPS = frozenset({"starting", "thinking", "writing", "tool", "waiting_helpers",
                    "compressing", "retrying", "finalizing", "idle"})
 TERMINAL = {"success": "done", "error": "failed", "failed_start": "failed",
             "user_stop": "stopped", "parent_stop": "stopped", "owner_restart": "paused_by_restart"}
+# A thread's newest admission (``turn_last``: its outcome once terminal, else its status) -> status.
+THREAD_TURN = {"completed": "done", "failed": "failed", "interrupted": "stopped", "cancelled": "stopped",
+               "unknown": "paused_by_restart", "queued": "working", "started": "working"}
 SESSION_FIELDS = ("id", "source", "user_id", "chat_id", "parent_session_id", "title", "started_at", "ended_at", "model",
                   "last_activity_at", "last_activity_description", "last_activity_kind", "last_activity_tool", "runtime_generation",
                   "end_reason", "model_config")
@@ -44,11 +48,16 @@ def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, w
             conn.set_trace_callback(trace)
         conn.execute("PRAGMA query_only=1")
         conn.execute("BEGIN")
-        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        schema = dict(conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall())
+        tables = set(schema)
         columns = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
         fields = ",".join(f's."{field}"' if field in columns else f'NULL AS "{field}"' for field in SESSION_FIELDS)
+        # The ledger's columns from its stored CREATE text (SQLite rewrites it on ADD COLUMN), not a
+        # PRAGMA: the read stays query-bound. A partial ledger simply has no thread status.
+        ledger = re.findall(r"\w+", schema.get("session_admissions") or "")
         sessions, launches, aliases, owners = read_metadata(
-            conn, name, tables, columns, fields, seeds=seeds, since=since, walk=walk)
+            conn, name, tables, columns, fields, seeds=seeds, since=since, walk=walk,
+            admission_columns=frozenset(ledger))
         conn.rollback()
     return Profile(name, sessions, launches, aliases, owners)
 
@@ -65,6 +74,10 @@ def activity_at(row: dict, live: dict):
                 if value is not None), default=None)
 
 
+def is_thread(row: dict) -> bool:
+    return str(row.get("launch_id") or "").startswith("thread:")
+
+
 def status_for(row: dict, live: dict, now: float) -> str:
     cause = terminal_cause_for(row, live)
     if cause in TERMINAL and cause != "owner_restart":
@@ -75,6 +88,9 @@ def status_for(row: dict, live: dict, now: float) -> str:
         threshold = 1200 if row["kind"] in {"lane", "teammate"} else 600
         activity = activity_at(row, live)
         return "quiet" if activity is not None and now - activity >= threshold else "working"
+    if cause is None and is_thread(row) and row.get("turn_last") in THREAD_TURN:
+        # A thread (a chat the thread tool opened) is hosted by the owner and never exits: its newest turn says.
+        return THREAD_TURN[row["turn_last"]]
     return "paused_by_restart" if cause == "owner_restart" else "unknown"
 
 
@@ -186,7 +202,8 @@ class Family:
         needs = {"kind": pending, "session_id": live.get("control_session_id", sid), "profile": profile} if pending and sid else None
         if needs and live.get("can_answer"):
             actions.append("answer")
-        if status == "paused_by_restart" and kind in {"lane", "helper", "teammate"}:
+        # A paused thread's queue waits on its cut-off turn, which resume doesn't clear: open it instead.
+        if status == "paused_by_restart" and kind in {"lane", "helper", "teammate"} and not is_thread(row):
             actions.append("resume")
         if status in LIVE and kind in {"helper", "process"} and live.get("can_stop"):
             actions.append("stop")
@@ -197,14 +214,17 @@ class Family:
                 "activity_text": row.get("last_activity_description"),
                 "started_at": row.get("created_at", row.get("started_at")),
                 "ended_at": next((value for value in (row.get("finished_at"), live.get("ended_at"),
-                                                       None if row.get("launch_id") else row.get("ended_at"))
+                                                       None if row.get("launch_id") else row.get("ended_at"),
+                                                       (activity_at(row, live) or row.get("created_at"))
+                                                       if is_thread(row) and status in FINISHED else None)
                                   if value is not None), None),
                 "last_activity_at": activity_at(row, live),
                 "model": row.get("model"), "terminal_cause": terminal_cause_for(row, live),
                 "needs_you": needs, "next_run_at": row.get("next_run_at") if kind == "check_in" else None,
                 "exit_code": live.get("exit_code") if kind == "process" else None,
                 "command": live.get("command") if kind == "process" else None,
-                "report_hint": (row.get("report_hint") or live.get("report_hint")) if kind == "lane" and status in FINISHED else None,
+                "report_hint": ((row.get("report_hint") or live.get("report_hint"))
+                                if (kind == "lane" or is_thread(row)) and status in FINISHED else None),
                 "child_count": len(self.children[key]), "backend_ref": backend_ref,
                 "root_profile": root_profile, "root_session_id": root_session_id, "actions": actions}
 
