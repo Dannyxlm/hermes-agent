@@ -47,7 +47,19 @@ def _cwd_marker_printf(marker: str) -> str:
     return f"printf '\\n{marker}%s{marker}\\n' \"$(pwd -P)\""
 
 
-def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[str] = ()) -> str:
+def _snapshot_unset_args(excluded_names: Iterable[str]) -> str:
+    safe_names = {name for name in excluded_names if isinstance(name, str) and name}
+    extra = "".join(f" {shlex.quote(name)}" for name in sorted(safe_names))
+    return (
+        "${!HERMES_SESSION_*} ${!HERMES_STARTED_BY_*} ${!HERMES_LAUNCH_*} ${!HERMES_CRON_AUTO_DELIVER_*} "
+        "${!HERMES_BROWSER_CONTROL_*} AI_AGENT HERMES_AGENT "
+        "HERMES_DELEGATED_CHILD_CONTEXT HERMES_CRON_SESSION "
+        "${!HERMES_RPC_*} HERMES_KERNEL_DIR "
+        f"HERMES_UI_SESSION_ID{extra}")
+
+
+def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[str] = (),
+                                        *, track_unsets: bool = False) -> str:
     """Shell snippet dumping ``export -p`` to *tmp_path* minus the per-session bridged vars (see
     ``_SNAPSHOT_EXCLUDED_ENV_REGEX``) and *excluded_names*. The vars are ``unset`` in a subshell
     BEFORE ``export -p``: a line-based ``grep -vE`` is unsafe because bash 3.2 prints a value
@@ -64,24 +76,16 @@ def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[
     # ${!PREFIX*} is bash 3.2+ name-prefix expansion; empty matches are ignored
     # under 2>/dev/null. Caller names are quoted so malformed config can never
     # become shell syntax (valid names stay unquoted by shlex.quote()).
-    safe_names = {name for name in excluded_names if isinstance(name, str) and name}
-    extra_unset = "".join(f" {shlex.quote(name)}" for name in sorted(safe_names))
+    # The initial-name list was captured before sourcing the snapshot, minus
+    # fresh per-turn identity/passthrough names. Preserve removals from Popen's
+    # baseline too: absence in export-p alone would resurrect them next call.
+    removed = (
+        'for __hermes_env_name in $__hermes_initial_exports; do '
+        'if [ -z "${!__hermes_env_name+x}" ]; then '
+        'printf "unset %s\\n" "$__hermes_env_name"; fi; done; '
+    ) if track_unsets else ""
     return (
-        "{ ( unset ${!HERMES_SESSION_*} ${!HERMES_STARTED_BY_*} ${!HERMES_LAUNCH_*} ${!HERMES_CRON_AUTO_DELIVER_*} "
-        "${!HERMES_BROWSER_CONTROL_*} "
-        # AI_AGENT / HERMES_AGENT are per-command attribution markers re-exported
-        # by every wrapper with ${VAR:-default} semantics; persisting them would
-        # let the FIRST command's value override a later outer-harness value.
-        "AI_AGENT HERMES_AGENT "
-        # Scope markers stamped onto a delegate_task child's / cron run's subprocess
-        # env; a snapshot taken inside that window would re-assert them on every
-        # later ``source`` and fence the PARENT session's kanban CLI (#90782).
-        "HERMES_DELEGATED_CHILD_CONTEXT HERMES_CRON_SESSION "
-        # Remote code-execution channel vars (RPC token, kernel/rpc dirs): a
-        # leaked token in the snapshot would re-export into every later command
-        # on the backend and outlive the private dir it protects.
-        "${!HERMES_RPC_*} HERMES_KERNEL_DIR "
-        f"HERMES_UI_SESSION_ID{extra_unset} 2>/dev/null; "
+        f"{{ ( {removed}unset {_snapshot_unset_args(excluded_names)} 2>/dev/null; "
         "export -p; ) || true; } "
         f"> {tmp_path}")
 
@@ -132,7 +136,7 @@ def _passthrough_save_restore(names: Iterable[str]) -> tuple[list[str], list[str
 def _wrap_command_script(
     command: str, *, quoted_cwd: str, quoted_snap: str, snap_tmp_template: str,
     passthrough_names: Iterable[str], snapshot_ready: bool, cwd_marker: str,
-    persist_env: bool = True) -> str:
+    persist_env: bool = True, track_unsets: bool = False) -> str:
     """Per-command bash script: source snapshot, cd, run, re-dump env, emit CWD marker.
     ``persist_env=False`` skips the re-dump, so every command starts from the login-time
     snapshot and exports from one command never reach the next (the CWD marker still runs).
@@ -148,6 +152,10 @@ def _wrap_command_script(
     escaped = command.replace("'", "'\\''")
     save, restore = _passthrough_save_restore(passthrough_names)
     parts = list(save)
+    if track_unsets and snapshot_ready and persist_env:
+        parts.append(
+            f"__hermes_initial_exports=$(unset {_snapshot_unset_args(passthrough_names)} "
+            "2>/dev/null; compgen -e)")
     if snapshot_ready:
         parts.append(f"source {quoted_snap} >/dev/null 2>&1 || true")
     parts += restore
@@ -162,7 +170,7 @@ def _wrap_command_script(
     if snapshot_ready and persist_env:
         parts.append(
             f"__hermes_snap_tmp=$(mktemp {snap_tmp_template}) && "
-            f"{{ {_export_dump_excluding_session_vars(_SNAP_TMP, passthrough_names)} "
+            f"{{ {_export_dump_excluding_session_vars(_SNAP_TMP, passthrough_names, track_unsets=track_unsets)} "
             f"&& mv -f {_SNAP_TMP} {quoted_snap}; }} "
             f"2>/dev/null || rm -f {_SNAP_TMP} 2>/dev/null || true")
     parts += [_cwd_marker_printf(cwd_marker), "exit $__hermes_ec"]

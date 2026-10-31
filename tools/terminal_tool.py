@@ -377,6 +377,8 @@ def clear_task_env_overrides(task_id: str):
     """Drop a task's overrides, cwd record and container alias (rollout cleanup)."""
     _task_env_overrides.pop(_qualify_task_key(task_id), None)
     clear_session_cwd(task_id)
+    from tools.terminal_tool_session_env import clear_session_environment
+    clear_session_environment(_qualify_task_key(task_id))
     with _container_alias_lock:
         _container_aliases.pop(task_id, None)
 
@@ -1354,11 +1356,13 @@ def _run_foreground(
             # bounded_capture: model-facing output keeps a head/tail window
             # while streaming so a verbose command can't OOM the gateway;
             # internal env.execute() consumers stay unbounded.
-            result = env.execute(
-                command, timeout=effective_timeout, cwd=command_cwd, bounded_capture=True,
-                **_yield_kwargs(command, env_type=env_type, cwd=command_cwd, effective_task_id=eff,
-                                task_id=task_id, session_key=session_key),
-            )
+            from tools.terminal_tool_session_env import session_environment, snapshot_key
+            with session_environment(env, snapshot_key(task_id, session_key)):
+                result = env.execute(
+                    command, timeout=effective_timeout, cwd=command_cwd, bounded_capture=True,
+                    **_yield_kwargs(command, env_type=env_type, cwd=command_cwd, effective_task_id=eff,
+                                    task_id=task_id, session_key=session_key),
+                )
             break
         except Exception as e:
             # A backend exception (e.g. an SSH connect timeout) never reached an exit status, so it

@@ -460,6 +460,7 @@ class BaseEnvironment(ABC):
             passthrough_names=self._snapshot_excluded_passthrough_names(),
             snapshot_ready=self._snapshot_ready,
             persist_env=self._persist_env,
+            track_unsets=self.is_local,
             **self._snapshot_script_kwargs(cwd))
 
     @staticmethod
