@@ -234,16 +234,22 @@ def test_wake_backs_off_for_a_chat_with_no_threads(home):
     assert len(sent) == 1
 
 
-def test_threads_toolset_is_local_only():
-    from toolsets import TOOLSETS, resolve_toolset
-    from tools.delegate_tool_toolsets import DELEGATE_BLOCKED_TOOLS
+def test_threads_toolset_is_local_only_and_opt_in():
     from hermes_cli.tools_config import CONFIGURABLE_TOOLSETS
+    from toolsets import TOOLSETS, TOOLSET_SESSION_PLATFORMS, resolve_toolset, session_platform_tool_drops
+    from tools.delegate_tool_toolsets import DELEGATE_BLOCKED_TOOLS
+    from tools.tool_search import is_deferrable_tool_name
     assert resolve_toolset("threads") == ["thread"]
-    assert "thread" in TOOLSETS["hermes-cli"]["tools"]
-    for bundle in ("hermes-cron", "hermes-telegram", "hermes-api-server", "hermes-acp", "hermes-webhook", "delegation"):
-        assert "thread" not in TOOLSETS[bundle]["tools"], bundle
+    assert TOOLSET_SESSION_PLATFORMS["threads"] == frozenset({"cli", "tui", "desktop"})
+    for platform in ("cli", "tui", "desktop"):
+        assert "thread" not in session_platform_tool_drops(platform)
+    for platform in ("telegram", "cron", "api_server", "acp", "webhook", None):
+        assert "thread" in session_platform_tool_drops(platform), platform
+    assert "thread" not in resolve_toolset("all")  # opt-in: only a config that names it gets it
+    assert all("thread" not in spec["tools"] for name, spec in TOOLSETS.items() if name != "threads")
     assert "thread" in DELEGATE_BLOCKED_TOOLS
     assert "threads" in {key for key, *_ in CONFIGURABLE_TOOLSETS}
+    assert not is_deferrable_tool_name("thread")  # a lead's tool is in hand, not behind tool_search
 
 
 def test_a_paused_turn_is_cleared_only_when_it_is_the_tools(home):
