@@ -2,9 +2,9 @@
 
 What a thread may be told to do, by whom, and when its result comes back are store questions, so
 these drive the real schema: a login-stamped parent chat, thread launches bound to it and the
-canonical admission ledger. The owner RPCs themselves (create, submit, steer, interrupt) are
-exercised live; here ``_run`` is made to fail loudly, so a guard that let a call through to the
-owner fails the test instead of passing quietly.
+canonical admission ledger. By default ``_run`` fails loudly, so a guard that let a call through to
+the owner fails the test instead of passing quietly; ``owner`` swaps in a fake owner that writes the
+same rows the real one does, for the paths that must reach it (create, send, stop).
 """
 import contextlib
 import json
@@ -167,12 +167,12 @@ def test_wait_returns_the_tool_turn_not_the_users_and_hands_it_back_once(home):
         admit(db, "t2", "second", "terminal", "failed", reply="")
     with ts.reader(home) as conn:
         lineage = ts.lineage(conn, "parent")
-    assert {i["admission_id"] for i in ts.settled_unreported(home, "default", lineage)} == {"brief", "second"}
+    assert {i["admission_id"] for i in ts.wake_state(home, "default", lineage)[0]} == {"brief", "second"}
     out = call(action="wait", thread_ids=["t1", "t2"], timeout_s=5)
     one, two = out["threads"]
     assert (one["status"], one["admission_id"], one["final_response"]) == ("done", "brief", "the brief's result")
     assert two["status"] == "failed" and "note" not in out
-    assert ts.settled_unreported(home, "default", lineage) == []
+    assert ts.wake_state(home, "default", lineage)[0] == []
     listed = {t["thread_id"]: t["status"] for t in call(action="list")["threads"]}
     assert listed == {"t1": "done", "t2": "failed"}
 
@@ -205,6 +205,7 @@ def test_wake_delivers_each_result_once_and_retries_a_refused_submit(home):
 
     with _db(home) as db:
         admit(db, "t1", "a2", "unknown")
+    session["_thread_wake"]["next_scan"] = 0.0  # the idle minute passed
     tn.poll("live", session, **_hooks(sent))
     assert len(sent) == 2 and "paused" in sent[1], sent
     with _db(home) as db:
@@ -212,6 +213,7 @@ def test_wake_delivers_each_result_once_and_retries_a_refused_submit(home):
     refused = []
     tn.poll("live", session, **_hooks(refused, accept=False))
     assert len(refused) == 1  # tried, refused: nothing is marked delivered
+    session["_thread_wake"]["next_scan"] = 0.0  # the refusal backoff passed
     tn.poll("live", session, **_hooks(sent))
     assert len(sent) == 3 and "second result" in sent[2], sent
     tn.poll("live", session, **_hooks(sent))
@@ -231,7 +233,44 @@ def test_wake_backs_off_for_a_chat_with_no_threads(home):
     assert sent == []  # still backing off
     session["agent"] = SimpleNamespace(_thread_launched=True)  # a create in this process
     tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 1
+    assert len(sent) == 1 and session["agent"]._thread_launched is False  # one immediate scan, not every poll
+    tn.poll("live", session, **_hooks(sent))
+    assert session["_thread_wake"]["next_scan"] > time.monotonic()  # nothing out: back to the idle cadence
+
+
+def test_a_refused_wake_backs_off_and_stops_pinning_a_chat_hosted_elsewhere(home):
+    from tui_gateway import thread_notifications as tn
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+    session, refused = {"session_key": "parent"}, []
+    for n in range(tn.REFUSALS_BEFORE_UNPIN):
+        session["_thread_wake"] = {**session.get("_thread_wake", {}), "next_scan": 0.0}
+        tn.poll("live", session, **_hooks(refused, accept=False))
+        assert session["_thread_wake"]["next_scan"] > time.monotonic()  # not again on the next poll
+    assert len(refused) == tn.REFUSALS_BEFORE_UNPIN and not tn.owns_pending_thread_wake(session)
+    session["_thread_wake"]["next_scan"] = 0.0
+    sent = []
+    tn.poll("live", session, **_hooks(sent))
+    assert len(sent) == 1 and session["_thread_wake"]["refusals"] == 0
+
+
+def test_a_failed_claim_releases_the_turn_it_took(home, monkeypatch):
+    from tools import thread_state as ts
+    from tui_gateway import thread_notifications as tn
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ts, "claim", broken)
+    released = []
+    hooks = {**_hooks([]), "release_turn": released.append}
+    session = {"session_key": "parent"}
+    tn.poll("live", session, **hooks)
+    assert released == [session]  # the chat isn't left busy
 
 
 def test_threads_toolset_is_local_only_and_opt_in():
@@ -300,6 +339,156 @@ def test_messages_into_threads_stop_until_the_user_writes_again(home):
         db.append_message("parent", "user", "Danny: keep going")
     with pytest.raises(AssertionError, match="reach the owner"):  # past the guard, on its way to the owner
         call(action="send", thread_id="t1", message="one more")
+
+
+def test_automatic_turns_in_the_parent_are_not_the_user_writing(home):
+    """A heartbeat, /loop, /goal or Kanban turn must not hand an unattended lead a fresh send budget."""
+    from hermes_cli.goals import CONTINUATION_PROMPT_GATE_FAILED_TEMPLATE, CONTINUATION_PROMPT_TEMPLATE
+    from hermes_cli.heartbeat import HEARTBEAT_PROMPT_TEMPLATE
+    from hermes_cli.loops import WAKEUP_PROMPT_TEMPLATE, WAKEUP_PROMPT_WITH_UNTIL_TEMPLATE
+    from tools import thread_tool as tool
+    for template in (HEARTBEAT_PROMPT_TEMPLATE, WAKEUP_PROMPT_TEMPLATE, WAKEUP_PROMPT_WITH_UNTIL_TEMPLATE,
+                     CONTINUATION_PROMPT_TEMPLATE, CONTINUATION_PROMPT_GATE_FAILED_TEMPLATE):
+        assert template.startswith(tool.AUTOMATIC_PREFIXES), template[:40]  # the headers the guard knows
+    with _db(home) as db:
+        db.append_message("parent", "user", "Danny: go")
+        thread(db, "t1")
+        for n in range(tool.MAX_SENDS_SINCE_USER):
+            db.append_message("t1", "user", f"{tool.MARK} From Ava in parent \u00b7 thread tool\n\nmessage {n}")
+        db.append_message("parent", "user", HEARTBEAT_PROMPT_TEMPLATE.format(interval="5m", prompt="check in"))
+        db.append_message("parent", "user", WAKEUP_PROMPT_TEMPLATE.format(tick=3, cadence=" \u00b7 every 5m",
+                                                                         prompt="watch the build"))
+        db.append_message("parent", "user", "\u2714 Kanban t_1 done", display_metadata={"automatic_turn": "kanban"})
+    assert call(action="send", thread_id="t1", message="one more")["error"] == "check_in_with_user"
+
+
+def ts_reader(home):
+    from tools import thread_state as ts
+    return ts.reader(home)
+
+
+class Owner:
+    """A fake session owner: it writes the rows the real one does (sessions, launch binding,
+    admissions) and records each RPC, so the tool's own sequencing is what's under test."""
+
+    def __init__(self, home, *, refuse_titles=(), running=None):
+        self.home, self.calls, self.revision, self.resumed = home, [], 0, []
+        self.refuse_titles, self.running = set(refuse_titles), running
+
+    async def rpc(self, method, **params):
+        from hermes_cli.gateway_client import GatewayRPCError
+        self.calls.append((method, params))
+        self.revision += 1
+        with _db(self.home) as db:
+            if method == "session.create":
+                sid = "t" + params["launch_id"][-6:]
+                db.create_session(sid, "tui", user_id=DANNY)
+                db.record_launch(launch_id=params["launch_id"], kind=params["launch_kind"],
+                                 launcher_profile=params["started_by_profile"],
+                                 launcher_session_id=params["started_by_session"], child_profile="default")
+                db.bind_launch(params["launch_id"], child_session_id=sid)
+                return {"session_id": sid, "info": {"title": "", "model": "m"}, "revision": self.revision}
+            if method == "session.resume":
+                self.resumed.append(self.revision)
+                return {"revision": self.revision, "running": self.running is not None, "execution_generation": 1}
+            if method == "session.mutate":
+                if params["payload"].get("title") in self.refuse_titles:
+                    raise GatewayRPCError("title_taken")
+                return {"revision": self.revision}
+            if method == "prompt.submit":
+                aid, status = "adm-" + params["submission_id"][-8:], "queued" if self.running else "started"
+                with ts_reader(self.home) as conn:  # the owner replays a request it already admitted
+                    if conn.execute("SELECT 1 FROM session_admissions WHERE admission_id=?", (aid,)).fetchone():
+                        return {"admission_id": aid, "status": "replayed"}
+                admit(db, params["session_id"], aid, status)
+                db._write_sql("UPDATE session_admissions SET request_id=? WHERE admission_id=?",
+                              (params["submission_id"], aid))
+                return {"admission_id": aid, "status": status}
+            if method == "prompt.cancel":
+                settle(db, params["admission_id"], "cancelled")
+                return {"status": "terminal"}
+        return {}
+
+
+@pytest.fixture
+def owner(home, monkeypatch):
+    import asyncio
+    import tools.thread_tool as tool
+    fake = Owner(home)
+
+    async def with_owner(home_, subject, fn):
+        assert subject == DANNY  # every call acts for the caller's own principal
+        return await fn(fake)
+
+    monkeypatch.setattr(tool, "_run", asyncio.run)
+    monkeypatch.setattr(tool, "_with_owner", with_owner)
+    return fake
+
+
+def test_create_opens_a_marked_thread_and_a_retry_in_the_same_turn_reports_how_it_stands(home, owner):
+    owner.refuse_titles = {"\u21b3 Research"}  # the plain title is taken: the fallback must get a fresh revision
+    with _db(home) as db:
+        db.append_message("parent", "user", "Danny: research this")
+    out = call(action="create", title="Research", brief="Find the facts.", option="fast")
+    assert (out["success"], out["status"], out["option"]) == (True, "running", "fast"), out
+    assert out["title"].startswith("\u21b3 Research \u00b7 ")
+    methods = [m for m, _ in owner.calls]
+    assert methods == ["session.create", "session.resume", "session.mutate", "session.resume", "session.mutate",
+                       "prompt.submit"], methods
+    first, second = (p for m, p in owner.calls if m == "session.mutate")
+    assert (first["expected_revision"], second["expected_revision"]) == tuple(owner.resumed)
+    create = owner.calls[0][1]
+    assert (create["model"], create["provider"], create["reasoning"]) == ("claude-haiku-5-5", "anthropic", "medium")
+    brief = owner.calls[-1][1]
+    assert brief["finite"] is True and brief["turn_author"]["is_bot"] is True
+    assert brief["text"].startswith("\u21b3 From Ava in") and "Find the facts." in brief["text"]
+
+    with _db(home) as db:
+        settle(db, out["admission_id"], "completed", reply="facts")
+    again = call(action="create", title="Research", brief="Find the facts.", option="fast")
+    assert (again["reused"], again["thread_id"], again["status"]) == (True, out["thread_id"], "done")
+    with _db(home) as db:
+        db.append_message("parent", "user", "Danny: once more")
+    later = call(action="create", title="Research", brief="Find the facts.", option="fast")
+    assert "reused" not in later and later["thread_id"] != out["thread_id"]  # a later turn is new work
+
+
+def test_stop_cancels_and_interrupts_only_the_tools_turns_and_wakes_no_one_about_it(home, owner):
+    from tui_gateway import thread_notifications as tn
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "running", "started")
+        admit(db, "t1", "queued1", "queued")
+        admit(db, "t1", "dannys", "queued", tool=False)
+    owner.running = "running"
+    out = call(action="stop", thread_id="t1")
+    assert (out["status"], out["cancelled_queued"]) == ("stopping", ["queued1"]), out
+    assert [m for m, _ in owner.calls] == ["session.resume", "prompt.cancel", "session.interrupt"]
+    with _db(home) as db:
+        settle(db, "running", "interrupted")
+    sent = []
+    tn.poll("live", {"session_key": "parent"}, **_hooks(sent))
+    assert sent == []  # the lead stopped them itself: no update telling it so
+
+
+def test_interrupt_send_cancels_then_interrupts_then_queues_and_leaves_the_users_turn(home, owner):
+    with _db(home) as db:
+        db.append_message("parent", "user", "Danny: change course")
+        thread(db, "t1")
+        admit(db, "t1", "running", "started")
+        admit(db, "t1", "queued1", "queued")
+    owner.running = "running"
+    out = call(action="send", thread_id="t1", message="New plan: X, because Y.", mode="interrupt")
+    assert out["note"].startswith("Interrupted") and out["status"] == "queued", out
+    assert [m for m, _ in owner.calls] == ["session.resume", "prompt.cancel", "session.interrupt", "prompt.submit"]
+
+    with _db(home) as db:
+        thread(db, "t2")
+        admit(db, "t2", "dannys", "started", tool=False)
+    owner.calls.clear()
+    out = call(action="send", thread_id="t2", message="New plan.", mode="interrupt")
+    assert [m for m, _ in owner.calls] == ["session.resume", "prompt.submit"]  # the user's turn runs on
+    assert "user's own turn" in out["note"]
 
 
 def test_a_send_repeated_in_one_turn_is_one_send(home):

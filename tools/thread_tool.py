@@ -65,6 +65,12 @@ RUN_BUDGET_DEFAULT_S, RUN_BUDGET_MIN_S, RUN_BUDGET_MAX_S = 7_200, 60, 28_800
 REASONING = ["none", "minimal", "low", "medium", "high", "xhigh"]
 ACTIVE = {"running", "queued", "paused"}
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: User-role rows no human typed, by their fixed headers (the same on every surface; a test pins each to
+#: its template): thread updates, scheduled wakes, /heartbeat and /loop ticks, /goal continuations.
+AUTOMATIC_PREFIXES = ("[Thread update", "[Scheduled wake", "[Heartbeat \u2014 recurring instruction",
+                      "[/loop wakeup #", "[Continuing toward your standing goal")
+#: ``display_metadata`` key on automatic turns that have no fixed header (Kanban notices).
+AUTOMATIC_KEY = "automatic_turn"
 # Parallel tool calls in one turn run on worker threads of this process: one cap check + create at a time.
 _CREATE_LOCK = threading.Lock()
 
@@ -101,7 +107,11 @@ class Thread:
     archived: bool
 
     def handle(self, caller: Caller) -> str:
-        return self.session_id if self.profile == caller.profile else f"{self.profile}:{self.session_id}"
+        return _handle(caller, self.profile, self.session_id)
+
+
+def _handle(caller: Caller, profile: str, session_id: str) -> str:
+    return session_id if profile == caller.profile else f"{profile}:{session_id}"
 
 
 # ── who is calling, and which chat is meant ───────────────────────────────────────────────────
@@ -265,6 +275,12 @@ async def _attach(client, thread: Thread) -> dict:
     return await client.rpc("session.resume", session_id=thread.session_id, omit_messages=True, defer_history=True)
 
 
+def _handed_back(caller: Caller, admission_ids) -> None:
+    """What the tool itself stopped needs no thread update telling this chat it stopped."""
+    for admission_id in admission_ids:
+        ts.mark_delivered(caller.home, admission_id, "stopped")
+
+
 # ── collaborators: the delegation menu and the teammates ──────────────────────────────────────
 
 def _menu(cfg: dict) -> tuple[dict, str | None, dict]:
@@ -353,13 +369,16 @@ def _check_caps(caller: Caller) -> None:
         with ts.reader(home) as conn:
             if conn is None:
                 continue
-            rows = [dict(r) for r in conn.execute(
-                "SELECT child_session_id, launcher_profile, launcher_session_id FROM work_launches "
-                f"WHERE substr(launch_id,1,{len(ts.LAUNCH_PREFIX)})=? AND child_profile=? "
-                "AND child_session_id IS NOT NULL AND created_at>=?", (ts.LAUNCH_PREFIX, profile, now - 2 * 86400))]
-            box += _active(conn, rows)
-            mine += _active(conn, [r for r in rows if r["launcher_profile"] == caller.profile
-                                   and r["launcher_session_id"] in caller.lineage])
+            try:
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT child_session_id, launcher_profile, launcher_session_id FROM work_launches "
+                    f"WHERE substr(launch_id,1,{len(ts.LAUNCH_PREFIX)})=? AND child_profile=? "
+                    "AND child_session_id IS NOT NULL AND created_at>=?", (ts.LAUNCH_PREFIX, profile, now - 2 * 86400))]
+                box += _active(conn, rows)
+                mine += _active(conn, [r for r in rows if r["launcher_profile"] == caller.profile
+                                       and r["launcher_session_id"] in caller.lineage])
+            except sqlite3.Error:  # a store from before the launch ledger runs no threads
+                continue
     if mine >= MAX_ACTIVE_PER_CHAT:
         raise ThreadError("fanout_limit", f"{mine} of this chat's threads are still working (max {MAX_ACTIVE_PER_CHAT}). "
                           "Wait on one, settle or stop one first.")
@@ -383,7 +402,9 @@ def _toolset_ceiling(caller: Caller, profile: str):
 
 @contextlib.contextmanager
 def _create_lock():
-    """Box-wide: chats in the dashboard, the gateway and ``hermes chat`` all create threads."""
+    """Box-wide: chats in the dashboard, the gateway and ``hermes chat`` all create threads. Held across
+    the cap check and the owner calls on purpose, so two creates can't both pass the same cap; parallel
+    creates serialize (each is a few seconds), and the owner's own timeouts bound the wait."""
     path = ts.homes()["default"] / "cache" / "threads" / "create.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     with _CREATE_LOCK, open(path, "ab") as fh:
@@ -402,11 +423,12 @@ def _create_lock():
 def _check_unattended(caller: Caller) -> None:
     """The loop guard: what this chat sent into its threads since the user last wrote in it."""
     ids = list(caller.lineage)
+    automatic = " ".join("AND substr(content,1,?)<>?" for _ in AUTOMATIC_PREFIXES)
     with ts.reader(caller.home) as conn:
         row = conn.execute(
             f"SELECT MAX(timestamp) FROM messages WHERE session_id IN ({','.join('?' * len(ids))}) AND role='user' "
-            "AND COALESCE(display_kind,'') IN ('','steer') AND content NOT LIKE '[Thread update%' "
-            "AND content NOT LIKE '[Scheduled wake%'", ids).fetchone()
+            f"AND COALESCE(display_kind,'') IN ('','steer') AND COALESCE(display_metadata,'') NOT LIKE ? {automatic}",
+            [*ids, f'%"{AUTOMATIC_KEY}"%', *(x for p in AUTOMATIC_PREFIXES for x in (len(p), p))]).fetchone()
     since = (row[0] if row else None) or 0
     homes, sent = ts.homes(), 0
     for launch in ts.threads_of(caller.profile, caller.lineage):
@@ -484,7 +506,8 @@ def _create(caller: Caller, args: dict) -> dict:
     if budget is not None and (isinstance(budget, bool) or not isinstance(budget, (int, float)) or budget < 0):
         raise ThreadError("invalid_request", "run_budget_s must be 0 (the profile's default) or a number of seconds.")
     budget = RUN_BUDGET_DEFAULT_S if budget is None else budget
-    key = _key(args.get("request_id"), caller.session_id, title, brief, sorted(route.items()), cwd, budget)
+    key = _key(args.get("request_id"), caller.session_id, title, brief, sorted(route.items()), cwd, budget,
+               _turn_mark(caller))
     create_id, launch_id = ts.REQUEST_PREFIX + key, ts.LAUNCH_PREFIX + key
     display = f"{MARK} {title}"
     text = f"{_header(caller)}\n\n{brief}{_brief_footer(caller)}"
@@ -510,8 +533,7 @@ def _create(caller: Caller, args: dict) -> dict:
                               "sent. Nothing is running there.")
         titled = snap["info"].get("title") or ""
         if not titled.startswith(display):
-            titled = await _rename(client, sid, snap["revision"], [display, f"{display} \u00b7 {sid[-4:]}"],
-                                   create_id + ":title")
+            titled = await _rename(client, sid, [display, f"{display} \u00b7 {sid[-4:]}"], create_id + ":title")
         admission = await client.rpc("prompt.submit", session_id=sid, submission_id=create_id + ":brief", text=text,
                                      finite=True, turn_author=_author(caller))
         return sid, titled, admission, snap["info"].get("model")
@@ -524,16 +546,21 @@ def _create(caller: Caller, args: dict) -> dict:
             _check_caps(caller)
             _check_unattended(caller)
         sid, titled, admission, model = _run(_with_owner(home, caller.subject, go))
-    handle = sid if profile == caller.profile else f"{profile}:{sid}"
-    out = {"thread_id": handle, "title": titled, "admission_id": admission["admission_id"],
-           "status": "queued" if admission.get("status") == "queued" else "running", "profile": profile,
-           "model": model, "request_id": key}
+    handle = _handle(caller, profile, sid)
+    status = "queued" if admission.get("status") == "queued" else "running"
+    if reused:  # the replayed brief may have finished long ago: say how it stands
+        with ts.reader(home) as conn:
+            row = next((r for r in ts.admissions(conn, ts.lineage(conn, sid))
+                        if r["admission_id"] == admission["admission_id"]), None)
+        status = ts.admission_status(row) if row is not None else status
+    out = {"thread_id": handle, "title": titled, "admission_id": admission["admission_id"], "status": status,
+           "profile": profile, "model": model, "request_id": key}
     if "option" in route:
         out["option"] = route["option"]
     if reused:
         out["reused"] = True
-        out["note"] = ("Same chat, title, brief and route as an earlier create: returned that thread. Pass a new "
-                       "request_id to open another.")
+        out["note"] = ("Same title, brief and route as a create earlier in this turn: returned that thread. Pass a "
+                       "new request_id to open another.")
     if args.get("wait_s"):
         out["wait"] = _wait(caller, {"thread_id": handle, "admission_id": out["admission_id"], "timeout_s": args["wait_s"]})
     else:
@@ -547,12 +574,14 @@ def _bound_child(home: Path, launch_id: str):
         return row[0] if row else None
 
 
-async def _rename(client, sid, revision, titles, request_id):
+async def _rename(client, sid, titles, request_id):
     from hermes_cli.gateway_client import GatewayRPCError
     for attempt, title in enumerate(titles):
+        # Each attempt reads the revision afresh: a refused first title must not fence out the second.
+        snap = await client.rpc("session.resume", session_id=sid, omit_messages=True, defer_history=True)
         try:
             await client.rpc("session.mutate", session_id=sid, request_id=f"{request_id}:{attempt}",
-                             expected_revision=revision, operation="rename", payload={"title": title[:100]})
+                             expected_revision=snap["revision"], operation="rename", payload={"title": title[:100]})
             return title[:100]
         except GatewayRPCError:
             continue  # titles are unique per profile: try the next one
@@ -593,6 +622,7 @@ def _send(caller: Caller, args: dict) -> dict:
                     await client.rpc("prompt.cancel", session_id=thread.session_id, admission_id=row["admission_id"])
                 await client.rpc("session.interrupt", session_id=thread.session_id,
                                  execution_generation=snap["execution_generation"])
+                _handed_back(caller, [row["admission_id"] for row in [*queued, running] if ts.tool_sent(row)])
                 notes.append("Interrupted the turn you sent (and dropped what you had queued); this message runs "
                              "next, with the thread's history intact.")
             else:
@@ -651,7 +681,6 @@ def _mark_delivered(caller: Caller, thread: Thread, report: dict) -> None:
 
 
 def _wait(caller: Caller, args: dict) -> dict:
-    from tools.interrupt import consume_yield, is_interrupted
     handles = args.get("thread_ids") or ([args["thread_id"]] if args.get("thread_id") else [])
     if not isinstance(handles, list) or not handles or len(handles) > WAIT_MANY_MAX:
         raise ThreadError("invalid_request", f"Give thread_id, or thread_ids (a list of at most {WAIT_MANY_MAX}).")
@@ -671,17 +700,8 @@ def _wait(caller: Caller, args: dict) -> dict:
     while True:
         reports = [_report(caller, thread, pins[thread.session_id], cap) for thread in threads]
         settled = [r for r in reports if r["status"] not in {"queued", "running"}]
-        note = None
-        if (first and settled) or len(settled) == len(reports):
-            pass
-        elif is_interrupted():
-            note = "Interrupted: the wait ended, and the threads keep working."
-        elif consume_yield(threading.current_thread().ident):
-            note = ("The user sent a new message, so the wait ended and the threads keep working. Respond to the "
-                    "user now; their results will come back to you.")
-        elif time.monotonic() >= deadline:
-            note = "Timed out: the threads keep working. " + _wake_hint(caller)
-        else:
+        note = None if (first and settled) or len(settled) == len(reports) else _wait_ended(caller, deadline)
+        if note == "":
             time.sleep(POLL_S)
             continue
         for thread, report in zip(threads, reports):
@@ -692,6 +712,19 @@ def _wait(caller: Caller, args: dict) -> dict:
         return out
 
 
+def _wait_ended(caller: Caller, deadline: float) -> str:
+    """Why an unsettled wait ends now, or "" to keep polling."""
+    from tools.interrupt import consume_yield, is_interrupted
+    if is_interrupted():
+        return "Interrupted: the wait ended, and the threads keep working."
+    if consume_yield(threading.current_thread().ident):
+        return ("The user sent a new message, so the wait ended and the threads keep working. Respond to the "
+                "user now; their results will come back to you.")
+    if time.monotonic() >= deadline:
+        return "Timed out: the threads keep working. " + _wake_hint(caller)
+    return ""
+
+
 def _author_of(role: str, text: str) -> str:
     if role == "assistant":
         return "assistant"
@@ -699,7 +732,7 @@ def _author_of(role: str, text: str) -> str:
         return "agent"
     if text.startswith("[Thread update"):
         return "thread_update"
-    return "scheduled" if text.startswith("[Scheduled wake") else "user"
+    return "automatic" if text.startswith(AUTOMATIC_PREFIXES) else "user"
 
 
 def _read(caller: Caller, args: dict) -> dict:
@@ -762,7 +795,7 @@ def _list(caller: Caller, args: dict) -> dict:
                 continue
             preview, _ = _cap(ts.last_reply(conn, ids), PREVIEW_CAP)
             profile = launch["child_profile"]
-            out.append({"thread_id": current if profile == caller.profile else f"{profile}:{current}",
+            out.append({"thread_id": _handle(caller, profile, current),
                         "title": info["title"], "status": ts.thread_status(ts.admissions(conn, ids)),
                         "profile": profile, "model": info["model"], "settled": bool(info["archived"]),
                         "last_activity_at": info["last_activity_at"], "preview": preview})
@@ -780,11 +813,12 @@ def _stop(caller: Caller, args: dict) -> dict:
     async def go(client):
         snap = await _attach(client, thread)
         cleared = await _clear_paused(client, thread, rows, force)
-        cancelled = []
+        cancelled, cancelled_running = [], []
         for row in queued:
             receipt = await client.rpc("prompt.cancel", session_id=thread.session_id, admission_id=row["admission_id"])
             if receipt.get("status") == "terminal":
                 cancelled.append(row["admission_id"])
+        _handed_back(caller, cancelled)
         out: dict = {"cancelled_queued": cancelled}
         if cleared:
             out["cleared_paused"] = cleared
@@ -792,6 +826,8 @@ def _stop(caller: Caller, args: dict) -> dict:
             if ts.tool_sent(running) or force:
                 await client.rpc("session.interrupt", session_id=thread.session_id,
                                  execution_generation=snap["execution_generation"])
+                if ts.tool_sent(running):
+                    cancelled_running = [running["admission_id"]]
                 out["status"] = "stopping"
             else:
                 out["status"] = "running"
@@ -800,6 +836,7 @@ def _stop(caller: Caller, args: dict) -> dict:
             out["status"] = "idle"
             if not (cancelled or cleared):
                 out["note"] = "Nothing was running or queued."
+        _handed_back(caller, cancelled_running)
         return out
 
     return {"thread_id": thread.handle(caller), "title": thread.title,
@@ -844,13 +881,17 @@ def thread_tool(args: dict, parent_agent=None) -> str:
         if action not in ACTIONS:
             raise ThreadError("invalid_request", f"action must be one of: {', '.join(ACTIONS)}.")
         result = ACTIONS[action](_caller(parent_agent), args)
-        if action == "create" and parent_agent is not None:
-            # The dashboard's wake poller skips chats with no threads; this turns it on for this chat at once.
+        if action in {"create", "send"} and parent_agent is not None:
+            # The dashboard's wake poller scans an idle chat once a minute; new work here rescans it at once.
             with contextlib.suppress(AttributeError):
                 parent_agent._thread_launched = True
         return json.dumps({"success": True, "action": action, **result}, ensure_ascii=False)
     except ThreadError as exc:
         return json.dumps({"success": False, "action": action, "error": exc.code, "message": str(exc)},
+                          ensure_ascii=False)
+    except sqlite3.Error as exc:
+        return json.dumps({"success": False, "action": action, "error": "store_unavailable",
+                           "message": f"A session store couldn't be read ({exc}); try again shortly."},
                           ensure_ascii=False)
 
 
@@ -919,19 +960,10 @@ THREAD_SCHEMA = {
 }
 
 
-def check_thread_requirements() -> bool:
-    try:
-        import hermes_cli.gateway_client
-        return True
-    except ImportError:
-        return False
-
-
 registry.register(
     name="thread",
     toolset="threads",
     schema=THREAD_SCHEMA,
     handler=lambda args, **kw: thread_tool(args, parent_agent=kw.get("parent_agent")),
-    check_fn=check_thread_requirements,
     emoji="\U0001f9f5",
 )

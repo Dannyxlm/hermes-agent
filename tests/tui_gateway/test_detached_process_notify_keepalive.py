@@ -392,3 +392,20 @@ def test_agent_rebuild_keeps_pre_compression_process_owners(server, registry, de
 
     assert "pre-compression-id" in session["agent"]._process_owner_task_ids
     assert not server._session_is_reapable(sid, session)
+
+
+def test_reapers_spare_a_session_still_owed_a_thread_result(server, registry, detached):
+    """The thread tool's wake (``tui_gateway/thread_notifications``) marks its chat pending while a thread it
+    opened still owes a result; the cap, TTL and orphan reapers must consult that through the server namespace."""
+    sid, session, popped = detached
+    assert server._session_is_reapable(sid, session)
+    session["_thread_wake"] = {"next_scan": 0.0, "pending": True}
+    assert not server._session_is_reapable(sid, session)
+    assert not server._session_is_evictable(sid, session, time.time() + 10 * 86400)
+
+    server._schedule_ws_orphan_reap(sid)
+    _Timer.created[-1].callback()
+    assert server._sessions.get(sid) is session and not popped
+
+    session["_turn_cancel_requested"] = True  # after the user's Stop no update could start: not a reason to stay
+    assert server._session_is_reapable(sid, session)

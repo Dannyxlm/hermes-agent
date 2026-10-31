@@ -31,6 +31,8 @@ MARK = "\u21b3"  # ↳
 #: Admissions the wake still looks at: a thread active within this window. Shorter than the marker
 #: lifetime, so a pruned marker can never make an old result fire again.
 WAKE_WINDOW_S = 6 * 24 * 3600
+#: The wake reads threads opened in this window: a long-lived lead chat doesn't rescan every thread it ever opened.
+WAKE_LAUNCH_WINDOW_S = 30 * 24 * 3600
 MARKER_TTL_S = 7 * 24 * 3600
 #: A claim older than this was left by a wake that died between claiming and submitting.
 CLAIM_STALE_S = 120
@@ -102,23 +104,23 @@ def tip(conn, session_id: str) -> str:
     return current
 
 
-def launches(conn, launcher_profile: str, launcher_ids) -> list[dict]:
+def launches(conn, launcher_profile: str, launcher_ids, since: float = 0) -> list[dict]:
     """Thread launches one profile's store records for chats launched by these sessions."""
     ids = list(launcher_ids)
     return [dict(r) for r in conn.execute(
         "SELECT launch_id, kind, child_profile, child_session_id, launcher_session_id, title, created_at "
         f"FROM work_launches WHERE substr(launch_id,1,{len(LAUNCH_PREFIX)})=? AND child_session_id IS NOT NULL "
-        f"AND launcher_profile=? AND launcher_session_id IN ({_marks(ids)}) ORDER BY created_at",
-        [LAUNCH_PREFIX, launcher_profile, *ids])]
+        f"AND launcher_profile=? AND launcher_session_id IN ({_marks(ids)}) AND COALESCE(created_at,0)>=? "
+        "ORDER BY created_at", [LAUNCH_PREFIX, launcher_profile, *ids, since])]
 
 
-def threads_of(launcher_profile: str, launcher_ids) -> list[dict]:
-    """Every thread these sessions opened, across all profiles (each store holds its own children)."""
+def threads_of(launcher_profile: str, launcher_ids, since: float = 0) -> list[dict]:
+    """Every thread these sessions opened (since a time), across all profiles (each store holds its own children)."""
     found = []
     for profile, home in homes().items():
         with reader(home) as conn:
             if conn is not None:
-                found += [row for row in launches(conn, launcher_profile, launcher_ids)
+                found += [row for row in launches(conn, launcher_profile, launcher_ids, since)
                           if row["child_profile"] == profile]
     return sorted(found, key=lambda row: row["created_at"] or 0)
 
@@ -257,17 +259,12 @@ def prune_markers(home: Path, now: float | None = None) -> None:
                     path.unlink()
 
 
-def settled_unreported(launcher_home: Path, launcher_profile: str, launcher_ids, now: float | None = None) -> list[dict]:
-    """Tool-sent turns in this chat's threads that settled (or paused) and nobody handed back yet."""
-    return wake_state(launcher_home, launcher_profile, launcher_ids, now)[0]
-
-
 def wake_state(launcher_home: Path, launcher_profile: str, launcher_ids, now: float | None = None):
     """The wake's whole read: (results to hand back, how many tool-sent turns are still queued or running)."""
     now = time.time() if now is None else now
     out, working = [], 0
     by_profile = {}
-    for row in threads_of(launcher_profile, launcher_ids):
+    for row in threads_of(launcher_profile, launcher_ids, since=now - WAKE_LAUNCH_WINDOW_S):
         by_profile.setdefault(row["child_profile"], []).append(row)
     for profile, rows in by_profile.items():
         with reader(homes().get(profile, launcher_home)) as conn:

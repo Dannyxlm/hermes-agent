@@ -19,6 +19,7 @@ final message excerpted in a fence as data: the full text is one ``thread action
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 
@@ -27,6 +28,9 @@ from tools import thread_state as ts
 logger = logging.getLogger(__name__)
 
 SCAN_IDLE_S = 60.0
+REFUSED_BACKOFF_S = 30.0
+#: After this many refused submits in a row (the chat is hosted elsewhere) its results stop pinning it here.
+REFUSALS_BEFORE_UNPIN = 3
 EXCERPT = 600
 
 
@@ -64,7 +68,7 @@ def _render(items: list[dict], still: list[str], profile: str) -> str:
 def _still_working(profile: str, lineage, done: set) -> list[str]:
     homes = ts.homes()
     out = []
-    for launch in ts.threads_of(profile, lineage):
+    for launch in ts.threads_of(profile, lineage, since=time.time() - ts.WAKE_LAUNCH_WINDOW_S):
         home = homes.get(launch["child_profile"])
         if home is None:
             continue
@@ -87,10 +91,15 @@ def poll(sid: str, session: dict, *, scope, claim_turn, release_turn, submit) ->
         return
     now = time.monotonic()
     state = session.setdefault("_thread_wake", {"next_scan": 0.0, "pending": False})
-    flagged = bool(getattr(session.get("agent"), "_thread_launched", False))
+    agent = session.get("agent")
+    flagged = bool(getattr(agent, "_thread_launched", False))
     if not flagged and now < state["next_scan"]:
         return
+    if flagged:  # a create or send in this process: scan now, once
+        with contextlib.suppress(AttributeError):
+            agent._thread_launched = False
     claimed: list[dict] = []
+    turn = False
     home = None
     try:
         with scope(session):
@@ -101,17 +110,19 @@ def poll(sid: str, session: dict, *, scope, claim_turn, release_turn, submit) ->
                 if conn is None:
                     return
                 lineage = ts.lineage(conn, key)
-            if not ts.threads_of(profile, lineage):
+            if not ts.threads_of(profile, lineage, since=time.time() - ts.WAKE_LAUNCH_WINDOW_S):
                 state.update(next_scan=now + SCAN_IDLE_S, pending=False)
                 return
-            state["next_scan"] = 0.0
             if time.time() - state.get("pruned", 0.0) > 86_400:
                 state["pruned"] = time.time()
                 ts.prune_markers(home)
             items, working = ts.wake_state(home, profile, lineage)
-            state["pending"] = bool(items or working)
+            # Every poll while thread work is out; the idle cadence once there's nothing to hand back.
+            state["next_scan"] = 0.0 if (items or working) else now + SCAN_IDLE_S
+            state["pending"] = bool(items or working) and state.get("refusals", 0) < REFUSALS_BEFORE_UNPIN
             if not items or not claim_turn(session):
                 return
+            turn = True
             claimed = [item for item in items if ts.claim(home, item["admission_id"], item["status"])]
             if not claimed:
                 release_turn(session)
@@ -123,9 +134,10 @@ def poll(sid: str, session: dict, *, scope, claim_turn, release_turn, submit) ->
                          display_metadata={"display_text": f"Thread update: {names}"},
                          turn_author={"id": f"bot:{profile}", "name": "Thread update", "is_bot": True})
     except Exception:  # health: allow BLE001 -- the chat's only notification loop must outlive a bad read
-        if claimed and home is not None:
+        if home is not None:
             for item in claimed:
                 ts.finish_claim(home, item["admission_id"], item["status"], accepted=False)
+        if turn:  # nothing was submitted: a held turn would leave the chat busy for good
             release_turn(session)
         logger.warning("thread update poll failed for %s", key, exc_info=True)
         return
@@ -138,4 +150,8 @@ def poll(sid: str, session: dict, *, scope, claim_turn, release_turn, submit) ->
     finally:
         for item in claimed:
             ts.finish_claim(home, item["admission_id"], item["status"], accepted=accepted)
-        state["pending"] = bool(working or not accepted or len(items) > len(claimed))
+        state["refusals"] = 0 if accepted else state.get("refusals", 0) + 1
+        if not accepted:  # refused (the chat is busy or hosted elsewhere): don't retry every poll
+            state["next_scan"] = time.monotonic() + REFUSED_BACKOFF_S
+        state["pending"] = (bool(working or not accepted or len(items) > len(claimed))
+                            and state["refusals"] < REFUSALS_BEFORE_UNPIN)

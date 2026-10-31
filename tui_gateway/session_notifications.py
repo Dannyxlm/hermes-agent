@@ -537,10 +537,11 @@ def _notif_poll_kanban_scoped(sid: str, session: dict) -> None:
         diagnostic = split and isinstance(pending[0], DiagnosticText)
         batch = [text for text in pending if not split or isinstance(text, DiagnosticText) == diagnostic]
         session["_kanban_pending"] = [text for text in pending if split and isinstance(text, DiagnosticText) != diagnostic]
+    # Marked automatic (tools/thread_tool.py AUTOMATIC_KEY): a notice isn't the user writing in this chat.
+    metadata = {"automatic_turn": "kanban", **({"notification_category": "diagnostic"} if diagnostic else {})}
     with contextlib.suppress(Exception):
         _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, "\n".join(batch),
-                      "kanban notification dispatch failed",
-                      **({"display_metadata": {"notification_category": "diagnostic"}} if diagnostic else {}))
+                      "kanban notification dispatch failed", display_metadata=metadata)
 
 
 def _notif_poll_threads(sid: str, session: dict) -> None:
