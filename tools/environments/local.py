@@ -1054,6 +1054,16 @@ class LocalEnvironment(BaseEnvironment):
         super().__init__(cwd=_resolve_local_initial_cwd(cwd), timeout=timeout, env=env, persist_env=persistent)
         self.init_session()
 
+    def _snapshot_script_kwargs(self, cwd: str) -> dict:
+        from tools.terminal_tool_session_env import command_snapshot_path
+        from tools.environments.base_session_env import _SNAP_TMP_SUFFIX
+
+        kwargs = super()._snapshot_script_kwargs(cwd)
+        path = command_snapshot_path(self)
+        kwargs.update(quoted_snap=self._quote_shell_path(path),
+                      snap_tmp_template=self._quote_shell_path(path + _SNAP_TMP_SUFFIX))
+        return kwargs
+
     def get_temp_dir(self) -> str:
         """Shell-safe writable temp dir. Precedence: ``TERMINAL_TEMP_DIR``, TMPDIR/TMP/TEMP
         (Termux has no system temp dir), ``HERMES_HOME/cache/terminal`` (real storage: a
@@ -1191,6 +1201,8 @@ class LocalEnvironment(BaseEnvironment):
     def cleanup(self):
         """Clean up temp files, including orphaned atomic-write snapshots
         (``snap.tmp.<bashpid>``) a failed/interrupted mv could leave behind."""
+        from tools.terminal_tool_session_env import cleanup_environment_snapshots
+        cleanup_environment_snapshots(self)
         # See #38249.
         import glob
         try:

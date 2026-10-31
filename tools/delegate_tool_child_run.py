@@ -822,6 +822,17 @@ class _ChildRun:
                 record_session_cwd(self.child_task_id, parent_cwd)
             register_container_alias(self.child_task_id, self.parent_task_id)
 
+        with _quiet("Child environment seed failed: %s"):
+            from tools.terminal_tool import _qualify_task_key
+            from tools.terminal_tool_session_env import capture_session_environment, seed_session_environment
+            parent_scope = _qualify_task_key("default")
+            parent_snapshot = capture_session_environment(self.parent_task_id)
+            with child_profile_scope(self.child):
+                # Routed profiles have their own HOME/credentials; do not seed them
+                # with the launch profile's shell state.
+                if _qualify_task_key("default") == parent_scope:
+                    seed_session_environment(_qualify_task_key(self.child_task_id), parent_snapshot)
+
         self.worktree_info = _create_isolated_worktree(self.parent_agent, self.parent_task_id, self.subagent_id)
         if self.worktree_info is not None:
             with _quiet("worktree cwd seed failed: %s"), child_profile_scope(self.child):
@@ -1144,6 +1155,11 @@ class _ChildRun:
         # processes, httpx clients) so subagent subprocesses don't outlive the delegation.
         if not close_deferred:
             _close_child(child, "Failed to close child agent after delegation")
+            with _quiet("Failed to clear child terminal state: %s"):
+                from tools.delegate_tool_routes import child_profile_scope
+                from tools.terminal_tool import clear_task_env_overrides
+                with child_profile_scope(child):
+                    clear_task_env_overrides(self.child_task_id)
         # The child's execute_code kernels live exactly as long as the child (pinned against the LRU
         # cap while it runs); dispose them here so they never squat the cap after the child is gone.
         with _quiet("Failed to dispose child execute_code kernels: %s"):
