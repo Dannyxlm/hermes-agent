@@ -50,6 +50,7 @@ def _make_background_cli_stub():
     cli.max_turns = 90
     cli.enabled_toolsets = []
     cli._session_db = None
+    cli.session_id = "approval-ui-parent"
     cli.reasoning_config = {}
     cli.service_tier = None
     cli._providers_only = None
