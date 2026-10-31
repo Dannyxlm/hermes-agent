@@ -77,8 +77,22 @@ def _safe_parse_import_env(name: str, default: Any, converter, type_label: str):
 # it are promoted to a tracked background process. It must stay under the executor's generic tool
 # deadline (agent.tool_executor._DEFAULT_CONCURRENT_TOOL_TIMEOUT_S, 420 s): at 600 the executor killed
 # 421-600 s foreground calls first with a bare "timed out after 420.0s" and the work was lost and re-run
-# (48 such kills in Oct 26-30 Traceboard data).
+# (48 such kills in Oct 26-30 Traceboard data). 400 leaves ~20 s for the backend's own timeout kill and
+# output flush. _effective_foreground_cap() enforces the same rule at call time for env/config overrides.
 FOREGROUND_MAX_TIMEOUT = _safe_parse_import_env("TERMINAL_MAX_FOREGROUND_TIMEOUT", 400, int, "integer")
+_EXECUTOR_DEADLINE_MARGIN_S = 20
+
+
+def _effective_foreground_cap() -> int:
+    """FOREGROUND_MAX_TIMEOUT clamped under the executor's resolved tool deadlines (minus a margin).
+    An override above them (Kanban workers inject max_runtime_seconds - 30) or a config deadline below
+    the cap would otherwise let the executor kill the call first; with the clamp it is promoted."""
+    from agent.tool_executor import _resolve_concurrent_tool_timeout, _resolve_sequential_tool_timeout
+
+    deadlines = [d for d in (_resolve_concurrent_tool_timeout(), _resolve_sequential_tool_timeout()) if d]
+    if not deadlines:
+        return FOREGROUND_MAX_TIMEOUT
+    return max(1, min(FOREGROUND_MAX_TIMEOUT, int(min(deadlines)) - _EXECUTOR_DEADLINE_MARGIN_S))
 
 
 # Approval / sudo-prompt UI callbacks (CLI registers prompt_toolkit-aware
@@ -1225,7 +1239,7 @@ def _plan_execution(
             guidance = _foreground_background_guidance(command)
             if guidance:
                 raise _Rejected(_error_json(guidance, status="error"))
-            if timeout and timeout > FOREGROUND_MAX_TIMEOUT:
+            if timeout and timeout > _effective_foreground_cap():
                 promoted = timeout
     else:
         auto_bg = None
@@ -1255,7 +1269,7 @@ def _with_promoted_note(result_json: str, requested_timeout: int) -> str:
     if not isinstance(data, dict) or data.get("error"):
         return result_json
     template = _PROMOTED_NOTE if data.get("notify_on_complete") else _PROMOTED_NOTE_POLL_ONLY
-    data["promoted_from_foreground"] = template.format(requested=requested_timeout, cap=FOREGROUND_MAX_TIMEOUT)
+    data["promoted_from_foreground"] = template.format(requested=requested_timeout, cap=_effective_foreground_cap())
     return json.dumps(data, ensure_ascii=False)
 
 

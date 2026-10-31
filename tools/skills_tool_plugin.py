@@ -49,12 +49,13 @@ def _safe_frontmatter(path: Path | None = None, *, content: str | None = None) -
 
     A *path* parse is memoized on the file's stat identity: ``skill_view`` resolves a name by
     checking the frontmatter of every SKILL.md (~440 here), and re-parsing them all in pure
-    Python on each call made batched skill loads queue on the GIL (p50 3.4 s, p90 13 s)."""
+    Python on each call made batched skill loads queue on the GIL (p50 3.4 s, p90 13 s).
+    The returned dict is a shallow copy: callers must not mutate nested values."""
     from tools import skills_tool as _st
     if content is None and path is not None:
         with suppress(OSError):
             st = os.stat(path)
-            key = (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino, _st._parse_frontmatter)
+            key = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size, _st._parse_frontmatter)
             hit = _FRONTMATTER_MEMO.get(str(path))
             if hit is not None and hit[0] == key:
                 return dict(hit[1])

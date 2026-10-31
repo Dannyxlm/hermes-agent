@@ -13,6 +13,10 @@
         ],
         "type": "string"
       },
+      "batch_name": {
+        "description": "Optional name for this fan-out batch.",
+        "type": "string"
+      },
       "message": {
         "description": "For action='steer': the course correction, appended to the child's next tool result mid-run. Be directive and specific.",
         "type": "string"
@@ -45,6 +49,10 @@
               "properties": {},
               "required": [],
               "type": "object"
+            },
+            "title": {
+              "description": "Optional short launch title; truncated to 40 characters.",
+              "type": "string"
             }
           },
           "required": [

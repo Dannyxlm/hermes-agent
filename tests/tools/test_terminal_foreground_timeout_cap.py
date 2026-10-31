@@ -154,13 +154,53 @@ class TestPromotionKeepsTheDetachmentGuard:
         assert "nohup" in result2["error"]
 
 
-def test_foreground_cap_stays_under_the_executor_deadline():
+
+def _executor_deadlines():
+    from agent.tool_executor import _resolve_concurrent_tool_timeout, _resolve_sequential_tool_timeout
+    return [d for d in (_resolve_concurrent_tool_timeout(), _resolve_sequential_tool_timeout()) if d]
+
+
+def test_foreground_cap_stays_under_the_executor_deadline(monkeypatch):
     """A foreground call the terminal tool accepts must not be killed first by the executor's
     generic tool deadline: at cap 600 vs deadline 420, every 421-600 s request died with a bare
     "timed out after 420.0s" (work lost, then re-run in the background)."""
-    from agent.tool_executor import _resolve_concurrent_tool_timeout, _resolve_sequential_tool_timeout
-    from tools.terminal_tool import FOREGROUND_MAX_TIMEOUT
+    monkeypatch.delenv("HERMES_CONCURRENT_TOOL_TIMEOUT_S", raising=False)
+    from tools.terminal_tool import FOREGROUND_MAX_TIMEOUT, _effective_foreground_cap
 
-    deadlines = [d for d in (_resolve_concurrent_tool_timeout(), _resolve_sequential_tool_timeout()) if d]
+    deadlines = _executor_deadlines()
     assert deadlines, "no executor deadline resolved"
     assert FOREGROUND_MAX_TIMEOUT < min(deadlines), (FOREGROUND_MAX_TIMEOUT, deadlines)
+    assert _effective_foreground_cap() < min(deadlines)
+
+
+def test_override_above_the_deadline_is_promoted_not_killed(tmp_path, monkeypatch):
+    """Kanban workers inject TERMINAL_MAX_FOREGROUND_TIMEOUT = max_runtime_seconds - 30. A request
+    between the executor deadline and that override must be promoted to the background, because the
+    executor would kill it at its deadline; the note names the effective cap."""
+    import tools.terminal_tool as tt
+
+    monkeypatch.delenv("HERMES_CONCURRENT_TOOL_TIMEOUT_S", raising=False)
+    monkeypatch.setattr(tt, "FOREGROUND_MAX_TIMEOUT", 3570)
+    deadline = min(_executor_deadlines())
+    cap = tt._effective_foreground_cap()
+    assert cap < deadline
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hh"))
+    with patch("tools.terminal_tool._get_env_config", return_value=_make_env_config(cwd=str(tmp_path))), \
+         patch("tools.terminal_tool._start_cleanup_thread"), \
+         patch("tools.terminal_tool._check_all_guards", return_value={"approved": True}):
+        result = json.loads(tt.terminal_tool(command="true", timeout=int(deadline) - 5))
+
+    assert result.get("error") is None
+    assert result["session_id"].startswith("proc_"), result
+    assert f"{cap}s cap" in result["promoted_from_foreground"]
+
+
+def test_disabled_executor_deadline_leaves_the_cap_alone(monkeypatch):
+    import tools.terminal_tool as tt
+
+    monkeypatch.setenv("HERMES_CONCURRENT_TOOL_TIMEOUT_S", "0")
+    if _executor_deadlines():
+        import pytest
+        pytest.skip("a config timeouts.tools deadline is set in this environment")
+    assert tt._effective_foreground_cap() == tt.FOREGROUND_MAX_TIMEOUT
