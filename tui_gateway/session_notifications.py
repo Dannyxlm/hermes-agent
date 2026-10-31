@@ -593,6 +593,10 @@ def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None
         # honour ``hidden``). Only what the agent says about the new output is visible.
         from tools.process_registry_notifications import HEARTBEAT_DISPLAY_KIND
         kwargs = {"display_kind": HEARTBEAT_DISPLAY_KIND}
+    else:
+        # Watch matches, disables and overflow land as plain user rows: mark them automatic
+        # (tools/thread_tool.py AUTOMATIC_KEY), so they aren't the user writing in this chat.
+        kwargs = {"display_metadata": {"automatic_turn": "process"}}
     from agent.notification_presentation import diagnostic_process_event
     if diagnostic_process_event(evt):
         kwargs.setdefault("display_metadata", {})["notification_category"] = "diagnostic"
