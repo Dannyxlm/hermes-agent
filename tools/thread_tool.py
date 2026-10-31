@@ -41,6 +41,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 from tools import thread_state as ts
 from tools.registry import registry
@@ -960,10 +961,18 @@ THREAD_SCHEMA = {
 }
 
 
+def _registry_handler(args, **kw):
+    """The agent loop runs ``thread`` inline with its agent (``agent/inline_tool_executors.py``). Any
+    other dispatch route gets only the dispatcher's ``session_id``: that still names the calling chat,
+    so the same login-principal and ownership guards apply (without the parent's toolset ceiling)."""
+    sid = kw.get("session_id")
+    return thread_tool(args, parent_agent=SimpleNamespace(session_id=sid) if isinstance(sid, str) and sid else None)
+
+
 registry.register(
     name="thread",
     toolset="threads",
     schema=THREAD_SCHEMA,
-    handler=lambda args, **kw: thread_tool(args, parent_agent=kw.get("parent_agent")),
+    handler=_registry_handler,
     emoji="\U0001f9f5",
 )
