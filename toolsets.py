@@ -154,6 +154,11 @@ TOOLSETS = {
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),
     "delegation": _ts("Spawn subagents with isolated context for complex subtasks", ["delegate_task"]),
+    # Local chats only, and only where the profile's config names it: a thread is one of the user's own
+    # visible chats, so a messaging, cron, API or editor session never gets it, and delegate_task children
+    # never do (DELEGATE_BLOCKED_TOOLS). Platform-gated toolsets load eagerly (tools/tool_search.py).
+    "threads": _ts("Lead threads: open, message, wait on and read the user's own chats", ["thread"],
+                   platforms=frozenset({"cli", "tui", "desktop"})),
     "kanban": _ts(
         "Kanban multi-agent coordination — only active when the agent is spawned by "
         "the kanban dispatcher (HERMES_KANBAN_TASK env set). The dispatcher runs "

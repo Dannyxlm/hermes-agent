@@ -132,3 +132,15 @@ def test_the_poller_thread_survives_a_dispatch_that_raises(monkeypatch):
 
     assert not worker.is_alive()
     assert handled == [1, 1], "the second event must still be dispatched after the first one raised"
+
+
+def test_a_process_watch_turn_is_marked_automatic(monkeypatch):
+    """A watch match lands as a plain user row; the thread tool's loop guard must not read it as the
+    user writing (tools/thread_tool.py AUTOMATIC_KEY)."""
+    from tools.thread_tool import AUTOMATIC_KEY
+    monkeypatch.setattr("tools.async_delegation.claim_event_delivery", lambda evt, consumer: object())
+    monkeypatch.setattr("tools.async_delegation.complete_event_delivery", lambda *a, **k: None)
+    submitted = []
+    monkeypatch.setattr(server, "_notif_submit", lambda *a, **k: submitted.append(k) or True)
+    server._notif_dispatch_event("sid", _claimed_session(), {"type": "watch_match", "session_id": "proc_a"}, "text")
+    assert submitted and submitted[0]["display_metadata"][AUTOMATIC_KEY] == "process"

@@ -3662,6 +3662,7 @@
                 "skills",
                 "start_chat",
                 "terminal",
+                "threads",
                 "todo",
                 "tts",
                 "video",

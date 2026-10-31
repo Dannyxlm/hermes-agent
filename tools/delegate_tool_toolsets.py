@@ -18,6 +18,7 @@ DELEGATE_BLOCKED_TOOLS = frozenset(
         "memory",  # no writes to shared MEMORY.md
         "send_message",  # no cross-platform side effects
         "cronjob_manage",  # no scheduling more work in the parent's name
+        "thread",  # no opening or messaging the user's chats from an isolated child
     ]
 )
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
