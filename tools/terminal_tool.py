@@ -73,8 +73,12 @@ def _safe_parse_import_env(name: str, default: Any, converter, type_label: str):
         return default
 
 
-# Hard cap on foreground timeout; override via TERMINAL_MAX_FOREGROUND_TIMEOUT env var.
-FOREGROUND_MAX_TIMEOUT = _safe_parse_import_env("TERMINAL_MAX_FOREGROUND_TIMEOUT", 600, int, "integer")
+# Hard cap on foreground timeout; override via TERMINAL_MAX_FOREGROUND_TIMEOUT env var. Requests above
+# it are promoted to a tracked background process. It must stay under the executor's generic tool
+# deadline (agent.tool_executor._DEFAULT_CONCURRENT_TOOL_TIMEOUT_S, 420 s): at 600 the executor killed
+# 421-600 s foreground calls first with a bare "timed out after 420.0s" and the work was lost and re-run
+# (48 such kills in Oct 26-30 Traceboard data).
+FOREGROUND_MAX_TIMEOUT = _safe_parse_import_env("TERMINAL_MAX_FOREGROUND_TIMEOUT", 400, int, "integer")
 
 
 # Approval / sudo-prompt UI callbacks (CLI registers prompt_toolkit-aware

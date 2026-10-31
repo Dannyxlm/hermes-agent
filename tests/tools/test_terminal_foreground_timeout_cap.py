@@ -152,3 +152,15 @@ class TestPromotionKeepsTheDetachmentGuard:
             result2 = json.loads(terminal_tool(command="nohup make test", timeout=9999))
         assert "'&' backgrounding" in result["error"]
         assert "nohup" in result2["error"]
+
+
+def test_foreground_cap_stays_under_the_executor_deadline():
+    """A foreground call the terminal tool accepts must not be killed first by the executor's
+    generic tool deadline: at cap 600 vs deadline 420, every 421-600 s request died with a bare
+    "timed out after 420.0s" (work lost, then re-run in the background)."""
+    from agent.tool_executor import _resolve_concurrent_tool_timeout, _resolve_sequential_tool_timeout
+    from tools.terminal_tool import FOREGROUND_MAX_TIMEOUT
+
+    deadlines = [d for d in (_resolve_concurrent_tool_timeout(), _resolve_sequential_tool_timeout()) if d]
+    assert deadlines, "no executor deadline resolved"
+    assert FOREGROUND_MAX_TIMEOUT < min(deadlines), (FOREGROUND_MAX_TIMEOUT, deadlines)
