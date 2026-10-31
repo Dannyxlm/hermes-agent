@@ -408,6 +408,8 @@ def _guarded_write(name: str, skill_dir: Path, target: Path, action: str, label:
     from hermes_constants import mkdir_under_hermes_home
     mkdir_under_hermes_home(target.parent)
     atomic_write_text(target, content, preserve_mode=True, create_mode=0o644)
+    from tools.skills_tool_index import invalidate_skill_index
+    invalidate_skill_index()
     scan_error = _security_scan_skill(skill_dir)
     if not scan_error:
         return None
@@ -819,7 +821,12 @@ def skill_manage(
             _ledger_complete = capture_is_complete(_pre["path"] if _pre else None, _ledger_before)
         handler = _ACTION_HANDLERS.get(action, lambda a: _err(
             f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"))
-        result = handler({"name": name, **args})
+        from tools.skills_tool_index import invalidate_skill_index
+        try:
+            result = handler({"name": name, **args})
+        finally:
+            # Also fence failed/rolled-back writes, not just successful telemetry.
+            invalidate_skill_index()
         if isinstance(result, str):
             return result  # tool_error JSON for argument-shape problems (patch)
         if result.get("success"):

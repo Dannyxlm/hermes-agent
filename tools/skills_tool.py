@@ -43,6 +43,8 @@ _SIGNATURE_MAX_DEPTH = 6
 
 def clear_skills_cache() -> None:
     """Drop the scanned catalog so the next listing re-scans (explicit reloads must not wait out the TTL)."""
+    from tools.skills_tool_index import invalidate_skill_index
+    invalidate_skill_index()
     _SKILLS_CACHE.clear()
 
 
@@ -386,42 +388,8 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
     recursive by dir / frontmatter name, legacy flat <name>.md), deduped by resolved path.
     Every copy is returned so the caller resolves them via ``agent.skill_utils.pick_skill_candidate``
     (cross-tier precedence; a same-tier tie of different skills is refused, never guessed)."""
-    from agent.skill_utils import iter_skill_index_files
-    candidates: list[tuple[Optional[Path], Path]] = []
-    seen_md: set = set()
-
-    def _record(sd: Optional[Path], smd: Path) -> None:
-        key = smd
-        with suppress(Exception):
-            key = smd.resolve()
-        if key not in seen_md:
-            seen_md.add(key)
-            candidates.append((sd, smd))
-
-    def _record_direct(direct_path: Path, search_root: Path) -> None:  # "mlops/axolotl" / "axolotl" or its flat .md sibling
-        flat = direct_path.with_suffix(".md")
-        if not _is_skill_support_path(direct_path) and direct_path.is_dir() and (direct_path / "SKILL.md").exists():
-            _record(direct_path, direct_path / "SKILL.md")
-        elif (flat.exists() and not _is_skill_support_path(flat)
-              and not _is_package_owned_markdown(flat, search_root)):
-            _record(None, flat)
-
-    for search_dir in all_dirs:
-        for direct in filter(None, (name, local_category_name)):  # "p:x" with no plugin p → "p/x"
-            _record_direct(search_dir / direct, search_dir)
-        # Recursive by directory name plus frontmatter `name:` — skills_list()
-        # exposes the frontmatter name, so skill_view(name) must accept it too.
-        for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
-            if (found_skill_md.parent.name == name
-                    or _safe_frontmatter(found_skill_md).get("name") == name):
-                _record(found_skill_md.parent, found_skill_md)
-        # Legacy flat <name>.md anywhere under the dir. Markdown owned by an ancestor
-        # directory skill loads through file_path and must not shadow a real skill.
-        for found_md in search_dir.rglob(f"{name}.md"):
-            if (found_md.name != "SKILL.md" and not _is_skill_support_path(found_md)
-                    and not _is_package_owned_markdown(found_md, search_dir)):
-                _record(None, found_md)
-    return candidates
+    from tools.skills_tool_index import collect_skill_candidates
+    return collect_skill_candidates(name, local_category_name, all_dirs)
 
 
 # (support dir, globs, recursive, files only) — order is the linked_files key order.
