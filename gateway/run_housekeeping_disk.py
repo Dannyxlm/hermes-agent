@@ -1,5 +1,5 @@
-"""Gateway housekeeping chores that keep the data disk healthy: stale media-cache cleanup and the
-home-channel prompt for the low-disk auto-prune decision (see ``hermes_cli/prune_advisor.py``).
+"""Gateway housekeeping chores that keep the data disk healthy: checkpoint-store pruning, stale media-cache
+cleanup and the home-channel prompt for the low-disk auto-prune decision (see ``hermes_cli/prune_advisor.py``).
 
 A headless gateway on a small VPS is where a disk fills up, and its owner may never open the CLI,
 so the question goes to each served profile's home channel; Desktop and Ink TUI viewers of local
@@ -15,6 +15,14 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def housekeeping_checkpoint_prune() -> None:
+    """Checkpoint store retention + size cap on a live timer; ``auto_prune_from_config`` gates on
+    ``checkpoints.auto_prune`` and the 24h ``.last_prune`` marker. Off the startup path because its
+    ``git gc`` can block for tens of seconds on a large store."""
+    from tools.checkpoint_maintenance import auto_prune_from_config
+    auto_prune_from_config()
 
 
 def housekeeping_media_caches() -> None:

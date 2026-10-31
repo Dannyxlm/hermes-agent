@@ -10,8 +10,8 @@ launch provenance, ``session.mutate``, ``prompt.submit``, ``prompt.cancel``,
 text inside the marker that grants the user's own authority, and an agent must not speak with it. There is no
 orchestration store: each thread is a ``work_launches`` row (``launch_id`` ``thread:<key>``) bound
 to the chat that opened it, so Family shows it as that chat's child. When a thread finishes work
-the tool sent it, the dashboard wakes the parent chat with the result
-(``tui_gateway/thread_notifications.py``).
+the tool sent it, the session owner wakes the parent chat with the result
+(``gateway/thread_wake.py``).
 
 Guards. These are rails for a cooperative agent, not a security boundary: anything with a
 terminal can call the same RPCs as the same user. The caller must be a local chat whose row
@@ -36,10 +36,9 @@ import json
 import os
 import re
 import sqlite3
-import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -66,12 +65,13 @@ RUN_BUDGET_DEFAULT_S, RUN_BUDGET_MIN_S, RUN_BUDGET_MAX_S = 7_200, 60, 28_800
 REASONING = ["none", "minimal", "low", "medium", "high", "xhigh"]
 ACTIVE = {"running", "queued", "paused"}
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-#: User-role rows no human typed, by their fixed headers (the same on every surface; a test pins each to
-#: its template): thread updates, scheduled wakes, /heartbeat and /loop ticks, /goal continuations.
-AUTOMATIC_PREFIXES = ("[Thread update", "[Scheduled wake", "[Heartbeat \u2014 recurring instruction",
-                      "[/loop wakeup #", "[Continuing toward your standing goal")
-#: ``display_metadata`` key on automatic turns that have no fixed header (Kanban notices).
-AUTOMATIC_KEY = "automatic_turn"
+#: Every automatic user-role row Hermes writes opens with a bracketed header (thread updates, scheduled wakes,
+#: process and delegation notices, compaction summaries, /heartbeat, /loop and /goal turns; a test pins the
+#: templates), except Kanban notices, which name the card (``_kanban_heads``). So the user wrote only in an
+#: unbracketed row that names no card, or in one of these bracketed forms of their own (mid-turn messages,
+#: attachments, replies). A user row read as automatic only asks for a check-in sooner; the unsafe miss is an
+#: automatic row read as the user, so every new automatic template must keep a bracketed header.
+HUMAN_BRACKETED = ("[OUT-OF-BAND USER MESSAGE", "[The user attached", "[The user sent", "[Replying to your previous message")
 # Parallel tool calls in one turn run on worker threads of this process: one cap check + create at a time.
 _CREATE_LOCK = threading.Lock()
 
@@ -272,8 +272,11 @@ async def _with_owner(home: Path, subject: str, fn):
         raise ThreadError("owner_refused", f"The gateway refused the request: {exc}") from exc
 
 
-async def _attach(client, thread: Thread) -> dict:
-    return await client.rpc("session.resume", session_id=thread.session_id, omit_messages=True, defer_history=True)
+async def _attach(client, thread: Thread) -> tuple[dict, Thread]:
+    """Resume the thread. The owner may attach another id of the same conversation (a local chat's logical id
+    once it compresses) and takes writes only for the id it attached, so every write uses the returned one."""
+    snap = await client.rpc("session.resume", session_id=thread.session_id, omit_messages=True, defer_history=True)
+    return snap, replace(thread, session_id=snap.get("session_id") or thread.session_id)
 
 
 def _handed_back(caller: Caller, admission_ids) -> None:
@@ -421,15 +424,26 @@ def _create_lock():
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+def _kanban_heads() -> tuple[str, ...]:
+    """How a Kanban notice names its card, in every language Hermes ships (``gateway.kanban.ping.head``; per
+    call, so this profile's own catalog overlay counts)."""
+    from agent.i18n import SUPPORTED_LANGUAGES, t
+    return tuple(sorted({t("gateway.kanban.ping.head", lang=lang, board_tag="", assignee_tag="", task_id="t_")
+                         for lang in SUPPORTED_LANGUAGES}))
+
+
 def _check_unattended(caller: Caller) -> None:
     """The loop guard: what this chat sent into its threads since the user last wrote in it."""
     ids = list(caller.lineage)
-    automatic = " ".join("AND substr(content,1,?)<>?" for _ in AUTOMATIC_PREFIXES)
+    human_bracketed = " OR ".join("substr(ltrim(content),1,?)=?" for _ in HUMAN_BRACKETED)
+    no_card = " AND ".join("instr(substr(content,1,120),?)=0" for _ in _kanban_heads())
+    mark = f"{MARK} From "
     with ts.reader(caller.home) as conn:
         row = conn.execute(
             f"SELECT MAX(timestamp) FROM messages WHERE session_id IN ({','.join('?' * len(ids))}) AND role='user' "
-            f"AND COALESCE(display_kind,'') IN ('','steer') AND COALESCE(display_metadata,'') NOT LIKE ? {automatic}",
-            [*ids, f'%"{AUTOMATIC_KEY}"%', *(x for p in AUTOMATIC_PREFIXES for x in (len(p), p))]).fetchone()
+            "AND COALESCE(display_kind,'') IN ('','steer') AND content IS NOT NULL "
+            f"AND ((substr(ltrim(content),1,1)<>'[' AND substr(content,1,?)<>? AND {no_card}) OR {human_bracketed})",
+            [*ids, len(mark), mark, *_kanban_heads(), *(x for p in HUMAN_BRACKETED for x in (len(p), p))]).fetchone()
     since = (row[0] if row else None) or 0
     homes, sent = ts.homes(), 0
     for launch in ts.threads_of(caller.profile, caller.lineage):
@@ -480,14 +494,10 @@ async def _clear_paused(client, thread: Thread, rows: list[dict], force: bool) -
 # ── actions ────────────────────────────────────────────────────────────────────────────────────
 
 def _wake_hint(caller: Caller) -> str:
-    """How the parent hears back: the dashboard's per-chat poller wakes chats it hosts."""
-    server = sys.modules.get("tui_gateway.server")
-    sessions = getattr(server, "_sessions", None) or {}
-    hosted = any(str(s.get("session_key") or "") in caller.lineage for s in list(sessions.values()) if isinstance(s, dict))
-    if hosted:
-        return ("When it finishes, this chat gets a thread update with the result, so you can end your turn or do "
-                "other work; use wait only when you need the result now.")
-    return "This chat isn't woken by thread updates: use wait (repeat it while threads work) or list to check back."
+    """How the parent hears back: the session owner wakes it (``gateway/thread_wake.py``)."""
+    return ("When it finishes, the session owner posts a thread update with the result into this chat once it's idle "
+            "(within about 10 s), even with the app closed. So end your turn or do other work; use wait only when you "
+            "need the result inside this turn.")
 
 
 def _create(caller: Caller, args: dict) -> dict:
@@ -581,7 +591,7 @@ async def _rename(client, sid, titles, request_id):
         # Each attempt reads the revision afresh: a refused first title must not fence out the second.
         snap = await client.rpc("session.resume", session_id=sid, omit_messages=True, defer_history=True)
         try:
-            await client.rpc("session.mutate", session_id=sid, request_id=f"{request_id}:{attempt}",
+            await client.rpc("session.mutate", session_id=snap.get("session_id") or sid, request_id=f"{request_id}:{attempt}",
                              expected_revision=snap["revision"], operation="rename", payload={"title": title[:100]})
             return title[:100]
         except GatewayRPCError:
@@ -613,15 +623,15 @@ def _send(caller: Caller, args: dict) -> dict:
     queued = [row for row in rows if row["status"] == "queued" and ts.tool_sent(row)]
 
     async def go(client):
-        snap = await _attach(client, thread)
+        snap, at = await _attach(client, thread)
         notes = []
-        if await _clear_paused(client, thread, rows, force):
+        if await _clear_paused(client, at, rows, force):
             notes.append("Cleared a turn a gateway restart had cut off, so the thread's queue moves again.")
         if mode == "interrupt" and snap.get("running") and running is not None:
             if ts.tool_sent(running) or force:
                 for row in queued:
-                    await client.rpc("prompt.cancel", session_id=thread.session_id, admission_id=row["admission_id"])
-                await client.rpc("session.interrupt", session_id=thread.session_id,
+                    await client.rpc("prompt.cancel", session_id=at.session_id, admission_id=row["admission_id"])
+                await client.rpc("session.interrupt", session_id=at.session_id,
                                  execution_generation=snap["execution_generation"])
                 _handed_back(caller, [row["admission_id"] for row in [*queued, running] if ts.tool_sent(row)])
                 notes.append("Interrupted the turn you sent (and dropped what you had queued); this message runs "
@@ -629,7 +639,7 @@ def _send(caller: Caller, args: dict) -> dict:
             else:
                 notes.append("The user's own turn is running there, so this was queued after it (force=true "
                              "interrupts the user's turn).")
-        admission = await client.rpc("prompt.submit", session_id=thread.session_id, submission_id=submission,
+        admission = await client.rpc("prompt.submit", session_id=at.session_id, submission_id=submission,
                                      text=text, finite=True, turn_author=_author(caller))
         busy = snap.get("running") and not any(n.startswith("Interrupted") for n in notes)
         if busy and not notes:
@@ -733,7 +743,8 @@ def _author_of(role: str, text: str) -> str:
         return "agent"
     if text.startswith("[Thread update"):
         return "thread_update"
-    return "automatic" if text.startswith(AUTOMATIC_PREFIXES) else "user"
+    human = not text.lstrip().startswith("[") or text.lstrip().startswith(HUMAN_BRACKETED)
+    return "user" if human and not any(head in text[:120] for head in _kanban_heads()) else "automatic"
 
 
 def _read(caller: Caller, args: dict) -> dict:
@@ -812,11 +823,11 @@ def _stop(caller: Caller, args: dict) -> dict:
     running = next((row for row in rows if row["status"] == "started"), None)
 
     async def go(client):
-        snap = await _attach(client, thread)
-        cleared = await _clear_paused(client, thread, rows, force)
+        snap, at = await _attach(client, thread)
+        cleared = await _clear_paused(client, at, rows, force)
         cancelled, cancelled_running = [], []
         for row in queued:
-            receipt = await client.rpc("prompt.cancel", session_id=thread.session_id, admission_id=row["admission_id"])
+            receipt = await client.rpc("prompt.cancel", session_id=at.session_id, admission_id=row["admission_id"])
             if receipt.get("status") == "terminal":
                 cancelled.append(row["admission_id"])
         _handed_back(caller, cancelled)
@@ -825,7 +836,7 @@ def _stop(caller: Caller, args: dict) -> dict:
             out["cleared_paused"] = cleared
         if snap.get("running") and running is not None:
             if ts.tool_sent(running) or force:
-                await client.rpc("session.interrupt", session_id=thread.session_id,
+                await client.rpc("session.interrupt", session_id=at.session_id,
                                  execution_generation=snap["execution_generation"])
                 if ts.tool_sent(running):
                     cancelled_running = [running["admission_id"]]
@@ -846,8 +857,8 @@ def _stop(caller: Caller, args: dict) -> dict:
 
 def _mutate(caller: Caller, thread: Thread, operation: str, payload: dict, request_id: str) -> dict:
     async def go(client):
-        snap = await _attach(client, thread)
-        return await client.rpc("session.mutate", session_id=thread.session_id, request_id=request_id,
+        snap, at = await _attach(client, thread)
+        return await client.rpc("session.mutate", session_id=at.session_id, request_id=request_id,
                                 expected_revision=snap["revision"], operation=operation, payload=payload)
     return _run(_with_owner(thread.home, caller.subject, go))
 
@@ -882,10 +893,6 @@ def thread_tool(args: dict, parent_agent=None) -> str:
         if action not in ACTIONS:
             raise ThreadError("invalid_request", f"action must be one of: {', '.join(ACTIONS)}.")
         result = ACTIONS[action](_caller(parent_agent), args)
-        if action in {"create", "send"} and parent_agent is not None:
-            # The dashboard's wake poller scans an idle chat once a minute; new work here rescans it at once.
-            with contextlib.suppress(AttributeError):
-                parent_agent._thread_launched = True
         return json.dumps({"success": True, "action": action, **result}, ensure_ascii=False)
     except ThreadError as exc:
         return json.dumps({"success": False, "action": action, "error": exc.code, "message": str(exc)},
@@ -920,7 +927,7 @@ THREAD_SCHEMA = {
         "A good brief: the goal and why it matters, what done looks like and how it's checked, context and paths, "
         "constraints and what the thread owns, and what to report. Say why, invite pushback, and verify what comes "
         "back. A thread can't message its parent: it ends its turn with a clear final message, and when this chat "
-        "can be woken, that result comes back to you as a thread update. Everything you send is visibly marked as "
+        "is idle, that result comes back to you as a thread update. Everything you send is visibly marked as "
         "from you, and threads can't open threads."),
     "parameters": {
         "type": "object",

@@ -7,6 +7,7 @@ the owner fails the test instead of passing quietly; ``owner`` swaps in a fake o
 same rows the real one does, for the paths that must reach it (create, send, stop).
 """
 import contextlib
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -186,93 +187,6 @@ def test_thread_status_reads_the_ledger(home):
         assert ts.thread_status([{"status": s, "outcome": o} for s, o in rows]) == expected, rows
 
 
-def _hooks(sent, *, accept=True):
-    return dict(scope=lambda session: contextlib.nullcontext(), claim_turn=lambda session: True,
-                release_turn=lambda session: None,
-                submit=lambda rid, sid, session, text, what, **kw: sent.append(text) or accept)
-
-
-def test_wake_delivers_each_result_once_and_retries_a_refused_submit(home):
-    from tui_gateway import thread_notifications as tn
-    with _db(home) as db:
-        thread(db, "t1")
-        admit(db, "t1", "a1", "terminal", "completed", reply="first result")
-    session = {"session_key": "parent"}
-    sent = []
-    tn.poll("live", session, **_hooks(sent))
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 1 and "[Thread update" in sent[0] and "first result" in sent[0], sent
-
-    with _db(home) as db:
-        admit(db, "t1", "a2", "unknown")
-    session["_thread_wake"]["next_scan"] = 0.0  # the idle minute passed
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 2 and "paused" in sent[1], sent
-    with _db(home) as db:
-        settle(db, "a2", "completed", reply="second result")
-    refused = []
-    tn.poll("live", session, **_hooks(refused, accept=False))
-    assert len(refused) == 1  # tried, refused: nothing is marked delivered
-    session["_thread_wake"]["next_scan"] = 0.0  # the refusal backoff passed
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 3 and "second result" in sent[2], sent
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 3
-
-
-def test_wake_backs_off_for_a_chat_with_no_threads(home):
-    from tui_gateway import thread_notifications as tn
-    sent = []
-    session = {"session_key": "parent"}
-    tn.poll("live", session, **_hooks(sent))
-    assert sent == [] and session["_thread_wake"]["next_scan"] > 0
-    with _db(home) as db:
-        thread(db, "t1")
-        admit(db, "t1", "a1", "terminal", "completed", reply="done")
-    tn.poll("live", session, **_hooks(sent))
-    assert sent == []  # still backing off
-    session["agent"] = SimpleNamespace(_thread_launched=True)  # a create in this process
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 1 and session["agent"]._thread_launched is False  # one immediate scan, not every poll
-    tn.poll("live", session, **_hooks(sent))
-    assert session["_thread_wake"]["next_scan"] > time.monotonic()  # nothing out: back to the idle cadence
-
-
-def test_a_refused_wake_backs_off_and_stops_pinning_a_chat_hosted_elsewhere(home):
-    from tui_gateway import thread_notifications as tn
-    with _db(home) as db:
-        thread(db, "t1")
-        admit(db, "t1", "a1", "terminal", "completed", reply="result")
-    session, refused = {"session_key": "parent"}, []
-    for n in range(tn.REFUSALS_BEFORE_UNPIN):
-        session["_thread_wake"] = {**session.get("_thread_wake", {}), "next_scan": 0.0}
-        tn.poll("live", session, **_hooks(refused, accept=False))
-        assert session["_thread_wake"]["next_scan"] > time.monotonic()  # not again on the next poll
-    assert len(refused) == tn.REFUSALS_BEFORE_UNPIN and not tn.owns_pending_thread_wake(session)
-    session["_thread_wake"]["next_scan"] = 0.0
-    sent = []
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 1 and session["_thread_wake"]["refusals"] == 0
-
-
-def test_a_failed_claim_releases_the_turn_it_took(home, monkeypatch):
-    from tools import thread_state as ts
-    from tui_gateway import thread_notifications as tn
-    with _db(home) as db:
-        thread(db, "t1")
-        admit(db, "t1", "a1", "terminal", "completed", reply="result")
-
-    def broken(*args, **kwargs):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(ts, "claim", broken)
-    released = []
-    hooks = {**_hooks([]), "release_turn": released.append}
-    session = {"session_key": "parent"}
-    tn.poll("live", session, **hooks)
-    assert released == [session]  # the chat isn't left busy
-
-
 def test_threads_toolset_is_local_only_and_opt_in():
     from hermes_cli.tools_config import CONFIGURABLE_TOOLSETS
     from toolsets import TOOLSETS, TOOLSET_SESSION_PLATFORMS, resolve_toolset, session_platform_tool_drops
@@ -342,24 +256,47 @@ def test_messages_into_threads_stop_until_the_user_writes_again(home):
 
 
 def test_automatic_turns_in_the_parent_are_not_the_user_writing(home):
-    """A heartbeat, /loop, /goal or Kanban turn must not hand an unattended lead a fresh send budget."""
+    """Heartbeat, /loop, /goal, process and delegation notices, compaction rows, scheduled wakes and Kanban
+    notices must not hand an unattended lead a fresh send budget; the user's own messages (typed, mid-turn,
+    with an attachment) do reset it."""
+    from agent.context_compressor import _BACKGROUND_PROCESS_NOTIFICATION_PREFIX, SUMMARY_PREFIX
+    from agent.i18n import t
+    from cron.session_delivery import wake_message
+    from gateway.thread_wake import render
     from hermes_cli.goals import CONTINUATION_PROMPT_GATE_FAILED_TEMPLATE, CONTINUATION_PROMPT_TEMPLATE
     from hermes_cli.heartbeat import HEARTBEAT_PROMPT_TEMPLATE
     from hermes_cli.loops import WAKEUP_PROMPT_TEMPLATE, WAKEUP_PROMPT_WITH_UNTIL_TEMPLATE
     from tools import thread_tool as tool
-    for template in (HEARTBEAT_PROMPT_TEMPLATE, WAKEUP_PROMPT_TEMPLATE, WAKEUP_PROMPT_WITH_UNTIL_TEMPLATE,
-                     CONTINUATION_PROMPT_TEMPLATE, CONTINUATION_PROMPT_GATE_FAILED_TEMPLATE):
-        assert template.startswith(tool.AUTOMATIC_PREFIXES), template[:40]  # the headers the guard knows
+    from tools.process_registry_notifications import _format_async_delegation
+    delegation = _format_async_delegation({"delegation_id": "deleg_1", "goal": "g", "completed_at": 0,
+                                           "results": [{"status": "completed", "summary": "ok", "task_index": 0}]})
+    kanban = [t("gateway.kanban.ping.head", lang=lang, board_tag="", assignee_tag="@iris ", task_id="t_1a2b") + " done"
+              for lang in ("en", "zh")]
+    automatic = [HEARTBEAT_PROMPT_TEMPLATE.format(interval="5m", prompt="check in"),
+                 WAKEUP_PROMPT_TEMPLATE.format(tick=3, cadence=" \u00b7 every 5m", prompt="watch the build"),
+                 WAKEUP_PROMPT_WITH_UNTIL_TEMPLATE, CONTINUATION_PROMPT_TEMPLATE, CONTINUATION_PROMPT_GATE_FAILED_TEMPLATE,
+                 wake_message({"name": "job"}, "tick"), render([], [], "default"),
+                 _BACKGROUND_PROCESS_NOTIFICATION_PREFIX + "proc_1 completed (exit 0).", delegation,
+                 SUMMARY_PREFIX + "\n...", *kanban]
+    for text in automatic[:-len(kanban)]:
+        assert text.startswith("["), text[:40]  # every automatic template keeps its bracketed header
     with _db(home) as db:
         db.append_message("parent", "user", "Danny: go")
         thread(db, "t1")
         for n in range(tool.MAX_SENDS_SINCE_USER):
             db.append_message("t1", "user", f"{tool.MARK} From Ava in parent \u00b7 thread tool\n\nmessage {n}")
-        db.append_message("parent", "user", HEARTBEAT_PROMPT_TEMPLATE.format(interval="5m", prompt="check in"))
-        db.append_message("parent", "user", WAKEUP_PROMPT_TEMPLATE.format(tick=3, cadence=" \u00b7 every 5m",
-                                                                         prompt="watch the build"))
-        db.append_message("parent", "user", "\u2714 Kanban t_1 done", display_metadata={"automatic_turn": "kanban"})
+        for text in automatic:
+            db.append_message("parent", "user", text)
     assert call(action="send", thread_id="t1", message="one more")["error"] == "check_in_with_user"
+    for human, kind in (("keep going", None), ("[OUT-OF-BAND USER MESSAGE \u2014 ...]\nchange course", "steer"),
+                        ("[The user attached an image] look", None)):
+        with _db(home) as db:
+            db.append_message("parent", "user", human, display_kind=kind)
+        with pytest.raises(AssertionError, match="reach the owner"):  # past the guard, on its way to the owner
+            call(action="send", thread_id="t1", message=f"one more after {human[:8]}")
+        with _db(home) as db:
+            db.append_message("parent", "user", "[IMPORTANT: Background process proc_2 completed (exit 0).")
+            db._write_sql("UPDATE messages SET timestamp=timestamp-10000 WHERE session_id='parent' AND content=?", (human,))
 
 
 def ts_reader(home):
@@ -374,11 +311,29 @@ class Owner:
     def __init__(self, home, *, refuse_titles=(), running=None):
         self.home, self.calls, self.revision, self.resumed = home, [], 0, []
         self.refuse_titles, self.running = set(refuse_titles), running
+        self.refuse_submit = self.lose_receipt = self.lose_resolve_receipt = False
+        self.update_outcome = "completed"  # how a thread update's turn ends: an outcome, "unknown" or None (running)
+        self.attached = set()  # like the real owner, writes are taken only for an id this connection attached
+
+    def _attach(self, sid):
+        """What the owner's resume attaches: a local chat's logical id, otherwise the compression tip."""
+        from tools import thread_state as ts
+        with ts_reader(self.home) as conn:
+            logical = sorted(i for i in ts.lineage(conn, sid) if i.startswith("local-"))
+            target = logical[0] if logical else ts.tip(conn, sid)
+        self.attached.add(target)
+        return target
+
+    def submits(self, prefix="thread_update:"):
+        return [p for m, p in self.calls if m == "prompt.submit" and p["submission_id"].startswith(prefix)]
 
     async def rpc(self, method, **params):
         from hermes_cli.gateway_client import GatewayRPCError
         self.calls.append((method, params))
         self.revision += 1
+        writes = {"prompt.submit", "prompt.cancel", "prompt.resolve_unknown", "session.interrupt", "session.mutate"}
+        if method in writes and params["session_id"] not in self.attached:
+            raise GatewayRPCError("permission_denied")
         with _db(self.home) as db:
             if method == "session.create":
                 sid = "t" + params["launch_id"][-6:]
@@ -387,27 +342,54 @@ class Owner:
                                  launcher_profile=params["started_by_profile"],
                                  launcher_session_id=params["started_by_session"], child_profile="default")
                 db.bind_launch(params["launch_id"], child_session_id=sid)
+                self.attached.add(sid)
                 return {"session_id": sid, "info": {"title": "", "model": "m"}, "revision": self.revision}
             if method == "session.resume":
                 self.resumed.append(self.revision)
-                return {"revision": self.revision, "running": self.running is not None, "execution_generation": 1}
+                return {"session_id": self._attach(params["session_id"]), "revision": self.revision,
+                        "running": self.running is not None, "execution_generation": 1}
             if method == "session.mutate":
                 if params["payload"].get("title") in self.refuse_titles:
                     raise GatewayRPCError("title_taken")
                 return {"revision": self.revision}
             if method == "prompt.submit":
-                aid, status = "adm-" + params["submission_id"][-8:], "queued" if self.running else "started"
-                with ts_reader(self.home) as conn:  # the owner replays a request it already admitted
-                    if conn.execute("SELECT 1 FROM session_admissions WHERE admission_id=?", (aid,)).fetchone():
-                        return {"admission_id": aid, "status": "replayed"}
-                admit(db, params["session_id"], aid, status)
-                db._write_sql("UPDATE session_admissions SET request_id=? WHERE admission_id=?",
-                              (params["submission_id"], aid))
-                return {"admission_id": aid, "status": status}
+                return self._submit(db, params)
             if method == "prompt.cancel":
                 settle(db, params["admission_id"], "cancelled")
                 return {"status": "terminal"}
+            if method == "prompt.resolve_unknown":
+                settle(db, params["admission_id"], "interrupted")  # idempotent on a row it already settled
+                if self.lose_resolve_receipt:
+                    self.lose_resolve_receipt = False
+                    raise ConnectionError("receipt lost")
+                return {"status": "terminal"}
         return {}
+
+    def _submit(self, db, params):
+        from hermes_cli.gateway_client import GatewayRPCError
+        if self.refuse_submit:
+            raise GatewayRPCError("owner_busy")
+        digest = hashlib.sha256(json.dumps({k: v for k, v in params.items() if k != "submission_id"},
+                                           sort_keys=True).encode()).hexdigest()
+        with ts_reader(self.home) as conn:  # the owner replays a request id only for the identical payload
+            seen = conn.execute("SELECT admission_id, payload_digest FROM session_admissions WHERE request_id=?",
+                                (params["submission_id"],)).fetchone()
+        if seen:
+            if seen["payload_digest"] != digest:
+                raise GatewayRPCError("admission_conflict")
+            return {"admission_id": seen["admission_id"], "status": "replayed"}
+        aid, status = "adm-" + params["submission_id"][-8:], "queued" if self.running else "started"
+        admit(db, params["session_id"], aid, status)
+        db._write_sql("UPDATE session_admissions SET request_id=?, payload_digest=? WHERE admission_id=?",
+                      (params["submission_id"], digest, aid))
+        if params["submission_id"].startswith("thread_update:") and self.update_outcome == "unknown":
+            db._write_sql("UPDATE session_admissions SET status='unknown' WHERE admission_id=?", (aid,))
+        elif params["submission_id"].startswith("thread_update:") and self.update_outcome:
+            settle(db, aid, self.update_outcome)  # the update turn ran
+        if self.lose_receipt:
+            self.lose_receipt = False
+            raise ConnectionError("receipt lost")
+        return {"admission_id": aid, "status": status}
 
 
 @pytest.fixture
@@ -454,7 +436,7 @@ def test_create_opens_a_marked_thread_and_a_retry_in_the_same_turn_reports_how_i
 
 
 def test_stop_cancels_and_interrupts_only_the_tools_turns_and_wakes_no_one_about_it(home, owner):
-    from tui_gateway import thread_notifications as tn
+    from gateway.thread_wake import deliver
     with _db(home) as db:
         thread(db, "t1")
         admit(db, "t1", "running", "started")
@@ -466,9 +448,262 @@ def test_stop_cancels_and_interrupts_only_the_tools_turns_and_wakes_no_one_about
     assert [m for m, _ in owner.calls] == ["session.resume", "prompt.cancel", "session.interrupt"]
     with _db(home) as db:
         settle(db, "running", "interrupted")
-    sent = []
-    tn.poll("live", {"session_key": "parent"}, **_hooks(sent))
-    assert sent == []  # the lead stopped them itself: no update telling it so
+    assert not deliver(home, "default", "parent") and owner.submits() == []  # it stopped them itself: no update
+
+
+def test_the_owner_wakes_an_idle_lead_once_with_every_result(home, owner):
+    from gateway.thread_wake import SUBMISSION_PREFIX, deliver
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="first result")
+        thread(db, "t2")
+        admit(db, "t2", "a2", "terminal", "failed", reply="")
+        admit(db, "t2", "dannys", "terminal", "completed", tool=False, reply="Danny's own turn")
+        thread(db, "t3")
+        admit(db, "t3", "a3", "started")
+    assert deliver(home, "default", "parent")
+    (update,) = owner.submits()
+    assert (update["session_id"], update["queued"], update["finite"], update["turn_author"]["is_bot"]) == (
+        "parent", True, True, True)
+    assert update["submission_id"].startswith(SUBMISSION_PREFIX) and not update["submission_id"].startswith("thread-")
+    text = update["text"]
+    assert text.startswith("[Thread update") and "first result" in text and "failed" in text, text
+    assert "Danny's own turn" not in text and "Still working: " in text  # the user's turns aren't reported back
+    assert not deliver(home, "default", "parent") and len(owner.submits()) == 1  # each result once
+    with _db(home) as db:
+        settle(db, "a3", "completed", reply="third result")
+    assert deliver(home, "default", "parent") and "third result" in owner.submits()[-1]["text"]
+
+
+def test_a_busy_lead_gets_its_update_when_idle(home, owner):
+    from gateway.thread_wake import deliver
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+        admit(db, "parent", "leads-turn", "started", tool=False)
+    assert not deliver(home, "default", "parent") and owner.calls == []  # mid-turn: maybe waiting on it right now
+    with _db(home) as db:
+        settle(db, "leads-turn", "completed")
+    assert deliver(home, "default", "parent")
+
+
+def test_a_refused_or_lost_update_is_retried_as_the_same_admission(home, owner):
+    """The submit is refused, then admitted with its receipt lost, while another thread settles in between: the
+    retry carries the identical payload under the same key (the owner's digest rule would refuse a drifted one),
+    no second turn re-reports anything, and the newly settled result comes in the next update."""
+    from gateway.thread_wake import deliver
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="first")
+        thread(db, "t2")
+        admit(db, "t2", "a2", "started")
+    owner.refuse_submit = True
+    with pytest.raises(Exception, match="owner_busy"):
+        deliver(home, "default", "parent")
+    with _db(home) as db:
+        settle(db, "a2", "completed", reply="second")  # the still-working list the first text named is stale now
+    owner.refuse_submit, owner.lose_receipt = False, True  # admitted this time, but the reply never came back
+    with pytest.raises(ConnectionError):
+        deliver(home, "default", "parent")
+    assert not deliver(home, "default", "parent")  # the ledger shows it admitted and done: no resubmit
+    first, retry = owner.submits()
+    assert first == retry and "first" in first["text"] and "second" not in first["text"]
+    assert deliver(home, "default", "parent") and "second" in owner.submits()[-1]["text"]
+    assert "first" not in owner.submits()[-1]["text"].replace("first message", "")  # reported once
+    with ts_reader(home) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM session_admissions WHERE request_id LIKE 'thread_update:%'"
+                            ).fetchone()[0] == 2
+
+
+def test_an_update_cut_off_by_a_restart_is_cleared_and_sent_again(home, owner):
+    """A restart during the update's turn leaves it ``unknown``, which parks the lead. Nobody but the sweeper
+    sent it, so a fresh sweeper (the restarted owner) discards it and sends it again; the results are delivered
+    only once a turn carrying them is done."""
+    from gateway import thread_wake
+    from tools import thread_state as ts
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+    owner.update_outcome = "unknown"
+    assert thread_wake.deliver(home, "default", "parent")
+    assert not ts.delivered(home, "a1", "done")  # admitted is not delivered
+    owner.update_outcome = "completed"
+    sweeper = thread_wake.Sweeper(lambda: [home])  # the restarted owner: everything it knows is on disk
+    assert sweeper.sweep() == 0  # saves the resend, naming the cut-off turn...
+    assert sweeper.sweep() == 0  # ...discards that turn...
+    (cleared,) = [p for m, p in owner.calls if m == "prompt.resolve_unknown"]
+    assert cleared["admission_id"] == "adm-" + owner.submits()[0]["submission_id"][-8:]
+    assert sweeper.sweep() == 1  # ...then sends it again under a new key
+    first, again = owner.submits()
+    assert again["submission_id"] != first["submission_id"] and again["text"] == first["text"] + thread_wake.RESENT
+    assert sweeper.sweep() == 0 and ts.delivered(home, "a1", "done")
+    assert len(owner.submits()) == 1 + 1
+
+
+def _compress(db, sid, into):
+    db.create_session(into, "tui", user_id=DANNY)
+    db._write_sql("UPDATE sessions SET parent_session_id=? WHERE id=?", (sid, into))
+    db._write_sql("UPDATE sessions SET end_reason='compression' WHERE id=?", (sid,))
+
+
+def _update_admission(home):
+    with ts_reader(home) as conn:
+        return conn.execute("SELECT admission_id FROM session_admissions WHERE request_id LIKE 'thread_update:%' "
+                            "ORDER BY seq DESC").fetchone()[0]
+
+
+def test_a_compressed_local_lead_gets_its_update_at_the_id_the_owner_attaches(home, owner):
+    """A local chat's continuations are timestamp ids; the owner attaches its logical ``local-`` id and refuses
+    writes to any other."""
+    from gateway.thread_wake import deliver
+    with _db(home) as db:
+        db.create_session("local-lead", "tui", user_id=DANNY)
+        thread(db, "t1", launcher="local-lead")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+        _compress(db, "local-lead", "20261031_120000_abcdef")
+    assert deliver(home, "default", "local-lead")
+    assert [u["session_id"] for u in owner.submits()] == ["local-lead"]
+
+
+def test_a_compressed_local_thread_takes_sends_at_its_logical_id(home, owner):
+    with _db(home) as db:
+        thread(db, "local-t1")
+        _compress(db, "local-t1", "20261031_120000_abcdef")
+    out = call(action="send", thread_id="local-t1", message="carry on")
+    assert out.get("admission_id"), out
+    (sent,) = owner.submits(prefix="thread-send-")
+    assert sent["session_id"] == "local-t1"
+
+
+def test_a_lead_that_compresses_mid_update_keeps_one_update(home, owner):
+    """The pending update is keyed on the conversation's first segment, so a compression during the update's
+    long turn (its claims long stale by then) finds the same record instead of sending the results twice."""
+    import os
+    from gateway.thread_wake import deliver
+    from tools import thread_state as ts
+    with _db(home) as db:
+        db.create_session("local-lead", "tui", user_id=DANNY)
+        thread(db, "t1", launcher="local-lead")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+    owner.update_outcome = None  # the update's turn is still running...
+    assert deliver(home, "default", "local-lead")
+    with _db(home) as db:
+        _compress(db, "local-lead", "20261031_120000_abcdef")  # ...when the lead compresses
+    for path in ts._marker_dir(home).glob("*.claim"):
+        os.utime(path, (time.time() - 3600, time.time() - 3600))
+    assert not deliver(home, "default", "local-lead")
+    with _db(home) as db:
+        settle(db, _update_admission(home), "completed")
+    assert not deliver(home, "default", "local-lead") and ts.delivered(home, "a1", "done")
+    assert not deliver(home, "default", "local-lead") and len(owner.submits()) == 1
+
+
+def test_a_resend_survives_a_crash_between_clearing_and_saving(home, owner):
+    """The resend's intent is saved before the cut-off turn is cleared: losing the clear's answer (a crash right
+    after it) must not turn the cleared turn into "delivered"."""
+    from gateway.thread_wake import RESENT, deliver
+    from tools import thread_state as ts
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+    owner.update_outcome = "unknown"
+    assert deliver(home, "default", "parent")
+    owner.update_outcome = "completed"
+    assert not deliver(home, "default", "parent")  # saves the resend, cut-off turn named
+    owner.lose_resolve_receipt = True
+    with pytest.raises(ConnectionError):
+        deliver(home, "default", "parent")  # clears it, then "crashes"
+    assert not ts.delivered(home, "a1", "done")
+    assert not deliver(home, "default", "parent")  # clears again (idempotent), forgets the cut-off turn
+    assert deliver(home, "default", "parent") and owner.submits()[-1]["text"].endswith(RESENT)
+    assert not deliver(home, "default", "parent") and ts.delivered(home, "a1", "done")
+
+
+def test_a_cancelled_update_is_sent_again_a_bounded_number_of_times(home, owner):
+    from gateway.thread_wake import MAX_RESENDS, deliver
+    from tools import thread_state as ts
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+    owner.update_outcome = "cancelled"  # cancelled before it ran: nobody has read it
+    for _ in range(4 * (MAX_RESENDS + 2)):
+        deliver(home, "default", "parent")
+    assert len(owner.submits()) == 1 + MAX_RESENDS and ts.delivered(home, "a1", "done")
+
+
+def test_a_lead_parked_on_its_users_cut_off_turn_waits_for_them(home, owner):
+    from gateway.thread_wake import deliver
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+        admit(db, "parent", "dannys", "unknown", tool=False)
+    assert not deliver(home, "default", "parent") and owner.calls == []  # his to discard, not the sweeper's
+    with _db(home) as db:
+        settle(db, "dannys", "interrupted")  # he discarded it (or closed the chat)
+    assert deliver(home, "default", "parent")
+
+
+def test_the_sweep_serves_every_lead_and_backs_off_one_that_fails(home, owner, monkeypatch):
+    from gateway import thread_wake
+    old = time.time() - 10 * 86400
+    with _db(home) as db:
+        db.create_session("other", "tui", user_id=DANNY)
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="for parent")
+        thread(db, "t2", launcher="other")
+        admit(db, "t2", "a2", "terminal", "completed", reply="for other")
+        db.create_session("old", "tui", user_id=DANNY)
+        thread(db, "t3", launcher="old")
+        admit(db, "t3", "a3", "terminal", "completed", reply="stale")
+        db.create_session("compressed", "tui", user_id=DANNY)
+        thread(db, "t4", launcher="compressed")  # compressed; its continuation finished today
+        db.create_session("t4b", "tui", user_id=DANNY)
+        db.create_session("gone", "tui", user_id=DANNY)
+        thread(db, "t5", launcher="gone")
+        admit(db, "t5", "a5", "terminal", "completed", reply="archived lead")
+        db._write_sql("UPDATE sessions SET archived=1 WHERE id='gone'")
+        db._write_sql("UPDATE sessions SET parent_session_id='t4' WHERE id='t4b'")
+        db._write_sql("UPDATE sessions SET end_reason='compression' WHERE id='t4'")
+        db._write_sql("UPDATE sessions SET started_at=?, last_activity_at=? WHERE id IN ('t3','t4')", (old, old))
+    assert thread_wake.leads("default") == ["compressed", "gone", "other", "parent"]  # t3 idle past the window
+    real = thread_wake.deliver
+
+    def flaky(home_, profile, lead):
+        if lead == "other":
+            raise RuntimeError("owner unreachable")
+        return real(home_, profile, lead)
+
+    monkeypatch.setattr(thread_wake, "deliver", flaky)
+    sweeper = thread_wake.Sweeper(lambda: [home])
+    assert sweeper.sweep(now=1000.0) == 1  # parent; the archived lead gets nothing; the failing one backs off
+    assert sweeper._retry[(home.resolve(), "other")][0] == 1000.0 + thread_wake.BACKOFF_S
+    monkeypatch.setattr(thread_wake, "deliver", real)
+    assert sweeper.sweep(now=1001.0) == 0  # still backing off
+    assert sweeper.sweep(now=1000.0 + thread_wake.BACKOFF_S) == 1 and (home.resolve(), "other") not in sweeper._retry
+    assert [p["session_id"] for p in owner.submits()] == ["parent", "other"]
+
+
+def test_the_sweeper_sweeps_until_stopped():
+    import threading
+    from gateway.thread_wake import Sweeper
+    swept_twice = threading.Event()
+
+    class Counting(Sweeper):
+        swept = 0
+
+        def sweep(self, now=None):
+            Counting.swept += 1
+            if Counting.swept >= 2:
+                swept_twice.set()
+            return 0
+
+    stop = threading.Event()
+    worker = threading.Thread(target=Counting(list).run, args=(stop, 0.01))
+    worker.start()
+    assert swept_twice.wait(timeout=5)  # it keeps sweeping on its interval...
+    stop.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()  # ...and its loop ends with the stop
 
 
 def test_interrupt_send_cancels_then_interrupts_then_queues_and_leaves_the_users_turn(home, owner):
@@ -513,24 +748,6 @@ def test_a_claim_left_by_a_crash_is_retaken_and_a_delivered_result_is_not(home):
     ts.finish_claim(home, "a1", "done", accepted=True)
     assert ts.delivered(home, "a1", "done") and not ts.claim(home, "a1", "done", now=time.time() + 10_000)
     assert ts.claim(home, "a1", "paused")  # another transition of the same turn is its own delivery
-
-
-def test_pending_thread_work_keeps_the_chat_resident(home):
-    from tui_gateway import thread_notifications as tn
-    with _db(home) as db:
-        thread(db, "t1")
-        admit(db, "t1", "a1", "started")
-    session = {"session_key": "parent"}
-    sent = []
-    tn.poll("live", session, **_hooks(sent))
-    assert sent == [] and tn.owns_pending_thread_wake(session)
-    session["_turn_cancel_requested"] = True
-    assert not tn.owns_pending_thread_wake(session)  # after Stop nothing would deliver it anyway
-    del session["_turn_cancel_requested"]
-    with _db(home) as db:
-        settle(db, "a1", "completed", reply="ok")
-    tn.poll("live", session, **_hooks(sent))
-    assert len(sent) == 1 and not tn.owns_pending_thread_wake(session)
 
 
 def test_a_repeated_send_replays_the_first_and_touches_nothing(home):
@@ -584,3 +801,35 @@ def test_no_registry_tool_expects_an_agent_it_is_never_given():
             continue
         if 'kw.get("parent_agent")' in source or "kwargs.get(\"parent_agent\")" in source:
             assert name in agent_level, f"{name} reads parent_agent from registry kwargs, which never carry it"
+
+
+def test_gateway_housekeeping_runs_the_sweeper_inside_its_own_lifetime(home, monkeypatch):
+    """The owner's sweeper starts with housekeeping (a runtime writer) and is stopped and joined before it returns."""
+    import gateway.run as gateway_run
+    from gateway import thread_wake
+
+    class Ticks:  # one housekeeping tick, no sleeping
+        def __init__(self):
+            self.n = 0
+
+        def is_set(self):
+            return self.n >= 1
+
+        def wait(self, timeout=None):
+            self.n += 1
+            return True
+
+    started = {}
+
+    class Worker:
+        def join(self, timeout=None):
+            started["joined_after_stop"] = started["stop"].is_set()
+
+    def fake_start(stop, homes):
+        started.update(stop=stop, homes=homes())
+        return Worker()
+
+    monkeypatch.setattr(thread_wake, "start", fake_start)
+    runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=False), adapters=None)
+    gateway_run._start_gateway_housekeeping(Ticks(), interval=0, runner=runner)
+    assert started["homes"] == [home] and started["joined_after_stop"] is True
