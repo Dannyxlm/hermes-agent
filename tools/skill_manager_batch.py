@@ -303,6 +303,8 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
                 entry.update({k: parsed[k] for k in _ADVISORY_KEYS if parsed.get(k) is not None})
                 results.append(entry)
         finally:
+            from tools.skills_tool_index import invalidate_skill_index
+            invalidate_skill_index()  # rollback may have replaced trees indexed by an earlier op
             _smt._skill_review_batch.reset(review_token)
             _smt._skill_gate_bypass.reset(token)
             if rollback_failed:

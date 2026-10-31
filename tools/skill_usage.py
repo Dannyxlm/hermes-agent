@@ -591,6 +591,7 @@ def _relocate(src: Path, dest: Path, skill_name: str, action: str, **capture_kwa
         _ledger_before = _ledger.capture_before(src, **capture_kwargs)
     except Exception:
         _ledger = _ledger_before = None  # type: ignore[assignment]
+    from tools.skills_tool_index import invalidate_skill_index
     try:
         src.rename(dest)
     except OSError:
@@ -599,6 +600,9 @@ def _relocate(src: Path, dest: Path, skill_name: str, action: str, **capture_kwa
             shutil.move(str(src), str(dest))
         except Exception as e:
             return False, f"failed to {action}: {e}"
+    finally:
+        # Cross-filesystem moves can leave a partial destination even on failure.
+        invalidate_skill_index()
     archiving = action == "archive"
     if archiving:
         # `curator purge` ages archives by mtime; a move keeps the skill's last-edit mtime, so an
