@@ -60,6 +60,7 @@ def live_projections(entries, launch_home):
     import sqlite3
     from hermes_constants import profile_name_for_home
     from hermes_state import SessionDB
+    from hermes_state_launches import thread_parents
     from .mobile_session_scope import projection_destinations
 
     result = {sid: {} for sid, _key, _session in entries}
@@ -79,6 +80,8 @@ def live_projections(entries, launch_home):
                 destinations = projection_destinations(db, profile_name_for_home(home), list(dict.fromkeys(key for _, key, _ in members)))
                 roots = {dest['root']['id']: dest['root'] for dest in destinations.values()}
                 replies = page_replies(db, list(roots.values()))
+                parents = thread_parents(db, profile_name_for_home(home),
+                    {key: dest['root']['_lineage_ids'] for key, dest in destinations.items()})
             for sid, key, session in members:
                 dest = destinations.get(key)
                 if dest is None:
@@ -86,6 +89,7 @@ def live_projections(entries, launch_home):
                     # Keep the live fallback; retry the projection on the next poll.
                     continue
                 result[sid]['title'] = dest['title']
+                result[sid]['thread_parent_id'] = parents.get(key)
                 if reply := replies.get(dest['root']['id']):
                     result[sid]['last_assistant_reply'] = reply
                 scopes[sid] = dest['scope'].key
