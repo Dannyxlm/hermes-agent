@@ -72,6 +72,19 @@ async def test_thread_provenance_comes_from_the_authority_store(owner):
 
 
 @pytest.mark.asyncio
+async def test_a_session_replaced_during_provenance_read_does_not_publish_the_old_snapshot(owner, monkeypatch):
+    from copy import copy
+    import hermes_state_launches
+
+    def replaced_during_read(*args):
+        owner.authority.sessions['chat'] = copy(owner.authority.sessions['chat'])
+        return {}
+
+    monkeypatch.setattr(hermes_state_launches, 'thread_parents', replaced_during_read, raising=False)
+    assert await owner.active() == {}
+
+
+@pytest.mark.asyncio
 async def test_a_row_names_its_source(owner):
     # Desktop's poll can see a messaging turn settle before its messaging row loads; the source
     # on the live row is what keeps that settle from reading as a Desktop completion.
