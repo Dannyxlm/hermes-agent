@@ -20,6 +20,15 @@ def _status(live, handle, pending) -> str:
     return 'starting' if any(row['status'] == 'queued' for row in pending) else 'idle'
 
 
+def _thread_parents(db, session_ids):
+    from hermes_state_launches import thread_parents
+    from tui_gateway.mobile_session_scope import projection_destinations
+    profile = db._own_profile_name() or 'default'
+    destinations = projection_destinations(db, profile, session_ids)
+    return thread_parents(db, profile,
+                          {key: dest['root']['_lineage_ids'] for key, dest in destinations.items()})
+
+
 async def active_list(connection, ref, params):
     if set(params) - {'profile', 'current_session_id'}:
         raise RuntimeStoreError('invalid_params')
@@ -27,15 +36,14 @@ async def active_list(connection, ref, params):
         raise RuntimeStoreError('permission_denied')
     import asyncio
     from gateway.session_live_listing import live_entries, _readable
-    from hermes_state_launches import thread_parents
     from hermes_state_sessions import INTERNAL_LISTING_SOURCES
     current = str(params.get('current_session_id') or '')
     # Same population as the live session.list feed, hidden chats included. Only visible
     # candidates need provenance; finished internal jobs can dominate the authority registry.
     entries = [entry for entry in await live_entries(connection.authority, connection.actor)
                if entry.row.get('source') not in INTERNAL_LISTING_SOURCES and not entry.closed]
-    parents = await asyncio.to_thread(thread_parents, connection.authority.db, connection.actor.profile_id,
-                                     {entry.session_id: [entry.session_id] for entry in entries})
+    parents = await asyncio.to_thread(_thread_parents, connection.authority.db,
+                                     [entry.session_id for entry in entries])
     if connection.authority.retiring or connection.authority.retired:
         return {'sessions': []}
     rows = []
