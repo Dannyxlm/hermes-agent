@@ -14109,7 +14109,10 @@
           "display_kind": {
             "anyOf": [
               {
-                "const": "hidden",
+                "enum": [
+                  "hidden",
+                  "internal_notification"
+                ],
                 "type": "string"
               },
               {

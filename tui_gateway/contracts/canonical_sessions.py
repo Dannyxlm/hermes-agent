@@ -228,7 +228,9 @@ class CanonicalSubmitParams(CanonicalSessionParams):
     # Desktop composer presentation, committed per admission (``display_v1``): a hidden widget
     # intent persists ``display_kind=hidden`` (never a user bubble); a large paste's preview is
     # titler input only, never model input.
-    display_kind: Literal['hidden'] | None = None
+    # internal_notification is reserved for the server's exact pending thread wake;
+    # bot attribution alone never authorizes it.
+    display_kind: Literal['hidden', 'internal_notification'] | None = None
     title_preview: str | None = None
     # Classic CLI per-turn inputs, committed per admission (``cli_turn_v1``): who wrote the turn
     # (memory attribution only), the model-facing text when it differs from the persisted ``text``
