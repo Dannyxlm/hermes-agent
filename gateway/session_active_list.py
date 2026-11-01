@@ -40,7 +40,8 @@ async def active_list(connection, ref, params):
         return {'sessions': []}
     rows = []
     for entry in entries:
-        if not _readable(connection.authority, connection.actor, entry.session_id):
+        if (connection.authority.sessions.get(entry.session_id) is not entry.live
+                or not _readable(connection.authority, connection.actor, entry.session_id)):
             continue
         row = entry.row
         sid, started = entry.session_id, float(row.get('started_at') or 0)
