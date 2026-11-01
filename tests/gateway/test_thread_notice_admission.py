@@ -94,7 +94,31 @@ def test_real_thread_wake_persists_notice_and_keeps_exact_model_input(tmp_path, 
             assert record is not None
             request_id = thread_wake.SUBMISSION_PREFIX + record['key']
             _wait_for(lambda: _admissions(home).get(request_id) == 'terminal')
+
+            async def check_record_binding(client, target):
+                from hermes_cli.gateway_client import GatewayRPCError
+
+                params = dict(session_id=target, submission_id=request_id, text=record['text'],
+                    queued=True, finite=True, display_kind='internal_notification',
+                    turn_author={'id': 'bot:default', 'name': 'Thread update', 'is_bot': True})
+                first = await client.rpc('prompt.submit', **params)
+                replay = await client.rpc('prompt.submit', **params)
+                assert first['admission_id'] == replay['admission_id']
+                for drift in ({'text': 'my own text'}, {'api_text': 'hidden model instructions'},
+                              {'finite': False}, {'submission_id': 'thread_update:another-key'},
+                              {'turn_author': {'id': 'human', 'is_bot': False}}, {'attachments': []}):
+                    with pytest.raises(GatewayRPCError, match='^invalid_params$'):
+                        await client.rpc('prompt.submit', **(params | drift))
+
+            thread_wake._owner(home, sid, check_record_binding)
             assert not thread_wake.deliver(home, 'default', sid), 'the settled wake is delivered once'
+            assert thread_wake._load(home, sid) is None
+            # Removing the pending file after settlement cannot revoke the durable replay receipt.
+            from tools.thread_tool import ThreadError
+            try:
+                thread_wake._owner(home, sid, check_record_binding)
+            except ThreadError as exc:
+                pytest.fail(f'exact notice replay must survive pending-record cleanup: {exc}')
             history = asyncio.run(history_and_followup(desc, sid))
     finally:
         model.release.set()
@@ -113,8 +137,10 @@ def test_real_thread_wake_persists_notice_and_keeps_exact_model_input(tmp_path, 
     assert text == record['text']
     assert (human, human_kind) == ('HUMAN_FOLLOWUP', None), 'notice typing cannot leak to the next turn'
     assert payload['finite'] is True
-    [(projected,)] = [(row,) for row in history if row['role'] == 'user']
+    [projected] = [row for row in history if row['role'] == 'user']
     assert projected['display_kind'] == kind and projected['display_metadata']['results'] == metadata['results']
+    assert len(model.requests) == 2, 'one wake and one human follow-up; replay must not run another turn'
+    assert all('display_kind' not in m and 'display_metadata' not in m for req in model.requests for m in req['messages'])
     prompts = [[m['content'] for m in req['messages'] if m['role'] == 'user'] for req in model.requests]
     assert prompts[0] == [text], 'the exact pre-existing wake prose still reaches the model'
     assert text in prompts[-1] and prompts[-1][-1] == 'HUMAN_FOLLOWUP', 'resumed model history retains the notice'
