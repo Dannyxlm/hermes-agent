@@ -6768,7 +6768,7 @@ export interface CanonicalSubmitParams {
   voice_context?: string | null
   interrupted?: boolean
   voice_turn?: boolean
-  display_kind?: 'hidden' | null
+  display_kind?: 'hidden' | 'internal_notification' | null
   title_preview?: string | null
   turn_author?: CanonicalTurnAuthor | null
   api_text?: string | null

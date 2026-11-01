@@ -139,8 +139,10 @@ def display_metadata_for_event(event: Any) -> dict:
     """``{"display_text": ...}`` for an internal event whose producer named an async-result card, plus the
     ``title_preview`` (titler-only) a canonical admission committed for this exact event."""
     from gateway.session_display import admission_display
-    preview = admission_display(event).get("title_preview")
-    return {**_producer_card(event), **({"title_preview": preview} if preview else {})}
+    committed = admission_display(event)
+    preview = committed.get("title_preview")
+    return {**_producer_card(event), **committed.get("metadata", {}),
+            **({"title_preview": preview} if preview else {})}
 
 
 def is_machinery_display_kind(display_kind: Any) -> bool:

@@ -22,19 +22,21 @@ def submit_display_fields(params):
     return {key: params[key] for key in _SUBMIT_FIELDS if key in params}
 
 
-def admit_display(params):
+def admit_display(params, *, thread_notice=False):
     """Wire ``display_kind`` / ``title_preview`` -> committed ``display_v1`` (``{}`` when absent).
 
     Only ``hidden`` is a client-authorable kind; anything else is refused rather than rendered,
     so a typo can never turn machine text into a visible user row."""
     kind, preview = params.get('display_kind'), params.get('title_preview')
-    if kind is not None and kind != HIDDEN:
+    if kind is not None and kind != HIDDEN and not (thread_notice and kind == 'internal_notification'):
         raise RuntimeStoreError('invalid_params')
     if preview is not None and not isinstance(preview, str):
         raise RuntimeStoreError('invalid_params')
     committed = {}
     if kind:
-        committed['kind'] = HIDDEN
+        committed['kind'] = kind
+    if kind == 'internal_notification':
+        committed['metadata'] = {'display_text': 'Thread update', 'results': [{'body': params['text']}]}
     if preview and preview.strip():
         committed['title_preview'] = preview[:_TITLE_PREVIEW_LIMIT]
     return {'display_v1': committed} if committed else {}
@@ -43,10 +45,18 @@ def admit_display(params):
 def restore_display(committed):
     """A committed ``display_v1`` arriving across a process boundary (managed worker), re-checked by the
     admission validator: only an object admission itself could have committed is accepted."""
-    if not isinstance(committed, dict) or not committed or set(committed) - {'kind', 'title_preview'}:
+    if not isinstance(committed, dict) or not committed or set(committed) - {'kind', 'title_preview', 'metadata'}:
         raise RuntimeStoreError('invalid_params')
     wire = {'display_kind': committed.get('kind'), 'title_preview': committed.get('title_preview')}
-    if admit_display(wire).get('display_v1') != committed:
+    notice = committed.get('kind') == 'internal_notification'
+    if notice:
+        metadata = committed.get('metadata')
+        results = metadata.get('results') if isinstance(metadata, dict) else None
+        if (not isinstance(results, list) or len(results) != 1 or not isinstance(results[0], dict)
+                or not isinstance(results[0].get('body'), str)):
+            raise RuntimeStoreError('invalid_params')
+        wire['text'] = results[0]['body']
+    if admit_display(wire, thread_notice=notice).get('display_v1') != committed:
         raise RuntimeStoreError('invalid_params')
     return committed
 
@@ -73,6 +83,7 @@ def worker_display_kwargs():
     """``run_conversation`` persistence kwargs of the managed child's single admitted turn."""
     bound = _display_turn.get()
     committed = bound[1] if bound is not None else {}
-    return {**({'persist_user_display_kind': HIDDEN} if committed.get('kind') == HIDDEN else {}),
-            **({'persist_user_display_metadata': {'title_preview': committed['title_preview']}}
-               if committed.get('title_preview') else {})}
+    metadata = {**committed.get('metadata', {}),
+                **({'title_preview': committed['title_preview']} if committed.get('title_preview') else {})}
+    return {**({'persist_user_display_kind': committed['kind']} if committed.get('kind') else {}),
+            **({'persist_user_display_metadata': metadata} if metadata else {})}
