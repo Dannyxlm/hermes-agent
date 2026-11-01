@@ -13,6 +13,58 @@ from tui_gateway.mobile_push_store import PushStore
 pytest_plugins = ["tests.tui_gateway.test_methods_mobile"]
 
 
+@pytest.mark.parametrize('n', [1, 10, 50])
+def test_thread_provenance_is_batched_and_survives_rename_and_compression(mobile_home, peer, monkeypatch, n):
+    monkeypatch.setattr(server, '_resolve_model', lambda: 'fixture')
+    with SessionDB(db_path=mobile_home / 'state.db') as db:
+        for i in range(n):
+            child = f'thread-{i}'
+            db.create_session(child, 'desktop')
+            db.set_session_title(child, f'Renamed without a marker {i}')
+            db.record_launch(launch_id=f'thread:key-{i}', kind='lane', launcher_profile='other',
+                             launcher_session_id=f'parent-{i}', child_profile='default')
+            db.bind_launch(f'thread:key-{i}', child_session_id=child)
+            db._write_sql('UPDATE sessions SET end_reason=? WHERE id=?', ('compression', child))
+            db.create_session(f'tip-{i}', 'desktop', parent_session_id=child)
+            server._sessions[child] = {'session_key': f'tip-{i}'}
+        for key, launch_id, profile in [('normal', 'ordinary-launch', 'default'),
+                                         ('foreign', 'thread:foreign', 'ops')]:
+            db.create_session(key, 'desktop')
+            db.set_session_title(key, f'↳ Not proof of a thread {key}')
+            db.record_launch(launch_id=launch_id, kind='lane', launcher_profile='default',
+                             launcher_session_id='not-a-thread-parent', child_profile=profile)
+            db.bind_launch(launch_id, child_session_id=key)
+            server._sessions[key] = {'session_key': key}
+        db.create_session('fork', 'desktop', parent_session_id='thread-0',
+                          model_config={'_branched_from': 'thread-0'})
+        server._sessions['fork'] = {'session_key': 'fork'}
+    statements = []
+    connect = sqlite3.connect
+    def counted(*args, **kwargs):
+        conn = connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+    monkeypatch.setattr(sqlite3, 'connect', counted)
+    rows = {r['id']: r for r in rpc('session.active_list', profile='default')['result']['sessions']}
+    assert [rows[f'thread-{i}'].get('thread_parent_id') for i in range(n)] == [f'parent-{i}' for i in range(n)]
+    assert all(rows[key].get('thread_parent_id') is None for key in ['normal', 'foreign', 'fork'])
+    provenance_reads = [sql for sql in statements if 'work_launches' in sql.lower() and not sql.startswith('PRAGMA')]
+    assert len(provenance_reads) == 1
+
+
+def test_thread_provenance_resolves_a_custom_home_as_the_writer_does(mobile_home, peer, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, '_resolve_model', lambda: 'fixture')
+    home = tmp_path / 'custom-home'
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.create_session('custom-thread', 'desktop')
+        db.record_launch(launch_id='thread:custom', kind='lane', launcher_profile='default',
+                         launcher_session_id='opening-chat', child_profile='default')
+        db.bind_launch('thread:custom', child_session_id='custom-thread')
+    server._sessions['custom-thread'] = {'session_key': 'custom-thread', 'profile_home': str(home)}
+    rows = rpc('session.active_list')['result']['sessions']
+    assert next(row for row in rows if row['id'] == 'custom-thread').get('thread_parent_id') == 'opening-chat'
+
+
 def store(home):
     return PushStore(home / "mobile-push" / "outbox.sqlite3", clock=lambda: 123)
 

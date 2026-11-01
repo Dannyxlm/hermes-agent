@@ -20,25 +20,43 @@ def _status(live, handle, pending) -> str:
     return 'starting' if any(row['status'] == 'queued' for row in pending) else 'idle'
 
 
+def _thread_parents(db, session_ids):
+    from hermes_state_launches import thread_parents
+    from tui_gateway.mobile_session_scope import projection_destinations
+    profile = db._own_profile_name() or 'default'
+    destinations = projection_destinations(db, profile, session_ids)
+    return thread_parents(db, profile,
+                          {key: dest['root']['_lineage_ids'] for key, dest in destinations.items()})
+
+
 async def active_list(connection, ref, params):
     if set(params) - {'profile', 'current_session_id'}:
         raise RuntimeStoreError('invalid_params')
     if 'session:read' not in connection.actor.capabilities:
         raise RuntimeStoreError('permission_denied')
-    from gateway.session_live_listing import live_entries
+    import asyncio
+    from gateway.session_live_listing import live_entries, _readable
     from hermes_state_sessions import INTERNAL_LISTING_SOURCES
     current = str(params.get('current_session_id') or '')
+    # Same population as the live session.list feed, hidden chats included. Only visible
+    # candidates need provenance; finished internal jobs can dominate the authority registry.
+    entries = [entry for entry in await live_entries(connection.authority, connection.actor)
+               if entry.row.get('source') not in INTERNAL_LISTING_SOURCES and not entry.closed]
+    parents = await asyncio.to_thread(_thread_parents, connection.authority.db,
+                                     [entry.session_id for entry in entries])
+    if connection.authority.retiring or connection.authority.retired:
+        return {'sessions': []}
     rows = []
-    for entry in await live_entries(connection.authority, connection.actor):
-        row = entry.row
-        # The same population as the live ``session.list`` feed, hidden chats included: a hidden
-        # chat open in a pane still needs its turn's liveness.
-        if row.get('source') in INTERNAL_LISTING_SOURCES or entry.closed:
+    for entry in entries:
+        if (connection.authority.sessions.get(entry.session_id) is not entry.live
+                or not _readable(connection.authority, connection.actor, entry.session_id)):
             continue
+        row = entry.row
         sid, started = entry.session_id, float(row.get('started_at') or 0)
         rows.append({'current': sid == current, 'id': sid, 'session_key': sid,
                      'last_active': float(row.get('ended_at') or started), 'started_at': started,
                      'message_count': int(row.get('message_count') or 0),
                      'model': str(row.get('model') or ''), 'preview': '', 'title': row.get('title') or '',
-                     'source': row.get('source'), 'status': _status(entry.live, entry.handle, entry.pending)})
+                     'source': row.get('source'), 'thread_parent_id': parents.get(sid),
+                     'status': _status(entry.live, entry.handle, entry.pending)})
     return {'sessions': rows}

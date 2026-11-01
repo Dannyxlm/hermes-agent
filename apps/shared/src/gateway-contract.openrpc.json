@@ -46493,6 +46493,18 @@
             "default": null,
             "title": "Profile"
           },
+          "thread_parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thread Parent Id"
+          },
           "pending_kind": {
             "anyOf": [
               {

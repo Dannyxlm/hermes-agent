@@ -8,6 +8,29 @@ RECORD_FIELDS = frozenset({'launch_id', 'kind', 'launcher_profile', 'launcher_se
                            'parent_launch_id', 'batch_id', 'batch_name', 'title', 'backend_ref', 'next_run_at'})
 
 
+def thread_parents(db, profile, lineages):
+    """Opening chats for already-authorized rows; one indexed provenance read for the whole list.
+
+    ``lineages`` contains only selected compression continuations, never ordinary forks.
+    A parent link, launch kind or title alone is not evidence of a thread-tool launch.
+    """
+    import json
+    if not lineages:
+        return {}
+    rows = db._read_all("""
+        SELECT requested.key, w.launcher_session_id
+        FROM json_each(?) requested JOIN json_each(requested.value) member
+        JOIN work_launches w ON w.child_session_id=member.value
+        WHERE substr(w.launch_id,1,7)='thread:' AND w.child_profile=?
+            AND length(trim(w.launcher_session_id))>0
+        ORDER BY w.created_at, w.launch_id
+    """, (json.dumps(lineages), profile))
+    result = {}
+    for row in rows:
+        result.setdefault(row['key'], row['launcher_session_id'])
+    return result
+
+
 def short_title(title):
     return title if title is None or len(title) <= 40 else title[:39] + '…'
 

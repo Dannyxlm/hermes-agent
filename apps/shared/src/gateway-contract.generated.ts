@@ -3212,6 +3212,7 @@ export interface SessionActiveListResult {
 /** ``server._session_live_item``. */
 export interface SessionActiveItem {
   profile?: string | null
+  thread_parent_id?: string | null
   pending_kind?: 'approval' | 'clarify' | 'input' | null
   pending_count?: number | null
   pending_revision?: string | null

@@ -367,6 +367,8 @@ class SessionActiveItem(Result):
     """``server._session_live_item``."""
 
     profile: str | None = None
+    # Thread-tool launch provenance, not a fork/compression parent or control authority.
+    thread_parent_id: str | None = None
     pending_kind: Literal["approval", "clarify", "input"] | None = None
     pending_count: int | None = Field(default=None, ge=1)
     pending_revision: str | None = None
