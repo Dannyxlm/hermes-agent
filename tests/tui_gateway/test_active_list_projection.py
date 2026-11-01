@@ -20,7 +20,7 @@ def test_thread_provenance_is_batched_and_survives_rename_and_compression(mobile
         for i in range(n):
             child = f'thread-{i}'
             db.create_session(child, 'desktop')
-            db.set_session_title(child, 'Renamed without a marker')
+            db.set_session_title(child, f'Renamed without a marker {i}')
             db.record_launch(launch_id=f'thread:key-{i}', kind='lane', launcher_profile='other',
                              launcher_session_id=f'parent-{i}', child_profile='default')
             db.bind_launch(f'thread:key-{i}', child_session_id=child)
@@ -30,7 +30,7 @@ def test_thread_provenance_is_batched_and_survives_rename_and_compression(mobile
         for key, launch_id, profile in [('normal', 'ordinary-launch', 'default'),
                                          ('foreign', 'thread:foreign', 'ops')]:
             db.create_session(key, 'desktop')
-            db.set_session_title(key, '↳ Not proof of a thread')
+            db.set_session_title(key, f'↳ Not proof of a thread {key}')
             db.record_launch(launch_id=launch_id, kind='lane', launcher_profile='default',
                              launcher_session_id='not-a-thread-parent', child_profile=profile)
             db.bind_launch(launch_id, child_session_id=key)
