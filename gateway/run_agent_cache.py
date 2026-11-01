@@ -424,6 +424,19 @@ class GatewayAgentCacheMixin:
         self._clear_session_boundary_security_state(session_key)
         logger.debug("Cleared conversation scope for %s (%s)", session_key, reason)
 
+    def _clear_session_terminal_state(self, session_key: str) -> None:
+        """Reclaim shell snapshots only at a real conversation boundary, under its owning profile.
+
+        Cache eviction (including compression rebuilds) must preserve these exports.
+        """
+        if not session_key:
+            return
+        try:
+            from tools.terminal_tool import clear_task_env_overrides
+            self._run_release_in_profile_scope(clear_task_env_overrides, (session_key,), session_key)
+        except Exception:
+            logger.debug("Failed to clear terminal state for session boundary %s", session_key, exc_info=True)
+
     def _clear_session_boundary_security_state(self, session_key: str) -> None:
         """Clear per-session control state that must not survive a boundary switch."""
         if not session_key:
@@ -456,6 +469,7 @@ class GatewayAgentCacheMixin:
             except Exception:
                 # Never fails the boundary itself, but a surviving ON would come back after a restart.
                 logger.warning("Failed to clear persisted yolo for session boundary %s", session_key, exc_info=True)
+        self._clear_session_terminal_state(session_key)
 
     def _begin_session_run_generation(self, session_key: str) -> int:
         """Claim a fresh, monotonically increasing run generation token (NEVER reset): a late result

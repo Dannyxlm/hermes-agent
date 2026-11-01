@@ -241,6 +241,9 @@ async def _run_close_lifecycle(authority, live, target, platform, reason):
     memory providers' end-of-session commit (the cached agent is evicted at a boundary, as a
     gateway ``/new`` does) and the finalize hooks under the owning profile's scope."""
     runner = authority.runner
+    clear_terminal = getattr(runner, '_clear_session_terminal_state', None)
+    if clear_terminal is not None:
+        clear_terminal(live.route)
     evict = getattr(runner, '_evict_cached_agent_at_boundary', None)
     if evict is not None:
         evict(live.route)
