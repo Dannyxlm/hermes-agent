@@ -144,3 +144,24 @@ def test_gateway_exports_survive_compression_session_id_rotation(terminal_sessio
                                 lambda: run("export-rotated", 'printf %s "$HERMES_EXPORT_VALUE"')) == "kept"
     finally:
         tt.clear_task_env_overrides("export-rotated")
+
+
+@pytest.mark.platforms("linux", "macos")
+@pytest.mark.parametrize("cwd_operation", ["get_session_cwd", "record_session_cwd"])
+def test_cwd_seed_failure_does_not_disable_child_export_isolation(terminal_sessions, monkeypatch, cwd_operation):
+    run, spawn, _ = terminal_sessions
+
+    def fail(*args):
+        raise OSError("cwd unavailable")
+
+    def turn():
+        run("export-parent", "export HERMES_EXPORT_VALUE=parent")
+        with monkeypatch.context() as patch:
+            patch.setattr(tt, cwd_operation, fail)
+            spawn("export-a")
+        assert run("export-a", 'printf %s "$HERMES_EXPORT_VALUE"') == "parent"
+        run("export-a", "export HERMES_EXPORT_VALUE=child")
+        assert run("export-parent", 'printf %s "$HERMES_EXPORT_VALUE"') == "parent"
+        assert run("export-a", 'printf %s "$HERMES_EXPORT_VALUE"') == "child"
+
+    _in_gateway_turn("agent:main:telegram:dm:cwd-failure", turn)

@@ -1,0 +1,267 @@
+"""Shell exports live with a gateway conversation, not an agent-cache instance."""
+
+from pathlib import Path
+import threading
+from types import SimpleNamespace
+
+import pytest
+import pytest_asyncio
+
+from gateway.run import GatewayRunner
+from tests.tools.test_terminal_session_exports import _in_gateway_turn
+from tools import terminal_tool as tt
+from tools import terminal_tool_session_env as snapshots
+from tools.delegate_tool_routes import delegated_profile_scope
+
+pytest_plugins = ["tests.tools.test_terminal_session_exports"]
+
+
+@pytest_asyncio.fixture
+async def local_owner(tmp_path, monkeypatch):
+    from gateway import run as grun
+    from gateway.config import GatewayConfig
+    from gateway.session import SessionStore
+    from gateway.session_authority import initialize_session_authority
+    from gateway.session_controls import AuthorityConnection
+
+    home = tmp_path / "owner"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(grun, "_load_gateway_config", lambda: {"platform_toolsets": {"cli": [], "acp": []}})
+    store = SessionStore(home / "sessions", GatewayConfig())
+    runner = object.__new__(GatewayRunner)
+    runner.session_store, runner._session_db = store, store._db
+    runner.adapters, runner._agent_cache = {}, {}
+    runner._agent_cache_lock = threading.Lock()
+    runner._draining = False
+    runner._peek_session_state = lambda key: None
+    runner._running_agent_ids = lambda: set()
+    runner._persist_active_agents = lambda: None
+    runner._adapter_for_source = lambda source: None
+    runner._set_session_reasoning_override = lambda *args: None
+    monkeypatch.setattr(runner, "_spawn_release_thread", lambda target, args, *a, **kw: target(*args))
+    authority = await initialize_session_authority(runner, profile_id="default", instance_id="fixture")
+    authority._schedule = lambda ref: None
+    viewer = AuthorityConnection(authority, object(), {"user_id": "human"})
+    try:
+        yield authority, viewer
+    finally:
+        await viewer.close()
+        store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
+@pytest.mark.platforms("linux", "macos")
+@pytest.mark.parametrize("operation", ["reset", "delete"])
+async def test_native_mutation_reclaims_terminal_conversation_state(terminal_sessions, local_owner, operation):
+    from gateway.session_local import create_local_session
+    from gateway.session_mutations import mutate_session
+
+    run, _, root = terminal_sessions
+    authority, viewer = local_owner
+    ref = create_local_session(authority, viewer.actor, dict(request_id="create", source="gui",
+                               cwd=str(root), model="fixture", toolsets=[]))
+    route = authority.sessions[ref.session_id].route
+    (root / "previous").mkdir()
+    _in_gateway_turn(route, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept; cd previous"))
+    key = tt._qualify_task_key(route)
+    path = next(Path(entries[key]) for entries in snapshots._snapshots.values() if key in entries)
+    snapshots.seed_session_environment(key, b"declare -x HERMES_EXPORT_VALUE=seed\n")
+    row = authority.db.get_session(ref.session_id)
+    try:
+        await mutate_session(authority, viewer.actor, ref, dict(session_id=ref.session_id,
+            request_id=operation, expected_revision=row["runtime_revision"],
+            expected_generation=row["runtime_generation"], operation=operation, payload={}))
+        assert not path.exists()
+        assert key not in snapshots._seeds
+        assert all(key not in entries for entries in snapshots._snapshots.values())
+        assert tt.get_session_cwd(route) is None
+        if operation == "delete":
+            assert ref.session_id not in authority.sessions
+        else:
+            assert _in_gateway_turn(route, lambda: run("export-parent",
+                'printf "%s:%s" "${HERMES_EXPORT_VALUE-unset}" "$PWD"')) == f"unset:{root}"
+    finally:
+        tt.clear_task_env_overrides(route)
+        run("export-parent", "true")
+
+
+@pytest.mark.asyncio
+@pytest.mark.platforms("linux", "macos")
+async def test_native_compression_projection_preserves_shell_state(terminal_sessions, local_owner):
+    from gateway.session_local import create_local_session
+    from gateway.session_mutations import _project_committed
+
+    run, _, root = terminal_sessions
+    authority, viewer = local_owner
+    ref = create_local_session(authority, viewer.actor, dict(request_id="create", source="gui",
+                               cwd=str(root), model="fixture", toolsets=[]))
+    route = authority.sessions[ref.session_id].route
+    _in_gateway_turn(route, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+    key = tt._qualify_task_key(route)
+    path = next(Path(entries[key]) for entries in snapshots._snapshots.values() if key in entries)
+    try:
+        # The committed compress projection shares reset's cache eviction, not its conversation boundary.
+        _project_committed(authority, ref, "compress", {})
+        assert path.exists()
+        assert _in_gateway_turn(route, lambda: run("export-parent", 'printf %s "$HERMES_EXPORT_VALUE"')) == "kept"
+    finally:
+        tt.clear_task_env_overrides(route)
+        run("export-parent", "true")
+
+
+@pytest.mark.asyncio
+@pytest.mark.platforms("linux", "macos")
+@pytest.mark.parametrize(("source", "end_via"), [("acp", "disconnect"), ("gui", "disconnect"),
+                                                 ("acp", "shutdown"), ("acp", "drain")])
+async def test_only_acp_true_disconnect_reclaims_terminal_state(terminal_sessions, local_owner, source, end_via):
+    from gateway.session_local import create_local_session
+
+    run, _, root = terminal_sessions
+    authority, viewer = local_owner
+    ref = create_local_session(authority, viewer.actor, dict(request_id="create", source=source,
+                               cwd=str(root), model="fixture", toolsets=[]))
+    if end_via == "disconnect":
+        reply = await viewer.dispatch(dict(id=1, method="session.resume", params={"session_id": ref.session_id}))
+        assert "result" in reply, reply
+    route = authority.sessions[ref.session_id].route
+    _in_gateway_turn(route, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+    key = tt._qualify_task_key(route)
+    path = next(Path(entries[key]) for entries in snapshots._snapshots.values() if key in entries)
+    try:
+        if end_via == "disconnect":
+            await viewer.close()
+        elif end_via == "drain":
+            await authority._drain(ref)
+        else:
+            from gateway.session_acp_lifecycle import end_idle_acp_sessions
+            end_idle_acp_sessions(authority)
+        if source == "acp":
+            assert not path.exists()
+        else:
+            assert path.exists()  # a GUI transport disconnect is not a conversation end
+            assert _in_gateway_turn(route, lambda: run("export-parent", 'printf %s "$HERMES_EXPORT_VALUE"')) == "kept"
+    finally:
+        tt.clear_task_env_overrides(route)
+        run("export-parent", "true")
+
+
+@pytest.mark.asyncio
+@pytest.mark.platforms("linux", "macos")
+async def test_acp_reattach_before_close_completion_preserves_terminal_state(terminal_sessions, local_owner):
+    from gateway.session_acp_lifecycle import end_idle_acp_session, reopen_if_reattached
+    from gateway.session_local import create_local_session
+
+    run, _, root = terminal_sessions
+    authority, viewer = local_owner
+    ref = create_local_session(authority, viewer.actor, dict(request_id="create", source="acp",
+                               cwd=str(root), model="fixture", toolsets=[]))
+    route = authority.sessions[ref.session_id].route
+    _in_gateway_turn(route, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+    try:
+        ended = end_idle_acp_session(authority, ref.session_id)
+        assert ended
+        # The database worker completed, but its owner-loop callback has not run yet.
+        reply = await viewer.dispatch(dict(id=1, method="session.resume", params={"session_id": ref.session_id}))
+        assert "result" in reply, reply
+        await reopen_if_reattached(authority, ref.session_id, ended)
+        assert _in_gateway_turn(route, lambda: run("export-parent", 'printf %s "$HERMES_EXPORT_VALUE"')) == "kept"
+    finally:
+        tt.clear_task_env_overrides(route)
+        run("export-parent", "true")
+
+
+@pytest.mark.platforms("linux", "macos")
+def test_conversation_boundary_reclaims_only_owning_profiles_snapshot(terminal_sessions, tmp_path):
+    run, _, _ = terminal_sessions
+    original_env = next(iter(tt._active_environments.values()))
+    key = "agent:worker:telegram:dm:lifecycle"
+    homes = [tmp_path / name for name in ("worker", "other")]
+    for home in homes:
+        home.mkdir()
+        (home / "config.yaml").write_text("terminal:\n  env: local\n", encoding="utf-8")
+    paths, keys = [], []
+    for home in homes:
+        with delegated_profile_scope(home):
+            _in_gateway_turn(key, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+            qualified = tt._qualify_task_key(key)
+            keys.append(qualified)
+            paths.append(next(Path(entries[qualified]) for entries in snapshots._snapshots.values() if qualified in entries))
+            snapshots.seed_session_environment(qualified, b"declare -x HERMES_EXPORT_VALUE=seed\n")
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = SimpleNamespace(_profile_home_for_key=lambda key: homes[0],
+                                           set_session_yolo=lambda *args: None)
+    try:
+        # A boundary can run under a different request's profile, not just in the owning turn.
+        with delegated_profile_scope(homes[1]):
+            runner._clear_conversation_scope(key, reason="session_reset")
+        assert not paths[0].exists()
+        assert keys[0] not in snapshots._seeds
+        assert all(keys[0] not in entries for entries in snapshots._snapshots.values())
+        assert paths[1].exists() and keys[1] in snapshots._seeds
+        with delegated_profile_scope(homes[0]):
+            assert _in_gateway_turn(key, lambda: run("export-rotated", 'printf %s "${HERMES_EXPORT_VALUE-unset}"')) == "unset"
+    finally:
+        for home in homes:
+            with delegated_profile_scope(home):
+                tt.clear_task_env_overrides(key)
+        for env in set(tt._active_environments.values()):
+            if env is not original_env:
+                env.cleanup()
+        run("export-parent", "true")
+
+
+@pytest.mark.platforms("linux", "macos")
+def test_exports_survive_normal_turn_release_rotation_and_cache_rebuild(terminal_sessions, monkeypatch):
+    run, _, _ = terminal_sessions
+    key = "agent:main:telegram:dm:cache-rebuild"
+    runner = object.__new__(GatewayRunner)
+    runner._persist_active_agents = lambda: None
+    runner._agent_cache_lock = None
+    releases = []
+    agent = SimpleNamespace(release_clients=lambda: releases.append("released"))
+    runner._agent_cache = {key: agent}
+    runner._running_agents = {key: agent}
+    monkeypatch.setattr(runner, "_spawn_release_thread", lambda target, args, *a, **kw: target(*args))
+    _in_gateway_turn(key, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+    qualified = tt._qualify_task_key(key)
+    path = next(Path(entries[qualified]) for entries in snapshots._snapshots.values() if qualified in entries)
+    runner._release_running_agent_state(key)
+    runner._evict_cached_agent(key)
+    # The memory-provider boundary evict also runs on /compress; it is NOT a shell boundary.
+    runner._agent_cache[key] = SimpleNamespace(release_clients=lambda: releases.append("released"))
+    runner._evict_cached_agent_at_boundary(key)
+    assert releases == ["released", "released"]
+    assert path.exists()
+    assert _in_gateway_turn(key, lambda: run("export-rotated", 'printf %s "$HERMES_EXPORT_VALUE"')) == "kept"
+
+
+@pytest.mark.asyncio
+@pytest.mark.platforms("linux", "macos")
+async def test_real_viewer_close_reclaims_snapshot_only_when_fifo_is_idle(terminal_sessions, tmp_path, monkeypatch):
+    from tests.gateway.test_viewer_close_lifecycle import _owner, _open, _call
+    from gateway.session_contract import SessionRef
+    from hermes_state_runtime import admit_session_input, cancel_session_input
+    from tests.waiting import async_wait_until
+
+    run, _, _ = terminal_sessions
+    db, authority, calls = await _owner(tmp_path / "owner", monkeypatch)
+    runner = object.__new__(GatewayRunner)
+    runner.__dict__.update(vars(authority.runner))
+    authority.runner = runner
+    viewer, subscription = await _open(db, authority, tmp_path / "owner")
+    route = authority.sessions["chat"].route
+    _in_gateway_turn(route, lambda: run("export-parent", "export HERMES_EXPORT_VALUE=kept"))
+    calls.clear()  # discard the terminal output-transform hook observed by the lifecycle spy
+    qualified = tt._qualify_task_key(route)
+    path = next(Path(entries[qualified]) for entries in snapshots._snapshots.values() if qualified in entries)
+    row = admit_session_input(db, epoch=authority.epoch, principal_id="native", session_id="chat",
+                              request_id="r1", payload={"text": "pending"})
+    await _call(viewer, "session.detach", session_id="chat", subscription_id=subscription, end_reason="cli_close")
+    assert path.exists() and calls == []
+    cancel_session_input(db, epoch=authority.epoch, admission_id=row["admission_id"])
+    authority._schedule(SessionRef(authority.profile_id, "chat"))
+    await async_wait_until(lambda: len(calls) == 2)
+    assert not path.exists()
+    assert all(qualified not in entries for entries in snapshots._snapshots.values())
+    run("export-parent", "true")

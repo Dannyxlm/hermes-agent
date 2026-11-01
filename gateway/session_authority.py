@@ -1201,11 +1201,12 @@ class SessionAuthority:
             # The FIFO is moving again (or empty): the next pause is a new episode.
             live.pause_notified = False
             if row is None:
-                from gateway.session_acp_lifecycle import end_idle_acp_session
+                from gateway.session_acp_lifecycle import end_idle_acp_session, reopen_if_reattached
                 # A write (idle check + stamp in one txn): off-loop. Input scheduled meanwhile set
                 # ``rescan`` on this still-live drain, which must claim it rather than exit.
                 from gateway.session_runtime_workers import tracked_write
-                await tracked_write(self, partial(end_idle_acp_session, self, ref.session_id))
+                await tracked_write(self, partial(end_idle_acp_session, self, ref.session_id),
+                                    then=partial(reopen_if_reattached, self, ref.session_id))
                 if live.rescan:
                     continue
                 from gateway.session_viewer_close import settle_viewer_close

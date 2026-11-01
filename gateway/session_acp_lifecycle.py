@@ -61,7 +61,17 @@ async def reopen_if_reattached(authority, session_id, ended):
         import asyncio
         target = local_receipt(authority.db, session_id)['entry']['session_id']
         await asyncio.to_thread(authority.db.reopen_session, target)
+    elif ended:
+        _clear_ended_terminal_state(authority, session_id)
     return ended
+
+
+def _clear_ended_terminal_state(authority, session_id):
+    """Owner-loop close tail: no yield between the last-viewer check and retirement."""
+    live = authority.sessions.get(session_id)
+    clear = getattr(authority.runner, '_clear_session_terminal_state', None)
+    if live is not None and not live.superseded and not live.subscribers and callable(clear):
+        clear(live.route)
 
 
 def end_idle_acp_sessions(authority):
@@ -69,4 +79,9 @@ def end_idle_acp_sessions(authority):
     with authority.db._read_ctx() as conn:
         ids = [row[0][len(POLICY_PREFIX):] for row in conn.execute(
             'SELECT key FROM state_meta WHERE key LIKE ?', (POLICY_PREFIX + '%',))]
-    return sum(end_idle_acp_session(authority, sid) for sid in ids)
+    ended = 0
+    for sid in ids:
+        if end_idle_acp_session(authority, sid):
+            ended += 1
+            _clear_ended_terminal_state(authority, sid)
+    return ended

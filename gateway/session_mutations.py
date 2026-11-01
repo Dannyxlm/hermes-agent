@@ -349,9 +349,14 @@ def _project_committed(authority, ref, operation, result):
     if operation in {'reset', 'compress'}:
         from gateway.session_local_recovery import restore_local_session
         restore_local_session(authority, ref.session_id)
+        route = authority.sessions[ref.session_id].route
+        if operation == 'reset':  # compression rebuilds preserve shell state
+            clear_terminal = getattr(authority.runner, '_clear_session_terminal_state', None)
+            if callable(clear_terminal):
+                clear_terminal(route)
         # A session boundary, not a resource evict: memory providers get on_session_end first.
         evict = getattr(authority.runner, '_evict_cached_agent_at_boundary', None) or authority.runner._evict_cached_agent
-        evict(authority.sessions[ref.session_id].route)
+        evict(route)
         # Publish the prepared entry, not just its target ID, so fresh-reset and
         # per-session counters match cold recovery in this process too.
         from hermes_state_local import local_receipt
@@ -415,6 +420,9 @@ def retire_live_sessions(authority, session_ids, *, require_fence=False):
         allow_for_session((authority.profile_id, sid))
         candidate = authority.sessions.pop(sid, None)
         if candidate is not None and not candidate.superseded:  # its route is the newer session's
+            clear_terminal = getattr(authority.runner, '_clear_session_terminal_state', None)
+            if callable(clear_terminal):
+                clear_terminal(candidate.route)
             evict = getattr(authority.runner, '_evict_cached_agent', None)
             if callable(evict):
                 evict(candidate.route)

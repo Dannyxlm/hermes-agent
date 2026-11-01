@@ -93,6 +93,14 @@ def _close_child(child: Any, log_message: str) -> None:
         if callable(close):
             close()
 
+def _close_child_and_clear_terminal(child: Any, child_task_id: str, log_message: str) -> None:
+    """Release private shell state at the same settled-worker boundary as the child."""
+    from tools.delegate_tool_routes import child_profile_scope
+    _close_child(child, log_message)  # resource close must not depend on profile scope entry
+    with _quiet("Failed to clear child terminal state: %s"), child_profile_scope(child):
+        from tools.terminal_tool import clear_task_env_overrides
+        clear_task_env_overrides(child_task_id)
+
 def _with_children_lock(parent_agent: Any, op: str, child: Any) -> None:
     """``parent_agent._active_children.<op>(child)`` under the parent's lock when it has one."""
     lock = getattr(parent_agent, "_active_children_lock", None)
@@ -453,7 +461,7 @@ def _create_isolated_worktree(parent_agent: Any, parent_task_id: Any, subagent_i
         )
     return None
 
-def _defer_close_after_timeout(child: Any, child_future: Any) -> None:
+def _defer_close_after_timeout(child: Any, child_future: Any, child_task_id: str) -> None:
     """Hand ``child.close()`` to a Future done-callback and drain its transports.
 
     The interrupt is cooperative: the worker still runs its finally path, so closing now could close SQLite under its
@@ -463,7 +471,11 @@ def _defer_close_after_timeout(child: Any, child_future: Any) -> None:
     sweep + one delayed re-sweep for a connection opened in between; a worker that still won't settle keeps its
     resources until process exit.
     """
-    child_future.add_done_callback(lambda _done: _close_child(child, "Failed to close timed-out child after worker exit"))
+    # Future callbacks run after the worker's copied context has unwound (or inline if already done).
+    # Preserve the commissioning profile even for an un-routed child of a routed parent.
+    ctx = contextvars.copy_context()
+    child_future.add_done_callback(lambda _done: ctx.run(
+        _close_child_and_clear_terminal, child, child_task_id, "Failed to close timed-out child after worker exit"))
     # Bounded drain (#94248 native half): the deferred close above only fires once the abandoned worker
     # unwinds, but that worker is typically parked inside an in-flight OpenSSL read (Codex / httpx). Never
     # hard-close that transport from this thread — releasing FDs under a live SSL read is the #29507/#70773
@@ -815,12 +827,14 @@ class _ChildRun:
         # The parent's record is read in the parent's scope; the child's is written in the child's (cwd records
         # are keyed by the active profile, and a profile-routed child looks its own up as that profile).
         from tools.delegate_tool_routes import child_profile_scope
+        with _quiet("Child container alias registration failed: %s"):
+            from tools.terminal_tool import register_container_alias
+            register_container_alias(self.child_task_id, self.parent_task_id)
         with _quiet("Child cwd seed failed: %s"):
-            from tools.terminal_tool import get_session_cwd, record_session_cwd, register_container_alias
+            from tools.terminal_tool import get_session_cwd, record_session_cwd
             parent_cwd = get_session_cwd(self.parent_task_id)
             with child_profile_scope(self.child):
                 record_session_cwd(self.child_task_id, parent_cwd)
-            register_container_alias(self.child_task_id, self.parent_task_id)
 
         with _quiet("Child environment seed failed: %s"):
             from tools.approval import get_current_session_key
@@ -1047,7 +1061,7 @@ class _ChildRun:
         _error_entry = self.finish_failed(_error_entry, _late_pending_steer, preview=f"Timed out after {duration}s" if is_timeout else str(exc))
         close_deferred = is_timeout and not future.done()
         if close_deferred:
-            _defer_close_after_timeout(child, future)
+            _defer_close_after_timeout(child, future, self.child_task_id)
         return None, _error_entry, close_deferred
 
     def append_sibling_write_reminder(self, entry: dict[str, Any]) -> None:
@@ -1158,12 +1172,7 @@ class _ChildRun:
         # Close tool resources (terminal sandboxes, browser daemons, background
         # processes, httpx clients) so subagent subprocesses don't outlive the delegation.
         if not close_deferred:
-            _close_child(child, "Failed to close child agent after delegation")
-            with _quiet("Failed to clear child terminal state: %s"):
-                from tools.delegate_tool_routes import child_profile_scope
-                from tools.terminal_tool import clear_task_env_overrides
-                with child_profile_scope(child):
-                    clear_task_env_overrides(self.child_task_id)
+            _close_child_and_clear_terminal(child, self.child_task_id, "Failed to close child agent after delegation")
         # The child's execute_code kernels live exactly as long as the child (pinned against the LRU
         # cap while it runs); dispose them here so they never squat the cap after the child is gone.
         with _quiet("Failed to dispose child execute_code kernels: %s"):
