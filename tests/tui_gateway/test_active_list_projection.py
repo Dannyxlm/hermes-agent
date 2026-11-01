@@ -52,6 +52,19 @@ def test_thread_provenance_is_batched_and_survives_rename_and_compression(mobile
     assert len(provenance_reads) == 1
 
 
+def test_thread_provenance_resolves_a_custom_home_as_the_writer_does(mobile_home, peer, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, '_resolve_model', lambda: 'fixture')
+    home = tmp_path / 'custom-home'
+    with SessionDB(db_path=home / 'state.db') as db:
+        db.create_session('custom-thread', 'desktop')
+        db.record_launch(launch_id='thread:custom', kind='lane', launcher_profile='default',
+                         launcher_session_id='opening-chat', child_profile='default')
+        db.bind_launch('thread:custom', child_session_id='custom-thread')
+    server._sessions['custom-thread'] = {'session_key': 'custom-thread', 'profile_home': str(home)}
+    rows = rpc('session.active_list')['result']['sessions']
+    assert next(row for row in rows if row['id'] == 'custom-thread').get('thread_parent_id') == 'opening-chat'
+
+
 def store(home):
     return PushStore(home / "mobile-push" / "outbox.sqlite3", clock=lambda: 123)
 

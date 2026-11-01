@@ -32,7 +32,7 @@ async def owner(tmp_path, monkeypatch):
 
     runner = SimpleNamespace(_session_db=store._db, session_store=store, _draining=False,
                              _handle_message=answer, _adapter_for_source=lambda source: None)
-    authority = await initialize_session_authority(runner, profile_id='live', instance_id='owner')
+    authority = await initialize_session_authority(runner, profile_id=str(tmp_path), instance_id='owner')
     store._db.create_session('chat', source='telegram')
     authority.sessions['chat'] = LiveSession(SessionSource(platform=Platform.TELEGRAM, chat_id='chat'), 'chat')
     connection = AuthorityConnection(authority, object(), {'user_id': 'viewer'})
@@ -44,7 +44,7 @@ async def owner(tmp_path, monkeypatch):
 
     async def submit(text):
         from gateway.session_contract import SessionRef, Submission
-        await authority.submit(connection.actor, Submission(text, SessionRef('live', 'chat'), {'text': text}, 'queue'))
+        await authority.submit(connection.actor, Submission(text, SessionRef(authority.profile_id, 'chat'), {'text': text}, 'queue'))
         await asyncio.wait_for(started.wait(), 5)
 
     yield SimpleNamespace(authority=authority, active=active, submit=submit, release=release)
@@ -66,9 +66,31 @@ async def test_a_running_turn_reads_working_until_it_settles(owner):
 async def test_thread_provenance_comes_from_the_authority_store(owner):
     db = owner.authority.db
     db.record_launch(launch_id='thread:authority', kind='lane', launcher_profile='other',
-                     launcher_session_id='opening-chat', child_profile='live')
+                     launcher_session_id='opening-chat', child_profile='default')
     db.bind_launch('thread:authority', child_session_id='chat')
     assert (await owner.active())['chat'].get('thread_parent_id') == 'opening-chat'
+
+
+@pytest.mark.asyncio
+async def test_thread_provenance_survives_multiple_compressions_but_not_forks(owner):
+    from gateway.session_authority import LiveSession
+    db = owner.authority.db
+    db.create_session('thread-root', source='desktop')
+    db.record_launch(launch_id='thread:compressed', kind='lane', launcher_profile='default',
+                     launcher_session_id='opening-chat', child_profile='default')
+    db.bind_launch('thread:compressed', child_session_id='thread-root')
+    for parent, child in [('thread-root', 'middle'), ('middle', 'tip')]:
+        db._write_sql('UPDATE sessions SET end_reason=? WHERE id=?', ('compression', parent))
+        db.create_session(child, source='desktop', parent_session_id=parent)
+    db.create_session('fork', source='desktop', parent_session_id='thread-root',
+                      model_config={'_branched_from': 'thread-root'})
+    source = owner.authority.sessions['chat'].source
+    for sid in ['tip', 'fork']:
+        owner.authority.sessions[sid] = LiveSession(source, sid)
+    rows = await owner.active()
+    assert rows['tip'].get('thread_parent_id') == 'opening-chat'
+    assert rows['fork'].get('thread_parent_id') is None
+    assert rows['chat'].get('thread_parent_id') is None
 
 
 @pytest.mark.asyncio
