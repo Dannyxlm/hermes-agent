@@ -268,9 +268,8 @@ class TestNotificationPollerLoopKanbanWiring:
         monkeypatch.setattr(
             server, "_emit", lambda event, sid, payload=None: emits.append((event, payload))
         )
-        def accept(rid, sid, sess, text, **kwargs):
-            # Model execution is replaced, including its concrete admission receipt. Notices pass
-            # display_metadata (automatic_turn, notification_category) like the real signature takes.
+        def accept(rid, sid, sess, text):
+            # Model execution is replaced, including its concrete admission receipt.
             server._emit("message.start", sid)
             submits.append(text)
             return True

@@ -1095,11 +1095,9 @@ def _schedule_ws_orphan_reap(
                     not current.get("running")
                     and not current.get("_client_gone_interrupt_requested")
                     and (_session_owns_live_wakeup_schedule(current)
-                         or _session_owns_pending_process_notification(current)
-                         or _session_owns_pending_thread_wake(current))):
+                         or _session_owns_pending_process_notification(current))):
                 # Live human input, background work, or a wake-up only this process's poller can deliver: an active /loop or
-                # /heartbeat, a running process that will notify this session, or a thread result still owed to it
-                # (thread tool). A settled client-gone interrupt
+                # /heartbeat, or a running process that will notify this session. A settled client-gone interrupt
                 # wins over both: its latches block every tick and reattach.
                 reschedule_delay = _WS_ORPHAN_REAP_GRACE_S
             elif not current.get("running"):
