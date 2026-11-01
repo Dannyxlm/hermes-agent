@@ -428,6 +428,9 @@ class GatewayAgentCacheMixin:
         """Reclaim shell snapshots only at a real conversation boundary, under its owning profile.
 
         Cache eviction (including compression rebuilds) must preserve these exports.
+        A real boundary intentionally drops the conversation's recorded cwd and terminal
+        overrides too: the next command starts in the configured workspace, not its last cd.
+        This also applies to an in-place branch through the boundary-security funnel.
         """
         if not session_key:
             return

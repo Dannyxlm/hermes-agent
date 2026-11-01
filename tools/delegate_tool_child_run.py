@@ -96,8 +96,8 @@ def _close_child(child: Any, log_message: str) -> None:
 def _close_child_and_clear_terminal(child: Any, child_task_id: str, log_message: str) -> None:
     """Release private shell state at the same settled-worker boundary as the child."""
     from tools.delegate_tool_routes import child_profile_scope
+    _close_child(child, log_message)  # resource close must not depend on profile scope entry
     with _quiet("Failed to clear child terminal state: %s"), child_profile_scope(child):
-        _close_child(child, log_message)  # best-effort: a failed close must not skip terminal cleanup
         from tools.terminal_tool import clear_task_env_overrides
         clear_task_env_overrides(child_task_id)
 

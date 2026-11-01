@@ -15,6 +15,33 @@ from tools.delegate_tool_routes import delegated_profile_scope
 pytest_plugins = ["tests.tools.test_terminal_session_exports"]
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_child_resources_close_even_if_terminal_profile_scope_cannot_enter(tmp_path, monkeypatch, deferred):
+    from concurrent.futures import Future
+    from contextlib import contextmanager
+    from tools import delegate_tool_routes
+    from tools.delegate_tool_child_run import _defer_close_after_timeout
+
+    @contextmanager
+    def broken_scope(child):
+        raise OSError("profile disappeared during close")
+        yield
+
+    monkeypatch.setattr(delegate_tool_routes, "child_profile_scope", broken_scope)
+    with (tmp_path / "child-resource").open("w") as resource:
+        child = SimpleNamespace(_launch_executed=True, close=resource.close)
+        if deferred:
+            future = Future()
+            _defer_close_after_timeout(child, future, "close-child")
+            assert not resource.closed
+            future.set_result(None)
+        else:
+            state = _ChildRun(child, SimpleNamespace(), 0, "close", "close-child", None)
+            state.cleanup(heartbeat=SimpleNamespace(stop=lambda: None), child_pool=None,
+                          leased_cred_id=None, close_deferred=False)
+        assert resource.closed
+
+
 @pytest.mark.platforms("linux", "macos")
 @pytest.mark.parametrize("profile_mode", ["launch", "inherited", "routed"])
 @pytest.mark.parametrize("close_raises", [False, True])
@@ -75,6 +102,7 @@ def test_timeout_reclaims_terminal_state_only_after_worker_exit(
     monkeypatch.setattr(state, "wait_liveness_aware", abandon_after_start)
 
     def turn():
+        seen["commissioning_home"] = get_hermes_home()
         run("export-parent", "export HERMES_EXPORT_VALUE=parent")
         state.seed_workspace()
         from tools.delegate_tool_routes import child_profile_scope
@@ -106,7 +134,7 @@ def test_timeout_reclaims_terminal_state_only_after_worker_exit(
         assert not seen["path"].exists()
         assert key not in snapshots._seeds
         assert all(key not in entries for entries in snapshots._snapshots.values())
-        assert seen["close_home"] == seen["home"]
+        assert seen["close_home"] == seen["commissioning_home"]
     finally:
         release.set()
         assert finished.wait(timeout=10)
