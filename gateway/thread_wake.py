@@ -129,7 +129,7 @@ def _record_path(home: Path, root: str) -> Path:
 
 def _load(home: Path, root: str) -> dict | None:
     with contextlib.suppress(FileNotFoundError, ValueError):
-        return json.loads(_record_path(home, root).read_text())
+        return json.loads(_record_path(home, root).read_text(encoding="utf-8"))
     return None
 
 
@@ -137,7 +137,7 @@ def _save(home: Path, root: str, record: dict) -> None:
     path = _record_path(home, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(record))
+    tmp.write_text(json.dumps(record), encoding="utf-8")
     os.replace(tmp, path)
 
 
