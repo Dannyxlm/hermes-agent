@@ -63,6 +63,15 @@ async def test_a_running_turn_reads_working_until_it_settles(owner):
 
 
 @pytest.mark.asyncio
+async def test_thread_provenance_comes_from_the_authority_store(owner):
+    db = owner.authority.db
+    db.record_launch(launch_id='thread:authority', kind='lane', launcher_profile='other',
+                     launcher_session_id='opening-chat', child_profile='live')
+    db.bind_launch('thread:authority', child_session_id='chat')
+    assert (await owner.active())['chat'].get('thread_parent_id') == 'opening-chat'
+
+
+@pytest.mark.asyncio
 async def test_a_row_names_its_source(owner):
     # Desktop's poll can see a messaging turn settle before its messaging row loads; the source
     # on the live row is what keeps that settle from reading as a Desktop completion.
