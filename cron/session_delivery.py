@@ -154,6 +154,18 @@ async def _wake_rpc(home: Path, record: dict, save) -> dict | None:
 
 def transfer_pending(path: Path, record: dict) -> bool:
     """Admit or observe an exact-session wake under the pending-record lock, never a CLI writer."""
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    # Read-only SessionDB opens also consult profile configuration. Bind the whole
+    # observation, not just the RPC, before a caller's profile can leak into it.
+    token = set_hermes_home_override(Path(record["home"]).resolve())
+    try:
+        return _transfer_pending(path, record)
+    finally:
+        reset_hermes_home_override(token)
+
+
+def _transfer_pending(path: Path, record: dict) -> bool:
     from cron.scheduler_delivery import BOT_CHAT_POLICY_PLATFORM
     from gateway.warning_notifications import warning_notifications_enabled
     from hermes_cli.config_effective import load_user_config_effective
@@ -191,9 +203,14 @@ def transfer_pending(path: Path, record: dict) -> bool:
             return False
         if receipt["ref"]["session_id"] != record["target_session_id"]:
             raise ValueError("scheduled wake receipt belongs to a different session")
+        if record.get("admission_id") and receipt["admission_id"] != record["admission_id"]:
+            raise ValueError("scheduled wake receipt belongs to a different admission")
         status = _admission_status(receipt)
         record.update(admission_id=receipt["admission_id"], receipt_status=status,
-                      status="transferred" if status in {"queued", "claimed"} else status, error=None)
+                      status="transferred" if status in {"queued", "claimed"} else status,
+                      admission_outcome=receipt.get("outcome"),
+                      error=f"scheduled wake terminal outcome: {receipt.get('outcome') or 'unknown'}"
+                      if status == "failed" else None)
         return True
     except Exception as exc:
         if isinstance(exc, GatewayRPCError) and str(exc) in {'not_found', 'permission_denied', 'profile_mismatch'}:

@@ -107,6 +107,24 @@ later run's status; the ledger only ever moves `queued` to a terminal outcome. U
 gateway drains the row, `last_status` stays `delivery_queued` and `hermes cron list`
 shows "finished; delivery is still in progress".
 
+Direct `no_agent` script deliveries to `session:<id>` use a separate receipt bridge,
+`cron/session_delivery_outcome.py`: acceptance (`queued`/`started`) is not completion.
+The pending drain observes the exact admission; `terminal/completed` settles that
+target successfully, while interruption or another terminal outcome retains a delivery
+error. Write-back requires the current target's exact delivery ID and, when retained,
+the latest execution. It removes only that queued target, preserves other pending targets
+and errors, and never advances the repeat count or changes schedule retirement. The
+producer also checks terminal receipts after bookkeeping to close an early-drain race.
+Canonical queue completion fences remain unchanged.
+
+The drain also reconciles older `settled`/`failed` session pending records with admission
+IDs, observing their receipt again if terminal detail is missing; it never submits them
+again. Successful bookkeeping is marked on the pending record so later drains are no-ops.
+Pruned execution rows are not reconstructed. Before removing historical jobs, preserve
+their job/output records and admission receipts: `remove_job` deletes the output directory
+and notepad. Schedule `state=completed` alone is not proof that a wake completed; an
+interrupted wake needs its own disposition, not a resend or a successful-delivery label.
+
 ### Job Lifecycle States
 
 | State | Meaning |
