@@ -125,5 +125,7 @@ def finish_completed_run(d, fire_owner: Optional[str], execution_id: str, *, rec
     if job.get("last_delivery_queued"):
         # A drain that settled before this run's own bookkeeping landed found nothing to fence on.
         settle_quietly(job["id"], execution_id)
+        from cron.session_delivery_outcome import settle_after_run
+        settle_after_run(job)
     journal.unlink(missing_ok=True)
     return True

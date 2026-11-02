@@ -83,7 +83,9 @@ def _queued(root: Path) -> list[tuple[Path, dict]]:
                 logger.error("Unreadable legacy Bot Chat pending record %s kept as evidence: %s", path, exc)
             continue
         if record.get("status") == "queued" or (
-                record.get("session_id") and record.get("admission_id") and record.get("status") == "transferred"):
+                record.get("session_id") and record.get("admission_id") and (
+                    record.get("status") == "transferred" or (
+                        record.get("status") in {"settled", "failed"} and not record.get("bookkeeping_settled")))):
             found.append((path, record))
     return sorted(found, key=lambda item: (item[1].get("sequence", 0), item[0].name))
 
@@ -144,6 +146,23 @@ def _dispose(path: Path, record: dict) -> bool:
     return True
 
 
+def _close_terminal_wake(path: Path, record: dict) -> None:
+    """Repair old terminal receipts too, without ever submitting their payload again."""
+    if (not record.get("session_id") or not record.get("admission_id")
+            or record.get("status") not in {"settled", "failed"} or record.get("bookkeeping_settled")):
+        return
+    from cron.session_delivery import transfer_pending
+    from cron.session_delivery_outcome import settle_pending
+
+    if "admission_outcome" not in record:
+        if not transfer_pending(path, record):
+            return
+        atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+    if settle_pending(path, record):
+        record["bookkeeping_settled"] = True
+        atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+
+
 def _drain_one(path: Path) -> dict | None:
     from hermes_cli.active_sessions import _FileLock
 
@@ -152,11 +171,13 @@ def _drain_one(path: Path) -> dict | None:
         if not isinstance(record, dict):
             raise ValueError("pending delivery is not a JSON object")
         if record.get("status") not in {"queued", "transferred"}:
+            _close_terminal_wake(path, record)
             return record  # A legacy claim or unknown turn is never replayed.
         if record.get("status") == "transferred" and not record.get("admission_id"):
             return record
         if _dispose(path, record):
             atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+            _close_terminal_wake(path, record)
         return record
 
 
