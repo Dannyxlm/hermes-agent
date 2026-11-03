@@ -5299,6 +5299,42 @@
       }
     },
     {
+      "name": "team_room.get",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TeamRoomGetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TeamRoomGetResult"
+        }
+      }
+    },
+    {
+      "name": "team_room.list",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TeamRoomListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TeamRoomListResult"
+        }
+      }
+    },
+    {
       "name": "terminal.resize",
       "summary": "Record the client's column width for server-side rendering.",
       "params": [
@@ -56636,6 +56672,264 @@
           "open_chat"
         ],
         "title": "TeamCurrent",
+        "type": "object"
+      },
+      "TeamRoomGetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 32,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}-(standup|campfire)$",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TeamRoomGetParams",
+        "type": "object"
+      },
+      "TeamRoomGetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "standup",
+              "campfire"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "started": {
+            "title": "Started",
+            "type": "string"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Participants",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/TeamRoomMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "kept": {
+            "items": {
+              "$ref": "#/components/schemas/TeamRoomKept"
+            },
+            "title": "Kept",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "date",
+          "started",
+          "host",
+          "topic",
+          "participants",
+          "messages",
+          "kept"
+        ],
+        "title": "TeamRoomGetResult",
+        "type": "object"
+      },
+      "TeamRoomKept": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "text"
+        ],
+        "title": "TeamRoomKept",
+        "type": "object"
+      },
+      "TeamRoomListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 30,
+            "maximum": 60,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}-(standup|campfire)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Before"
+          }
+        },
+        "title": "TeamRoomListParams",
+        "type": "object"
+      },
+      "TeamRoomListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/TeamRoomSummary"
+            },
+            "title": "Meetings",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "meetings",
+          "next_before"
+        ],
+        "title": "TeamRoomListResult",
+        "type": "object"
+      },
+      "TeamRoomMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "text",
+          "at"
+        ],
+        "title": "TeamRoomMessage",
+        "type": "object"
+      },
+      "TeamRoomSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "standup",
+              "campfire"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "started": {
+            "title": "Started",
+            "type": "string"
+          },
+          "host": {
+            "title": "Host",
+            "type": "string"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Participants",
+            "type": "array"
+          },
+          "message_count": {
+            "title": "Message Count",
+            "type": "integer"
+          },
+          "preview": {
+            "title": "Preview",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "date",
+          "started",
+          "host",
+          "topic",
+          "participants",
+          "message_count",
+          "preview"
+        ],
+        "title": "TeamRoomSummary",
         "type": "object"
       },
       "TerminalClosePayload": {

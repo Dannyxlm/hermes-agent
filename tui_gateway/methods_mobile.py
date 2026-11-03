@@ -7,6 +7,7 @@ method = _registry.method
 _MOBILE_METHODS = (
     "mobile.capabilities", "mobile.bots", "mobile.open", "mobile.snapshot",
     "mobile.submit", "mobile.stop", "mobile.approval.respond", "mobile.clarify.respond",
+    "team_room.list", "team_room.get",
 )
 
 

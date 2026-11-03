@@ -37,7 +37,8 @@ def _handle_admitted_request(req: dict) -> dict | None:
     if contract is not None:
         params, problem = _contracts.validate_params(contract, params)
         if problem is not None:
-            return _err(rid, 4000, problem)
+            code, message = contract.params_error or (4000, problem)
+            return _err(rid, code, message)
     token = _current_rpc_method.set(method)
     try:
         response = fn(rid, params)
