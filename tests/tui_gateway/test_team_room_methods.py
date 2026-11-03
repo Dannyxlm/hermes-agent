@@ -7,6 +7,8 @@ import pytest
 from tests.tui_gateway import test_methods_mobile as mobile
 from tui_gateway import methods_team_room as room, server
 
+pytestmark = pytest.mark.platforms("posix")
+
 mobile_home = mobile.mobile_home
 peer = mobile.peer
 rpc = mobile.rpc

@@ -38,6 +38,8 @@ class _Meeting(BaseModel):
 
 @contextmanager
 def _archive():
+    if os.name != 'posix':
+        raise OSError('Safe archive reads require POSIX directory handles')
     # This is an installation-wide archive, not a selected profile's state.
     directory = Path(os.environ.get('HERMES_TEAM_ROOM_DIR') or  # health: allow HX002 -- authoritative team-room wire contract requires this installation-wide override
                      Path.home() / 'hermes-workspaces/Automation/team-room/meetings').expanduser().resolve(strict=True)
