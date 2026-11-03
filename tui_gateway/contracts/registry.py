@@ -25,6 +25,7 @@ class MethodContract:
     params: type[Params]
     result: type[Result]
     doc: str = ""
+    params_error: tuple[int, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -60,8 +61,9 @@ def _declare(table: dict, entry) -> None:
     table[entry.name] = entry
 
 
-def method(name: str, *, params: type[Params], result: type[Result], doc: str = "") -> MethodContract:
-    entry = MethodContract(name, params, result, doc)
+def method(name: str, *, params: type[Params], result: type[Result], doc: str = "",
+           params_error: tuple[int, str] | None = None) -> MethodContract:
+    entry = MethodContract(name, params, result, doc, params_error)
     _declare(METHODS, entry)
     return entry
 

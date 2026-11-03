@@ -4824,6 +4824,48 @@ export interface PetScaleResult {
   ok: boolean
   scale: number
 }
+export interface TeamRoomListParams {
+  limit?: number
+  before?: string | null
+}
+export interface TeamRoomListResult {
+  meetings: TeamRoomSummary[]
+  next_before: string | null
+}
+export interface TeamRoomSummary {
+  id: string
+  kind: 'standup' | 'campfire'
+  date: string
+  started: string
+  host: string
+  topic: string | null
+  participants: string[]
+  message_count: number
+  preview: string
+}
+export interface TeamRoomGetParams {
+  id: string
+}
+export interface TeamRoomGetResult {
+  id: string
+  kind: 'standup' | 'campfire'
+  date: string
+  started: string
+  host: string
+  topic: string | null
+  participants: string[]
+  messages: TeamRoomMessage[]
+  kept: TeamRoomKept[]
+}
+export interface TeamRoomMessage {
+  name: string
+  text: string
+  at: string
+}
+export interface TeamRoomKept {
+  name: string
+  text: string
+}
 export interface TeamActivityParams {
   profiles: string[]
 }
@@ -8373,6 +8415,8 @@ export interface RpcMethods {
   'system.battery': { params: SystemBatteryParams; result: SystemBatteryResult }
   /** Owner-scoped verified positive runtime activity; unknown coverage never means free. */
   'team.activity': { params: TeamActivityParams; result: TeamActivityResult }
+  'team_room.get': { params: TeamRoomGetParams; result: TeamRoomGetResult }
+  'team_room.list': { params: TeamRoomListParams; result: TeamRoomListResult }
   /** Record the client's column width for server-side rendering. */
   'terminal.resize': { params: TerminalResizeParams; result: TerminalResizeResult }
   /** Persist a toolset / MCP enable-disable change and rebuild the session agent so it takes effect now. */
@@ -8724,6 +8768,8 @@ export const RPC_METHODS = [
   'subscription.upgrade',
   'system.battery',
   'team.activity',
+  'team_room.get',
+  'team_room.list',
   'terminal.resize',
   'tools.configure',
   'tools.list',

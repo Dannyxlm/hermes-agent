@@ -2291,3 +2291,5 @@ from tui_gateway import methods_human_input as _methods_human_input
 _methods_human_input.register(sys.modules[__name__], register_method)
 from tui_gateway import methods_files as _methods_files
 _methods_files.register(sys.modules[__name__], register_method)
+from tui_gateway import methods_team_room as _methods_team_room
+_methods_team_room.register(sys.modules[__name__], register_method)
