@@ -306,6 +306,7 @@ class ProfilesConfigureResult(Result):
 
     ok: bool
     applied: ProfilesConfigureApplied
+    credentials_required: dict[str, bool] | None = None
     confirm_required: bool | None = None
     confirm_message: str | None = None
 

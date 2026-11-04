@@ -335,6 +335,7 @@ def _configure(server, rid, **params):
     if ret is not None:
         t.write(ret)
     assert t.done.wait(10), "no terminal response"
+    assert "result" in t.frames[-1], t.frames[-1]
     return json.loads(json.dumps(t.frames[-1]))["result"]
 
 
