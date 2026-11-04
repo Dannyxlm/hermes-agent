@@ -1725,6 +1725,8 @@ export interface FamilyNode {
   session_id: string | null
   title: string | null
   full_title: string | null
+  projectId?: string | null
+  workspace?: string | null
   batch_id: string | null
   status: 'working' | 'needs_you' | 'failed' | 'done' | 'paused_by_restart' | 'stopped' | 'quiet' | 'unknown'
   step_kind: string | null

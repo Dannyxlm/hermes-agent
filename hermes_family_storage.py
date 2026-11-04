@@ -6,6 +6,29 @@ from contextlib import closing
 from pathlib import Path
 
 
+def read_folder_projects(path):
+    """Profile-local folder ownership, read-only: polling must not create/migrate projects.db."""
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=2)) as conn:
+            conn.execute("PRAGMA query_only=1")
+            return conn.execute(
+                "SELECT pf.path, pf.project_id FROM project_folders pf "
+                "JOIN projects p ON p.id=pf.project_id WHERE p.archived=0 "
+                "ORDER BY length(pf.path) DESC").fetchall()
+    except (OSError, sqlite3.Error):
+        # Folder presentation is optional; an absent/old/unreadable store is not a missing family.
+        return []
+
+
+def folder_project_id(cwd, folders):
+    """Match the phone's ordinary-session assignment: longest exact/ancestor folder wins."""
+    if not cwd:
+        return None
+    return next((pid for path, pid in folders if cwd == path or cwd.startswith(
+        path if path.endswith("/") else path + "/")), None)
+
+
 def compression_edge(columns, child="child", parent="parent", *, lease=False):
     if "end_reason" not in columns:
         return "0"
