@@ -238,6 +238,13 @@ one Claude model cools that credential down for *that model only* — the same k
 other Claude model, and `ANTHROPIC_API_KEY` / borrowed Claude Code tokens honour the same per-model
 cooldown. Billing (`402`, usage-limit) and auth (`401`) failures still bench the whole credential.
 
+**Auxiliary requests use the same model scope.** Vision, compression and delegated credential
+leases select for the model they will actually request. A bench for an unavailable Codex model
+must not disable another Codex model. Credential-only operations (usage, model discovery and
+refresh) ignore model-scoped benches, but still exclude exhausted or dead credentials. If an
+auxiliary route falls back to another provider, it uses that destination's model rather than
+carrying the failed provider's model name across.
+
 **A dead OAuth login is reported, not benched.** When a refresh token is rejected for good
 (`invalid_grant`, `invalid_token`, `refresh_token_reused` — the token was revoked, or another program
 holding the same login rotated it first — or, for Nous, the profile holds no Portal login or token

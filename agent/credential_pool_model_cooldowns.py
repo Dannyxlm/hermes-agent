@@ -37,11 +37,11 @@ def pool_failure_reason(reason: Any, error_context: Optional[dict[str, Any]], bi
 def model_cooldown_until(entry: PooledCredential, model: Optional[str]) -> Optional[float]:
     """Active cooldown blocking *entry* for *model*, or ``None``.
 
-    Callers that do not know the model stay conservative: any active model
-    cooldown blocks them, so an unscoped route cannot reuse the credential.
+    A model-less credential operation (usage, discovery or refresh) is not a
+    request for every model. Only credential-wide exhaustion blocks it.
     """
     cooldowns = entry.model_cooldowns or {}
-    values = cooldowns.values() if not model else (cooldowns.get(model),)
+    values = (cooldowns.get(model),) if model else ()
     now = time.time()
     active = [float(until) for until in values if isinstance(until, (int, float)) and until > now]
     return max(active) if active else None

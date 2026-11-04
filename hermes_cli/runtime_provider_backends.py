@@ -114,7 +114,8 @@ def _resolve_azure_foundry_runtime(*, requested_provider: str, model_cfg: dict[s
 
 
 def _resolve_openrouter_runtime(
-    *, requested_provider: str, explicit_api_key: Optional[str] = None, explicit_base_url: Optional[str] = None
+    *, requested_provider: str, explicit_api_key: Optional[str] = None, explicit_base_url: Optional[str] = None,
+    target_model: Optional[str] = None,
 ) -> dict[str, Any]:
     """Terminal resolver: OpenRouter, or a bare/aliased ``custom`` endpoint. base_url precedence:
     explicit > CUSTOM_BASE_URL > trusted ``model.base_url`` > OPENROUTER_BASE_URL > default.
@@ -195,7 +196,8 @@ def _resolve_openrouter_runtime(
                            api_key, source=source)
     # An explicit launch key is the operator's credential for this route and wins over the pool (R2-M1).
     if base_url and not rp.has_usable_secret(explicit_api_key):
-        pool_result = rp._try_resolve_from_custom_pool(base_url, "custom", cfg_api_mode, provider_name=None)
+        pool_result = rp._try_resolve_from_custom_pool(base_url, "custom", cfg_api_mode, provider_name=None,
+                                                       model=target_model or model_cfg.get("default"))
         if pool_result:
             return pool_result
     # Local no-auth servers get a placeholder key — the OpenAI SDK requires a non-empty string.

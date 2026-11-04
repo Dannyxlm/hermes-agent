@@ -2,7 +2,7 @@
 
 Points 1/2/5 of the issue: a token rotated or refreshed by another process must yield a new
 client instead of a 401 round trip on the cached one, including while a per-model cooldown
-hides the entry from ``peek()``.
+applies to the entry (credential-only ``peek()`` ignores those benches).
 """
 
 import time
@@ -56,13 +56,13 @@ def test_pool_token_rotation_changes_cache_key_and_hides_the_secret(isolated_hom
 
 
 def test_pool_cache_hint_follows_rotation_during_per_model_cooldown(isolated_home):
-    """A per-model cooldown hides the entry from peek(); the hint must still track the token."""
+    """Credential-only peek ignores a model bench; its hint still tracks the token."""
     _seed("anthropic", "tok-old", model_cooldown=MODEL)
     before = aux._pool_cache_hint("anthropic")
     _seed("anthropic", "tok-new", model_cooldown=MODEL)
     after = aux._pool_cache_hint("anthropic")
 
-    assert before.startswith("anthropic::") and after.startswith("anthropic::")
+    assert before.startswith("anthropic:entry-1:") and after.startswith("anthropic:entry-1:")
     assert before != after
     assert "tok-" not in before + after
 

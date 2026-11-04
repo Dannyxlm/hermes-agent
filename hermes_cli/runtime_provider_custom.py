@@ -520,6 +520,7 @@ def _entry_credential(rp, entry: dict[str, Any], name: str) -> Any:
 
 def _try_resolve_from_custom_pool(
     base_url: str, provider_label: str, api_mode_override: Optional[str] = None, provider_name: Optional[str] = None,
+    *, model: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Runtime dict from the first credential pool that owns this custom endpoint, else None. A pool
     the owning entry shares with a same-named built-in yields only the entry's rows (entry_scoped_pool)."""
@@ -538,7 +539,7 @@ def _try_resolve_from_custom_pool(
         try:
             if (pool := entry_scoped_pool(rp.load_pool(pool_key), pool_key, owner)) is None:
                 continue
-            entry = pool.select() if pool.has_credentials() else None
+            entry = pool.select(model=model) if pool.has_credentials() else None
             pool_api_key = rp._pool_entry_api_key(entry) if entry is not None else ""
             if not pool_api_key:
                 continue
@@ -656,7 +657,7 @@ def expand_direct_api_alias(provider: Optional[str], existing_base: Optional[str
 
 
 def _resolve_direct_alias_runtime(requested_provider: str, explicit_api_key: Optional[str],
-                                  explicit_base_url: str) -> dict[str, Any]:
+                                  explicit_base_url: str, *, target_model: Optional[str] = None) -> dict[str, Any]:
     """Bare ``custom`` + explicit base_url (e.g. a ``model_aliases:`` direct alias)."""
     rp = _rp()
     base_url = explicit_base_url.strip().rstrip("/")
@@ -664,7 +665,7 @@ def _resolve_direct_alias_runtime(requested_provider: str, explicit_api_key: Opt
     # custom_providers entry gets its api_key from the pool instead of env fallbacks. An explicit
     # launch key still wins over the pool (R2-M1).
     explicit_key = (explicit_api_key or "").strip()
-    pool_result = None if rp.has_usable_secret(explicit_key) else rp._try_resolve_from_custom_pool(base_url, "custom", None)
+    pool_result = None if rp.has_usable_secret(explicit_key) else rp._try_resolve_from_custom_pool(base_url, "custom", None, model=target_model)
     if pool_result:
         pool_result["source"] = "direct-alias"
         return pool_result
@@ -720,7 +721,7 @@ def _resolve_named_custom_runtime(*, requested_provider: str, explicit_api_key: 
     if requested_norm and requested_norm != "custom" and rp._resolves_to_custom(requested_norm):
         requested_norm = "custom"
     if requested_norm == "custom" and explicit_base_url:
-        return _resolve_direct_alias_runtime(requested_provider, explicit_api_key, explicit_base_url)
+        return _resolve_direct_alias_runtime(requested_provider, explicit_api_key, explicit_base_url, target_model=target_model)
     if custom_provider is None:
         custom_provider = (rp._get_named_custom_provider(requested_provider) if config is None
                            else _get_named_custom_provider(requested_provider, config=config))
@@ -738,6 +739,7 @@ def _resolve_named_custom_runtime(*, requested_provider: str, explicit_api_key: 
     pool_result = None if rp.has_usable_secret(explicit_key) else rp._try_resolve_from_custom_pool(
         base_url, "custom", custom_provider.get("api_mode"),
         provider_name=custom_provider.get("provider_key") or custom_provider.get("name"),
+        model=target_model or custom_provider.get("model"),
     )
     if pool_result:
         # The pool doesn't know the custom_providers fields — propagate them here too.
