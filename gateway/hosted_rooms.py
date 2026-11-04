@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 from gateway.hosted_rooms_common import (
     DbPath, bounded_int, canonical_json, clock as _now, compact_json, connect, fenced_update as _fenced_update,
-    identifier, open_sqlite, table_columns, table_exists, transaction, utf8_len)
+    identifier, open_sqlite, table_columns, table_exists, transaction, utf8_len, validate_meeting)
 
 PROTOCOL_VERSION = 2
 MAX_ROOM_ID_CHARS = 128
@@ -96,7 +96,8 @@ _SCHEMA_DDL = (
             revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
-            disbanded_at REAL
+            disbanded_at REAL,
+            meeting_json TEXT
         )""",
     """CREATE TABLE IF NOT EXISTS hosted_room_events (
             room_id TEXT NOT NULL,
@@ -158,10 +159,10 @@ _SELECT_EVENT = f"SELECT {_EVENT_COLUMNS} FROM hosted_room_events WHERE room_id=
 _INSERT_EVENT = (f"INSERT INTO hosted_room_events ({_EVENT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
 _ROOM_COLUMNS = (
     "room_id, name, members_json, authority_gateway_id, authority_epoch, next_seq, revision,"
-    " created_at, updated_at, disbanded_at")
+    " created_at, updated_at, disbanded_at, meeting_json")
 _ROOM_COLUMNS_WITH_BYTES = (
     "room_id, name, members_json, authority_gateway_id, authority_epoch, next_seq, event_bytes,"
-    " revision, created_at, updated_at, disbanded_at")
+    " revision, created_at, updated_at, disbanded_at, meeting_json")
 _SELECT_ROOM = f"SELECT {_ROOM_COLUMNS} FROM hosted_rooms WHERE room_id=?"
 _SELECT_ROOM_WITH_BYTES = f"SELECT {_ROOM_COLUMNS_WITH_BYTES} FROM hosted_rooms WHERE room_id=?"
 _SUM_EVENT_BYTES = "SELECT COALESCE(SUM(event_bytes), 0) FROM hosted_rooms"
@@ -348,6 +349,7 @@ _LEGACY_COLUMNS = (
     ("hosted_rooms", "authority_gateway_id", "TEXT NOT NULL", "'legacy'"),
     ("hosted_rooms", "authority_epoch", "INTEGER NOT NULL", "1"),
     ("hosted_rooms", "event_bytes", "INTEGER NOT NULL", "0"),
+    ("hosted_rooms", "meeting_json", "TEXT", None),
     ("hosted_room_events", "actor_json", "TEXT NOT NULL", f"'{_LEGACY_ACTOR_JSON}'"),
     ("hosted_room_events", "authority_epoch", "INTEGER", None))
 _EVENT_BYTES_BACKFILL = """UPDATE hosted_rooms
@@ -504,6 +506,7 @@ def _room_from_row(row: sqlite3.Row, *, idempotent: bool = False) -> dict[str, A
         "authority_gateway_id": row["authority_gateway_id"], "authority_epoch": int(row["authority_epoch"]),
         "revision": int(row["revision"]), "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]), "idempotent": idempotent,
+        "meeting": json.loads(row["meeting_json"]) if row["meeting_json"] is not None else None,
         **({"disbanded_at": float(row["disbanded_at"])} if "disbanded_at" in keys and row["disbanded_at"] is not None
            else {}),
         **({"latest_seq": int(row["next_seq"]) - 1} if "next_seq" in keys else {})}
@@ -864,7 +867,7 @@ def _adopt_legacy_room(
 
 def create_room(
     db_path: DbPath, *, room_id: Any, name: Any, members: Any, authority_gateway_id: Any, now: float | None = None,
-    admit: Callable[[sqlite3.Connection], Any] | None = None,
+    admit: Callable[[sqlite3.Connection], Any] | None = None, meeting: Any = None,
 ) -> dict[str, Any]:
     """Create a room, or return the identical existing room idempotently.
 
@@ -873,6 +876,8 @@ def create_room(
     room_id = _room_id(room_id)
     name = _validate_room_name(name)
     normalized_members, members_json = _validate_members(members)
+    meeting = validate_meeting(meeting, error=HostedRoomError)
+    meeting_json = compact_json(meeting) if meeting is not None else None
     authority_gateway_id = _actor_id(authority_gateway_id, "authority_gateway_id")
     now = _now(now)
     with _transaction(db_path, immediate=True) as conn:
@@ -887,7 +892,7 @@ def create_room(
             legacy_adoption = (existing["authority_gateway_id"] == "legacy" and authority_gateway_id != "legacy")
             members_match = existing["members_json"] == members_json or (
                 legacy_adoption and _legacy_members_match(existing["members_json"], normalized_members))
-            if existing["name"] != name or not members_match:
+            if existing["name"] != name or not members_match or existing["meeting_json"] != meeting_json:
                 raise RoomConflictError("room_id already exists with different state")
             if legacy_adoption:
                 return _adopt_legacy_room(
@@ -901,11 +906,11 @@ def create_room(
             raise HostedRoomError("This host has too many active Group Chats. Delete one and try again.")
         conn.execute(
             f"""INSERT INTO hosted_rooms ({_ROOM_COLUMNS_WITH_BYTES})
-                VALUES (?, ?, ?, ?, 1, 1, 0, 1, ?, ?, NULL)""",
-            (room_id, name, members_json, authority_gateway_id, now, now))
+                VALUES (?, ?, ?, ?, 1, 1, 0, 1, ?, ?, NULL, ?)""",
+            (room_id, name, members_json, authority_gateway_id, now, now, meeting_json))
         row = _reload(
             conn, """SELECT room_id, name, members_json, authority_gateway_id, authority_epoch, revision,
-                created_at, updated_at FROM hosted_rooms WHERE room_id=?""", (room_id,),
+                created_at, updated_at, meeting_json FROM hosted_rooms WHERE room_id=?""", (room_id,),
             "created room could not be reloaded")
     return {**_room_from_row(row), "members": normalized_members}
 
@@ -1101,7 +1106,7 @@ def claim_authority(
             existing_event = _load_event(conn, room_id, event_id)
         state_row = _reload(
             conn, """SELECT room_id, name, members_json, authority_gateway_id, authority_epoch, next_seq,
-                revision, created_at, updated_at FROM hosted_rooms WHERE room_id=?""", (room_id,),
+                revision, created_at, updated_at, meeting_json FROM hosted_rooms WHERE room_id=?""", (room_id,),
             "claimed room could not be reloaded")
     if existing_event is None:  # pragma: no cover - both claim paths set it
         raise RuntimeError("authority claim event could not be reloaded")

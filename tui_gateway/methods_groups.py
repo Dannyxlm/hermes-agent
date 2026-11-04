@@ -361,7 +361,8 @@ def _(rid, params: dict, db_path) -> dict:
 def _(rid, params: dict, service) -> dict:
     """Create a hosted room idempotently; authority is this gateway's stable install identity."""
     room = service.create_room(
-        room_id=params.get("room_id"), name=params.get("name"), members=params.get("members"))
+        room_id=params.get("room_id"), name=params.get("name"), members=params.get("members"),
+        meeting=params.get("meeting"))
     return _ok(rid, {"room": room})
 
 

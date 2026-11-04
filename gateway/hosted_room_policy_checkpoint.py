@@ -60,15 +60,28 @@ _SCHEMA_DDL = (
 
 _ROOM_EVENT_COLUMNS = hosted_rooms._EVENT_COLUMNS
 _DELETE_ACTIVE_EVENTS_SQL = ("DELETE FROM hosted_room_policy_events WHERE room_id=? AND discussion_event_id=?")
+# Retained settled receipts need their source user event even when the 24-message
+# window has evicted it. Fetch those bounded dependencies from the durable log;
+# never relax Discussion validation or grow the stored transcript window.
 _TRANSCRIPT_EVENTS_SQL = f"""WITH transcript_events(seq) AS (
-        SELECT seq FROM hosted_room_policy_transcript WHERE room_id=? AND thread_id=?
-        UNION ALL
+        SELECT seq FROM hosted_room_policy_transcript WHERE room_id=:room_id AND thread_id=:thread_id
+        UNION
         SELECT settled_seq FROM hosted_room_policy_transcript
-         WHERE room_id=? AND thread_id=? AND settled_seq IS NOT NULL)
+         WHERE room_id=:room_id AND thread_id=:thread_id AND settled_seq IS NOT NULL
+        UNION
+        SELECT source.seq FROM hosted_room_policy_transcript AS transcript
+        JOIN hosted_room_events AS member
+          ON member.room_id=transcript.room_id AND member.seq=transcript.seq
+        JOIN hosted_room_events AS source
+          ON source.room_id=member.room_id
+         AND source.event_id=json_extract(member.payload_json, '$.discussion_event_id')
+         AND source.kind='message.user'
+        WHERE transcript.room_id=:room_id AND transcript.thread_id=:thread_id
+          AND transcript.kind='message.member')
     SELECT {", ".join("events." + column for column in _ROOM_EVENT_COLUMNS.split(", "))}
     FROM transcript_events
-    JOIN hosted_room_events AS events ON events.room_id=? AND events.seq=transcript_events.seq
-    ORDER BY events.seq LIMIT ?"""
+    JOIN hosted_room_events AS events ON events.room_id=:room_id AND events.seq=transcript_events.seq
+    ORDER BY events.seq LIMIT :limit"""
 
 
 @dataclass(frozen=True)
@@ -162,7 +175,7 @@ class HostedRoomPolicyCheckpoint:
         if len(active_rows) > MAX_ACTIVE_POLICY_EVENTS:
             raise RuntimeError(bound_error)
         rows = conn.execute(_TRANSCRIPT_EVENTS_SQL,
-                            (room_id, thread_id, room_id, thread_id, room_id, MAX_TRANSCRIPT_POLICY_EVENTS + 1)).fetchall()
+                            {"room_id": room_id, "thread_id": thread_id, "limit": MAX_TRANSCRIPT_POLICY_EVENTS + 1}).fetchall()
         if len(rows) > MAX_TRANSCRIPT_POLICY_EVENTS:
             raise RuntimeError("thread policy transcript exceeded its bound")
         events_by_seq = {

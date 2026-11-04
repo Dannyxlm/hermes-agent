@@ -9,7 +9,9 @@ Handlers: ``tui_gateway/methods_groups.py``, ``tui_gateway/methods_bot_relay.py`
 
 from __future__ import annotations
 
-from pydantic import Field
+from typing import Literal
+
+from pydantic import Field, model_validator
 
 from .base import JsonValue, Params, Result, WireEnum
 from .common import OkResult, OpenModel, ProfileParams
@@ -51,6 +53,20 @@ class RoomEvent(Result):
     idempotent: bool = False
 
 
+class RoomMeeting(Params):
+    """Optional descriptive meeting marker; scheduling stays outside the room service."""
+
+    kind: Literal["standup", "campfire"]
+    schedule_local: str
+    timezone: str
+
+    @model_validator(mode="after")
+    def _valid_meeting(self):
+        from gateway.hosted_rooms_common import validate_meeting
+        validate_meeting(self.model_dump())
+        return self
+
+
 class Room(Result):
     """``gateway/hosted_rooms.py::_room_from_row`` plus the branch-only keys ``create`` (legacy
     adoption), ``state`` (``authority_claim``) and ``rename`` (``event``) add."""
@@ -58,6 +74,7 @@ class Room(Result):
     room_id: str
     name: str
     members: list[RoomMember]
+    meeting: RoomMeeting | None = None
     authority_gateway_id: str
     authority_epoch: int
     revision: int
@@ -191,6 +208,7 @@ class GroupsCreateParams(ProfileParams):
     room_id: str
     name: str
     members: list[RoomMemberInput]
+    meeting: RoomMeeting | None = None
     # Ignored: authority is always this gateway's install identity (a client cannot spoof it).
     authority_gateway_id: str | None = None
 
@@ -258,6 +276,8 @@ method("groups.state", params=GroupsStateParams, result=GroupsStateResult,
 class GroupsSendParams(RoomParams):
     event_id: str | None = None
     payload: dict[str, JsonValue]
+    expected_authority_gateway_id: str | None = None
+    expected_authority_epoch: int | None = Field(default=None, strict=True, ge=1)
 
 
 class GroupsSendResult(Result):

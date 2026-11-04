@@ -31,10 +31,10 @@ _FIELDS = {
     'groups.list': {'limit', 'offset', 'include_disbanded'},
     'groups.state': {'room_id', 'include_disbanded'},
     'groups.log': {'room_id', 'since_seq', 'limit', 'include_disbanded'},
-    'groups.create': {'room_id', 'name', 'members'},
+    'groups.create': {'room_id', 'name', 'members', 'meeting'},
     'groups.rename': {'room_id', 'event_id', 'name'},
     'groups.disband': {'room_id', 'cancel_id'},
-    'groups.send': {'room_id', 'event_id', 'payload'},
+    'groups.send': {'room_id', 'event_id', 'payload', 'expected_authority_gateway_id', 'expected_authority_epoch'},
     'groups.attachment.upload': {'room_id', 'upload_id', 'kind', 'name', 'mime', 'data_base64'},
     'groups.attachment.download': {'room_id', 'event_id', 'attachment_id'},
     'groups.stop': {'room_id', 'cancel_id'},
@@ -75,7 +75,9 @@ async def dispatch_group_control(connection, method, params):
             if method == 'profiles.list':
                 return _profiles(authority, actor, home, supplied, siblings)
             try:
-                return _group(authority, actor, method, supplied, host_scope=connection.host_scoped)
+                return _group(authority, actor, method, supplied, host_scope=connection.host_scoped,
+                              automation=(getattr(connection, 'native_owner', False)
+                                  and connection._identity.get('bootstrap_purpose') == 'team-room'))
             except RuntimeStoreError:
                 raise
             except HostedRoomError as exc:
@@ -85,7 +87,7 @@ async def dispatch_group_control(connection, method, params):
     return await asyncio.to_thread(invoke)
 
 
-def _group(authority, actor, method, params, *, host_scope=False):
+def _group(authority, actor, method, params, *, host_scope=False, automation=False):
     from gateway import hosted_rooms as rooms
     db_path = authority.db.db_path
     gateway_id = rooms.local_authority_gateway_id()
@@ -121,7 +123,7 @@ def _group(authority, actor, method, params, *, host_scope=False):
             raise RuntimeStoreError('runtime_coordination_required')
         if not params.get('room_id'):
             raise RuntimeStoreError('invalid_params')
-        return _execution_control(service, method, params)
+        return _execution_control(service, method, params, automation=automation)
 
     def capabilities():
         from gateway.session_hosted_members import member_roster
@@ -131,7 +133,7 @@ def _group(authority, actor, method, params, *, host_scope=False):
         return {'protocol_version': rooms.PROTOCOL_VERSION, 'driver': service is not None,
                 'persistent_process': True, 'authority_gateway_id': gateway_id,
                 'room_link': {'enabled': False, 'reason': 'canonical_driver_required'},
-                'features': ['room_identity', 'monotonic_log', 'replayable_disband'],
+                'features': ['authority_epoch', 'room_identity', 'monotonic_log', 'idempotent_send', 'replayable_disband'],
                 'methods': list(GROUP_METHODS), 'max_log_limit': rooms.MAX_LOG_LIMIT,
                 'seatable_profiles': sorted(name for name in homes if name not in refused)}
 
@@ -191,6 +193,7 @@ def _group(authority, actor, method, params, *, host_scope=False):
                        **({'display_name': m.display_name} if m.display_name else {})} for m in members]
         return {'room': rooms.create_room(db_path, room_id=params.get('room_id'),
                 name=params.get('name'), members=normalized, authority_gateway_id=gateway_id,
+                meeting=params.get('meeting'),
                 admit=admit)}
 
     def disband():
@@ -228,12 +231,18 @@ def _group(authority, actor, method, params, *, host_scope=False):
     return handlers[method]()
 
 
-def _execution_control(service, method, params):
+def _execution_control(service, method, params, *, automation=False):
     def send():
         from gateway.hosted_rooms import user_event_id
+        options: dict[str, object] = {'actor': {'kind': 'user', 'id': 'team-room', 'display_name': 'Team room'}} if automation else {}
+        if 'expected_authority_gateway_id' in params or 'expected_authority_epoch' in params:
+            gateway, epoch = params.get('expected_authority_gateway_id'), params.get('expected_authority_epoch')
+            if not isinstance(gateway, str) or not gateway.strip() or type(epoch) is not int or epoch < 1:
+                raise RuntimeStoreError('invalid_params')
+            options['expected_authority'] = (gateway, epoch)
         event = service.send(room_id=params.get('room_id'),
                              event_id=user_event_id(params.get('event_id')),
-                             payload=params.get('payload'))
+                             payload=params.get('payload'), **options)
         return {'event': event, 'client_event_id': params.get('event_id'),
                 'accepted': True, 'driver_started': True}
 

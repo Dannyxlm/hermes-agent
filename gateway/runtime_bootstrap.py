@@ -9,6 +9,8 @@ import time
 _PURPOSE_CAPABILITIES = {
     'interactive': frozenset({'session:create', 'session:read', 'session:submit',
                               'session:control', 'session:approve', 'session:respond'}),
+    # Same-user meeting automation: room read/create/send, never human approval or operator authority.
+    'team-room': frozenset({'session:read', 'session:submit', 'session:control'}),
     'native-http': frozenset({'http:owner'}),
     # Same-user host operation, not permission to read or mutate another profile.
     'native-profile-create': frozenset({'profiles:create'}),
@@ -18,8 +20,18 @@ _PURPOSE_CAPABILITIES = {
     'exposure': frozenset({'transport:delegate'}),
     'worker-adoption': frozenset({'worker:adopt'}),
 }
-# A grant's profile reach: its own home, or (interactive only) every served sibling.
+# A grant's profile reach: its own home, or an interactive/meeting connection's served siblings.
 _SCOPES = frozenset({'profile', 'host'})
+
+
+def redeem_session_ticket(store, ticket):
+    """Redeem only a local WebSocket purpose, retaining the issuer's origin attestation."""
+    for purpose in ('interactive', 'team-room', 'worker-adoption'):
+        try:
+            return store.redeem(ticket, profile_id=None, purpose=purpose)
+        except PermissionError:
+            continue
+    raise PermissionError('invalid session bootstrap ticket')
 
 
 class TicketStore:
@@ -35,10 +47,10 @@ class TicketStore:
         self._lock = threading.Lock()
 
     def mint(self, *, profile_id, subject, purpose, scope='profile') -> str:
-        """``scope='host'`` lets an interactive connection select every profile this process
-        serves (the Desktop's one shared socket); the default binds exactly ``profile_id``."""
+        """Host scope lets interactive and meeting clients select served siblings; the default
+        binds exactly ``profile_id``. Both are minted only through the same-user private bootstrap."""
         if (profile_id not in self.profile_ids or purpose not in _PURPOSE_CAPABILITIES or not subject
-                or scope not in _SCOPES or (scope == 'host' and purpose != 'interactive')):
+                or scope not in _SCOPES or (scope == 'host' and purpose not in {'interactive', 'team-room'})):
             raise PermissionError('bootstrap binding rejected')
         with self._lock:
             now = time.monotonic()

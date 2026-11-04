@@ -12705,6 +12705,17 @@
             },
             "title": "Members",
             "type": "array"
+          },
+          "meeting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomMeeting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -25183,6 +25194,17 @@
             "title": "Members",
             "type": "array"
           },
+          "meeting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomMeeting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "authority_gateway_id": {
             "anyOf": [
               {
@@ -26240,6 +26262,31 @@
             "additionalProperties": true,
             "title": "Payload",
             "type": "object"
+          },
+          "expected_authority_gateway_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Gateway Id"
+          },
+          "expected_authority_epoch": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Epoch"
           }
         },
         "required": [
@@ -45088,6 +45135,17 @@
             "title": "Members",
             "type": "array"
           },
+          "meeting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomMeeting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "authority_gateway_id": {
             "title": "Authority Gateway Id",
             "type": "string"
@@ -45741,6 +45799,35 @@
           "enabled"
         ],
         "title": "RoomLinkStatus",
+        "type": "object"
+      },
+      "RoomMeeting": {
+        "additionalProperties": false,
+        "description": "Optional descriptive meeting marker; scheduling stays outside the room service.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "standup",
+              "campfire"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "schedule_local": {
+            "title": "Schedule Local",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "schedule_local",
+          "timezone"
+        ],
+        "title": "RoomMeeting",
         "type": "object"
       },
       "RoomMember": {

@@ -336,20 +336,17 @@ class GatewayRuntimeAPI:
                 or not ws.client or ws.client.host not in {'127.0.0.1', '::1'}):
             await ws.close(code=4403)
             return
-        operator = True
+        from gateway.runtime_bootstrap import redeem_session_ticket
         try:
-            grant = self.runner.session_ticket_store.redeem(ticket, profile_id=None, purpose='interactive')
+            grant = redeem_session_ticket(self.runner.session_ticket_store, ticket)
         except PermissionError:
-            operator = False
-            try:
-                grant = self.runner.session_ticket_store.redeem(ticket, profile_id=None, purpose='worker-adoption')
-            except PermissionError:
-                # Browser/OAuth tickets have a separate issuer.
-                if draining_socket:
-                    await ws.close(code=1013)
-                    return
-                return await self.app(scope, receive, send)
-        allow_draining = not operator
+            # Browser/OAuth tickets have a separate issuer.
+            if draining_socket:
+                await ws.close(code=1013)
+                return
+            return await self.app(scope, receive, send)
+        operator = grant['purpose'] == 'interactive'
+        allow_draining = grant['purpose'] == 'worker-adoption'
         admitted_in_wait = restart_wait_open(self.runner)
         # A restart's after-turn wait still owns its turns: an interactive client attaches to answer
         # a parked approval/clarify (#139041); stop() closes this window.
@@ -372,5 +369,6 @@ class GatewayRuntimeAPI:
                                               'profile_id': grant['profile_id'],
                                               'instance_id': grant['instance_id'],
                                               'capabilities': grant['capabilities'], 'native_bootstrap': True,
+                                              'bootstrap_purpose': grant['purpose'],
                                               'profile_scope': grant.get('scope', 'profile')},
                             subprotocol=CANONICAL_GATEWAY_PROTOCOL, operator=operator)

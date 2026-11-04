@@ -69,6 +69,27 @@ def text(value: Any, *, error: type[Exception], label: str, max_bytes: int, stri
     return value
 
 
+def validate_meeting(value: Any, *, error: type[Exception] = ValueError) -> dict[str, str] | None:
+    """Validate optional room metadata without imposing any host-specific meeting schedule."""
+    if value is None:
+        return None
+    value = exact_fields(value, label="meeting", required={"kind", "schedule_local", "timezone"}, error=error)
+    if value["kind"] not in ("standup", "campfire"):
+        raise error("meeting.kind must be standup or campfire")
+    schedule = value["schedule_local"]
+    if not isinstance(schedule, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", schedule):
+        raise error("meeting.schedule_local must be HH:MM in local 24-hour time")
+    timezone = value["timezone"]
+    if not isinstance(timezone, str) or not timezone or len(timezone) > 255:
+        raise error("meeting.timezone must be an IANA timezone")
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    try:
+        ZoneInfo(timezone)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise error("meeting.timezone must be an IANA timezone") from exc
+    return dict(value)
+
+
 def compact_json(value: Any, *, ensure_ascii: bool = True) -> str:
     """Sorted-key, separator-free JSON (the digest/storage canonical form)."""
     return json.dumps(value, ensure_ascii=ensure_ascii, sort_keys=True, separators=(",", ":"))

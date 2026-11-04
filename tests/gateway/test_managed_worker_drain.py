@@ -45,7 +45,7 @@ async def test_reserved_worker_persists_while_runtime_drains(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('purpose', ['worker-adoption', 'interactive'])
+@pytest.mark.parametrize('purpose', ['worker-adoption', 'interactive', 'team-room'])
 @pytest.mark.parametrize('state', ['ready', 'draining'])
 async def test_draining_ws_redeems_only_worker_ticket(tmp_path, monkeypatch, purpose, state):
     from gateway.run_api import GatewayRuntimeAPI
