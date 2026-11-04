@@ -75,7 +75,9 @@ async def dispatch_group_control(connection, method, params):
             if method == 'profiles.list':
                 return _profiles(authority, actor, home, supplied, siblings)
             try:
-                return _group(authority, actor, method, supplied, host_scope=connection.host_scoped)
+                return _group(authority, actor, method, supplied, host_scope=connection.host_scoped,
+                              automation=(getattr(connection, 'native_owner', False)
+                                  and connection._identity.get('bootstrap_purpose') == 'team-room'))
             except RuntimeStoreError:
                 raise
             except HostedRoomError as exc:
@@ -85,7 +87,7 @@ async def dispatch_group_control(connection, method, params):
     return await asyncio.to_thread(invoke)
 
 
-def _group(authority, actor, method, params, *, host_scope=False):
+def _group(authority, actor, method, params, *, host_scope=False, automation=False):
     from gateway import hosted_rooms as rooms
     db_path = authority.db.db_path
     gateway_id = rooms.local_authority_gateway_id()
@@ -121,7 +123,7 @@ def _group(authority, actor, method, params, *, host_scope=False):
             raise RuntimeStoreError('runtime_coordination_required')
         if not params.get('room_id'):
             raise RuntimeStoreError('invalid_params')
-        return _execution_control(service, method, params)
+        return _execution_control(service, method, params, automation=automation)
 
     def capabilities():
         from gateway.session_hosted_members import member_roster
@@ -229,12 +231,14 @@ def _group(authority, actor, method, params, *, host_scope=False):
     return handlers[method]()
 
 
-def _execution_control(service, method, params):
+def _execution_control(service, method, params, *, automation=False):
     def send():
         from gateway.hosted_rooms import user_event_id
         event = service.send(room_id=params.get('room_id'),
                              event_id=user_event_id(params.get('event_id')),
-                             payload=params.get('payload'))
+                             payload=params.get('payload'),
+                             **({'actor': {'kind': 'user', 'id': 'team-room', 'display_name': 'Team room'}}
+                                if automation else {}))
         return {'event': event, 'client_event_id': params.get('event_id'),
                 'accepted': True, 'driver_started': True}
 

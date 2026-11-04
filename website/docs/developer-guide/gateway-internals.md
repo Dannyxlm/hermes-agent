@@ -45,6 +45,16 @@ is bound to the authenticated subject, not just the profile: use the same login
 subject as the intended client. This does not change member approval modes or
 bypass the bootstrap's scope validation.
 
+Meeting automation requests `purpose="team-room"` on that private local bootstrap.
+Its redeemed grant is attested by the WebSocket gate, not supplied in RPC params.
+`groups.send` from that connection remains `kind: "message.user"` but carries
+`actor: {kind: "user", id: "team-room", display_name: "Team room"}`. Human posts
+remain `{kind: "user", id: "desktop"}`. Remote clients cannot choose an actor or
+bootstrap origin through `groups.send`; text prefixes and event IDs do not select
+identity. The automation grant has read/submit/control capabilities, but no human
+approval, response, or operator capability. Clients can render its prompts as
+neutral notes rather than the human's own bubbles.
+
 `profiles.list` requires `session:read` and returns the authenticated profile
 first, with its display metadata and avatar presence, then the served siblings and
 hosted-room destinations as discovery metadata. `include_sessions` defaults to

@@ -506,7 +506,7 @@ class HostedRoomService:
         self.runtime.wakeup()
         return room
 
-    def send(self, *, room_id: str, event_id: str, payload: Any) -> dict[str, Any]:
+    def send(self, *, room_id: str, event_id: str, payload: Any, actor: Mapping[str, Any] | None = None) -> dict[str, Any]:
         normalized = discussion.validate_user_payload(payload)
         # Meeting rooms are one continuous conversation, including clients which
         # mint a new thread id for each post. Ordinary room threading is unchanged.
@@ -516,7 +516,7 @@ class HostedRoomService:
         from gateway.session_hosted_attachments import append_user_event
         event = append_user_event(
             self, room_id=room_id, event_id=event_id, payload=normalized,
-            gateway_id=gateway_id, epoch=epoch)
+            gateway_id=gateway_id, epoch=epoch, actor=actor)
         binding = next((b for b in self.bindings() if b.room_id == room_id), None)
         if binding is None:
             raise hosted_rooms.RoomNotFoundError("hosted room not found")

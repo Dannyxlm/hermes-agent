@@ -31,9 +31,10 @@ async def test_local_scope_and_subject_reach_private_ticket_issuer(monkeypatch, 
     monkeypatch.setattr(gateway_runtime, 'attachable', lambda result: True)
     monkeypatch.setattr('websockets.asyncio.client.connect', connect)
     subject = 'auth:v1:["basic","","fixture-owner"]'
-    async with gateway_client.connect_gateway(endpoint=endpoint if discovered else None, subject=subject, scope='host'):
+    async with gateway_client.connect_gateway(endpoint=endpoint if discovered else None, subject=subject,
+                                               scope='host', purpose='team-room'):
         pass
-    assert requested == [(endpoint, {'subject': subject, 'scope': 'host'})]
+    assert requested == [(endpoint, {'subject': subject, 'scope': 'host', 'purpose': 'team-room'})]
 
 
 @pytest.mark.asyncio

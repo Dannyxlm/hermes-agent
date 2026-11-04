@@ -8,7 +8,8 @@ import pytest
 
 @pytest.mark.platforms("linux")
 @pytest.mark.asyncio
-async def test_private_control_peer_mints_profile_bound_ticket(tmp_path):
+@pytest.mark.parametrize('purpose', ['interactive', 'team-room'])
+async def test_private_control_peer_mints_profile_bound_ticket(tmp_path, purpose):
     from gateway.control_socket import GatewayControlServer, resolve_client_socket_path
     home = tmp_path / 'home'
     home.mkdir(mode=0o700)
@@ -28,15 +29,17 @@ async def test_private_control_peer_mints_profile_bound_ticket(tmp_path):
         writer.close()
         await writer.wait_closed()
         return reply
-    params = {'profile_id': str(home.resolve()), 'instance_id': 'instance', 'purpose': 'interactive'}
+    params = {'profile_id': str(home.resolve()), 'instance_id': 'instance', 'purpose': purpose}
     try:
         reply = await request(params)
         assert reply['ok'], reply
         ticket = reply['result']['ticket']
-        grant = server.ticket_store.redeem(ticket, profile_id=params['profile_id'], purpose='interactive')
+        grant = server.ticket_store.redeem(ticket, profile_id=params['profile_id'], purpose=purpose)
         assert grant['subject'] == f'uid:{os.getuid()}'
         assert grant['instance_id'] == 'instance'
-        assert 'session:create' in grant['capabilities']
+        assert grant['purpose'] == purpose
+        assert 'session:control' in grant['capabilities']
+        assert ('session:create' in grant['capabilities']) == (purpose == 'interactive')
         for invalid in ({**params, 'instance_id': 'old'}, {**params, 'profile_id': '/wrong'}, {**params, 'subject': 'admin'}):
             assert not (await request(invalid))['ok']
         assert not (await request(params, origin='http://browser'))['ok']
