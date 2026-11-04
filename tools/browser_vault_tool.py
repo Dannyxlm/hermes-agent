@@ -592,6 +592,11 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         return _fill_bound_page(backend, handle, meta, page_origin, effective_task_id)
 
 
+def _checkout_changed(before, after):
+    """An unreadable checkout or any changed non-secret fact invalidates approval."""
+    return after is None or any(after[k] != before[k] for k in after)
+
+
 def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, effective_task_id: str) -> str:
     """Inspect the page, resolve the item's secret and write it; runs inside the backend's fill_context
     after the origin guard passed."""
@@ -671,7 +676,7 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
         # Same-origin cart edits invalidate the approved snapshot just as navigation does.
         # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
         current_summary = _checkout_summary(effective_task_id)
-        if current_summary is None or any(current_summary[k] != payment[k] for k in current_summary):
+        if _checkout_changed(payment, current_summary):
             return with_receipt({
                 "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
                 "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
@@ -714,7 +719,7 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
         fill_result = _eval_js_secret(
             effective_task_id, build_fill_js(fills, expected_origin=page_origin, nonce=nonce)
         )
-    except Exception as exc:
+    except Exception as exc:  # health: allow BLE001 -- secret-bearing backend failure; only the scrubbed error may leave this boundary
         # Strip any secret material from exception text before surfacing.
         return with_receipt({"success": False, "error": scrub_secret_from_text(str(exc), secret)})
     if not fill_result.get("success"):
