@@ -224,13 +224,21 @@ def test_a_failed_handoff_leaves_the_foreground_owner_its_group(monkeypatch, tmp
     assert not registry._running, "a session with no reader stayed registered"
 
 
-def test_reserved_launch_mixin_preserves_process_group_ownership(monkeypatch, tmp_path):
+def test_local_launch_has_one_authoritative_implementation():
     from tools.process_registry import ProcessRegistry
     from tools.process_registry_launch import ProcessLaunchMixin
 
+    assert ProcessRegistry.spawn_local.__qualname__ == 'ProcessRegistry.spawn_local'
+    assert 'spawn_local' not in ProcessLaunchMixin.__dict__
+    assert not hasattr(ProcessRegistry, '_spawn_local_reserved')
+
+
+def test_live_local_launch_preserves_process_group_ownership(monkeypatch, tmp_path):
+    from tools.process_registry import ProcessRegistry
+
     calls = _record_calls(monkeypatch)
     registry = ProcessRegistry()
-    session = ProcessLaunchMixin.spawn_local(registry, 'exit 0', cwd=str(tmp_path))
+    session = registry.spawn_local('exit 0', cwd=str(tmp_path))
     wait_until(lambda: session.exited and ('release', [session.pid]) in calls,
                timeout=15, what='the reserved launch to exit and release its group')
     assert calls == [('own', [session.pid]), ('release', [session.pid])]

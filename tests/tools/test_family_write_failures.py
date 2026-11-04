@@ -30,7 +30,7 @@ def test_process_spawn_survives_unavailable_metadata(tmp_path, monkeypatch):
     def spawn(session, *args):
         started.append(session.id)
         return session
-    monkeypatch.setattr(registry, '_spawn_local_reserved', spawn)
+    monkeypatch.setattr(registry, '_spawn_local_owned', spawn)
     result = None
     try:
         result = registry.spawn_local('echo fixture', cwd=str(tmp_path))
@@ -45,7 +45,7 @@ def test_process_recording_happens_after_spawn(tmp_path, monkeypatch):
     registry = pr.ProcessRegistry()
     order = []
     monkeypatch.setattr(process_launches, 'record_process_launch', lambda session: order.append('metadata'))
-    monkeypatch.setattr(registry, '_spawn_local_reserved', lambda session, *args: (order.append('spawn'), session)[1])
+    monkeypatch.setattr(registry, '_spawn_local_owned', lambda session, *args: (order.append('spawn'), session)[1])
     registry.spawn_local('echo fixture', cwd=str(tmp_path))
     assert order == ['spawn', 'metadata']
 
@@ -348,7 +348,7 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
     from gateway.session_contract import SessionRef
     from gateway.session_controls import AuthorityConnection
     from gateway.session_worker import _claim
-    from hermes_cli.process_identity import process_birth
+    from hermes_cli.process_identity import worker_birth
     from hermes_state_runtime import register_worker_execution
     from tests.gateway.test_local_source_labels import _authority
     authority, _ = await _authority(tmp_path, monkeypatch)
@@ -363,7 +363,7 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
         connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
         connection.actor = replace(connection.actor, capabilities=frozenset({'worker:adopt'}))
         scope = dict(profile_id=authority.profile_id, session_id=sid, execution_id='worker', generation=0,
-                     pid=worker.pid, birth=process_birth(psutil.Process(worker.pid)), secret='fixture-worker-secret')
+                     pid=worker.pid, birth=worker_birth(psutil.Process(worker.pid)), secret='fixture-worker-secret')
         claim = _claim(connection, SessionRef(authority.profile_id, sid), scope)
         register_worker_execution(authority.db, epoch=authority.epoch, execution_id='worker', session_id=sid,
                                   generation=0, kind='compute', adoption_secret=claim)
