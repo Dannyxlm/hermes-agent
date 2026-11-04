@@ -61,7 +61,8 @@ def test_wake_grant_preserves_exact_login_without_owner_or_host_authority():
     assert grant['profile_id'] == 'a'
     assert grant['capabilities'] == frozenset({'session:create', 'session:read', 'session:submit', 'session:control'})
     identity = {'provider': 'local', 'user_id': grant['subject'], 'native_bootstrap': True,
-                'bootstrap_purpose': grant['purpose']}
+                'bootstrap_purpose': grant['purpose'], 'profile_id': grant['profile_id'],
+                'instance_id': grant['instance_id'], 'capabilities': grant['capabilities']}
     assert principal_subject(identity) == subject
     assert principal_subject({**identity, 'native_bootstrap': False}) == host_owner_subject()
     assert principal_subject({**identity, 'bootstrap_purpose': 'interactive'}) == host_owner_subject()
