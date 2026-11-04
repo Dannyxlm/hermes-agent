@@ -604,12 +604,14 @@ class TestBrowserVaultTools:
         from tools import browser_vault_tool
         from agent import redact
         from agent.vault_store import VaultItemMeta
+        from agent.vault_backends.base import LoginBackend
 
         meta = VaultItemMeta(id="op:crd", kind="payment", label="Expense Card", origin=None, created_at="",
                              any_origin=True)
 
         class FakeBackend:
             name, display_name, needs_unlock = "onepassword", "1Password", True
+            fill_context = LoginBackend.fill_context
 
             def is_unlocked(self):
                 return True
