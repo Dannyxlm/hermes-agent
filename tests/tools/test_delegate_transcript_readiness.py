@@ -96,7 +96,7 @@ async def test_published_children_open_before_any_child_starts(
             assert row is not None
             assert row["source"] == "subagent"
             assert row["parent_session_id"] == parent_ref.session_id
-            assert row["model_config"] is None
+            assert json.loads(row["model_config"]) == {"_delegate_from": "sub-1"}
             assert not child._session_db_created
             reply = await connection.dispatch(
                 {

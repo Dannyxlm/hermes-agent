@@ -342,6 +342,13 @@ class AIAgent(
                 origin_json=_gateway_origin_json(self), parent_session_id=self._parent_session_id,
                 cwd=_launch_cwd_for_session(source), profile_name=profile_for_session,
             )
+            if getattr(self, "_session_db_reserved", False) is True:
+                # Launch reservation already stored the lineage marker. A normal upsert keeps
+                # non-null model_config, so merge the completed first-turn config through the
+                # same fenced writer instead of freezing the marker-only reservation forever.
+                self._session_db._write_model_config_patch(
+                    self.session_id, self._session_row_model_config() or {})
+                self._session_db_reserved = False
             self._session_db_created = True
         except Exception as e:
             # Transient failure (e.g. SQLite lock): _session_db_created stays False so the next turn retries.
