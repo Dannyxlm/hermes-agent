@@ -128,6 +128,7 @@ export const BROWSER_BRIDGE_STUBS = {
   updates: {
     apply: async () => ({ command: 'hermes update', manual: true, message: 'Run `hermes update` on the server host', ok: false }),
     check: async () => ({ message: 'Use `hermes update` on the server host', reason: 'browser-hosted', supported: false }),
+    checkUpstream: async () => { throw browserUnsupported('Upstream tracking') },
     onProgress: noopUnsubscribe
   },
   watchPreviewFile: async (url: string) => ({ id: `browser:${url}`, path: url })

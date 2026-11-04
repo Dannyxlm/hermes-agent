@@ -36,6 +36,18 @@ afterEach(() => {
 })
 
 describe('browser-hosted Desktop bridge', () => {
+  it('refuses native upstream checks without contacting the server', async () => {
+    seedWebappSession('served-token')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    expect(installBrowserDesktopBridge()).toBe(true)
+
+    await expect(mutableWindow().hermesDesktop!.updates!.checkUpstream()).rejects.toThrow(
+      'Upstream tracking is not available in the browser-hosted Desktop'
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('does not make network requests to resolve link titles', async () => {
     seedWebappSession('served-token')
     const fetchMock = vi.fn().mockResolvedValue(new Response('<title>Untrusted title</title>'))
