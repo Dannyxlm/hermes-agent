@@ -300,10 +300,10 @@ def _menu(cfg: dict) -> tuple[dict, str | None, dict]:
 
 def _profile_model(home: Path) -> dict:
     from hermes_yaml import YAMLError
-    from utils import load_yaml_file_readonly
+    from hermes_cli.config_backend import read_config_doc_readonly, ConfigBackendUnavailable
     try:
-        model = (load_yaml_file_readonly(home / "config.yaml") or {}).get("model")
-    except (OSError, YAMLError):  # a teammate without a readable config just shows no model
+        model = (read_config_doc_readonly(home / "config.yaml") or {}).get("model")
+    except (OSError, YAMLError, ConfigBackendUnavailable):  # an unavailable teammate shows no model
         return {}
     if isinstance(model, dict):
         return {k: v for k, v in (("model", model.get("default")), ("provider", model.get("provider"))) if v}
