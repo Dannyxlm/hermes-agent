@@ -231,7 +231,8 @@ def test_reserved_launch_mixin_preserves_process_group_ownership(monkeypatch, tm
     calls = _record_calls(monkeypatch)
     registry = ProcessRegistry()
     session = ProcessLaunchMixin.spawn_local(registry, 'exit 0', cwd=str(tmp_path))
-    wait_until(lambda: session.exited, timeout=15, what='the reserved launch to exit')
+    wait_until(lambda: session.exited and ('release', [session.pid]) in calls,
+               timeout=15, what='the reserved launch to exit and release its group')
     assert calls == [('own', [session.pid]), ('release', [session.pid])]
 
 
