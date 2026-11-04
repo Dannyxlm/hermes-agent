@@ -52,7 +52,7 @@ def _parked() -> list:
 
 class _Batch:
     def __init__(self, events):
-        self.events = events
+        self.events = self.notifications = events
 
     def render(self, registry):
         return "batch"
