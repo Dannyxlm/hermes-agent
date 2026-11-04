@@ -324,6 +324,7 @@ _MODEL_OPTIONS_TTL_S = 60.0
 
 
 def _credential_stamp(path: Path):
+    from utils import file_signature
     try:
         return file_signature(path.stat())
     except OSError:
