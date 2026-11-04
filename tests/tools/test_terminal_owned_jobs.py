@@ -224,6 +224,17 @@ def test_a_failed_handoff_leaves_the_foreground_owner_its_group(monkeypatch, tmp
     assert not registry._running, "a session with no reader stayed registered"
 
 
+def test_reserved_launch_mixin_preserves_process_group_ownership(monkeypatch, tmp_path):
+    from tools.process_registry import ProcessRegistry
+    from tools.process_registry_launch import ProcessLaunchMixin
+
+    calls = _record_calls(monkeypatch)
+    registry = ProcessRegistry()
+    session = ProcessLaunchMixin.spawn_local(registry, 'exit 0', cwd=str(tmp_path))
+    wait_until(lambda: session.exited, timeout=15, what='the reserved launch to exit')
+    assert calls == [('own', [session.pid]), ('release', [session.pid])]
+
+
 def test_unowned_jobs_are_never_handed_to_the_supervisor(monkeypatch, tmp_path):
     from tools.process_registry import ProcessRegistry
 

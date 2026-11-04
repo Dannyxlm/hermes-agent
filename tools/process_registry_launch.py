@@ -84,10 +84,10 @@ class ProcessLaunchMixin:
         # the scope attaches to the invoked process, not the spawning session.
         output = open_output_log(log) if log else subprocess.PIPE
         try:
-            proc = subprocess.Popen(
-                spawn_argv, text=True, cwd=session.cwd, env=spawn_env, encoding="utf-8",
-                errors="replace", stdout=output, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                start_new_session=True, **_popen_kwargs)
+            proc = self._spawn_job(
+                session, spawn_argv, session.persist_on_release, text=True, cwd=session.cwd, env=spawn_env,
+                encoding="utf-8", errors="replace", stdout=output, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, **_popen_kwargs)
         finally:
             if log:
                 os.close(output)
