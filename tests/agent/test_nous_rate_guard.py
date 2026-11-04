@@ -165,7 +165,7 @@ class TestAuxiliaryClientIntegration:
 
         # Mock _read_nous_auth to return valid creds (would normally succeed)
         import agent.auxiliary_client as aux
-        monkeypatch.setattr(aux, "_read_nous_auth", lambda: {
+        monkeypatch.setattr(aux, "_read_nous_auth", lambda **kw: {
             "access_token": "test-token",
             "inference_base_url": "https://api.nous.test/v1",
         })

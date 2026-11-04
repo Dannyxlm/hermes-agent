@@ -1025,13 +1025,13 @@ def _load_pool_with_credentials(provider: str, note: str = "") -> Optional[Any]:
     return pool if pool and pool.has_credentials() else None
 
 
-def _select_pool_entry(provider: str) -> tuple[bool, Optional[Any]]:
+def _select_pool_entry(provider: str, *, model: Optional[str] = None) -> tuple[bool, Optional[Any]]:
     """Return (pool_exists_for_provider, selected_entry)."""
     pool = _load_pool_with_credentials(provider)
     if pool is None:
         return False, None
     try:
-        return True, pool.select()
+        return True, pool.select(model=model)
     except Exception as exc:
         logger.debug("Auxiliary client: could not select pool entry for %s: %s", provider, exc)
         return True, None
@@ -1945,9 +1945,9 @@ def _maybe_wrap_anthropic(
     return AnthropicAuxiliaryClient(real_client, model, api_key, base_url, is_oauth=False)
 
 
-def _read_nous_auth() -> Optional[dict]:
+def _read_nous_auth(*, model: Optional[str] = None) -> Optional[dict]:
     """Nous provider state dict from the credential pool or ~/.hermes/auth.json; None when not active with tokens."""
-    pool_present, entry = _select_pool_entry("nous")
+    pool_present, entry = _select_pool_entry("nous", model=model)
     if pool_present:
         if entry is None:
             return None
@@ -1991,7 +1991,7 @@ def _nous_api_key(provider: dict) -> str:
     return ""
 
 
-def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False) -> Optional[tuple[str, str]]:
+def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False, model: Optional[str] = None) -> Optional[tuple[str, str]]:
     """Resolve Nous auxiliary credentials from the selected pool entry."""
     try:
         from hermes_cli.auth import _agent_key_is_usable
@@ -2002,7 +2002,7 @@ def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False) -> Optional[t
     if not pool or not pool.has_credentials():
         return None
     try:
-        entry = pool.select()
+        entry = pool.select(model=model)
     except Exception as exc:
         logger.debug("Auxiliary Nous pool selection failed: %s", exc)
         return None
@@ -2030,12 +2030,12 @@ def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False) -> Optional[t
 
 
 def _resolve_nous_runtime_api(
-    *, force_refresh: bool = False, stale_access_token: Optional[str] = None
+    *, force_refresh: bool = False, stale_access_token: Optional[str] = None, model: Optional[str] = None
 ) -> Optional[tuple[str, str]]:
     """Fresh Nous runtime credentials (pool first, then auth store + JWT refresh) — mirrors the main
     agent's 401 recovery. ``stale_access_token`` is the bearer that just 401'd; with ``force_refresh``
     it lets the auth store adopt a sibling process's rotation instead of re-POSTing the shared grant."""
-    pooled = _resolve_nous_pool_runtime_api(force_refresh=force_refresh)
+    pooled = _resolve_nous_pool_runtime_api(force_refresh=force_refresh, model=model)
     if pooled is not None:
         return pooled
     try:
@@ -2063,7 +2063,7 @@ def _creds_pair(creds: dict[str, Any]) -> Optional[tuple[str, str]]:
     return api_key, base_url
 
 
-def _resolve_xai_oauth_for_aux() -> Optional[tuple[str, str]]:
+def _resolve_xai_oauth_for_aux(*, model: Optional[str] = None) -> Optional[tuple[str, str]]:
     """Fresh xAI OAuth (api_key, base_url) for aux clients, or None.
 
     Pool first (some xAI OAuth logins exist only as pool entries), then the singleton auth-store resolver.
@@ -2072,7 +2072,7 @@ def _resolve_xai_oauth_for_aux() -> Optional[tuple[str, str]]:
         from hermes_cli.auth import DEFAULT_XAI_OAUTH_BASE_URL, _xai_validate_inference_base_url
         pool = load_pool("xai-oauth")
         if pool and pool.has_credentials():
-            entry = pool.select()
+            entry = pool.select(model=model)
             if entry is not None:
                 api_key = str(
                     getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "") or ""
@@ -2098,13 +2098,13 @@ def _resolve_xai_oauth_for_aux() -> Optional[tuple[str, str]]:
     return _creds_pair(creds)
 
 
-def _resolve_codex_credential_and_base() -> tuple[Optional[str], str]:
+def _resolve_codex_credential_and_base(*, model: Optional[str] = None) -> tuple[Optional[str], str]:
     """``(token, base_url)`` taken from ONE authority, so a Codex key is only ever sent to the host
     it belongs to (#121486): the profile-scoped ``HERMES_CODEX_BASE_URL`` wins; otherwise a pooled
     key goes where that pool entry routes (row URL / ``model.base_url``) and the auth.json OAuth
     token goes to the ChatGPT default. ``(None, <base>)`` without a usable token."""
     override = _codex_base_url_override()
-    pool_present, entry = _select_pool_entry("openai-codex")
+    pool_present, entry = _select_pool_entry("openai-codex", model=model)
     if pool_present:
         token = _pool_runtime_api_key(entry)
         if token:
@@ -2171,7 +2171,7 @@ def _resolve_api_key_provider() -> tuple[Optional[OpenAI], Optional[str]]:
         model = _get_aux_model_for_provider(provider_id) or None
         if model is None:
             continue  # skip provider if we don't know a valid aux model
-        pool_present, entry = _select_pool_entry(provider_id)
+        pool_present, entry = _select_pool_entry(provider_id, model=model)
         if pool_present:
             api_key = _pool_runtime_api_key(entry)
             if not api_key:
@@ -2310,7 +2310,7 @@ def _try_openrouter(explicit_api_key: Optional[str | Callable[[], str]] = None, 
     # A caller-supplied endpoint (fallback_providers entry, custom_providers entry) is
     # authoritative over both the pool row and the canonical host (#121359).
     override_url = (explicit_base_url or "").strip().rstrip("/")
-    pool_present, entry = _select_pool_entry("openrouter")
+    pool_present, entry = _select_pool_entry("openrouter", model=or_model)
     if pool_present:
         or_key = explicit_api_key or _pool_runtime_api_key(entry)
         if or_key:
@@ -2341,7 +2341,7 @@ def _describe_openrouter_unavailable(model: str | None = None) -> str:
             f"auxiliary.free_only rejected non-free model {or_model!r}; "
             "the request was skipped before provider availability checks"
         )
-    pool_present, entry = _select_pool_entry("openrouter")
+    pool_present, entry = _select_pool_entry("openrouter", model=or_model)
     if pool_present:
         if entry is None:
             return "OpenRouter credential pool has no usable entries (credentials may be exhausted)"
@@ -2352,9 +2352,9 @@ def _describe_openrouter_unavailable(model: str | None = None) -> str:
     return "no usable OpenRouter credentials found"
 
 
-def _try_nous(vision: bool = False) -> tuple[Optional[OpenAI], Optional[str]]:
-    nous = _read_nous_auth()
-    runtime = _resolve_nous_runtime_api(force_refresh=False)
+def _try_nous(vision: bool = False, *, model: Optional[str] = None) -> tuple[Optional[OpenAI], Optional[str]]:
+    nous = _read_nous_auth(model=model)
+    runtime = _resolve_nous_runtime_api(force_refresh=False, model=model)
     if runtime is None and not nous:
         logger.warning("Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).")
         _mark_provider_unhealthy("nous", ttl=60, reason="no Nous authentication found", level=logging.DEBUG)
@@ -2401,8 +2401,9 @@ def _try_nous(vision: bool = False) -> tuple[Optional[OpenAI], Optional[str]]:
     logger.debug("Auxiliary client: Nous Portal")
     # Portal recommended-models is authoritative (tier-aware); _NOUS_MODEL when unreachable/null.
     # Probes skip the lookup: exact model is irrelevant and it hits the network.
-    model = _NOUS_MODEL
-    if not _aux_probe_active():
+    requested_model = model
+    model = model or _NOUS_MODEL
+    if not requested_model and not _aux_probe_active():
         try:
             from hermes_cli.models import get_nous_recommended_aux_model
             recommended = get_nous_recommended_aux_model(vision=vision)
@@ -2417,6 +2418,13 @@ def _try_nous(vision: bool = False) -> tuple[Optional[OpenAI], Optional[str]]:
                 "falling back to %s",
                 lane, exc, model,
             )
+    # Recommendation discovery needs a credential before its model is known. Re-select
+    # the actual request model so an unrelated bench never decides the request account.
+    if _load_pool_with_credentials("nous") is not None:
+        selected = _resolve_nous_pool_runtime_api(model=model)
+        if selected is None:
+            return None, None
+        api_key, base_url = selected
     return _create_openai_client(api_key=api_key, base_url=base_url), model
 
 
@@ -2892,7 +2900,7 @@ def _build_xai_oauth_aux_client(model: str) -> tuple[Optional[Any], Optional[str
             "pass model explicitly (auxiliary.<task>.model in config.yaml)."
         )
         return None, None
-    resolved = _resolve_xai_oauth_for_aux()
+    resolved = _resolve_xai_oauth_for_aux(model=model)
     if resolved is None:
         return None, None
     api_key, base_url = resolved
@@ -2921,7 +2929,7 @@ def _build_codex_client(model: str) -> tuple[Optional[Any], Optional[str]]:
             "pass model explicitly (auxiliary.<task>.model in config.yaml)."
         )
         return None, None
-    codex_token, base_url = _resolve_codex_credential_and_base()
+    codex_token, base_url = _resolve_codex_credential_and_base(model=model)
     if not codex_token:
         return None, None
     logger.debug("Auxiliary client: Codex OAuth (%s via Responses API)", model)
@@ -2990,19 +2998,20 @@ def _try_azure_foundry(
 
 
 def _try_anthropic(explicit_api_key: Optional[str | Callable[[], str]] = None,
-                   explicit_base_url: Optional[str] = None) -> tuple[Optional[Any], Optional[str]]:
+                   explicit_base_url: Optional[str] = None, *, model: Optional[str] = None) -> tuple[Optional[Any], Optional[str]]:
+    model = _normalize_resolved_model(model or _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001", "anthropic")
     try:
         from agent.anthropic_adapter import build_anthropic_client
         from agent.anthropic_credentials import resolve_anthropic_token
     except ImportError:
         return None, None
-    pool_present, entry = _select_pool_entry("anthropic")
+    pool_present, entry = _select_pool_entry("anthropic", model=model)
     if pool_present and entry is not None:
         token = explicit_api_key or _pool_runtime_api_key(entry)
     else:
         # Pool absent/empty: legacy resolver so a dead pool entry can't wedge aux tasks when a standalone credential exists.
         entry = None
-        token = explicit_api_key or resolve_anthropic_token()
+        token = explicit_api_key or resolve_anthropic_token(model=model)
     if not token:
         return None, None
     # Honor config.yaml model.base_url only when provider is anthropic AND the URL is
@@ -3035,7 +3044,6 @@ def _try_anthropic(explicit_api_key: Optional[str | Callable[[], str]] = None,
         base_url = override_url
     from agent.anthropic_credentials import _is_oauth_token
     is_oauth = _is_oauth_token(token)
-    model = _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001"
     if _aux_probe_active():
         # Probe: token + adapter import resolved; skip real client construction.
         return _AuxProbeClientStub(api_key="", base_url=base_url), model
@@ -4566,7 +4574,8 @@ def _try_discovery_chain() -> tuple[Optional[OpenAI], Optional[str], str]:
 
 
 def _resolve_auto_route(
-    main_runtime: Optional[dict[str, Any]] = None, task: Optional[str] = None
+    main_runtime: Optional[dict[str, Any]] = None, task: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> tuple[Optional[OpenAI], Optional[str], str]:
     """Full auto-detection chain, including the selected provider identity. Priority: (1) main provider +
     main model, regardless of provider type ("auto" means "my main model for side tasks too"; explicit
@@ -4576,7 +4585,7 @@ def _resolve_auto_route(
     runtime = _normalize_main_runtime(main_runtime)
     _warn_stale_openai_base_url(runtime.get("provider", ""))
     main_provider, main_model, base_url, api_key, api_mode = _main_route_target(runtime, task)
-    routed = _try_main_provider_route(main_provider, main_model, base_url, api_key, api_mode)
+    routed = _try_main_provider_route(main_provider, model or main_model, base_url, api_key, api_mode)
     if routed is not None:
         return routed
     if task:
@@ -4664,7 +4673,7 @@ def _normalize_resolved_model(model_name: Optional[str], provider: str) -> Optio
         return model_name
 
 
-def _named_custom_api_key(custom_entry: dict[str, Any], provider: str, custom_base: str) -> Any:
+def _named_custom_api_key(custom_entry: dict[str, Any], provider: str, custom_base: str, *, model: Optional[str] = None) -> Any:
     """Credential for a named custom provider: inline api_key → key_env → key_cmd → credential pool → placeholder.
     Aux resolves named custom providers here, not via _resolve_named_custom_runtime, so key_cmd must be
     honoured at the same precedence or every aux call 401s."""
@@ -4687,7 +4696,7 @@ def _named_custom_api_key(custom_entry: dict[str, Any], provider: str, custom_ba
                     continue
                 if (pool := entry_scoped_pool(pool, pool_key, custom_entry)) is None or not pool.has_credentials():
                     continue
-                if (pool_entry := pool.select()) is None:
+                if (pool_entry := pool.select(model=model)) is None:
                     continue
                 pool_api_key = getattr(pool_entry, "runtime_api_key", None) or getattr(pool_entry, "access_token", "") or ""
                 if str(pool_api_key).strip():
@@ -4884,17 +4893,12 @@ def _route_or_warn(req: _ResolveRequest, client: Any, default: Optional[str], un
 
 def _resolve_auto_branch(req: _ResolveRequest) -> _ResolveResult:
     """Auto: try all providers in priority order; tag the client with the effective provider (survives cache reuse)."""
-    client, resolved, effective_provider = _resolve_auto_route(main_runtime=req.main_runtime, task=req.task)
+    client, resolved, effective_provider = _resolve_auto_route(main_runtime=req.main_runtime, task=req.task, model=req.model)
     if client is None:
         return None, None
-    model = req.model
-    # An OpenRouter-format model override won't work on a non-OpenRouter provider (e.g. local
-    # server); drop it for the provider's default.
-    if model and "/" in model and resolved and "/" not in resolved:
-        logger.debug("Dropping OpenRouter-format model %r for non-OpenRouter "
-                     "auxiliary provider (using %r instead)", model, resolved)
-        model = None
-    routed_client, routed_model = _route_client(req, client, model or resolved)
+    # Auto resolution pairs the model with the selected provider. An override belongs
+    # to the primary route, never to a fallback on another provider.
+    routed_client, routed_model = _route_client(req, client, resolved)
     if routed_client is not None and effective_provider:
         try:
             routed_client._hermes_aux_effective_provider = effective_provider
@@ -4920,7 +4924,7 @@ def _resolve_nous_branch(req: _ResolveRequest) -> _ResolveResult:
     model = req.model
     # Vision: caller flag, _PROVIDER_VISION_MODELS override, or a known vision id.
     client, default = _try_nous(vision=(req.is_vision or model in _PROVIDER_VISION_MODELS.values()
-                                        or (model or "").strip().lower() == "mimo-v2-omni"))
+                                        or (model or "").strip().lower() == "mimo-v2-omni"), model=model)
     if client is None:
         logger.warning("resolve_provider_client: nous requested but Nous Portal not configured (run: hermes auth)")
         return None, None
@@ -4946,7 +4950,7 @@ def _resolve_openai_codex_branch(req: _ResolveRequest) -> _ResolveResult:
     no_token_msg = "resolve_provider_client: openai-codex requested but no Codex OAuth token found (run: hermes model)"
     if req.raw_codex:
         # Raw OpenAI client for callers needing responses.stream() (main agent loop).
-        codex_token, base_url = _resolve_codex_credential_and_base()
+        codex_token, base_url = _resolve_codex_credential_and_base(model=model)
         if not codex_token:
             logger.warning(no_token_msg)
             return None, None
@@ -5071,7 +5075,7 @@ def _resolve_named_custom_branch(req: _ResolveRequest) -> Optional[_ResolveResul
     # whatever the caller left blank, never replaces what the caller set (compression prompts carry
     # conversation history, so a silently swapped destination is a data-routing bug, not a nuisance).
     custom_base = (req.explicit_base_url or custom_entry.get("base_url") or "").strip()
-    custom_key = _normalize_api_key(req.explicit_api_key) or _named_custom_api_key(custom_entry, provider, custom_base)
+    custom_key = _normalize_api_key(req.explicit_api_key) or _named_custom_api_key(custom_entry, provider, custom_base, model=req.model or custom_entry.get("model"))
     if custom_key == "no-key-required":
         logger.warning("resolve_provider_client: named custom provider %r has no resolvable "
                        "api_key — request will be sent with placeholder no-key-required "
@@ -5170,7 +5174,7 @@ def _resolve_api_key_branch(req: _ResolveRequest, pconfig: Any, resolve_creds: C
     provider = req.provider
     if provider == "anthropic":
         client, default_model = _try_anthropic(explicit_api_key=req.explicit_api_key,
-                                               explicit_base_url=req.explicit_base_url)
+                                               explicit_base_url=req.explicit_base_url, model=req.model)
         return _route_or_warn(req, client, default_model,
                               "resolve_provider_client: anthropic requested but no Anthropic credentials found")
     creds = resolve_creds(provider)
@@ -5350,30 +5354,12 @@ def resolve_provider_client(
     # Excluded: ``auto`` (a stale main slug could pair with any picked provider) and Nous + vision (the
     # Portal's tier-aware vision recommendation must win over a text-only model).
     if not model and provider != "auto" and not (provider == "nous" and is_vision):
-        # ``auto`` is intentionally excluded: `_resolve_auto_route(main_runtime=...)` returns the model paired
-        # with the provider it actually selected. Pre-filling an auto call from `_read_main_model()` can
-        # leak a stale process-global runtime into a different provider (for example Claude model slug on
-        # Codex OAuth) and override that correctly resolved model. 1. ``model`` argument (caller knew what
-        # they wanted) 2. Provider's catalog default — cheap/fast model the provider registered via
-        # ``ProviderProfile.default_aux_model`` or the legacy ``_API_KEY_PROVIDER_AUX_MODELS_FALLBACK``
-        # dict. 3. User's main model from ``model.model`` in config.yaml. This is the load-bearing step for
-        # OAuth providers: an xai-oauth user with grok-4.3 configured gets grok-4.3 for title generation
-        # instead of silently dropping to whatever Step-2 fallback (#31845). When the main provider is MoA,
-        # ``_read_main_model_for_aux()`` substitutes the preset's aggregator model — the preset NAME is
-        # never a valid wire model id, so unset aux models default to the preset's acting model instead.
-        # Each provider branch below sees a non-empty ``model`` whenever the user has *anything* configured
-        # — no provider-specific empty-model guards needed. When the user has NOTHING configured (fresh
-        # install, main_model also empty), the branches still hit their own missing-credentials returns and
-        # ``_resolve_auto_route`` falls through to the Step-2 chain as before. Do NOT pre-fill a blank ``auto``
-        # request from the config/main default here. Claude model sent to Codex after the main lane fell
-        # back to gpt-5.5). Let _resolve_auto_route() return the actual current runtime model when the caller did
-        # not explicitly request one. (# compression-current-model) Nous + vision is the one carve-out: the
-        # branch below resolves its model from the Portal's tier-aware vision recommendation
-        # (``_try_nous(vision= True)``), and ``final_model = model or default`` means anything pre-filled
-        # here wins over that. The main chat model is routinely text-only (e.g. a ``:free`` chat SKU), so
-        # pre-filling it sends the image to a model that cannot accept one and the Portal 404s. Leave
-        # ``model`` unset and let the Portal slot through; only an explicit caller model may override it.
+        # Auto keeps its provider/model pair; a stale main slug cannot override a
+        # fallback. Nous vision owns its tier-aware recommendation, not the text
+        # chat default. OAuth without a catalog default may reuse the main model
+        # (MoA is unwrapped to its aggregator).
         model = _get_aux_model_for_provider(provider) or _read_main_model_for_aux() or model
+    model = _normalize_resolved_model(model, provider) if provider != "auto" else model
     req = _ResolveRequest(
         provider, original_provider, model, async_mode, raw_codex,
         explicit_base_url, explicit_api_key, api_mode, main_runtime, is_vision, task,
@@ -5445,7 +5431,7 @@ _STRICT_VISION_BACKENDS: dict[str, Callable[[Optional[str]], tuple[Optional[Any]
     "openrouter": lambda model: _try_openrouter(model=model),
     "nous": lambda model: resolve_provider_client("nous", model, is_vision=True),
     "openai-codex": lambda model: resolve_provider_client("openai-codex", model, is_vision=True),
-    "anthropic": lambda model: _try_anthropic(),
+    "anthropic": lambda model: _try_anthropic(model=model),
     "deepinfra": _deepinfra_strict_vision_backend,
     "custom": lambda model: _try_custom_endpoint(),
 }
@@ -5498,7 +5484,7 @@ def _vision_main_provider_client(
     # A provider vision default (static override or catalog discovery) is a *known* multimodal
     # model; the pinned chat model usually isn't, so only fall back to it when no default exists.
     provider_vision_default = _resolve_provider_vision_default(main_provider)
-    vision_model = provider_vision_default or main_model
+    vision_model = resolved_model or provider_vision_default or main_model
     if main_provider == "nous":
         # Nous picks its vision model from Portal tier-aware slots inside _try_nous(vision=True);
         # passing the chat model would override that and 404. Only auxiliary.vision.model may.
@@ -5562,7 +5548,7 @@ def _vision_auto_route(
             continue  # already tried above
         sync_client, default_model = _resolve_strict_vision_backend(candidate)
         if sync_client is not None:
-            return _finalize_vision_client(candidate, sync_client, default_model, resolved_model, async_mode)
+            return _finalize_vision_client(candidate, sync_client, default_model, None, async_mode)
     logger.debug("Auxiliary vision client: none available")
     return None, None, None
 
@@ -7292,9 +7278,10 @@ def _resolve_call_client(
         if client is None and resolved_provider != "auto" and not resolved_base_url:
             logger.warning("Vision provider %s unavailable, falling back to auto vision backends",
                            resolved_provider)
-            effective_provider, client, final_model = resolve_vision_provider_client(
-                provider="auto", model=resolved_model, async_mode=async_mode,
-                main_runtime=main_runtime)
+            # Do not re-read the failed task's configured provider/model while rescuing
+            # across providers. Auto candidates own their vision model defaults.
+            effective_provider, client, final_model = _vision_auto_route(
+                _normalize_main_runtime(main_runtime), None, None, async_mode)
         if client is not None:
             resolved_provider = effective_provider or resolved_provider
     else:

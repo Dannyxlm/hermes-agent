@@ -661,8 +661,8 @@ def _resolve_anthropic_pool_token(*, skip_borrowed: bool = False, model: Optiona
     auth.json or hit the network; refresh-on-expiry belongs to the API call path's pool recovery.
 
     *model* scopes per-model cooldowns: a row benched only for another model (e.g. a Fable-only
-    ``credits_required`` 429) stays eligible. Without it every active cooldown blocks, so the per-request
-    refresh would otherwise skip that row for every model and pin all traffic to the next one."""
+    ``credits_required`` 429) stays eligible. Model-less usage/discovery ignores model-scoped
+    benches; credential-wide exhaustion still excludes an entry."""
     try:
         from agent.credential_pool import AUTH_TYPE_OAUTH, load_pool
         entries, _pending = load_pool("anthropic")._available_entries(clear_expired=False, refresh=False, model=model)

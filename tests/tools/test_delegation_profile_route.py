@@ -213,7 +213,7 @@ def test_profile_child_lease_and_schema_retry_run_inside_the_target_profile(two_
     seen = {}
 
     class _Pool:
-        def acquire_lease(self, credential_id=None):
+        def acquire_lease(self, credential_id=None, *, model=None):
             return "e1"
 
         def entries(self):

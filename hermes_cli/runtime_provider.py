@@ -1004,7 +1004,7 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
     return None
 
 
-def _local_endpoint_bypass(requested_provider: str, explicit_api_key, explicit_base_url) -> Optional[dict[str, Any]]:
+def _local_endpoint_bypass(requested_provider: str, explicit_api_key, explicit_base_url, target_model=None) -> Optional[dict[str, Any]]:
     """provider "auto"/unset with a config base_url at a custom/local endpoint routes through the
     OpenAI-compatible resolver, so resolve_provider() cannot pick up an env ANTHROPIC/OPENAI key
     and send the request to a cloud API. Only non-cloud roots take the bypass; match on HOST, not
@@ -1014,7 +1014,7 @@ def _local_endpoint_bypass(requested_provider: str, explicit_api_key, explicit_b
     if (not cfg_base_url or _cfg_provider(model_cfg) not in ("auto", "")
             or any(base_url_host_matches(cfg_base_url, host) for host in _LOCAL_BYPASS_CLOUD_HOSTS)):
         return None
-    return _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url)
+    return _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url, target_model)
 
 
 def _tag(runtime: Optional[dict[str, Any]], requested_provider: str) -> Optional[dict[str, Any]]:
@@ -1036,9 +1036,9 @@ def _named_custom_rung(requested_provider, explicit_api_key, explicit_base_url, 
     return runtime
 
 
-def _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url) -> dict[str, Any]:
+def _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url, target_model=None) -> dict[str, Any]:
     return _tag(_resolve_openrouter_runtime(requested_provider=requested_provider, explicit_api_key=explicit_api_key,
-                                            explicit_base_url=explicit_base_url), requested_provider)
+                                            explicit_base_url=explicit_base_url, target_model=target_model), requested_provider)
 
 
 def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_key: Optional[str] = None,
@@ -1118,7 +1118,7 @@ def _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, targe
     # letting resolve_provider() pick up an ANTHROPIC_API_KEY or OPENAI_API_KEY from the environment and
     # send the request to a cloud API. Fixes #3846.
     if not explicit_base_url and not explicit_api_key:
-        yield _local_endpoint_bypass(requested_provider, explicit_api_key, explicit_base_url)
+        yield _local_endpoint_bypass(requested_provider, explicit_api_key, explicit_base_url, target_model)
     provider = resolve_provider(requested_provider, explicit_api_key=explicit_api_key, explicit_base_url=explicit_base_url)
     model_cfg = _get_model_config()
     yield _resolve_explicit_runtime(provider=provider, requested_provider=requested_provider, model_cfg=model_cfg,
@@ -1147,7 +1147,7 @@ def _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, targe
     pconfig = PROVIDER_REGISTRY.get(provider)
     if pconfig and pconfig.auth_type == "api_key":
         yield _api_key_provider_runtime(provider, pconfig, requested_provider, model_cfg, target_model)
-    fallback = _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url)
+    fallback = _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url, target_model)
     if swallowed_auth_error is not None and not fallback.get("api_key"):
         fallback["auth_error"] = swallowed_auth_error
     yield fallback

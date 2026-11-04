@@ -55,11 +55,11 @@ def test_other_model_bench_does_not_divert_requested_model(store):
     assert resolve_anthropic_token(model=FABLE) == SECONDARY, "the benched model still skips the row"
 
 
-def test_model_less_resolution_stays_conservative(store):
+def test_model_less_resolution_ignores_model_benches(store):
     from agent.anthropic_credentials import resolve_anthropic_token
 
-    # Callers that name no model keep honouring every active cooldown (pool default).
-    assert resolve_anthropic_token() == SECONDARY
+    # Usage and discovery operate on credentials, not on every possible model.
+    assert resolve_anthropic_token() == PRIMARY
 
 
 def test_bench_on_requested_model_still_rotates(store):

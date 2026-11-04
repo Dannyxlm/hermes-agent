@@ -2266,7 +2266,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 return None
             return entry
 
-    def _rotate_unmatched(self) -> Optional[PooledCredential]:
+    def _rotate_unmatched(self, *, model: Optional[str] = None) -> Optional[PooledCredential]:
         """Rotate without marking anything when the failed identity matches no entry.
 
         Falling through to current()/_select_unlocked() would bench an
@@ -2278,7 +2278,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         available entries, then surface the error; no cooldown is written.
         """
         self._unmatched_rotation_streak += 1
-        available_count = len(self._available_entries()[0])
+        available_count = len(self._available_entries(model=model)[0])
         if self._unmatched_rotation_streak > max(available_count, 1):
             logger.warning(
                 "credential pool: failed credential identity matched no "
@@ -2295,8 +2295,8 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             self.provider,
         )
         self._current_id = None
-        next_entry, _pending = self._select_unlocked(refresh=False)
-        if next_entry is not None and len(self._available_entries()[0]) == 1:
+        next_entry, _pending = self._select_unlocked(refresh=False, model=model)
+        if next_entry is not None and available_count == 1:
             # A single-entry pool cannot rotate: returning its only entry would
             # report a recovery without changing the credential, and the
             # caller retries the same 401 indefinitely.
@@ -2319,11 +2319,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             identity_supplied = bool(credential_id or api_key_hint)
             entry = self.identify_failed_entry(credential_id, api_key_hint, allow_stale_key=status_code == 429)
             if entry is None and identity_supplied:
-                return self._rotate_unmatched()
+                return self._rotate_unmatched(model=model)
             # A real entry was identified — any prior unmatched streak is stale.
             self._unmatched_rotation_streak = 0
             if entry is None:
-                entry = self._current_unlocked() or self._select_unlocked(refresh=False)[0]
+                entry = self._current_unlocked() or self._select_unlocked(refresh=False, model=model)[0]
             if entry is None:
                 return None
             _label = entry.label or entry.id[:8]
@@ -2388,34 +2388,30 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
 
     # ---- leases ------------------------------------------------------------
 
-    def acquire_lease(self, credential_id: Optional[str] = None) -> Optional[str]:
+    def acquire_lease(self, credential_id: Optional[str] = None, *, model: Optional[str] = None) -> Optional[str]:
         """Acquire a soft lease on a credential.
 
-        With *credential_id*, lease that entry directly. Otherwise prefer the
-        least-leased available credential (priority as tie-breaker); when
-        every credential is at the soft cap, still return the least-leased
-        one instead of blocking.
+        With *model*, validate even an explicit id against its availability. Otherwise
+        prefer the least-leased available entry (priority breaks ties), including
+        above the soft cap rather than blocking.
         """
-        chosen_id, pending_refresh = self._acquire_lease_under_lock(credential_id)
+        chosen_id, pending_refresh = self._acquire_lease_under_lock(credential_id, model=model)
         if pending_refresh:
             self._refresh_pending_entries(pending_refresh)
             # Mirror select(): a pool whose entries all needed a deferred
             # refresh must retry once they are back in rotation, or the caller
             # sees "no credentials available" after a successful refresh.
             if chosen_id is None:
-                chosen_id, _ = self._acquire_lease_under_lock(credential_id)
+                chosen_id, _ = self._acquire_lease_under_lock(credential_id, model=model)
         return chosen_id
 
     def _acquire_lease_under_lock(
-        self, credential_id: Optional[str],
+        self, credential_id: Optional[str], *, model: Optional[str] = None,
     ) -> tuple[Optional[str], list[PooledCredential]]:
         with self._lock:
+            available, pending_refresh = self._available_entries(clear_expired=True, refresh=True, model=model)
             if credential_id:
-                self._active_leases[credential_id] = self._active_leases.get(credential_id, 0) + 1
-                self._current_id = credential_id
-                return credential_id, []
-
-            available, pending_refresh = self._available_entries(clear_expired=True, refresh=True)
+                available = [entry for entry in available if entry.id == credential_id]
             if not available:
                 return None, pending_refresh
 

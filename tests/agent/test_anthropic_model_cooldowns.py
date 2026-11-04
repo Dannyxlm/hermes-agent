@@ -44,7 +44,7 @@ def test_generic_429_benches_only_the_rate_limited_model(pool, monkeypatch):
     assert pool.entries()[0].last_status is None  # credential-wide state untouched
     assert pool.select(model=MODEL_A) is None
     assert pool.select(model=MODEL_B) is not None
-    assert pool.select() is None  # a caller that names no model honours every active cooldown
+    assert pool.select() is not None  # credential-only operations ignore model-scoped benches
     assert pool.next_available_at(model=MODEL_A) is not None
     assert pool.next_available_at(model=MODEL_B) is None
 
