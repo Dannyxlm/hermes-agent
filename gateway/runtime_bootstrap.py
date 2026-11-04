@@ -11,6 +11,8 @@ _PURPOSE_CAPABILITIES = {
                               'session:control', 'session:approve', 'session:respond'}),
     # Same-user meeting automation: room read/create/send, never human approval or operator authority.
     'team-room': frozenset({'session:read', 'session:submit', 'session:control'}),
+    # A scheduled wake delegates the stored row's exact login, not the machine owner.
+    'session-wake': frozenset({'session:create', 'session:read', 'session:submit', 'session:control'}),
     'native-http': frozenset({'http:owner'}),
     # Same-user host operation, not permission to read or mutate another profile.
     'native-profile-create': frozenset({'profiles:create'}),
@@ -26,7 +28,7 @@ _SCOPES = frozenset({'profile', 'host'})
 
 def redeem_session_ticket(store, ticket):
     """Redeem only a local WebSocket purpose, retaining the issuer's origin attestation."""
-    for purpose in ('interactive', 'team-room', 'worker-adoption'):
+    for purpose in ('interactive', 'team-room', 'session-wake', 'worker-adoption'):
         try:
             return store.redeem(ticket, profile_id=None, purpose=purpose)
         except PermissionError:

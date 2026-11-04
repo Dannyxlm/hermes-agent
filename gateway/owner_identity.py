@@ -32,6 +32,10 @@ def principal_subject(identity: dict) -> str:
         return subject
     provider = str(identity.get('provider') or '').strip()
     if provider == 'local':
+        # Only a private, redeemed wake grant can retain a delegated login. Interactive
+        # sign-ins still use the unified host owner; automation must not widen its subject.
+        if identity.get('native_bootstrap') and identity.get('bootstrap_purpose') == 'session-wake':
+            return subject
         login = parse_authenticated_subject(subject)
         return host_owner_subject() if login is not None and _login_provider(login[0]) and login[0] != 'local' else subject
     return host_owner_subject() if _login_provider(provider) else subject

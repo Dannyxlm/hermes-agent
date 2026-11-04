@@ -49,6 +49,28 @@ async def test_private_control_peer_mints_profile_bound_ticket(tmp_path, purpose
         await server.stop()
 
 
+def test_wake_grant_preserves_exact_login_without_owner_or_host_authority():
+    from gateway.owner_identity import host_owner_subject, principal_subject
+    from gateway.runtime_bootstrap import TicketStore, redeem_session_ticket
+    from gateway.session_identity import authenticated_subject
+
+    subject = authenticated_subject({'provider': 'basic', 'user_id': 'alice'})
+    store = TicketStore('boot', frozenset({'a', 'b'}))
+    ticket = store.mint(profile_id='a', subject=subject, purpose='session-wake')
+    grant = redeem_session_ticket(store, ticket)
+    assert grant['profile_id'] == 'a'
+    assert grant['capabilities'] == frozenset({'session:create', 'session:read', 'session:submit', 'session:control'})
+    identity = {'provider': 'local', 'user_id': grant['subject'], 'native_bootstrap': True,
+                'bootstrap_purpose': grant['purpose']}
+    assert principal_subject(identity) == subject
+    assert principal_subject({**identity, 'native_bootstrap': False}) == host_owner_subject()
+    assert principal_subject({**identity, 'bootstrap_purpose': 'interactive'}) == host_owner_subject()
+    with pytest.raises(PermissionError):
+        store.mint(profile_id='a', subject=subject, purpose='session-wake', scope='host')
+    with pytest.raises(PermissionError):
+        redeem_session_ticket(store, ticket)
+
+
 def test_ticket_atomic_single_use_profile_purpose_expiry_and_capacity(monkeypatch):
     from gateway.runtime_bootstrap import TicketStore
     clock = [0.0]

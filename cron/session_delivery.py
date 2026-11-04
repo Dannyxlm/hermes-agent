@@ -131,7 +131,7 @@ async def _wake_rpc(home: Path, record: dict, save) -> dict | None:
     token = set_hermes_home_override(home)
     try:
         forwarded = {'subject': record['wake_subject']} if record.get('wake_subject') else {}
-        async with connect_gateway(endpoint=discovery.endpoint, **forwarded) as client:
+        async with connect_gateway(endpoint=discovery.endpoint, purpose='session-wake', **forwarded) as client:
             snapshot = await client.rpc("session.resume",
                 session_id=target_session,
                 omit_messages=True, defer_history=True)
