@@ -1499,7 +1499,8 @@ class TestLockedGuard:
         with _skill_dir(skills):
             d = self._make(skills, "locked-skill")
             assert skill_usage.set_locked("locked-skill", True)
-            fresh = self._bg(d, action="create", name="brand-new", content=VALID_SKILL_CONTENT)
+            fresh_content = "---\nname: brand-new\ndescription: Diagnose PostgreSQL WAL replication lag.\n---\n\n# Replication\nInspect the standby replay LSN and replication slot backlog.\n"
+            fresh = self._bg(d, action="create", name="brand-new", content=fresh_content)
             shadow = self._bg(d, action="create", name="locked-skill", content=VALID_SKILL_CONTENT_2)
         assert fresh["success"] is True, fresh
         assert shadow["success"] is False and "already exists" in shadow["error"], shadow
