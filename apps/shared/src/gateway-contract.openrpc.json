@@ -40856,6 +40856,21 @@
           "applied": {
             "$ref": "#/components/schemas/ProfilesConfigureApplied"
           },
+          "credentials_required": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Credentials Required"
+          },
           "confirm_required": {
             "anyOf": [
               {

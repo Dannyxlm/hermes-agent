@@ -4260,6 +4260,7 @@ export interface ProfilesConfigureParams {
 export interface ProfilesConfigureResult {
   ok: boolean
   applied: ProfilesConfigureApplied
+  credentials_required?: Record<string, boolean> | null
   confirm_required?: boolean | null
   confirm_message?: string | null
 }
