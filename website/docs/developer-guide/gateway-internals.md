@@ -17,10 +17,33 @@ hosted-room metadata protocol in the owning authority's database. An explicit
 `profile` selector must resolve to that authority's home. Disband refuses rooms
 with unsettled driver work rather than bypassing Stop.
 
-This is **metadata management, not hosted-room inference**. The existing local
-hosted-room driver still uses legacy TUI session handlers; the canonical surface
-therefore reports `driver: false` and does not advertise send, retry, approval,
-or peer-grant operations. It never imports that driver to execute a group turn.
+When the canonical hosted service is running, `groups.capabilities` reports
+`driver: true` and advertises `groups.send`, Stop, retry/discard, and approval
+controls. The gateway owns member execution and durable recovery; clients only
+submit messages and replay the log. Without that service, metadata remains
+readable but execution controls require runtime coordination.
+
+`groups.create` optionally accepts `meeting` with exactly `kind` (`standup` or
+`campfire`), `schedule_local` (24-hour `HH:MM`), and `timezone` (an IANA name).
+Every room summary includes `meeting`, which is `null` for ordinary rooms.
+The marker is durable, survives rename/restart, and is part of create's exact
+idempotency comparison. It does not schedule anything: a separate owner-authorized
+runner posts meeting prompts through the ordinary `groups.send` method.
+
+Meeting-marked rooms are one continuous conversation: sends are normalized to
+`payload.thread_id: "main"`, including clients that mint a fresh thread id per
+post. Ordinary room threading is unchanged. A newer user post supersedes unfinished
+Discussion responses in that shared thread; a runner should yield rather than
+silently post the next scheduled prompt over the human's message. Each prompt
+still obeys the existing Discussion limits (six members, three rounds, ten member
+messages). Use successive settled prompts, not larger unbounded discussions.
+
+Local automation can use `connect_gateway(endpoint=..., subject=..., scope="host")`
+to request a host-scoped ticket from the existing same-user private bootstrap.
+Pass an already-discovered endpoint to avoid starting a gateway. Room ownership
+is bound to the authenticated subject, not just the profile: use the same login
+subject as the intended client. This does not change member approval modes or
+bypass the bootstrap's scope validation.
 
 `profiles.list` requires `session:read` and returns the authenticated profile
 first, with its display metadata and avatar presence, then the served siblings and

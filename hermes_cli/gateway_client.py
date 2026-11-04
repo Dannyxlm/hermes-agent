@@ -259,11 +259,13 @@ def _session_ticket(home: Path, endpoint, *, purpose="interactive", scope=None, 
 
 
 @asynccontextmanager
-async def connect_gateway(endpoint=None, subject=None):
+async def connect_gateway(endpoint=None, subject=None, *, scope=None):
     """Attach to this home's owner. ``endpoint``: an already-discovered ready owner to dial as-is
     (maintenance that must never start a gateway); default ensures one, starting it if needed.
     ``subject``: mint the ticket for this principal (the caller's authenticated dashboard user)
-    rather than the socket identity; only a peer the owner already trusts may name one."""
+    rather than the socket identity; only a peer the owner already trusts may name one.
+    ``scope``: optional bootstrap scope (for example ``host`` to seat served sibling bots);
+    the existing private bootstrap validates it. Explicit remote URLs cannot request a scope."""
     from websockets.asyncio.client import connect
     from hermes_constants import get_hermes_home
     from hermes_cli.gateway_runtime import attachable, ensure_gateway_runtime, gateway_profile_home
@@ -271,11 +273,14 @@ async def connect_gateway(endpoint=None, subject=None):
 
     remote = "" if endpoint is not None else os.environ.get("HERMES_TUI_GATEWAY_URL", "").strip()
     protocols = None
+    ticket_params = {key: value for key, value in {"subject": subject, "scope": scope}.items() if value is not None}
     if endpoint is not None:
         ticket = await asyncio.to_thread(_session_ticket, gateway_profile_home(get_hermes_home()), endpoint,
-                                         subject=subject)
+                                         **ticket_params)
         url, protocols = gateway_ws_target(endpoint, ticket)
     elif remote:
+        if scope is not None:
+            raise GatewayClientError("A bootstrap scope requires a local gateway endpoint")
         parsed = urlsplit(remote)
         if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
             raise GatewayClientError("Invalid explicit gateway WebSocket URL; no local fallback")
@@ -295,7 +300,7 @@ async def connect_gateway(endpoint=None, subject=None):
             raise GatewayUnavailableError(f"Gateway {result.state}: {result.reason_code or 'not_ready'}{detail}",
                                           result.state)
         endpoint = result.endpoint
-        ticket = await asyncio.to_thread(_session_ticket, home, endpoint)
+        ticket = await asyncio.to_thread(_session_ticket, home, endpoint, **ticket_params)
         url, protocols = gateway_ws_target(endpoint, ticket)
     try:
         # The gateway is a loopback (or explicitly named) peer, never something to route through the

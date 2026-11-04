@@ -31,7 +31,7 @@ _FIELDS = {
     'groups.list': {'limit', 'offset', 'include_disbanded'},
     'groups.state': {'room_id', 'include_disbanded'},
     'groups.log': {'room_id', 'since_seq', 'limit', 'include_disbanded'},
-    'groups.create': {'room_id', 'name', 'members'},
+    'groups.create': {'room_id', 'name', 'members', 'meeting'},
     'groups.rename': {'room_id', 'event_id', 'name'},
     'groups.disband': {'room_id', 'cancel_id'},
     'groups.send': {'room_id', 'event_id', 'payload'},
@@ -191,6 +191,7 @@ def _group(authority, actor, method, params, *, host_scope=False):
                        **({'display_name': m.display_name} if m.display_name else {})} for m in members]
         return {'room': rooms.create_room(db_path, room_id=params.get('room_id'),
                 name=params.get('name'), members=normalized, authority_gateway_id=gateway_id,
+                meeting=params.get('meeting'),
                 admit=admit)}
 
     def disband():

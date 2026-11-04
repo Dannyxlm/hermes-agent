@@ -39,11 +39,17 @@ def test_group_management_on_ordinary_authenticated_socket(tmp_path):
             assert 'groups.create' in capabilities['result']['methods']
             members = [{'member_id': 'one', 'profile': 'default', 'handle': 'one'},
                        {'member_id': 'two', 'profile': 'helper', 'handle': 'two'}]
-            created = await rpc(ws, 'groups.create', room_id='room-fixture', name='First', members=members)
+            meeting = {'kind': 'campfire', 'schedule_local': '21:00', 'timezone': 'America/Edmonton'}
+            created = await rpc(ws, 'groups.create', room_id='room-fixture', name='First', members=members, meeting=meeting)
             assert 'result' in created, created
             room = created['result']['room']
-            retry = (await rpc(ws, 'groups.create', room_id='room-fixture', name='First', members=members))['result']['room']
+            assert room['meeting'] == meeting
+            retry = (await rpc(ws, 'groups.create', room_id='room-fixture', name='First', members=members, meeting=meeting))['result']['room']
             assert retry['room_id'] == room['room_id'] and retry['idempotent']
+            assert retry['meeting'] == meeting
+            conflict = await rpc(ws, 'groups.create', room_id='room-fixture', name='First', members=members,
+                                 meeting={**meeting, 'schedule_local': '22:00'})
+            assert conflict['error']['message'] == 'invalid_params', conflict
             renamed = await rpc(ws, 'groups.rename', room_id='room-fixture', event_id='rename-fixture', name='Renamed')
             assert renamed['result']['room']['name'] == 'Renamed', renamed
             listed = await rpc(ws, 'groups.list')
@@ -51,6 +57,12 @@ def test_group_management_on_ordinary_authenticated_socket(tmp_path):
             state = await rpc(ws, 'groups.state', room_id='room-fixture')
             log = await rpc(ws, 'groups.log', room_id='room-fixture')
             assert state['result']['room']['latest_seq'] == log['result']['cursor']
+            for result_room in (renamed['result']['room'], listed['result']['rooms'][0], state['result']['room']):
+                assert result_room['meeting'] == meeting
+            ordinary = await rpc(ws, 'groups.create', room_id='ordinary', name='Ordinary', members=members)
+            assert ordinary['result']['room']['meeting'] is None
+            assert (await rpc(ws, 'groups.state', room_id='ordinary'))['result']['room']['meeting'] is None
+            await rpc(ws, 'groups.disband', room_id='ordinary')
             denied = await rpc(ws, 'groups.rename', profile='foreign', room_id='room-fixture', event_id='forbidden', name='Wrong')
             assert denied['error']['message'] == 'profile_mismatch', denied
             profiles = await rpc(ws, 'profiles.list', include_sessions=False)

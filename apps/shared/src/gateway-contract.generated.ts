@@ -1856,6 +1856,7 @@ export interface Room {
   room_id: string
   name: string
   members: RoomMember[]
+  meeting?: RoomMeeting | null
   authority_gateway_id: string
   authority_epoch: number
   revision: number
@@ -1877,6 +1878,12 @@ export interface RoomMember {
   display_name?: string | null
   target?: Record<string, unknown> | null
   [key: string]: unknown
+}
+/** Optional descriptive meeting marker; scheduling stays outside the room service. */
+export interface RoomMeeting {
+  kind: 'standup' | 'campfire'
+  schedule_local: string
+  timezone: string
 }
 /** ``gateway/hosted_rooms.py::_event_from_row``. */
 export interface RoomEvent {
@@ -1901,6 +1908,7 @@ export interface GroupsCreateParams {
   room_id: string
   name: string
   members: RoomMemberInput[]
+  meeting?: RoomMeeting | null
   authority_gateway_id?: string | null
 }
 /** A roster row as the client proposes it; ``validate_roster`` owns the exact rules. */
@@ -6937,6 +6945,7 @@ export interface CanonicalRoomCreateParams {
   room_id: string
   name: string
   members: RoomMemberInput[]
+  meeting?: RoomMeeting | null
 }
 export interface CanonicalRoomApproveParams {
   profile?: string | null
