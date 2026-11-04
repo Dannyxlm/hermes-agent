@@ -102,13 +102,51 @@ def test_host_owner_local_rows_can_lead_threads(home):
     with _db(home) as db:
         db.create_session('native', 'gui', user_id=owner)
         db.create_session('foreign-os', 'gui', user_id='uid:99999999')
+        db.create_session('foreign-native', 'gui', user_id=authenticated_subject(
+            {'provider': 'local', 'user_id': 'uid:99999999'}))
+        db.create_session('unstamped', 'tui')
         for source in ('telegram', 'cron', 'subagent'):
-            db.create_session(source, source, user_id=owner)
+            for kind, stamp in (('host', owner), ('login', DANNY), ('label', 'basic:danny')):
+                db.create_session(f'{source}-{kind}', source, user_id=stamp)
     assert _subject(home, 'native') == owner
     assert call('native', action='list')['success'] is True
-    assert _subject(home, 'foreign-os') is None
+    for sid in ('foreign-os', 'foreign-native', 'unstamped'):
+        assert _subject(home, sid) is None
+        assert call(sid, action='list')['error'] == 'caller_not_local'
     for source in ('telegram', 'cron', 'subagent'):
-        assert _subject(home, source) is None
+        for kind in ('host', 'login', 'label'):
+            assert _subject(home, f'{source}-{kind}') is None
+
+
+@pytest.mark.parametrize('source', ['tui', 'gui'])
+@pytest.mark.parametrize('stamp', [DANNY, 'basic:danny'], ids=['login-subject', 'login-label'])
+def test_legacy_login_chat_acts_as_host_without_forwarding_os_subject(home, monkeypatch, source, stamp):
+    import asyncio
+    from gateway.owner_identity import host_owner_subject
+    from hermes_cli import gateway_client, gateway_runtime
+    from tools import thread_tool as tool
+
+    with _db(home) as db:
+        db.create_session('old-lead', source, user_id=stamp)
+    subjects = []
+    client = object()
+
+    @contextlib.asynccontextmanager
+    async def connect(**kwargs):
+        subjects.append(kwargs['subject'])
+        yield client
+
+    async def use_owner(connected):
+        assert connected is client
+        return 'connected'
+
+    monkeypatch.setattr(gateway_runtime, 'discover_gateway_endpoint',
+                        lambda *a, **k: SimpleNamespace(state='ready', endpoint=object()))
+    monkeypatch.setattr(gateway_client, 'connect_gateway', connect)
+    subject = tool._subject(home, 'old-lead')
+    assert subject == host_owner_subject()
+    assert asyncio.run(tool._with_owner(home, subject, use_owner)) == 'connected'
+    assert subjects == [None], 'the control socket must attest the host; never forward its OS subject'
 
 
 def test_only_the_users_local_chats_can_lead_threads(home):
@@ -124,7 +162,10 @@ def test_writes_reach_only_this_chats_threads_and_reads_stay_with_the_user(home)
         thread(db, "mine")
         db.create_session("solo", "tui", user_id=DANNY)
         db.append_message("solo", "user", "hello")
-        db.create_session("theirs", "tui", user_id=MALLORY)
+        db.create_session("theirs", "tui", user_id=authenticated_subject(
+            {"provider": "local", "user_id": "uid:99999999"}))
+        db.create_session("other-login", "tui", user_id=MALLORY)
+    assert call(action="read", thread_id="other-login")["success"] is True  # sign-ins share the host owner
     for action, extra in (("send", {"message": "hi"}), ("stop", {}), ("settle", {}), ("rename", {"title": "x"})):
         out = call(action=action, thread_id="solo", **extra)
         assert out["error"] == "not_your_thread", (action, out)
@@ -354,7 +395,8 @@ class Owner:
         with _db(self.home) as db:
             if method == "session.create":
                 sid = "t" + params["launch_id"][-6:]
-                db.create_session(sid, "tui", user_id=DANNY)
+                from gateway.owner_identity import host_owner_subject
+                db.create_session(sid, "tui", user_id=host_owner_subject())
                 db.record_launch(launch_id=params["launch_id"], kind=params["launch_kind"],
                                  launcher_profile=params["started_by_profile"],
                                  launcher_session_id=params["started_by_session"], child_profile="default")
@@ -416,7 +458,8 @@ def owner(home, monkeypatch):
     fake = Owner(home)
 
     async def with_owner(home_, subject, fn):
-        assert subject == DANNY  # every call acts for the caller's own principal
+        from gateway.owner_identity import host_owner_subject
+        assert subject == host_owner_subject()  # interactive chats act for the unified host owner
         return await fn(fake)
 
     monkeypatch.setattr(tool, "_run", asyncio.run)

@@ -118,10 +118,15 @@ def _handle(caller: Caller, profile: str, session_id: str) -> str:
 # ── who is calling, and which chat is meant ───────────────────────────────────────────────────
 
 def _subject(home: Path, session_id: str):
-    """The local chat owner (login or host OS stamp), or None for non-local rows."""
+    """The host owner a local interactive chat acts for, or None for non-local/foreign rows."""
     from cron.session_delivery import _wake_subject
+    from gateway.owner_identity import host_owner_subject, same_owner
     try:
-        return _wake_subject(home, session_id)
+        stamp = _wake_subject(home, session_id)
+        # Interactive tools use the gateway's unified owner; scheduled wakes keep
+        # the exact stored login in _wake_subject for their narrower grant.
+        owner = host_owner_subject()
+        return owner if same_owner(stamp, owner) else None
     except (sqlite3.Error, OSError):  # an unreadable store proves no principal
         return None
 
