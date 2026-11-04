@@ -136,4 +136,3 @@ def test_text_auto_fallback_keeps_the_destination_model(auth_store):
         })
     assert client is not None
     assert model == "claude-haiku-4-5-20251001"
-
