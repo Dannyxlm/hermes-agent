@@ -23,6 +23,22 @@ def desk(tmp_path, monkeypatch):
     return make_desk(tmp_path, monkeypatch)
 
 
+@pytest.mark.parametrize('unavailable', [False, True])
+def test_guest_admission_respects_backend_layer_absence_even_when_file_exists(desk, monkeypatch, unavailable):
+    from hermes_cli import config_backend
+    runner, _, _ = desk
+    src = source(desk)
+    assert guest_channel_authorized(runner, src) is True
+
+    def absent(path):
+        if unavailable:
+            raise config_backend.ConfigBackendUnavailable('synthetic unavailable backend')
+        return False
+
+    monkeypatch.setattr(config_backend, 'config_exists', absent)
+    assert guest_channel_authorized(runner, src) is False
+
+
 def test_handbuilt_sources_do_not_require_slack_fields(desk):
     runner, adapter, _ = desk
     assert guest_turn_toolsets(runner, SimpleNamespace(), {}) is None
