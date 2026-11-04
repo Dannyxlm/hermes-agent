@@ -26262,6 +26262,31 @@
             "additionalProperties": true,
             "title": "Payload",
             "type": "object"
+          },
+          "expected_authority_gateway_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Gateway Id"
+          },
+          "expected_authority_epoch": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Authority Epoch"
           }
         },
         "required": [

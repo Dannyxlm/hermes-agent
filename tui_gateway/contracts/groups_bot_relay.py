@@ -276,6 +276,8 @@ method("groups.state", params=GroupsStateParams, result=GroupsStateResult,
 class GroupsSendParams(RoomParams):
     event_id: str | None = None
     payload: dict[str, JsonValue]
+    expected_authority_gateway_id: str | None = None
+    expected_authority_epoch: int | None = Field(default=None, strict=True, ge=1)
 
 
 class GroupsSendResult(Result):

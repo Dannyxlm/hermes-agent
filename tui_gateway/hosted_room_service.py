@@ -506,13 +506,19 @@ class HostedRoomService:
         self.runtime.wakeup()
         return room
 
-    def send(self, *, room_id: str, event_id: str, payload: Any, actor: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def send(
+        self, *, room_id: str, event_id: str, payload: Any, actor: Mapping[str, Any] | None = None,
+        expected_authority: tuple[str, int] | None = None,
+    ) -> dict[str, Any]:
         normalized = discussion.validate_user_payload(payload)
         # Meeting rooms are one continuous conversation, including clients which
         # mint a new thread id for each post. Ordinary room threading is unchanged.
         if self._room(room_id).get("meeting") is not None:
             normalized["thread_id"] = "main"
         gateway_id, epoch = self._owned_authority(room_id)
+        if expected_authority is not None and expected_authority != (gateway_id, epoch):
+            raise hosted_rooms.AuthorityConflictError("stale hosted room authority")
+        # The same coordinates fence the transactional append if authority changes after this read.
         from gateway.session_hosted_attachments import append_user_event
         event = append_user_event(
             self, room_id=room_id, event_id=event_id, payload=normalized,

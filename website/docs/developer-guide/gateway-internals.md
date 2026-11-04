@@ -55,6 +55,15 @@ identity. The automation grant has read/submit/control capabilities, but no huma
 approval, response, or operator capability. Clients can render its prompts as
 neutral notes rather than the human's own bubbles.
 
+The canonical authority's `groups.capabilities.features` includes `authority_epoch`,
+`room_identity`, `monotonic_log`, `idempotent_send`, and `replayable_disband`; its
+`methods` includes `groups.send`. Room projections and newly admitted room events
+carry positive integer epochs. Canonical `groups.send` accepts the phone's optional
+`expected_authority_gateway_id` and `expected_authority_epoch` together: malformed
+or incomplete pairs are refused, stale coordinates conflict, and the checked
+coordinates also fence the transactional append. Existing clients can omit both.
+The accepted event's epoch matches the room authority used for that append.
+
 `profiles.list` requires `session:read` and returns the authenticated profile
 first, with its display metadata and avatar presence, then the served siblings and
 hosted-room destinations as discovery metadata. `include_sessions` defaults to

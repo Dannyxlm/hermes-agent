@@ -1965,6 +1965,8 @@ export interface GroupsSendParams {
   room_id: string
   event_id?: string | null
   payload: Record<string, unknown>
+  expected_authority_gateway_id?: string | null
+  expected_authority_epoch?: number | null
 }
 export interface GroupsSendResult {
   event: RoomEvent
