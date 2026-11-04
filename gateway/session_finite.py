@@ -73,7 +73,13 @@ async def execute_finite_admission(authority, ref, row):
     from gateway.session_display import display_turn_scope, submission_turn_scope
     from gateway.session_surface import surface_turn_scope
     from gateway.session_cli_turn import cli_turn_scope
-    with finite_turn_scope(row['payload'].get('finite', False), row['payload'].get('unattended') is True), \
+    import asyncio
+    from agent.hosted_room_memory import hosted_room_memory_scope
+    from gateway.hosted_room_memory import admission_memory_context
+    memory_context = await asyncio.to_thread(admission_memory_context, authority, ref, row)
+    with hosted_room_memory_scope(ref.session_id, authority.profile_id, memory_context,
+            resolve_session=lambda session_id: authority.logical_owner(session_id)), \
+            finite_turn_scope(row['payload'].get('finite', False), row['payload'].get('unattended') is True), \
             surface_turn_scope(row['payload'].get('surface_v1')), \
             display_turn_scope(row['admission_id'], row['payload'].get('display_v1')), \
             submission_turn_scope(row['admission_id'], row.get('request_id')), \

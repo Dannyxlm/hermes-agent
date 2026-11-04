@@ -274,7 +274,7 @@ def check_remote_hosted_admission(authority, ref, row):
         return _check_remote_hosted_admission(authority, ref, row)
 
 
-def _check_remote_hosted_admission(authority, ref, row):
+def _check_remote_hosted_admission(authority, ref, row, *, memory_context=False):
     with authority.db._read_ctx() as conn:
         stored = conn.execute('SELECT value FROM state_meta WHERE key=?',
                               (_BINDING + ref.session_id,)).fetchone()
@@ -303,7 +303,7 @@ def _check_remote_hosted_admission(authority, ref, row):
     # Outside the permission_denied fold: a corrupted or missing retained document is a
     # storage fault of this destination, not a revoked source binding.
     verify_attested_documents(attested['attachments'], attested.get('attachment_digests'))
-    return True
+    return attested.get('memory_context') if memory_context else True
 
 
 class HostedRoomOwnerRPC(HostedRoomAuthorityRPC):

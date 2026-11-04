@@ -65,10 +65,12 @@ def append_user_event(service, *, room_id, event_id, payload, gateway_id, epoch,
             room_id=room_id, event_id=event_id, manifest=manifest,
             recipient_member_ids=[m['member_id'] for m in service._room(room_id)['members']],
             viewer_access=True, hold_until_event=True)
+    from gateway.hosted_room_memory import record_trigger
     try:
         return hosted_rooms.append_event(
             service.db_path, room_id=room_id, event_id=event_id, kind='message.user',
-            actor=actor if actor is not None else {'kind': 'user', 'id': 'desktop'}, payload=payload,
+            actor=actor if actor is not None else {'kind': 'user', 'id': 'desktop'},
+            payload=lambda conn: record_trigger(conn, room_id, event_id, payload),
             authority_gateway_id=gateway_id, authority_epoch=epoch)
     except Exception:
         if transitioned:
