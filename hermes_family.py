@@ -13,7 +13,7 @@ import re
 import sqlite3
 import time
 
-from hermes_family_storage import compression_owners, compression_tips, read_metadata
+from hermes_family_storage import compression_owners, compression_tips, folder_project_id, read_folder_projects, read_metadata
 
 
 LIVE = frozenset({"working", "quiet", "needs_you"})
@@ -27,7 +27,7 @@ THREAD_TURN = {"completed": "done", "failed": "failed", "interrupted": "stopped"
                "unknown": "paused_by_restart", "queued": "working", "started": "working"}
 SESSION_FIELDS = ("id", "source", "user_id", "chat_id", "parent_session_id", "title", "started_at", "ended_at", "model",
                   "last_activity_at", "last_activity_description", "last_activity_kind", "last_activity_tool", "runtime_generation",
-                  "end_reason", "model_config")
+                  "end_reason", "model_config", "cwd")
 
 
 @dataclass
@@ -59,6 +59,9 @@ def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, w
             conn, name, tables, columns, fields, seeds=seeds, since=since, walk=walk,
             admission_columns=frozenset(ledger))
         conn.rollback()
+    folders = read_folder_projects(Path(path).parent / "projects.db")
+    for session in sessions.values():
+        session["projectId"] = folder_project_id(session.get("cwd"), folders)
     return Profile(name, sessions, launches, aliases, owners)
 
 
@@ -209,7 +212,8 @@ class Family:
             actions.append("stop")
         return {"node_id": key, "parent_node_id": None if root else row.get("parent"), "kind": kind,
                 "profile": profile, "session_id": sid, "title": row.get("title") if row.get("launch_id") else None,
-                "full_title": session.get("title"), "batch_id": row.get("batch_id"), "status": status,
+                "full_title": session.get("title"), "projectId": session.get("projectId"), "workspace": session.get("cwd"),
+                "batch_id": row.get("batch_id"), "status": status,
                 "step_kind": step, "step_tool": (row.get("last_activity_tool") or live.get("step_tool")) if step == "tool" else None,
                 "activity_text": row.get("last_activity_description"),
                 "started_at": row.get("created_at", row.get("started_at")),

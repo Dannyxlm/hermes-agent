@@ -37,6 +37,9 @@ class FamilyNode(Result):
     session_id: str | None
     title: str | None
     full_title: str | None
+    # Match the ordinary chat summary's folder keys; older producers may omit them.
+    projectId: str | None = None
+    workspace: str | None = None
     batch_id: str | None
     status: Literal["working", "needs_you", "failed", "done", "paused_by_restart", "stopped", "quiet", "unknown"]
     step_kind: str | None
