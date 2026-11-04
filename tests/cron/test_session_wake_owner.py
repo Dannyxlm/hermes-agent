@@ -113,6 +113,20 @@ def queue(state):
     return path, pending.read_pending(key)
 
 
+def test_host_owner_wake_uses_socket_peer_without_forwarding_os_subject(wake_owner):
+    from gateway.owner_identity import host_owner_subject
+
+    owner = host_owner_subject()
+    with SessionDB(wake_owner.home / 'state.db') as db:
+        db._write_sql('UPDATE sessions SET user_id=? WHERE id=?', (owner, 'chat'))
+    path, record = queue(wake_owner)
+    assert record['wake_subject'] == owner
+    wake_owner.ready = True
+    saved = pending._drain_one(path)
+    assert saved['status'] == 'transferred', saved
+    assert wake_owner.subjects == [None]
+
+
 def test_login_owned_tui_wake_reaches_real_admission(wake_owner):
     path, _ = queue(wake_owner)
     wake_owner.ready = True

@@ -91,6 +91,9 @@ def _wake_subject(home: Path, session_id: str) -> str | None:
             from hermes_state_mutation_binding import _login_label
             if _login_label(subject) == owner:
                 return subject
+    from gateway.owner_identity import host_owner_subject
+    if owner == host_owner_subject():
+        return owner
     return None
 
 
@@ -130,7 +133,9 @@ async def _wake_rpc(home: Path, record: dict, save) -> dict | None:
     target_session = await asyncio.to_thread(resolve_session, record["session_id"], home)
     token = set_hermes_home_override(home)
     try:
-        forwarded = {'subject': record['wake_subject']} if record.get('wake_subject') else {}
+        from gateway.owner_identity import host_owner_subject
+        subject = record.get('wake_subject')
+        forwarded = {'subject': subject} if subject and subject != host_owner_subject() else {}
         async with connect_gateway(endpoint=discovery.endpoint, purpose='session-wake', **forwarded) as client:
             snapshot = await client.rpc("session.resume",
                 session_id=target_session,

@@ -184,6 +184,7 @@ def admit_display(authority, actor, request) -> dict:
     from gateway.session_display import admit_display as admit_client_display
     from hermes_state_runtime import RuntimeStoreError, find_session_admission
     from tools.thread_tool import _subject
+    from gateway.owner_identity import same_owner
 
     params = request.payload
     if params.get("display_kind") != "internal_notification":
@@ -202,7 +203,7 @@ def admit_display(authority, actor, request) -> dict:
             or request.request_id != SUBMISSION_PREFIX + record["key"]
             or params != {"text": record.get("text"), "finite": True, "display_kind": "internal_notification",
                           "turn_author": {"id": f"bot:{profile}", "name": "Thread update", "is_bot": True}}
-            or _subject(home, request.ref.session_id) != actor.subject):
+            or not same_owner(_subject(home, request.ref.session_id), actor.subject)):
         raise RuntimeStoreError("invalid_params")
     return admit_client_display(params, thread_notice=True)
 

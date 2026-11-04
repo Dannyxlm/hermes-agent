@@ -94,6 +94,23 @@ def call(sid="parent", **args):
     return json.loads(thread_tool(args, parent_agent=SimpleNamespace(session_id=sid)))
 
 
+def test_host_owner_local_rows_can_lead_threads(home):
+    from gateway.owner_identity import host_owner_subject
+    from tools.thread_tool import _subject
+
+    owner = host_owner_subject()
+    with _db(home) as db:
+        db.create_session('native', 'gui', user_id=owner)
+        db.create_session('foreign-os', 'gui', user_id='uid:99999999')
+        for source in ('telegram', 'cron', 'subagent'):
+            db.create_session(source, source, user_id=owner)
+    assert _subject(home, 'native') == owner
+    assert call('native', action='list')['success'] is True
+    assert _subject(home, 'foreign-os') is None
+    for source in ('telegram', 'cron', 'subagent'):
+        assert _subject(home, source) is None
+
+
 def test_only_the_users_local_chats_can_lead_threads(home):
     with _db(home) as db:
         db.create_session("tg", "telegram", user_id="12345")

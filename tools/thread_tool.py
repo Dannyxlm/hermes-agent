@@ -118,7 +118,7 @@ def _handle(caller: Caller, profile: str, session_id: str) -> str:
 # ── who is calling, and which chat is meant ───────────────────────────────────────────────────
 
 def _subject(home: Path, session_id: str):
-    """The login principal a local chat acts for, or None (messaging, cron, subagent, socket-uid rows)."""
+    """The local chat owner (login or host OS stamp), or None for non-local rows."""
     from cron.session_delivery import _wake_subject
     try:
         return _wake_subject(home, session_id)
@@ -175,7 +175,8 @@ def _resolve(caller: Caller, handle) -> Thread:
         current = ts.tip(conn, sid)
         row = conn.execute("SELECT title, model, archived FROM sessions WHERE id=?", (current,)).fetchone()
         launch = ts.launch_of(conn, profile, lineage)
-    if _subject(home, current) != caller.subject:
+    from gateway.owner_identity import same_owner
+    if not same_owner(_subject(home, current), caller.subject):
         raise missing
     return Thread(profile, home, current, lineage, (row["title"] or "") if row else "", row["model"] if row else None,
                   launch, bool(row["archived"]) if row else False)
@@ -266,7 +267,9 @@ async def _with_owner(home: Path, subject: str, fn):
     if found.state != "ready" or found.endpoint is None:
         raise ThreadError("owner_unavailable", "The Hermes gateway that hosts these chats isn't running; try again shortly.")
     try:
-        async with connect_gateway(endpoint=found.endpoint, subject=subject) as client:
+        from gateway.owner_identity import host_owner_subject
+        async with connect_gateway(endpoint=found.endpoint,
+                                   subject=None if subject == host_owner_subject() else subject) as client:
             return await fn(client)
     except GatewayRPCError as exc:
         raise ThreadError("owner_refused", f"The gateway refused the request: {exc}") from exc
