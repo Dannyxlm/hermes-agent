@@ -7,7 +7,9 @@ only the chosen members take the normal round. Anything the lead answers that na
 the lead alone: a routing answer can never broadcast.
 
 Everything else keeps the room's normal resolution: an @mention or @all/@everyone, a scheduled post, a
-reply inside an existing thread, and every message in an ``everyone`` room (the default).
+reply inside an existing ordinary thread, and every message in an ``everyone`` room (the default).
+Meeting rooms share one thread, so their unaddressed owner (user/desktop) posts route through the lead
+even there; the server-owned team-room automation actor never does.
 
 The routing turn is an ordinary driver task whose payload carries ``lead_routing: true``. Only the planner's
 lead round sets it; the driver accepts it only as exactly true, and it is hashed into the task id (the prompt
@@ -46,7 +48,7 @@ def lead_member(room: DiscussionRoom, context: Mapping[str, str]) -> DiscussionM
 
 
 def routes_through_lead(discussion: _ValidatedEvent, room: DiscussionRoom, events: Sequence[_ValidatedEvent]) -> bool:
-    """A human message that opens a new thread and addresses nobody goes to the lead first."""
+    """Unaddressed meeting-owner posts or ordinary new-thread posts go to the lead first."""
     from gateway.hosted_room_context import scheduled_post_kind
     from gateway.hosted_room_discussion import _MENTION_RE
 
@@ -55,6 +57,9 @@ def routes_through_lead(discussion: _ValidatedEvent, room: DiscussionRoom, event
     handles = {member.handle.casefold() for member in room.members} | {"all", "everyone"}
     if any(match.group(1).casefold() in handles for match in _MENTION_RE.finditer(str(discussion.payload["text"]))):
         return False
+    if room.is_meeting:
+        # Meeting sends share main; only the authenticated interactive owner gets the exception.
+        return discussion.actor.get("kind") == "user" and discussion.actor.get("id") == "desktop"
     thread_id = discussion.payload["thread_id"]
     return not any(
         event.seq < discussion.seq and event.kind in {"message.user", "message.member"}

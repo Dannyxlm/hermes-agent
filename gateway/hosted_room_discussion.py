@@ -125,6 +125,7 @@ class DiscussionRoom:
     members: tuple[DiscussionMember, ...]
     gateway_id: str
     authority_epoch: int
+    is_meeting: bool = False
 
 
 @dataclass(frozen=True)
@@ -330,7 +331,8 @@ def validate_room(value: Any, *, local_profiles: Iterable[str]) -> DiscussionRoo
     gateway_id = _identifier(value.get("authority_gateway_id"), label="authority_gateway_id")
     authority_epoch = _positive_int(value.get("authority_epoch"), label="authority_epoch")
     members = validate_roster(value.get("members"), local_profiles=local_profiles)
-    return DiscussionRoom(room_id, name, members, gateway_id, authority_epoch)
+    is_meeting = common.validate_meeting(value.get("meeting"), error=DiscussionValidationError) is not None
+    return DiscussionRoom(room_id, name, members, gateway_id, authority_epoch, is_meeting)
 
 
 def is_pass_text(value: Any) -> bool:
