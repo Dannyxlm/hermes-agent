@@ -1187,6 +1187,16 @@ def _take_real_profile_note(route_key: str) -> dict:
     return {"real_profile_unavailable": _real_profile_fallback[route_key]}
 
 
+def _remember_real_profile_task(env, task_id):
+    """Attribute a task only when its resolved endpoint is the running real-profile browser."""
+    if _has_cdp_env(env) and hermes_home_key() in _real_profile_scopes:
+        from tools.browser_launcher import get_browser
+        from tools.browser_session_real_profile import real_profile_key
+        running = get_browser(real_profile_key())
+        if running is not None and (env.get("BU_CDP_WS") or env.get("BU_CDP_URL")) == running.cdp_url:
+            _real_profile_task_homes[task_id or "default"] = hermes_home_key()
+
+
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
@@ -1226,12 +1236,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         env["BU_NAME"] = _sidecar_daemon_name(session)
     fit_default_socket_dir(env)  # BU_NAME is final: a deep HOME's socket would overflow sun_path
     _exec_route_is_sidecar[route_key] = local_sidecar
-    if _has_cdp_env(env) and hermes_home_key() in _real_profile_scopes:
-        from tools.browser_launcher import get_browser
-        from tools.browser_session_real_profile import real_profile_key
-        running = get_browser(real_profile_key())
-        if running is not None and (env.get("BU_CDP_WS") or env.get("BU_CDP_URL")) == running.cdp_url:
-            _real_profile_task_homes[task_id or "default"] = hermes_home_key()
+    _remember_real_profile_task(env, task_id)
     local_engine = env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None)
     bot_desktop_browser = bool(local_engine)
     _exec_local_engine.set(local_engine)  # only local browsers carry the sentinel
