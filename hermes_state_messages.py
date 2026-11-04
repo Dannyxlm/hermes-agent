@@ -3,6 +3,8 @@ replayed-user dedupe. Mixin bound via the MRO, built on SessionDB's _read_ctx/_e
 
 from __future__ import annotations
 
+from hermes_state_message_values import _coerce_timestamp, _parse_tool_calls, _tool_calls_count, _tool_calls_len, _scrub_surrogates
+
 import hashlib
 import json
 import logging
@@ -78,41 +80,9 @@ _SET_CODEX_REASONING_SQL = "UPDATE messages SET codex_reasoning_items = ? WHERE 
 _INVALID = object()  # _json_or sentinel where the fallback must be distinguishable from JSON null
 
 
-def _coerce_timestamp(value: Any, default: float) -> float:
-    """Explicit message timestamp (datetime or number) or *default* when invalid or outside the sane
-    epoch window — the write-side twin of the readers' ``coerce_epoch``: a bad row is never persisted."""
-    result = coerce_epoch(value, field="message timestamp")
-    if result is None:
-        return default
-    # SQLite reads both signed zero spellings back as 0.0. Hash the value
-    # in that stored form so -0.0 and 0.0 retain the historical SQL/Python
-    # identity equality.
-    return 0.0 if result == 0.0 else result
 
 
-def _parse_tool_calls(tool_calls: Any) -> Any:
-    """tool_calls is a list (live agent) or JSON string (import/export); parse so json.dumps never double-encodes."""
-    if not isinstance(tool_calls, str):
-        return tool_calls
-    try:
-        return json.loads(tool_calls)
-    except (json.JSONDecodeError, TypeError):
-        return []
 
-
-def _tool_calls_count(tool_calls: Any) -> int:
-    return 0 if tool_calls is None else (len(tool_calls) if isinstance(tool_calls, list) else 1)
-
-
-def _tool_calls_len(raw: Any, scalar: int = 0) -> int:
-    """Count of a stored ``tool_calls`` column: list length, *scalar* for a truthy non-list, else 0."""
-    parsed = _parse_tool_calls(raw)
-    return len(parsed) if isinstance(parsed, list) else (scalar if parsed else 0)
-
-
-def _scrub_surrogates(value: Any) -> Any:
-    """Lone surrogates make sqlite3 raise UnicodeEncodeError and abort the whole write."""
-    return _sanitize_surrogates(value) if isinstance(value, str) else value
 
 
 def _stale_holder(row, now: float) -> bool:
