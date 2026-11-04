@@ -71,16 +71,16 @@ def test_session_and_always_answers_stop_the_next_prompt_for_that_tool_only(choi
 
 
 def test_consent_without_an_identity_offers_and_records_only_once(monkeypatch):
-    """Elicitation-style consent: the card offers Once / Deny, the CLI panel is asked for once/deny,
-    and a stale broader answer approves this call without remembering anything."""
-    with _Chat("tg:chat-c", "session") as chat:
+    """Elicitation-style consent: both the gateway card and CLI panel offer only
+    Once / Deny, and accepting never creates a reusable grant."""
+    with _Chat("tg:chat-c", "once") as chat:
         assert approval_prompt.request_elicitation_consent("Use the camera?", "server asks") == "accept"
     assert chat.cards[0]["allow_session"] is False and chat.cards[0]["allow_permanent"] is False
     assert approval._session_approved == {}
 
     asked = []
     monkeypatch.setattr("tools.terminal_tool._get_approval_callback",
-                        lambda: lambda *a, **kw: asked.append(kw) or "always")
+                        lambda: lambda *a, **kw: asked.append(kw) or "once")
     monkeypatch.setattr(approval_prompt._ctx, "_no_user_can_answer", lambda: False)
     assert approval_prompt.request_elicitation_consent("Fill card?", "pay") == "accept"
     assert asked[0]["allow_session"] is False and asked[0]["allow_permanent"] is False
