@@ -60,6 +60,11 @@ class ClientCapabilitiesResult(Result):
     declines_not_shown: bool = False
     #: Version of the ``sessions.changed`` cursor protocol this backend speaks (0 = none).
     session_change_cursor: int = 0
+    #: A canonical owner on this backend admits ``clarify_batch`` on ``prompt.submit``: the turn's
+    #: multi-question clarify arrives as ONE ``clarify`` request answered with ``clarify.lock``, not
+    #: one card per question. An older owner refuses the unknown key, so a client declares it only when
+    #: this is true. (The legacy sidecar always asks the batch at once and is never sent the key.)
+    canonical_clarify_batch: bool = False
 
 
 method("client.capabilities", params=ClientCapabilitiesParams, result=ClientCapabilitiesResult,

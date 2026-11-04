@@ -46,9 +46,11 @@ class TicketStore:
         self._entries: dict[str, tuple[float, dict]] = {}
         self._lock = threading.Lock()
 
-    def mint(self, *, profile_id, subject, purpose, scope='profile') -> str:
-        """Host scope lets interactive and meeting clients select served siblings; the default
-        binds exactly ``profile_id``. Both are minted only through the same-user private bootstrap."""
+    def mint(self, *, profile_id, subject, purpose, scope='profile', refuse_restart_wait=False) -> str:
+        """``scope='host'`` lets interactive and meeting connections select every profile this process
+        serves (the Desktop's one shared socket); the default binds exactly ``profile_id``.
+        ``refuse_restart_wait``: the socket redeeming it is refused while a restart's after-turn
+        wait is open, however long after the mint that wait began (a machine poller, never a human)."""
         if (profile_id not in self.profile_ids or purpose not in _PURPOSE_CAPABILITIES or not subject
                 or scope not in _SCOPES or (scope == 'host' and purpose not in {'interactive', 'team-room'})):
             raise PermissionError('bootstrap binding rejected')
@@ -61,7 +63,8 @@ class TicketStore:
             self._entries[hashlib.sha256(ticket.encode()).hexdigest()] = (
                 now + self.TTL_SECONDS,
                 {'instance_id': self.instance_id, 'profile_id': profile_id, 'subject': subject,
-                 'purpose': purpose, 'capabilities': _PURPOSE_CAPABILITIES[purpose], 'scope': scope})
+                 'purpose': purpose, 'capabilities': _PURPOSE_CAPABILITIES[purpose], 'scope': scope,
+                 'refuse_restart_wait': bool(refuse_restart_wait)})
             return ticket
 
     def redeem(self, ticket, *, profile_id, purpose) -> dict:

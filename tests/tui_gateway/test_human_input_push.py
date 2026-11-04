@@ -96,7 +96,7 @@ def test_sessionless_install_is_connection_owned_and_only_enrolled_profile_notif
     sid, scope, ids = enrolled
     # Same device enrolled twice in this profile gets one connection alert; another
     # profile's attention lease must not receive this host prompt.
-    from tui_gateway.methods_browser_control import _principal_digest
+    from gateway.session_identity import authenticated_principal_digest as _principal_digest
     principal = _principal_digest({"user_id": "test-user", "provider": "test-auth"})
     for profile, root_id in ((scope.profile, "other-chat"), ("default", "foreign-chat")):
         push_service.store.register(principal, Scope("native", profile, root_id),

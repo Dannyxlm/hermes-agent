@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from plugins.cloudseed_mobile.dashboard.plugin_api import deliverable_store, owner_config
 from plugins.cloudseed_mobile.links_index import query_index
 from .contracts.files import FilesIndexParams, IndexParams
-from .methods_browser_control import _is_authenticated_identity
+from gateway.session_identity import is_authenticated_identity as _is_authenticated_identity
 
 
 def _principal(server):

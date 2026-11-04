@@ -68,7 +68,7 @@ def _(rid, params):
 @method("config.defaults.set")
 @_profile_scoped
 def _(rid, params):
-    from tui_gateway.methods_browser_control import _is_authenticated_identity, _principal_digest
+    from gateway.session_identity import authenticated_principal_digest as _principal_digest, is_authenticated_identity as _is_authenticated_identity
     from tui_gateway.profile_defaults import validate_default, write_default
     identity = getattr(current_transport(), "auth_identity", None)
     if not _is_authenticated_identity(identity):

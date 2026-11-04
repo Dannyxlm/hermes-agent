@@ -70,7 +70,7 @@ def _clear_ended_terminal_state(authority, session_id):
     """Owner-loop close tail: no yield between the last-viewer check and retirement."""
     live = authority.sessions.get(session_id)
     clear = getattr(authority.runner, '_clear_session_terminal_state', None)
-    if live is not None and not live.superseded and not live.subscribers and callable(clear):
+    if live is not None and not live.subscribers and callable(clear):
         clear(live.route)
 
 

@@ -162,7 +162,7 @@ def call(operation, body, *, principal):
 
 def _rpc(server, operation, rid, body):
     from hermes_cli.config import load_config
-    from .methods_browser_control import _is_authenticated_identity
+    from gateway.session_identity import is_authenticated_identity as _is_authenticated_identity
     identity = getattr(server.current_transport(), 'auth_identity', None)
     try:
         if not _is_authenticated_identity(identity):

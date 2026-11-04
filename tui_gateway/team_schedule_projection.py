@@ -28,7 +28,7 @@ class UnknownProfile(Exception):
 def owner_principal(identity, *, config_scope=None):
     from hermes_cli.config import load_config_readonly
     from hermes_cli.web_server_profiles import _config_profile_scope
-    from tui_gateway.methods_browser_control import _is_authenticated_identity
+    from gateway.session_identity import is_authenticated_identity as _is_authenticated_identity
     if not _is_authenticated_identity(identity):
         raise OwnerDenied("Configured owner required")
     if config_scope is None:

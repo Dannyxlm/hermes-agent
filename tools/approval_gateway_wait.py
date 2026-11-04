@@ -29,6 +29,8 @@ def _consent_kind(data: dict) -> str | None:
     if surface == "vault-payment" or kind == "payment" or data.get("payment") is not None:
         return "payment"
     family = surface.split("/", 1)[0]
+    if family == "mcp-trust" and data.get("mcp_trust_remember_key"):
+        return None  # host-built trust gate, not a one-call elicitation/payment consent
     if family in ("mcp-trust", "mcp-elicitation"):
         return family.replace("-", "_")
     return kind if kind in ("mcp_trust", "mcp_elicitation") else None
@@ -61,7 +63,7 @@ class _ApprovalNotice(dict):
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("acknowledged", "auth", "cancelled", "data", "event", "expired", "reason", "result", "settle")
+    __slots__ = ("acknowledged", "auth", "cancelled", "data", "event", "expired", "observers", "reason", "result", "settle")
 
     def __init__(self, data: dict, *, timeout_seconds: float | None = None):
         from agent.deadline import clamp_timeout
@@ -73,6 +75,7 @@ class _ApprovalEntry:
         from tools.approval import _gateway_approval_epoch
         self.data.update(scoped_approval_response=1, request_epoch=_gateway_approval_epoch, request_revision=1)
         self.data.update(created_at=time.time(), timeout_seconds=timeout)
+        self.data.setdefault("timeout_s", timeout)  # legacy prompt field; deadline stays event-owned
         self.data["expires_at"] = self.data["created_at"] + timeout
         # Carry the producer's frozen budget with the wake signal. Publication
         # and observer latency must not restart the queue's clock after sending.
@@ -88,6 +91,7 @@ class _ApprovalEntry:
         # Surface hook run once when the wait ends by ANY path (answer, timeout, interrupt, /approve from
         # another client): the tui_gateway withdraws its open server→client request through it.
         self.settle = None
+        self.observers = []
         self.result: str | None = None  # "once"|"session"|"always"|"deny"
         # Free-text reason from ``/deny <reason>`` so the agent can adapt, not just hear "denied".
         self.reason: str | None = None
@@ -100,7 +104,8 @@ class _ApprovalEntry:
         self.expired = False
 
 
-def _poll_event(event: _ApprovalEvent, session_key: str, *, interrupt_log: str) -> str:
+def _poll_event(event: _ApprovalEvent, session_key: str, *, interrupt_log: str,
+                timeout_s: float | None = None) -> str:
     """Wait on *event* until it fires, the turn is interrupted, or approvals.timeout
     elapses; returns ``"set"`` | ``"interrupted"`` | ``"timeout"``. Polls in ~1s
     slices so activity heartbeats reach the agent's inactivity tracker every ~10s —
@@ -169,7 +174,8 @@ def _await_coalesced_leader(session_key: str, leader, payload: dict):
     so the caller must issue a fresh prompt. Hooks fire with ``coalesced=True``
     so observers see the follower's lifecycle without a duplicate prompt."""
     _ctx._fire_approval_hook("pre_approval_request", **payload, coalesced=True)
-    state = _poll_event(leader.event, session_key,
+    # The leader's captured timeout (when stamped), so a config edit mid-wait can't end the follower first.
+    state = _poll_event(leader.event, session_key, timeout_s=leader.data.get("timeout_s"),
                         interrupt_log="Coalesced approval wait interrupted — "
                                       "returning deny for session %s")
     if state == "set" and leader.result is None and leader.expired:
@@ -269,6 +275,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             if not queue:
                 _approval._gateway_queues.pop(session_key, None)
             settle, entry.settle = entry.settle, None
+            observers, entry.observers = entry.observers, []
             if choice is None and state in ("timeout", "notify_failed"):
                 # Coalesced followers block on this event: wake them with the leader's outcome rather than
                 # leaving them waiting their own full timeout on a prompt that no longer exists.
@@ -276,18 +283,21 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
                 if state == "notify_failed":
                     entry.cancelled = "the approval prompt could not be delivered"
                 entry.event.set()
-        if settle is not None:
+        if settle is not None or observers:
             # ``request.cancel`` carries a RequestCancelReason: a choice committed from another surface is
             # ``resolved``; a withdrawn entry (woken with no choice — session torn down, turn ended, client
             # cannot answer) is ``session_closed``; never the raw poll-state token "set".
-            if state == "set":
+            if state == "timeout" and choice is not None:
+                reason = "resolved"
+            elif state == "set":
                 reason = "resolved" if choice is not None else "session_closed"
             else:
                 reason = state
-            try:
-                settle(reason)
-            except Exception:
-                logger.debug("approval settle hook failed", exc_info=True)
+            for callback in ([settle] if settle is not None else []) + observers:
+                try:
+                    callback(reason)
+                except Exception:
+                    logger.debug("approval settle hook failed", exc_info=True)
         return choice
 
     from tools.human_input_hooks import human_input_request
@@ -307,7 +317,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             human.outcome = "notify_failed"
             return {"resolved": False, "choice": None, "notify_failed": True}
 
-        state = _poll_event(entry.event, session_key,
+        state = _poll_event(entry.event, session_key, timeout_s=entry.data["timeout_s"],
                             interrupt_log="Approval wait interrupted — returning deny for session %s")
         cancelled = _cancel_cause(state, entry)
         if state == "interrupted":
