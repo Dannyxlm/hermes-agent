@@ -18,6 +18,8 @@ def room(tmp_path, monkeypatch):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     with SessionDB(tmp_path / 'state.db') as db:
         authority = SimpleNamespace(db=db, profile_id=str(tmp_path), epoch=begin_runtime_epoch(db, instance_id='test'))
+        from gateway.session_authority import SessionAuthority
+        authority.logical_owner = lambda session_id: SessionAuthority.logical_owner(authority, session_id)
         service = authority.hosted_room_service = CanonicalHostedRoomService(authority, None)
         monkeypatch.setattr(service, 'profile_homes', lambda: {'default': tmp_path, 'atlas': tmp_path / 'profiles/atlas'})
         monkeypatch.setattr(service.runtime, 'status', lambda: {'running': True, 'stopping': False})
@@ -138,6 +140,22 @@ def test_trigger_receipt_is_atomic_and_never_backfills_legacy_events(room, monke
     replay = _group(authority, actor, 'groups.send', params)['event']
     assert replay['idempotent'] is True
     assert local_memory_context(service, task) is None
+
+
+def test_scope_follows_only_server_verified_compression_lineage(room):
+    from agent.hosted_room_memory import current_hosted_room_memory, hosted_room_memory_scope
+    authority, _, _ = room
+    db = authority.db
+    db.create_session('root', source='local')
+    db.create_session('foreign', source='local')
+    with hosted_room_memory_scope('root', authority.profile_id, {'version': 1}, resolve_session=authority.logical_owner):
+        for parent, child in [('root', 'compressed'), ('compressed', 'compressed-again')]:
+            db.publish_compression_child(parent_session_id=parent, child_session_id=child, source='local',
+                messages=[{'role': 'user', 'content': 'fixture'}], require_compression_lease=False)
+            assert current_hosted_room_memory(child, authority.profile_id) == {'version': 1}
+            assert current_hosted_room_memory(child, '/foreign-profile') is None
+        assert current_hosted_room_memory('foreign', authority.profile_id) is None
+        assert current_hosted_room_memory('missing', authority.profile_id) is None
 
 
 def test_scope_revokes_copied_background_context_even_on_exception():

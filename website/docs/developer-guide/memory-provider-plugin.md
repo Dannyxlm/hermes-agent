@@ -192,8 +192,8 @@ identity should skip destructive mirroring when it is absent.
 A `bot_room` platform label, owner-looking sender ID or prompt prefix is not
 memory-write authority. During a canonical member admission, providers may read
 `agent.hosted_room_memory.current_hosted_room_memory(session_id, profile_id)`.
-It returns `None` outside that exact executing session/profile, or a version-1
-server description with `room_id`, `profiles` (the entire seated roster),
+It returns `None` outside that executing session/profile (or its server-verified
+SQLite compression lineage), or a version-1 server description with `room_id`, `profiles` (the entire seated roster),
 `member_profile` and `trigger` (`owner` or `team-room`). Read it at write time;
 never cache it as a session-wide permission or accept an equivalent client field.
 

@@ -11,9 +11,9 @@ _current: ContextVar[tuple | None] = ContextVar('hosted_room_memory', default=No
 
 
 @contextmanager
-def hosted_room_memory_scope(session_id, profile_id, context):
+def hosted_room_memory_scope(session_id, profile_id, context, *, resolve_session=None):
     active = [True]  # shared with copied Contexts: reset alone cannot revoke background copies
-    token = _current.set((session_id, profile_id, deepcopy(context), active))
+    token = _current.set((session_id, profile_id, deepcopy(context), active, resolve_session))
     try:
         yield
     finally:
@@ -23,6 +23,8 @@ def hosted_room_memory_scope(session_id, profile_id, context):
 
 def current_hosted_room_memory(session_id, profile_id):
     bound = _current.get()
-    if bound is None or bound[:2] != (session_id, profile_id) or not bound[3][0]:
+    if bound is None or bound[2] is None or bound[1] != profile_id or not bound[3][0]:
+        return None
+    if bound[0] != session_id and (bound[4] is None or bound[4](session_id) != bound[0]):
         return None
     return deepcopy(bound[2])
