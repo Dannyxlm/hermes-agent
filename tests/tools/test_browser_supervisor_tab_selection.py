@@ -346,11 +346,14 @@ def test_page_hints_record_http_pages_only_and_clear_on_stop():
     assert reg.page_hint("t1") is None
 
 
-def test_browser_navigate_hint_is_recorded_for_task_and_session_key():
-    from tools import browser_tool
-
+def test_page_hint_is_recorded_for_task_and_session_key():
+    # The legacy browser_navigate producer (browser_tool._note_supervisor_page) retired with the
+    # built-in browser_* tools in v0.22.7; browser_exec has no navigation producer, so vault tab
+    # selection falls back to its existing heuristics unless a caller records a hint. The registry
+    # contract that the consumer reads is unchanged and still covered here.
     try:
-        browser_tool._note_supervisor_page("nav-task", "nav-task::rp", "https://www.bestbuy.ca/signin?tid=B")
+        bs.SUPERVISOR_REGISTRY.note_page("nav-task", "https://www.bestbuy.ca/signin?tid=B")
+        bs.SUPERVISOR_REGISTRY.note_page("nav-task::rp", "https://www.bestbuy.ca/signin?tid=B")
         assert bs.SUPERVISOR_REGISTRY.page_hint("nav-task") == "https://www.bestbuy.ca/signin?tid=B"
         assert bs.SUPERVISOR_REGISTRY.page_hint("nav-task::rp") == "https://www.bestbuy.ca/signin?tid=B"
     finally:
