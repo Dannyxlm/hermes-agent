@@ -4,7 +4,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { en } from '@/i18n/en'
 import { installBrowserDesktopBridge } from '@/lib/browser-desktop-bridge'
-import { deferred } from '@/test/deferred'
 import { clearWebappSession, seedWebappSession } from '@/test/webapp-session'
 
 // Collect the component graph before the behavioral test deadline starts.
