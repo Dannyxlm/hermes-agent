@@ -271,12 +271,15 @@ def _typed_stop_phrase_response(rid, text, sid=None):
 _HOSTED_TASK_FIELDS = {"room_id", "task_id", "thread_id", "turn_id", "execution_generation", "member_id"}
 
 
-def _hosted_submit_error(rid, session, hosted_task, hosted_terminal_callback):
-    """Validate the hosted-room turn proof carried by an internal submit."""
+def _hosted_submit_error(rid, session, hosted_task, hosted_terminal_callback, hosted_images=None):
+    """Validate the hosted-room turn proof carried by an internal submit. ``hosted_images`` are the
+    member's event-bound images, already materialized under the image cache by the room worker."""
     if session.get("source") != "bot_room":
         return _err(rid, 4120, "hosted room turns require a bot_room session")
     valid = (
         isinstance(hosted_task, dict) and callable(hosted_terminal_callback)
+        and (hosted_images is None or (isinstance(hosted_images, list)
+                                       and all(isinstance(p, str) and p for p in hosted_images)))
         and set(hosted_task) == _HOSTED_TASK_FIELDS
         and all(isinstance(hosted_task.get(f), str) and hosted_task[f]
                 for f in _HOSTED_TASK_FIELDS - {"execution_generation"})
@@ -1024,12 +1027,16 @@ def _submit_prompt(rid, params: dict, image_paths=None, operations=None, receipt
     turn_author = raw_author.author if raw_author is not None else None
     hosted_task = params.get("_hosted_task")
     hosted_terminal_callback = params.get("_hosted_terminal_callback")
-    internal_hosted_submit = hosted_task is not None or hosted_terminal_callback is not None
+    hosted_images = params.get("_hosted_images")
+    internal_hosted_submit = (
+        hosted_task is not None or hosted_terminal_callback is not None or hosted_images is not None)
     err = (
-        _hosted_submit_error(rid, session, hosted_task, hosted_terminal_callback)
+        _hosted_submit_error(rid, session, hosted_task, hosted_terminal_callback, hosted_images)
         if internal_hosted_submit else _legacy_group_fence_error(rid, session, params))
     if err is not None:
         return err
+    if hosted_images is not None:
+        image_paths = hosted_images
     if (limit_message := _ensure_active_session_slot(sid, session)) is not None:
         # Refused HERE — before the busy queue, db row and agent build — so a refusal
         # leaves the session untouched.  The reason travels as machine-readable data.

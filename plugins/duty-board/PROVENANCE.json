@@ -163,8 +163,8 @@
     },
     {
       "file": "dashboard/summary_text.py",
-      "reason": "Comment-only health annotations preserve reviewed upstream boundaries and collector shape; UTF-8 reads accept BOMs.",
-      "vendored_sha256": "9eaf5e3d3fc8b957d7557fd06e56d6740fecad3df67840a06dac38ce9463abf4"
+      "reason": "Comment-only health annotations preserve reviewed upstream boundaries and collector shape; UTF-8 reads accept BOMs. The pinned locale read carries a reasoned config-reader marker (display-only, pre-authorization, no Hermes loader side effects).",
+      "vendored_sha256": "189affc17343348d1fdbb182a19e7dcff406cf82ddfe49934675de21e2861be6"
     },
     {
       "file": "dev/README.md",

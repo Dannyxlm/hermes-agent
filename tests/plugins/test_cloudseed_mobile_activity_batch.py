@@ -73,8 +73,8 @@ def test_batch_cloned_ids_and_compression_do_not_cross_profiles_or_branches(clie
     other.mkdir(parents=True)
     (other / 'config.yaml').write_text('{}')
     with sqlite3.connect(home / 'state.db') as db:
-        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY, parent_session_id TEXT, end_reason TEXT)')
-        db.executemany('INSERT INTO sessions VALUES(?,?,?)', [
+        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY, parent_session_id TEXT, end_reason TEXT, model_config TEXT, source TEXT)')
+        db.executemany('INSERT INTO sessions(id,parent_session_id,end_reason) VALUES(?,?,?)', [
             ('root', None, 'compression'), ('tip', 'root', None), ('branch', 'tip', None)])
     before = (home / 'state.db').read_bytes()
     for directory, label in [(home, 'ours'), (other, 'foreign')]:

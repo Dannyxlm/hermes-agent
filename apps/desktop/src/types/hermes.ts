@@ -2,6 +2,10 @@ import type { ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } fr
 
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
 
+import type { BackendManagedSourceUpdate } from './hermes-managed-source'
+
+export * from './hermes-managed-source'
+
 export type StoredToolCallLabels = Record<string, ToolLabel[]>
 
 export interface ConfigFieldSchema {
@@ -170,7 +174,7 @@ export interface AppHandoffStatus {
   lines: string[]
   moved_toolkits?: string[]
   probably_moved?: boolean
-  state: 'claimed' | 'failed' | 'gone' | 'idle' | 'paused' | 'pending' | 'retrying'
+  state: 'claimed' | 'failed' | 'gone' | 'idle' | 'pending' | 'retrying'
   updated_at?: null | string
 }
 
@@ -380,8 +384,42 @@ export interface MessagingPlatformInfo {
    *  the client (or vendor console) must call. Null for standalone and default-profile platforms. */
   ingress_url?: null | string
   name: string
+  /** Team Gateway's shared bot carries this platform: setup links a chat account to it. */
+  relay_fronted?: boolean
+  /** The relay owns this platform outright, so a direct bot is switched off at every start. */
+  relay_exclusive?: boolean
+  /** Team Gateway switches this platform's direct connection off at every gateway start. */
+  disabled_by_relay?: boolean
   state?: null | string
   updated_at?: null | string
+}
+
+export interface RelayLinkedAccount {
+  displayName?: string
+  handle?: string
+  platformUserId: string
+}
+
+export interface RelayLinksResponse {
+  /** "portal" when the Nous Portal access setting governs this agent: links are made there. */
+  managed_by?: 'connector' | 'portal'
+  portal_url?: string
+  platforms: { accounts: RelayLinkedAccount[]; bot_url: null | string; platform: string }[]
+}
+
+export interface RelayLinkCode {
+  bot_url: null | string
+  code: string
+  /** The exact message to send the shared bot. */
+  command: string
+  expires_at: null | string
+  platform: string
+}
+
+export interface RelayLinkCodeState {
+  reason?: null | string
+  /** pending = not redeemed yet; inactive = used or expired; refused = see reason. */
+  state: 'inactive' | 'pending' | 'refused'
 }
 
 export interface MessagingPlatformsResponse {
@@ -1049,11 +1087,17 @@ export interface AnalyticsTotals {
 }
 
 export interface CronJob {
+  /** Missed-run policy: true runs one catch-up, false skips; null/absent follows the default. */
+  catch_up?: boolean | null
   deliver?: null | string
   enabled: boolean
   id: string
   last_error?: null | string
   last_run_at?: null | string
+  /** The job's newest ledger attempt (``cron.jobs.list_jobs``); claimed/running = a run in flight. */
+  latest_execution?: CronJobExecution | null
+  /** The newest claimed/running attempt under a live owner, even when a newer refused row is latest. */
+  live_execution?: CronJobExecution | null
   model?: null | string
   name?: null | string
   next_run_at?: null | string
@@ -1066,7 +1110,23 @@ export interface CronJob {
   state?: null | string
 }
 
+export interface CronJobExecution {
+  claimed_at?: null | string
+  error?: null | string
+  id: string
+  status: string
+}
+
+/** POST /api/cron/jobs/{id}/cancel: ``cancelled`` is false when no run was in flight. */
+export interface CronCancelResult {
+  cancelled: boolean
+  detail?: string
+  execution_id?: null | string
+  job_id: string
+}
+
 export interface CronJobCreatePayload {
+  catch_up?: boolean
   deliver?: string
   model?: string
   name?: string
@@ -1083,6 +1143,7 @@ export interface CronJobSchedule {
 }
 
 export interface CronJobUpdates {
+  catch_up?: boolean | null
   deliver?: string
   enabled?: boolean
   model?: null | string
@@ -1232,6 +1293,8 @@ export interface SkillInfo {
   /** 'agent' = learned/local (editable), 'bundled' = ships with Hermes, 'hub' = installed,
    * 'external' = mounted from skills.external_dirs (externally authored, still editable). */
   provenance?: 'agent' | 'bundled' | 'external' | 'hub'
+  /** User lock: the AGENT may not change this skill (the user still can). Absent on older backends. */
+  locked?: boolean
 }
 
 /** One entry of the built-in optional-skills catalog (optional-skills/ in the
@@ -1622,51 +1685,6 @@ export interface BackendUpdateCommit {
   at: number
 }
 
-export type BackendManagedSourceAvailability = 'invalid' | 'missing' | 'ready' | 'stale' | 'unreadable'
-
-export interface BackendManagedUpdateRefreshRequest {
-  requested: boolean
-  error: string | null
-}
-
-export interface BackendManagedSourceUpdate {
-  schema_version: string
-  count_basis?: 'recorded_official_base' | 'running_source' | 'unavailable_non_ancestral'
-  availability: BackendManagedSourceAvailability
-  stale: boolean
-  status_error: string | null
-  running_release?: string
-  release_id?: string
-  hermes_version?: string
-  running_source?: string
-  running_upstream_base?: string
-  tracked_upstream?: string
-  upstream_head?: string
-  commits_behind?: number | null
-  running_source_is_ancestor_of_upstream?: boolean | null
-  local_patch_count?: number
-  overlay_count?: number
-  overlay_ids?: string[]
-  carried_commit_count?: number
-  install_mode?: string
-  last_fetched_at?: string
-  generated_at?: string
-  age_seconds?: number
-  candidate_status?: 'blocked' | 'building' | 'current' | 'not_built' | 'passed' | 'ready'
-  candidate_target_revision?: string | null
-  candidate_target_is_ancestor_of_upstream?: boolean | null
-  running_upstream_base_is_ancestor_of_candidate_target?: boolean | null
-  candidate_target_commits_behind?: number | null
-  blockers?: string[]
-  next_action?: string
-  source_worktree_clean?: boolean
-  source_refs_remotely_reachable?: boolean
-  can_build_candidate: boolean
-  candidate_request_available: boolean
-  refresh_request_available: boolean
-  refresh_request: BackendManagedUpdateRefreshRequest | null
-}
-
 /** Shape of `GET /api/hermes/update/check` — the backend's own update state.
  *  Used by the desktop's remote update overlay so the backend version (not the
  *  Electron client clone) drives "what's changed + Install" in remote mode. */
@@ -1921,10 +1939,19 @@ export interface McpCatalogResponse {
   diagnostics: { name: string; kind: string; message: string }[]
 }
 
+export type MemoryProviderStatus = 'missing' | 'needs_config' | 'ready' | 'unavailable'
+
 /** `GET /api/memory` — active provider + built-in memory file sizes. */
 export interface MemoryStatusResponse {
+  /** Configured external provider; `''` = built-in memory only. */
   active: string
-  providers: { name: string; description: string; configured: boolean }[]
+  providers: {
+    name: string
+    description: string
+    available: boolean
+    configured: boolean
+    status: MemoryProviderStatus
+  }[]
   builtin_files: { memory: number; user: number }
 }
 

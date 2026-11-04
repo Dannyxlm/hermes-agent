@@ -85,8 +85,6 @@ def _resident_sessions(connections):
         authority = connection.authority
         allowed = []
         for sid, live in tuple(authority.sessions.items()):
-            if live.superseded:
-                continue
             try:
                 authority.authorize(connection.actor, SessionRef(authority.profile_id, sid), "session:read")
             except RuntimeStoreError:
@@ -108,7 +106,7 @@ def _live_signals(connections, profiles, residents):
         tips = compression_tips(snapshot.sessions)
         owners = compression_owners(snapshot.sessions)
         for sid, live in residents[profile]:
-            if authority.sessions.get(sid) is not live or live.superseded:
+            if authority.sessions.get(sid) is not live:
                 continue
             target = snapshot.aliases.get(sid, sid)
             tip = tips.get(target, target)

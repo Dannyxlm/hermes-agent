@@ -208,7 +208,8 @@ def test_modified_search_error_without_matches_is_not_downgraded():
 
 @pytest.mark.parametrize("order", ["discovery", "modified"])
 def test_rg_partial_output_with_error_exit_is_explicitly_incomplete(order):
-    env = RecordingEnvironment(rg_output="/repo/partial.py\n", rg_code=2)
+    env = RecordingEnvironment(
+        rg_output="rg: /repo/locked: Permission denied (os error 13)\n/repo/partial.py\n", rg_code=2)
 
     result = ShellFileOperations(env).search(
         "*.py", path="/repo", target="files", order=order
@@ -220,7 +221,18 @@ def test_rg_partial_output_with_error_exit_is_explicitly_incomplete(order):
     assert result.truncated is True
     assert result.limit_reason == "search_error"
     assert "exit code 2" in (result.warning or "")
+    assert "/repo/locked" in result.warning
+    assert result.skipped_paths == ["/repo/locked"]
     assert len(env.rg_commands) == 1
+
+
+@pytest.mark.parametrize("order", ["discovery", "modified"])
+def test_unexplained_rg_error_with_payload_stays_fail_closed(order):
+    env = RecordingEnvironment(rg_output="/repo/partial.py\n", rg_code=2)
+    result = ShellFileOperations(env).search("*.py", path="/repo", target="files", order=order)
+    assert result.error is not None
+    assert "exit code 2" in result.error
+    assert not result.files and result.total_count == 0
 
 
 @pytest.mark.parametrize("order", ["discovery", "modified"])

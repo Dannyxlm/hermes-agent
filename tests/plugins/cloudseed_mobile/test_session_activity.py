@@ -14,10 +14,12 @@ from tui_gateway.side_task_activity import registry
 def test_batch_lineages_use_one_statement_and_preserve_outputs(client, workers, monkeypatch, count):
     c, home = client
     with sqlite3.connect(home / 'state.db') as db:
-        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY,parent_session_id TEXT,end_reason TEXT)')
-        db.executemany('INSERT INTO sessions VALUES(?,?,?)', [
+        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY,parent_session_id TEXT,end_reason TEXT,model_config TEXT,source TEXT)')
+        db.executemany('INSERT INTO sessions(id,parent_session_id,end_reason) VALUES(?,?,?)', [
             ('root', None, 'compression'), ('tip', 'root', None),
             ('sibling', 'root', None), ('branch', 'tip', None)])
+        db.execute('INSERT INTO sessions(id,parent_session_id,end_reason,model_config) VALUES(?,?,?,?)',
+                   ('delegate', 'root', None, '{"_delegate_from":"root"}'))
     ids = (['tip', 'root', 'sibling', 'branch'] + [f'missing-{i}' for i in range(count)])[:count]
     owner = str(home.resolve())
     rows = [None, {'owner_profile_home': owner, 'owner_conversation_id': 'tip',
@@ -28,6 +30,8 @@ def test_batch_lineages_use_one_statement_and_preserve_outputs(client, workers, 
              'subagent_id': 'b', 'status': 'queued'},
             {'owner_profile_home': owner, 'owner_conversation_id': 'branch',
              'subagent_id': 'c', 'status': 'completed'},
+            {'owner_profile_home': owner, 'owner_conversation_id': 'delegate',
+             'subagent_id': 'delegated-worker', 'status': 'running'},
             {'owner_profile_home': owner + '/foreign', 'owner_conversation_id': 'tip',
              'subagent_id': 'foreign', 'status': 'running'}]
     processes = [{'owner_profile_home': owner, 'owner_conversation_id': 'root',

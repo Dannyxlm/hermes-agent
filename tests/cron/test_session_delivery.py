@@ -66,7 +66,8 @@ def native_owner(owner_home, monkeypatch):
     expected_endpoint = endpoint
 
     @asynccontextmanager
-    async def connect(*, endpoint):
+    async def connect(*, endpoint, purpose):
+        assert purpose == 'session-wake'
         assert endpoint is expected_endpoint
         assert get_hermes_home() == home
         yield Client()

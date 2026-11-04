@@ -11,6 +11,8 @@ _PURPOSE_CAPABILITIES = {
                               'session:control', 'session:approve', 'session:respond'}),
     # Same-user meeting automation: room read/create/send, never human approval or operator authority.
     'team-room': frozenset({'session:read', 'session:submit', 'session:control'}),
+    # A scheduled wake delegates the stored row's exact login, not the machine owner.
+    'session-wake': frozenset({'session:create', 'session:read', 'session:submit', 'session:control'}),
     'native-http': frozenset({'http:owner'}),
     # Same-user host operation, not permission to read or mutate another profile.
     'native-profile-create': frozenset({'profiles:create'}),
@@ -26,7 +28,7 @@ _SCOPES = frozenset({'profile', 'host'})
 
 def redeem_session_ticket(store, ticket):
     """Redeem only a local WebSocket purpose, retaining the issuer's origin attestation."""
-    for purpose in ('interactive', 'team-room', 'worker-adoption'):
+    for purpose in ('interactive', 'team-room', 'session-wake', 'worker-adoption'):
         try:
             return store.redeem(ticket, profile_id=None, purpose=purpose)
         except PermissionError:
@@ -46,9 +48,11 @@ class TicketStore:
         self._entries: dict[str, tuple[float, dict]] = {}
         self._lock = threading.Lock()
 
-    def mint(self, *, profile_id, subject, purpose, scope='profile') -> str:
-        """Host scope lets interactive and meeting clients select served siblings; the default
-        binds exactly ``profile_id``. Both are minted only through the same-user private bootstrap."""
+    def mint(self, *, profile_id, subject, purpose, scope='profile', refuse_restart_wait=False) -> str:
+        """``scope='host'`` lets interactive and meeting connections select every profile this process
+        serves (the Desktop's one shared socket); the default binds exactly ``profile_id``.
+        ``refuse_restart_wait``: the socket redeeming it is refused while a restart's after-turn
+        wait is open, however long after the mint that wait began (a machine poller, never a human)."""
         if (profile_id not in self.profile_ids or purpose not in _PURPOSE_CAPABILITIES or not subject
                 or scope not in _SCOPES or (scope == 'host' and purpose not in {'interactive', 'team-room'})):
             raise PermissionError('bootstrap binding rejected')
@@ -61,7 +65,8 @@ class TicketStore:
             self._entries[hashlib.sha256(ticket.encode()).hexdigest()] = (
                 now + self.TTL_SECONDS,
                 {'instance_id': self.instance_id, 'profile_id': profile_id, 'subject': subject,
-                 'purpose': purpose, 'capabilities': _PURPOSE_CAPABILITIES[purpose], 'scope': scope})
+                 'purpose': purpose, 'capabilities': _PURPOSE_CAPABILITIES[purpose], 'scope': scope,
+                 'refuse_restart_wait': bool(refuse_restart_wait)})
             return ticket
 
     def redeem(self, ticket, *, profile_id, purpose) -> dict:

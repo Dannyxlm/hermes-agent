@@ -306,6 +306,7 @@ class ProfilesConfigureResult(Result):
 
     ok: bool
     applied: ProfilesConfigureApplied
+    credentials_required: dict[str, bool] | None = None
     confirm_required: bool | None = None
     confirm_message: str | None = None
 
@@ -672,6 +673,21 @@ class SubagentListResult(Result):
 
 method("subagent.list", params=SessionParams, result=SubagentListResult,
        doc="Live children owned by this session (other sessions' children never leak).")
+
+
+class SubagentRosterEntry(Result):
+    session_id: str
+    subagents: int = 0
+    background: int = 0
+
+
+class SubagentRosterResult(Result):
+    sessions: list[SubagentRosterEntry] = Field(default_factory=list)
+
+
+method("subagent.roster", params=ProfileParams, result=SubagentRosterResult,
+       doc="Per-conversation counts of live delegated children and running background processes, limited to "
+           "conversations stored in the named profile (launch profile when omitted). Needs no attached session.")
 
 
 class SubagentIdParams(SessionParams):

@@ -25,9 +25,8 @@ _IS_WINDOWS = platform.system() == "Windows"
 # (not merely "not Windows") so macOS and other POSIX platforms never touch systemd.
 # See #70716.
 _IS_LINUX = platform.system() == "Linux"
-from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env, _terminal_env
+from tools.environments.local import _append_dropped_path_entries, _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env, _terminal_env
 from hermes_cli._subprocess_compat import windows_hide_flags
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
 from hermes_cli.config import get_hermes_home
@@ -36,6 +35,7 @@ from tools.process_registry_notifications import (
     format_process_notification, heartbeat_output_tail, is_child_process_notification, should_surface_notification)
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
+from tools.process_registry_ownership import ProcessOwnershipMixin
 from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
 from tools.process_registry_activity import new_process_session
@@ -58,7 +58,8 @@ def _checkpoint_path() -> Path:
     checkpoint to the launch home."""
     return CHECKPOINT_PATH if CHECKPOINT_PATH != _CHECKPOINT_PATH_AT_IMPORT else get_hermes_home() / "processes.json"
 
-MAX_OUTPUT_CHARS = 200_000      # rolling output buffer
+from tools.process_registry_session import MAX_OUTPUT_CHARS as _MAX_OUTPUT_CHARS, ProcessSession
+MAX_OUTPUT_CHARS = _MAX_OUTPUT_CHARS
 # Tail of the output a completion notification carries. Right for a build log; a spawner whose
 # output IS the payload (a bot DM's reply) asks for more per process (completion_output_chars).
 COMPLETION_OUTPUT_CHARS = 2000
@@ -492,123 +493,6 @@ def _completion_output(session: "ProcessSession") -> dict:
     return {"output": _output_tail(session, limit), **({"output_cut": cut} if cut > 0 else {})}
 
 
-@dataclass
-class ProcessSession:
-    """A tracked background process with output buffering."""
-    id: str                                     # "proc_xxxxxxxxxxxx"
-    command: str
-    task_id: str = ""                           # Task/sandbox isolation key (CONTAINER key,
-                                                # may be collapsed by _resolve_container_task_id)
-    owner_task_id: str = ""                     # RAW spawning task id ("sa-..."); ownership
-                                                # checks must use this, not task_id
-    session_key: str = ""                       # Gateway session key (reset protection)
-    launch_id: str = ""
-    launcher_session_id: str = ""
-    launcher_profile: str = ""
-    title: Optional[str] = None
-    batch_id: Optional[str] = None
-    batch_name: Optional[str] = None
-    owner_profile_home: str = ""                # Captured at spawn; empty on old checkpoints.
-    owner_conversation_id: str = ""             # Durable root, including delegated descendants.
-    pid: Optional[int] = None
-    process: Optional[subprocess.Popen] = None  # Popen handle (local only)
-    env_ref: Any = None                         # Environment object (sandbox spawns)
-    cwd: Optional[str] = None
-    started_at: float = 0.0                     # time.time() of spawn
-    host_start_time: Optional[int] = None       # kernel start ticks (/proc/<pid>/stat f22) — PID-reuse guard
-    exited: bool = False
-    exited_at: float = 0.0                      # time.time() of the FIRST move to finished (0 = unknown)
-    exit_code: Optional[int] = None             # None while running
-    completion_reason: str = "exited"           # exited|killed|lost|failed_start|already_exited
-    termination_source: str = ""                # process.kill|kill_all|backend_lost|failed_start
-    output_buffer: str = ""                     # Rolling tail (last max_output_chars)
-    max_output_chars: int = MAX_OUTPUT_CHARS
-    detached: bool = False                      # Recovered from checkpoint (no pipe)
-    pid_scope: str = "host"                     # "host" for local/PTY PIDs, "sandbox" for env-local PIDs
-    systemd_unit: str = ""                      # transient scope unit name when spawned under systemd-run
-    wsl_chain: bool = False                     # spawned via wsl[.exe]: the host PID is the short-lived
-                                                # launcher; Linux-side workers outlive it (#120546)
-    handoff_note: str = ""                      # why a subagent handed this process to its parent (rides the notice)
-    persist_on_release: bool = False           # opt out of agent-lifecycle cleanup (release()/turn-abandon kill
-                                                # sweeps), per terminal(background=true, persist_on_release=true) (#41225)
-    output_log: str = ""                        # file the process writes to (worker spawns; no pipe to lose)
-    # Watcher/notification routing (persisted for crash recovery)
-    watcher_platform: str = ""
-    watcher_chat_id: str = ""
-    watcher_user_id: str = ""
-    watcher_user_name: str = ""
-    watcher_thread_id: str = ""
-    watcher_message_id: str = ""                # Triggering message id — reply anchor for topic routing
-    watcher_interval: int = 0                   # 0 = no watcher configured
-    # Session-db id of the spawning conversation; lets the gateway drop completions whose
-    # session was closed at a user boundary (/new) instead of injecting into the NEW one.
-    parent_session_id: str = ""
-    notify_on_complete: bool = False            # Queue agent notification on exit
-    completion_output_chars: int = 0            # Output chars the completion carries; 0 = COMPLETION_OUTPUT_CHARS
-    watch_patterns: list[str] = field(default_factory=list)
-    heartbeat_seconds: int = 0                  # 0 = off; else a "heartbeat" event every N s while running
-    total_output_chars: int = 0                 # Chars ever ingested (the buffer is a rolling tail)
-    _heartbeat_last: float = field(default=0.0, repr=False)          # time of the last heartbeat (or spawn)
-    _heartbeat_total_at_last: int = field(default=0, repr=False)     # total_output_chars at that moment
-    _heartbeat_seq: int = field(default=0, repr=False)
-    _watch_hits: int = field(default=0, repr=False)          # total matches delivered
-    _watch_suppressed: int = field(default=0, repr=False)    # matches dropped by rate limit
-    _watch_disabled: bool = field(default=False, repr=False) # permanently killed after strike limit
-    # Rate-limit window state (see WATCH_*). A strike is a WINDOW with drops, not a drop.
-    _watch_cooldown_until: float = field(default=0.0, repr=False)
-    _watch_strike_candidate: bool = field(default=False, repr=False)
-    _watch_consecutive_strikes: int = field(default=0, repr=False)
-    _completion_event: threading.Event = field(default_factory=threading.Event, repr=False)
-    # Set by the _move_to_finished call that moved the session out of _running; only that call
-    # publishes the completion, so a duplicate finisher must not release waiters early.
-    _finish_claimed: bool = field(default=False, repr=False)
-    # The last stop of ``systemd_unit`` failed, so its descendants may still be alive; bulk
-    # cleanup retries the stop even after the session finished.
-    _scope_stop_pending: bool = field(default=False, repr=False)
-    _launch_pending_kills: int = field(default=0, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-    _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
-    _reader_finish_requested: threading.Event = field(default_factory=threading.Event, repr=False)
-    _reader_selectable: bool = field(default=False, repr=False)
-    _pty: Any = field(default=None, repr=False)  # ptyprocess handle (use_pty=True)
-
-    def __post_init__(self):
-        # A session built without an explicit owner is owned by its own task, so ownership checks compare
-        # ``owner_task_id`` alone instead of repeating an ``or task_id`` fallback at every call site.
-        if not self.owner_task_id:
-            self.owner_task_id = self.task_id
-
-    def append_output(self, text: str) -> None:
-        """Append to the rolling output buffer under the session lock, keeping the tail."""
-        with self._lock:
-            self._append_locked(text)
-
-    def append_output_if_running(self, text: str) -> bool:
-        """Append unless the session has exited. Decided under the lock a kill holds while it
-        snapshots the output and sets ``exited``, so a chunk is either in the kill's receipt or
-        dropped, never added after it."""
-        with self._lock:
-            if self.exited:
-                return False
-            self._append_locked(text)
-        return True
-
-    def _append_locked(self, text: str) -> None:
-        self.output_buffer += text
-        self.total_output_chars += len(text)
-        if len(self.output_buffer) > self.max_output_chars:
-            self.output_buffer = self.output_buffer[-self.max_output_chars:]
-
-    def mark_exited(self, exit_code, reason: str = "exited", source: str = "") -> None:
-        """Record an exit. A kill that raced the observer already recorded its own
-        exit_code/reason; never overwrite it."""
-        self.exited = True
-        if self.completion_reason != "killed":
-            self.exit_code = exit_code
-            self.completion_reason = reason
-            if source:
-                self.termination_source = source
-
 
 # Watcher routing fields, in event-dict key order (``watcher_<key>`` on the session).
 _WATCHER_ROUTE_KEYS = ("platform", "chat_id", "user_id", "user_name", "thread_id", "message_id")
@@ -635,7 +519,7 @@ _WSL_CHAIN_NOTE = (
 )
 
 
-class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin):
+class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, ProcessOwnershipMixin):
     """In-memory registry of running and finished background processes.
     Thread-safe: accessed from executor threads (terminal_tool, process handlers),
     the gateway asyncio loop (watchers, reset checks) and the cleanup thread."""
@@ -1113,28 +997,91 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         pty_env.setdefault("GIT_PAGER", "cat")
         pty_env.setdefault("PAGER", "cat")
         pty_proc = _PtyProcessCls.spawn(pty_argv, cwd=session.cwd, env=pty_env, dimensions=(30, 120))
+        self._own_pty_job(session, pty_proc)
         session.pid = pty_proc.pid
         session.host_start_time = self._safe_host_start_time(session.pid)
         session._pty = pty_proc
         self._track_started(session, self._pty_reader_loop, f"proc-pty-reader-{session.id}")
         return session
 
+    def spawn_local(
+        self, command: str, cwd: str | None = None, task_id: str = "", session_key: str = "",
+        env_vars: dict | None = None, use_pty: bool = False, owner_task_id: str = "",
+        persist_on_release: bool = False, restore_login_path: bool = False) -> ProcessSession:
+        """Spawn a background process locally (TERMINAL_ENV=local; other backends: spawn_via_env()).
+        ``use_pty`` asks ptyprocess/pywinpty for a pseudo-terminal; on failure: pipe + ``pty_fallback``.
+        ``persist_on_release``: no agent kill sweeps (#41225); ``restore_login_path``: re-add reset PATH dirs (#56634)."""
+        # Bash runs ``A && B &`` as a subshell holding our stdout pipe open while a server B lives;
+        # the rewriter makes it ``A && { B & }`` (#68915). Lazy: terminal_tool imports this module.
+        from tools.terminal_tool_sudo import _rewrite_compound_background as _rewrite_bg
 
+        safe_command = _append_dropped_path_entries(_rewrite_bg(command), self._spawn_env(env_vars).get("PATH", "") if restore_login_path else "")
+        session = self._new_session(command, task_id, owner_task_id, session_key, _resolve_safe_cwd(cwd or os.getcwd()),
+                                    persist_on_release=persist_on_release)
+        try:
+            result = self._spawn_local_owned(session, safe_command, env_vars, use_pty, persist_on_release)
+        except BaseException:
+            from tools.process_launches import finish_process_launch, record_process_launch
+            record_process_launch(session)
+            finish_process_launch(session, "failed_start")
+            raise
+        from tools.process_launches import record_process_launch
+        record_process_launch(session)
+        return result
 
-    def _reap_untracked(self, session: ProcessSession, proc: subprocess.Popen) -> None:
-        """Post-Popen setup failed: kill the orphaned subprocess (and any setsid
-        descendants) so nothing leaks untracked."""
-        with suppress(Exception):
-            if session.systemd_unit:
-                # Scope teardown is the authoritative cleanup for the worker cgroup;
-                # the systemd-run wrapper PID is terminated below as fallback.
-                _stop_systemd_unit(session.systemd_unit)
-            # _terminate_host_pid revalidates the kernel start time captured at
-            # spawn before signalling: pgid == pid would only prove the pid leads a
-            # group, and a reaped child can be recycled onto an unrelated leader.
-            self._terminate_host_pid(proc.pid, session.host_start_time)
-        with suppress(Exception):
-            proc.wait(timeout=5)
+    def _spawn_local_owned(self, session, safe_command, env_vars, use_pty, persist_on_release):
+        """Current upstream ownership path, wrapped by the fork's Family launch receipts."""
+        pty_scope_attempted = False
+        # A worker's pipe or PTY dies with the worker (the child's next write is SIGPIPE): write to a log.
+        log = worker_output_log(session.id)
+        if use_pty and log is None:
+            try:
+                return self._spawn_local_pty(session, safe_command, env_vars)
+            except ImportError:
+                session.pty_fallback = "the PTY library (ptyprocess/pywinpty) is not installed"
+                logger.warning("ptyprocess not installed, falling back to pipe mode")
+            except Exception as e:
+                session.pty_fallback = f"the PTY spawn failed ({e})"
+                logger.warning("PTY spawn failed (%s), falling back to pipe mode", e)
+                if session.systemd_unit:
+                    pty_scope_attempted = True
+                    if not _stop_systemd_unit(session.systemd_unit):
+                        raise RuntimeError(
+                            "PTY scope could not be reaped; refusing pipe fallback "
+                            "to avoid duplicate command execution"
+                        ) from e
+                    session.systemd_unit = ""
+        # Pipe path (non-PTY or PTY fallback).
+        _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
+        unit_suffix = f"{session.id}-pipe-fallback" if pty_scope_attempted else session.id
+        spawn_argv = self._scope_argv(session, record_exit_command(log, safe_command) if log else safe_command,
+                                      unit_suffix, "Local")
+        spawn_env = self._spawn_env(env_vars)
+        if session.systemd_unit:
+            spawn_env = systemd_user_bus_env(spawn_env)
+        # start_new_session is REQUIRED with systemd-run --scope too: the scope does not
+        # give the worker a new session, so from an interactive TUI the worker would
+        # share the foreground process group and background spawns would stop the whole
+        # session (observed as dead TUIs in state T). Cgroup isolation is unaffected —
+        # the scope attaches to the invoked process, not the spawning session.
+        output = open_output_log(log) if log else subprocess.PIPE
+        try:
+            proc = self._spawn_job(
+                session, spawn_argv, persist_on_release, text=True, cwd=session.cwd, env=spawn_env,
+                encoding="utf-8", errors="replace", stdout=output, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, **_popen_kwargs)
+        finally:
+            if log:
+                os.close(output)
+        session.process, session.output_log = proc, str(log or "")
+        session.pid = proc.pid
+        session.host_start_time = self._safe_host_start_time(session.pid)
+        try:
+            self._track_started(session, self._log_reader_loop if log else self._reader_loop, f"proc-reader-{session.id}")
+        except Exception:
+            self._reap_untracked(session, proc)
+            raise
+        return session
 
     def adopt_local(
         self, proc: subprocess.Popen, *, command: str, cwd: Optional[str], task_id: str = "",
@@ -1150,9 +1097,16 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         session.pid = proc.pid
         session.host_start_time = self._safe_host_start_time(session.pid)
         session.notify_on_complete = notify_on_complete
+        handed_pgid = getattr(proc, "_hermes_owned_pgid", None)
+        self._take_handoff_group(session, proc)
         if output_so_far:
             session.append_output(output_so_far)
-        self._track_started(session, self._reader_loop, f"proc-reader-{session.id}")
+        try:
+            self._track_started(session, self._reader_loop, f"proc-reader-{session.id}")
+        except Exception:
+            # The caller resumes its foreground wait: give it back its group, still covered.
+            self._return_handoff_group(session, proc, handed_pgid)
+            raise
         from tools.process_launches import record_process_launch
         record_process_launch(session)
         return session
@@ -1423,6 +1377,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 save_completed_result(session)
                 self._running.pop(session.id)
             self._finished[session.id] = session
+        self._release_job_group(session)
         # Release the retained Popen/PTY handles now: otherwise every
         # finished-but-unpruned session keeps its stdout pipe (or PTY master)
         # FD open until FINISHED_TTL_SECONDS elapses, and heavy background
@@ -2153,18 +2108,18 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         return None
 
     def _stdin_op(self, session_id: str, pty_op, pipe_op, ok: dict) -> dict:
-        """Run a stdin operation on a running session — ``pty_op(pty)`` under PTY mode,
-        else ``pipe_op(stdin)`` on the Popen pipe — and return *ok* on success."""
+        """``pty_op(pty)`` under PTY mode, else ``pipe_op(stdin)`` on the Popen pipe; *ok* on success."""
+        from tools.process_registry_stdin import already_exited_error, stdin_unavailable_error
         session = self.get(session_id)
         if session is None:
             return _not_found(session_id)
         if session.exited:
-            return {"status": "already_exited", "error": "Process has already finished"}
+            return {"status": "already_exited", "error": already_exited_error(session)}
         try:
             if session._pty:
                 pty_op(session._pty)
             elif not session.process or not session.process.stdin:
-                return {"status": "error", "error": "Process stdin not available (non-local backend or stdin closed)"}
+                return {"status": "error", "error": stdin_unavailable_error(session)}
             else:
                 pipe_op(session.process.stdin)
             return ok
@@ -2189,13 +2144,12 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         return self._stdin_op(session_id, via_pty, via_pipe, {"status": "ok", "bytes_written": len(data)})
 
     def submit_stdin(self, session_id: str, data: str = "") -> dict:
-        """Send data + newline to stdin (like pressing Enter).
-        On a Windows PTY, Enter is a carriage return: ConPTY treats ``\\r`` as
-        end-of-line and a bare ``\\n`` through pywinpty is NOT a line terminator — the
-        child's blocking line read (``readline()``, Go ``bufio.Scanner``) never returns
-        and the process hangs looking healthy. ``\\r\\n`` gives it both; POSIX keeps ``\\n``."""
+        """Send data + Enter. On a PTY Enter is the CR a keyboard sends: raw-mode TUIs (prompt_toolkit,
+        Ink) read ``\\n`` as Ctrl+J and canonical children still get ``\\n`` via ICRNL; a Windows PTY
+        gets ``\\r\\n`` (a bare ``\\n`` through pywinpty never ends a ConPTY line read). Pipes keep ``\\n``."""
         session = self.get(session_id)
-        return self.write_stdin(session_id, data + ("\r\n" if _IS_WINDOWS and session and session._pty else "\n"))
+        pty_enter = "\r\n" if _IS_WINDOWS else "\r"
+        return self.write_stdin(session_id, data + (pty_enter if session is not None and session._pty else "\n"))
 
     def request_close_terminal(self, session_id: str) -> dict:
         """Ask the desktop GUI to close this process's read-only terminal tab. Does NOT
@@ -2445,8 +2399,7 @@ PROCESS_SCHEMA = {
     # (write-vs-submit is the one real trap: a lone \n on a Windows PTY is not Enter).
     # See #95681.
     "description": (
-        "Poll, wait on, or kill background terminal processes (from "
-        "terminal(background=true)). "
+        "Poll, wait on, send input to, or kill terminal(background=true) processes. "
         "Completed results remain retrievable by session_id when resuming their owning conversation "
         "(up to 7 days, newest 64 results per profile; rolling output tail). "
         "poll: status + new output. log: full output, paged. wait: block "

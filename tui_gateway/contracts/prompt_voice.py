@@ -65,6 +65,7 @@ class PromptSubmitParams(SessionParams):
     turn_author: JsonValue | None = Field(default=None, exclude=True, alias="_turn_author")
     hosted_terminal_callback: JsonValue | None = Field(
         default=None, exclude=True, alias="_hosted_terminal_callback")
+    hosted_images: JsonValue | None = Field(default=None, exclude=True, alias="_hosted_images")
 
 
 class PromptSubmitStatus(WireEnum):
@@ -217,6 +218,14 @@ method("attachment.operation.detach", params=AttachmentOperationParams, result=A
        doc="Cancel only this operation; a durable tombstone fences delayed uploads. Dispatched media is retained.")
 
 
+class StagedFileUpload(Params):
+    """Source identity returned by the browser upload route, checked against the live profile."""
+
+    install_id: str
+    path: str
+    profile_home: str
+
+
 class FileAttachParams(SessionParams):
     """``path`` when the file is gateway-visible, else ``data_url`` carries the bytes; ``name`` labels
     an uploaded file."""
@@ -224,6 +233,7 @@ class FileAttachParams(SessionParams):
     path: str | None = None
     data_url: str | None = None
     name: str | None = None
+    staged_upload: StagedFileUpload | None = None
 
 
 class FileAttachResult(Result):

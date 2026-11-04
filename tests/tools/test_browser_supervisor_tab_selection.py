@@ -346,11 +346,14 @@ def test_page_hints_record_http_pages_only_and_clear_on_stop():
     assert reg.page_hint("t1") is None
 
 
-def test_browser_navigate_hint_is_recorded_for_task_and_session_key():
-    from tools import browser_tool
-
+def test_page_hint_is_recorded_for_task_and_session_key():
+    # The legacy browser_navigate producer (browser_tool._note_supervisor_page) retired with the
+    # built-in browser_* tools in v0.22.7; browser_exec has no navigation producer, so vault tab
+    # selection falls back to its existing heuristics unless a caller records a hint. The registry
+    # contract that the consumer reads is unchanged and still covered here.
     try:
-        browser_tool._note_supervisor_page("nav-task", "nav-task::rp", "https://www.bestbuy.ca/signin?tid=B")
+        bs.SUPERVISOR_REGISTRY.note_page("nav-task", "https://www.bestbuy.ca/signin?tid=B")
+        bs.SUPERVISOR_REGISTRY.note_page("nav-task::rp", "https://www.bestbuy.ca/signin?tid=B")
         assert bs.SUPERVISOR_REGISTRY.page_hint("nav-task") == "https://www.bestbuy.ca/signin?tid=B"
         assert bs.SUPERVISOR_REGISTRY.page_hint("nav-task::rp") == "https://www.bestbuy.ca/signin?tid=B"
     finally:
@@ -380,7 +383,7 @@ def test_vault_focus_passes_the_navigated_tab_as_prefer_url():
 
 def test_vault_supervisor_uses_the_session_endpoint_without_a_daemon_round_trip():
     """``get cdp-url`` timed out at 30 s in the busy shared Chrome; a real-profile session already knows it."""
-    from tools import browser_tool, browser_vault_tool as vt
+    from tools import browser_session, browser_vault_tool as vt
 
     ws = "ws://127.0.0.1:9225/devtools/browser/abc"
     started = {}
@@ -389,25 +392,22 @@ def test_vault_supervisor_uses_the_session_endpoint_without_a_daemon_round_trip(
         started.update(kw)
         return "SUP"
 
-    with patch.dict(browser_tool._active_sessions, {"ep-task": {"cdp_url": ws}}), \
-            patch.object(browser_tool, "_last_session_key", lambda t: t), \
-            patch("tools.browser_tool_session._run_browser_command",
-                  side_effect=AssertionError("daemon must not be asked")), \
+    with patch.dict(browser_session._active_sessions, {"ep-task": {"cdp_url": ws}}), \
+            patch("tools.browser_session_cdp.resolve_cdp_override", return_value=ws) as resolve, \
             patch.object(bs.SUPERVISOR_REGISTRY, "get_or_start", side_effect=get_or_start):
         assert vt._ensure_supervisor("ep-task") == "SUP"
+    resolve.assert_called_once_with(ws)
     assert started["task_id"] == "ep-task" and started["cdp_url"] == ws
 
 
 def test_vault_supervisor_still_asks_the_daemon_for_a_local_session():
-    from tools import browser_tool, browser_vault_tool as vt
+    """All current sessions carry CDP; an incomplete legacy record must refuse, not spawn a fallback."""
+    from tools import browser_session, browser_vault_tool as vt
 
-    with patch.dict(browser_tool._active_sessions, {"local-task": {"session_name": "h_1"}}), \
-            patch.object(browser_tool, "_last_session_key", lambda t: t), \
-            patch("tools.browser_tool_session._run_browser_command",
-                  return_value={"success": False, "error": "no daemon"}) as run, \
+    with patch.dict(browser_session._active_sessions, {"local-task": {"session_name": "h_1"}}), \
+            patch("tools.browser_session_cdp.resolve_cdp_override", side_effect=AssertionError("no endpoint")), \
             patch.object(bs.SUPERVISOR_REGISTRY, "get_or_start", side_effect=AssertionError("no endpoint")):
         assert vt._ensure_supervisor("local-task") is None
-    run.assert_called_once_with("local-task", "get", ["cdp-url"])
 
 
 def test_cancelling_selection_detaches_already_completed_probe_sessions(monkeypatch):

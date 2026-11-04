@@ -45,7 +45,7 @@ def test_activity_keeps_attention_cue_when_no_ordinary_job_covers_event(delivery
 def test_activity_only_attention_reservation_survives_retry_and_reopen(delivery, adopt):
     import hashlib
 
-    from tui_gateway.methods_browser_control import _principal_digest
+    from gateway.session_identity import authenticated_principal_digest as _principal_digest
     from tui_gateway.mobile_push_adoption import adopt_legacy_installation
     from tui_gateway.mobile_push_provider import DeliveryResult
     from tui_gateway.mobile_push_store import PushStore

@@ -329,9 +329,59 @@ function UpdateActions({ target, u, view }: UpdateActionsProps): ReactElement | 
  */
 export function UpdateStatusCard({
   showReleaseNotes = true,
-  target
+  target,
+  version
 }: {
   showReleaseNotes?: boolean
+  target: UpdateTarget
+  version: DesktopVersionInfo | null
+}): ReactElement {
+  // An installed bundle waiting only for a restart owns the client status; a
+  // stale check error beside it contradicts it (#128195).
+  if (target === 'client' && version?.bundleSwapPending) {
+    return <></>
+  }
+
+  return <UpdateStatusCardBody showReleaseNotes={showReleaseNotes} target={target} />
+}
+
+function UpdateStatusHeadline({
+  fetchedAt,
+  justChecked,
+  u,
+  view
+}: {
+  fetchedAt: Parameters<typeof relativeTime>[0]
+  justChecked: boolean
+  u: Translations['updates']
+  view: UpdateStatusView
+}): ReactElement {
+  return (
+    <div className="flex items-start gap-2">
+      {view.tone === 'available' ? (
+        <Codicon className="mt-0.5 size-4 shrink-0 text-primary" name="cloud-download" size="1rem" />
+      ) : view.tone === 'error' || view.tone === 'unsupported' ? null : (
+        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+      )}
+      <div className="min-w-0">
+        <p className="font-medium">{view.line}</p>
+        {view.error && <p className="mt-1 text-xs text-muted-foreground">{view.error}</p>}
+        {view.tone !== 'unsupported' && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {u.lastChecked(relativeTime(fetchedAt, u))}
+            {justChecked ? u.justNowSuffix : ''}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function UpdateStatusCardBody({
+  showReleaseNotes,
+  target
+}: {
+  showReleaseNotes: boolean
   target: UpdateTarget
 }): ReactElement {
   const { t } = useI18n()
@@ -368,23 +418,12 @@ export function UpdateStatusCard({
         (view.tone === 'idle' || view.tone === 'unsupported') && 'border-border/70 bg-muted/20 text-foreground'
       )}
     >
-      <div className="flex items-start gap-2">
-        {view.tone === 'available' ? (
-          <Codicon className="mt-0.5 size-4 shrink-0 text-primary" name="cloud-download" size="1rem" />
-        ) : view.tone === 'error' || view.tone === 'unsupported' ? null : (
-          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-        )}
-        <div className="min-w-0">
-          <p className="font-medium">{view.line}</p>
-          {view.error && <p className="mt-1 text-xs text-muted-foreground">{view.error}</p>}
-          {view.tone !== 'unsupported' && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {u.lastChecked(relativeTime(status?.fetchedAt, u))}
-              {justChecked && !checking ? u.justNowSuffix : ''}
-            </p>
-          )}
-        </div>
-      </div>
+      <UpdateStatusHeadline
+        fetchedAt={status?.fetchedAt}
+        justChecked={justChecked && !checking}
+        u={u}
+        view={view}
+      />
 
       {view.tone !== 'unsupported' && (
         <div className="mt-3 flex flex-wrap items-center gap-4">

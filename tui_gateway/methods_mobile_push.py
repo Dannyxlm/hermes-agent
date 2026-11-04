@@ -63,7 +63,7 @@ def _mobile_push_handler(name):
     def decorate(fn):
         def handle(rid, params):
             import sqlite3
-            from tui_gateway.methods_browser_control import _is_authenticated_identity, _principal_digest
+            from gateway.session_identity import authenticated_principal_digest as _principal_digest, is_authenticated_identity as _is_authenticated_identity
             identity = getattr(current_transport(), "auth_identity", None)
             if not _is_authenticated_identity(identity):
                 return _err(rid, 4403, "authenticated mobile identity required")
@@ -653,7 +653,7 @@ def _mobile_push_note_submission(session, params, status="streaming"):
             return
         origin = params.get("origin")
         identity = getattr(current_transport(), "auth_identity", None)
-        from tui_gateway.methods_browser_control import _is_authenticated_identity, _principal_digest
+        from gateway.session_identity import authenticated_principal_digest as _principal_digest, is_authenticated_identity as _is_authenticated_identity
         if isinstance(origin, dict) and _is_authenticated_identity(identity):
             try:
                 service.store.set_origin(push_scope, _principal_digest(identity),

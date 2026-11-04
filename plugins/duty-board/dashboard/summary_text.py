@@ -102,7 +102,7 @@ def hermes_language(home=None) -> str:
     if home is None:
         return "en"
     try:
-        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8-sig").splitlines()
+        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8-sig").splitlines()  # config-reader: ok — pinned upstream side-effect-free display.language read before authorization; display-only, falls back to English
     except (OSError, UnicodeDecodeError):
         return "en"
     in_display = False

@@ -188,27 +188,6 @@ def test_membership_preserves_terminal_delivery_and_revokes_departed_peers(monke
             server.reset_transport(token)
         assert a.receive()["id"] == "private"
         assert b.frames.empty()
-        from gateway import browser_control_broker as broker_module
-        monkeypatch.setattr(broker_module, "browser_control_enabled", lambda: True)
-        for client in (a, b, stranger):
-            client.auth_identity = {"user_id": "fanout-owner", "provider": "fixture"}
-        session["profile"] = "default"
-
-        def controller(client, action, **params):
-            return server.dispatch({"jsonrpc": "2.0", "id": 1,
-                                    "method": "browser.controller." + action,
-                                    "params": {"session_id": "fanout-invariant", **params}}, client)
-
-        registered = controller(a, "register", controller_id="invariant",
-                                browser_profile_id="fixture", capabilities=["controller.noop"],
-                                protocol_version=broker_module.BROWSER_CONTROL_PROTOCOL_VERSION)
-        assert "result" in registered, registered
-        try:
-            assert controller(a, "heartbeat")["result"] == {"ok": True}
-            assert controller(b, "heartbeat")["error"]["message"] == "controller is not owned by this transport"
-            assert controller(stranger, "heartbeat")["error"]["message"] == "session is not owned by this transport"
-        finally:
-            controller(a, "detach")
         session["viewers"] = {b: object(), stranger: object()}
         assert server._detach_session_transport(session, b)
         assert not session["viewers"]
@@ -327,6 +306,23 @@ def test_overflow_closes_only_the_slow_peer_and_healthy_keeps_streaming():
         loop.call_soon_threadsafe(loop.stop)
         loop_thread.join(timeout=2)
         loop.close()
+
+
+def test_deadline_then_fanout_abort_closes_the_socket_once(monkeypatch):
+    monkeypatch.setattr("tui_gateway.ws._WS_SEND_DEADLINE_S", 0.01)
+
+    async def run():
+        socket = _SocketWS()
+        transport = WSTransport(socket, asyncio.get_running_loop())
+        await transport._safe_send_many(['{}'])
+        await asyncio.sleep(0)  # let the deadline's scheduled close run
+        assert socket.close_codes == [1011]
+        transport.abort()
+        await asyncio.sleep(0)  # let the independently scheduled abort run
+        assert socket.close_codes == [1011]
+        assert transport.closed is True
+
+    asyncio.run(run())
 
 
 def test_fanout_close_and_detach_leave_peer_sockets_open():

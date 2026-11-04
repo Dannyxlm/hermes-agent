@@ -14,7 +14,7 @@ class DesktopDenied(PermissionError):
 def _desktop_scope(server, params):
     from hermes_cli.config import load_config
     from hermes_cli.profiles import _get_default_hermes_home, validate_profile_name
-    from .methods_browser_control import _is_authenticated_identity
+    from gateway.session_identity import is_authenticated_identity as _is_authenticated_identity
 
     transport = server.current_transport()
     identity = getattr(transport, 'auth_identity', None)

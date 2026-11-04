@@ -44,7 +44,7 @@ def test_live_session_payload_replays_pending_approval(server, monkeypatch):
     # correlate their approval.respond with the exact queued request.
     assert replayed.pop("request_id")
     assert replayed.pop("expires_at") == replayed.pop("created_at") + replayed.pop("timeout_seconds")
-    for key in ("scoped_approval_response", "request_epoch", "request_revision"):
+    for key in ("scoped_approval_response", "request_epoch", "request_revision", "timeout_s"):
         assert replayed.pop(key) == first_entry.data[key]
     assert replayed == first
 

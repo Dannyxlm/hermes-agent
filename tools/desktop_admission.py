@@ -56,11 +56,11 @@ def assert_agent_admitted(endpoint: str) -> int | None:
 
 
 def task_endpoint(task_id: str) -> str:
+    from tools.browser_session import session_for_task
     from tools.browser_supervisor import SUPERVISOR_REGISTRY
-    from tools.browser_tool import _active_sessions, _last_session_key
 
     from tools.browser_vault_signin import bound_supervisor
     supervisor = bound_supervisor(task_id) or SUPERVISOR_REGISTRY.get(task_id)
     if supervisor is not None:
         return str(getattr(supervisor, 'cdp_url', ''))
-    return str((_active_sessions.get(_last_session_key(task_id)) or {}).get('cdp_url') or '')
+    return str(session_for_task(task_id).get('cdp_url') or '')

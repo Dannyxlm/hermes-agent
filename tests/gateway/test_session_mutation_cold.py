@@ -25,8 +25,10 @@ def test_cold_import_mutation_binds_owner_across_restart(tmp_path):
     with daemon(tmp_path) as (home, descriptor), httpx.Client(base_url=descriptor['api_origin'], trust_env=False) as client:
         assert client.patch('/api/sessions/cold', headers=headers(ticket(home, descriptor)), json=body).json() == edited.json()
         assert client.get('/api/sessions/cold/mutation-snapshot', headers=headers(ticket(home, descriptor))).status_code == 200
-        denied = client.patch('/api/sessions/cold', headers={'Authorization': 'Bearer normal-http-owner'}, json=body | {'request_id': 'foreign'})
-        assert denied.status_code == 403, denied.text
+        # The dashboard login is the owner the binding names: a new request on the stale revision is
+        # an ordinary revision conflict, not an ownership refusal.
+        login = client.patch('/api/sessions/cold', headers={'Authorization': 'Bearer normal-http-owner'}, json=body | {'request_id': 'login'})
+        assert login.status_code == 409 and 'revision_conflict' in login.text, login.text
 
 
 @pytest.mark.platforms("linux")
@@ -73,3 +75,27 @@ def test_mobile_sidebar_control_preserves_owner_and_fences(tmp_path):
             expected_revision=readback['runtime_revision'], expected_generation=0))
         assert deleted.status_code == 200, deleted.text
         assert client.get(path, headers=grant()).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_deleted_idle_retired_session_clears_terminal_state(tmp_path, monkeypatch):
+    """A delete still ends shell state after upstream idle retirement releases the live record."""
+    from gateway.session_mutations import retire_live_sessions
+    from gateway.session_retirement import retire_idle
+    from tests.gateway.test_local_closed_retirement import _owner, _create
+
+    runner, authority, db = await _owner(tmp_path, monkeypatch)
+    try:
+        ref = _create(authority)
+        live = authority.sessions[ref.session_id]
+        route = live.route
+        assert retire_idle(authority, ref.session_id, live, authority.physical_target(ref))
+        assert ref.session_id not in authority.sessions
+        cleared = []
+        monkeypatch.setattr(runner, '_clear_session_terminal_state', cleared.append)
+        retire_live_sessions(authority, [ref.session_id])
+        assert cleared == [route]
+        assert ref.session_id not in authority.retired_routes
+        assert ref.session_id not in authority.retired_local
+    finally:
+        db.close()

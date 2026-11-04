@@ -56,12 +56,13 @@ def wake_owner(request, tmp_path, monkeypatch):
                                endpoint=endpoint if state.ready else None)
 
     @asynccontextmanager
-    async def connect(*, endpoint, subject=None):
+    async def connect(*, endpoint, subject=None, purpose='interactive'):
         assert get_hermes_home() == home
         state.subjects.append(subject)
         control = GatewayControlServer(home)
         control.ticket_store = TicketStore('test', frozenset({str(home)}))
-        params = {'profile_id': str(home), 'instance_id': 'test', 'purpose': 'interactive'}
+        assert purpose == 'session-wake'
+        params = {'profile_id': str(home), 'instance_id': 'test', 'purpose': purpose}
         forwarded = state.forced_subject or subject
         if forwarded is not None:
             params['subject'] = forwarded
@@ -69,7 +70,7 @@ def wake_owner(request, tmp_path, monkeypatch):
             'protocol': 1, 'id': 1, 'verb': 'session-ticket', 'params': params}).encode(),
             peer_subject='uid:1000'))
         assert answer['ok'], answer
-        grant = control.ticket_store.redeem(answer['result']['ticket'], profile_id=str(home), purpose='interactive')
+        grant = control.ticket_store.redeem(answer['result']['ticket'], profile_id=str(home), purpose=purpose)
         store = SessionStore(home / 'sessions', GatewayConfig())
         store._db = SessionDB(home / 'state.db')
         runner = run.GatewayRunner.__new__(run.GatewayRunner)
@@ -80,7 +81,8 @@ def wake_owner(request, tmp_path, monkeypatch):
         authority._schedule = lambda ref: None
         conn = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {
             'provider': 'local', 'user_id': grant['subject'], 'profile_id': grant['profile_id'],
-            'instance_id': grant['instance_id'], 'capabilities': grant['capabilities'], 'native_bootstrap': True})
+            'instance_id': grant['instance_id'], 'capabilities': grant['capabilities'], 'native_bootstrap': True,
+            'bootstrap_purpose': grant['purpose']})
 
         class Client:
             async def rpc(self, method, **kwargs):
@@ -109,6 +111,34 @@ def queue(state):
     key = job['_bot_chat_delivery_receipts']['session:chat']['delivery_id']
     path = state.home / 'cron' / 'bot_chat_pending' / (key + '.json')
     return path, pending.read_pending(key)
+
+
+def test_host_owner_wake_uses_socket_peer_without_forwarding_os_subject(wake_owner):
+    from gateway.owner_identity import host_owner_subject
+
+    owner = host_owner_subject()
+    with SessionDB(wake_owner.home / 'state.db') as db:
+        db._write_sql('UPDATE sessions SET user_id=? WHERE id=?', (owner, 'chat'))
+    path, record = queue(wake_owner)
+    assert record['wake_subject'] == owner
+    wake_owner.ready = True
+    saved = pending._drain_one(path)
+    assert saved['status'] == 'transferred', saved
+    assert wake_owner.subjects == [None]
+
+
+def test_unstamped_host_wake_keeps_its_binding_after_owner_adoption(wake_owner):
+    with SessionDB(wake_owner.home / 'state.db') as db:
+        db._write_sql('UPDATE sessions SET user_id=NULL WHERE id=?', ('chat',))
+    path, record = queue(wake_owner)
+    assert record['wake_subject'] is None
+    wake_owner.ready = True
+    first = pending._drain_one(path)
+    assert first['status'] == 'transferred', first
+    again = pending._drain_one(path)
+    assert again['status'] == 'transferred', again
+    assert again['admission_id'] == first['admission_id']
+    assert wake_owner.subjects == [None, None]
 
 
 def test_login_owned_tui_wake_reaches_real_admission(wake_owner):

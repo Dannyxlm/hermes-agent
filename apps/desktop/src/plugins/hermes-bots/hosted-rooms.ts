@@ -16,6 +16,7 @@ export interface HostedRoom {
   authority_epoch: number
   latest_seq?: number
   disbanded_at?: number
+  meeting?: object | null
 }
 
 export interface HostedEvent {
@@ -698,13 +699,15 @@ export class HostedRoomsController {
         return false
       }
 
+      // Marked rooms share main; keep old stored request bytes intact for exact retries.
       if (
         result.accepted !== true ||
         result.client_event_id !== operation.event_id ||
         result.event?.room_id !== operation.room_id ||
         result.event.kind !== 'message.user' ||
         result.event.payload.text !== operation.payload.text ||
-        result.event.payload.thread_id !== operation.payload.thread_id
+        (result.event.payload.thread_id !== operation.payload.thread_id &&
+          !(this.state.get().selected?.meeting != null && result.event.payload.thread_id === 'main'))
       ) {
         throw new Error('unknownDelivery')
       }

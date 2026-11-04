@@ -6,6 +6,7 @@ import math
 from fastapi import HTTPException
 from hermes_constants import get_hermes_home
 from hermes_state_holders import read_only_db_uri
+from hermes_state_common import _non_continuation_child_sql
 from hermes_state_sessions import _LINEAGE_CTE_SQL
 from plugins.cloudseed_mobile.scope import profile_id
 from tui_gateway.side_task_activity import registry
@@ -35,6 +36,7 @@ def _lineages(home, ids):
                 JOIN sessions child ON child.id=a.id
                 JOIN sessions parent ON parent.id=child.parent_session_id
                 WHERE parent.end_reason='compression'
+                {continuation}
             ),
             descendants(root,id) AS (
                 SELECT root,root FROM roots
@@ -43,9 +45,11 @@ def _lineages(home, ids):
                 JOIN sessions parent ON parent.id=d.id
                 JOIN sessions child ON child.parent_session_id=parent.id
                 WHERE parent.end_reason='compression'
+                {continuation}
             )
             SELECT root,id FROM ancestors UNION SELECT root,id FROM descendants
-        """.format(','.join('(?)' for _ in ids))
+        """.format(','.join('(?)' for _ in ids),
+                   continuation=_non_continuation_child_sql('child.', 'parent.id'))
         parents = {sid: [] for sid in ids}
         for root, member in db.execute(sql, ids):
             parents[root].append(member)

@@ -118,8 +118,8 @@ def test_session_activity_compression_lineage_read_only(client):
     c, home = client
     db_path = home/'state.db'
     with sqlite3.connect(db_path) as db:
-        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY, parent_session_id TEXT, end_reason TEXT)')
-        db.executemany('INSERT INTO sessions VALUES(?,?,?)', [
+        db.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY, parent_session_id TEXT, end_reason TEXT, model_config TEXT, source TEXT)')
+        db.executemany('INSERT INTO sessions(id,parent_session_id,end_reason) VALUES(?,?,?)', [
             ('root', None, 'compression'), ('tip', 'root', None), ('branch', 'tip', None)])
     before = db_path.read_bytes()
     registry.register(home, 'root', 'bg', 'background')

@@ -53,14 +53,14 @@ class SigninPage:
 
 @contextmanager
 def signin_page(target_id: str, origin: str):
-    from tools.browser_tool_cdp import _resolve_cdp_override
+    from tools.browser_session_cdp import resolve_cdp_override
     from websockets.sync.client import connect
     from agent.proxy_bypass import loopback_connect_kwargs
     from agent.vault_store import normalize_origin
 
     # This is the shared Desktop gate, never the producer's process-local default browser.
     assert_agent_admitted(DESKTOP_CDP)
-    endpoint = _resolve_cdp_override(DESKTOP_CDP)
+    endpoint = resolve_cdp_override(DESKTOP_CDP)
     # websockets DEBUG tracing includes payloads; never trace credential-bearing frames.
     silent = logging.Logger(__name__ + '.secret_socket', level=logging.CRITICAL)
     with connect(endpoint, open_timeout=7, max_size=1048576, logger=silent,

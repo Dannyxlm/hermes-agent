@@ -65,6 +65,7 @@ def guest_channel_authorized(runner, source):
             or identity.runtime_profile != target or getattr(source, "profile_route_rejected", False)):
         return False
     from hermes_cli.profiles import get_profile_dir
+    from hermes_cli.config_backend import config_exists, ConfigBackendUnavailable
     try:
         expected = get_profile_dir(target).resolve()
         if identity.runtime_home.resolve() != expected or not expected.is_dir():
@@ -72,10 +73,10 @@ def guest_channel_authorized(runner, source):
         from hermes_cli.config_effective import load_user_config_effective
         from gateway.run import _profile_runtime_scope
         config_path = expected / "config.yaml"
-        if not config_path.is_file():
-            return False
         # Admission must not expand the receiving profile's env into guest policy.
         with _profile_runtime_scope(expected, prepared_secret_scope={}):
+            if not config_exists(config_path):
+                return False
             config = load_user_config_effective(config_path, fail_closed=True)
         memory = config.get("memory", {})
         return (config.get("platform_toolsets", {}).get("slack") == []
@@ -85,7 +86,7 @@ def guest_channel_authorized(runner, source):
                 and not config.get("mcp_servers")
                 and config.get("skills", {}).get("external_dirs") == []
                 and config.get("plugins", {}).get("enabled") == [])
-    except (OSError, ValueError, TypeError, AttributeError, YAMLError):
+    except (OSError, ValueError, TypeError, AttributeError, YAMLError, ConfigBackendUnavailable):
         return False
 
 

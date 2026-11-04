@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
+import hermes_yaml as yaml
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.profile_routing import parse_profile_routes

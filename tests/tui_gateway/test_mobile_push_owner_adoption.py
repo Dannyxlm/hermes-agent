@@ -9,7 +9,7 @@ import pytest
 from tests.tui_gateway.test_methods_mobile import mobile_home as mobile_home, peer as peer, rpc, open_bot, scope as runtime_scope  # noqa: PLC0414
 from tests.tui_gateway.test_methods_mobile_push import push_service as push_service  # noqa: PLC0414
 from tui_gateway import mobile_inbox_invalidation as hints
-from tui_gateway.methods_browser_control import _principal_digest
+from gateway.session_identity import authenticated_principal_digest as _principal_digest
 from tui_gateway.mobile_push import Scope
 from tui_gateway.mobile_push_store import PushStore
 

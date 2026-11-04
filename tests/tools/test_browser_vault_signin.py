@@ -49,7 +49,7 @@ def signin(desktop, monkeypatch, tmp_path):
 
 @pytest.fixture
 def signin_cdp(signin, monkeypatch):
-    from tools import browser_supervisor, browser_tool_cdp
+    from tools import browser_supervisor, browser_session_cdp
 
     page = SimpleNamespace(target='chrome-target', present=True, commands=[], attached=[], writes=0)
 
@@ -93,7 +93,7 @@ def signin_cdp(signin, monkeypatch):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         port = server.socket.getsockname()[1]
-        monkeypatch.setattr(browser_tool_cdp, '_resolve_cdp_override',
+        monkeypatch.setattr(browser_session_cdp, 'resolve_cdp_override',
                             lambda endpoint: f'ws://127.0.0.1:{port}/devtools/browser/fixture')
         try:
             yield page

@@ -65,7 +65,7 @@ def _delivery_key(home: Path, job: dict, session_id: str, for_failure: bool) -> 
         separators=(",", ":")).encode()).hexdigest()
 
 
-def _wake_subject(home: Path, session_id: str) -> str | None:
+def _wake_subject(home: Path, session_id: str, *, host_unstamped: bool = False) -> str | None:
     """Recover only the exact row's local login stamp, never a caller-supplied principal."""
     # Job creation is host-equivalent; the wake acts for the target row's owner.
     # Multi-login job isolation would require a creator principal stamped at creation.
@@ -91,6 +91,9 @@ def _wake_subject(home: Path, session_id: str) -> str | None:
             from hermes_state_mutation_binding import _login_label
             if _login_label(subject) == owner:
                 return subject
+    from gateway.owner_identity import host_owner_subject
+    if owner == host_owner_subject() or (host_unstamped and not owner):
+        return host_owner_subject()
     return None
 
 
@@ -102,9 +105,16 @@ def _wake_binding(path: Path, home: Path, record: dict) -> tuple[str, str | None
             or path.resolve() != (home / 'cron' / 'bot_chat_pending' / (expected + '.json')).resolve()):
         raise GatewayRPCError('permission_denied')
     target = resolve_session(record['session_id'], home)
-    subject = _wake_subject(home, record['session_id'])
-    if (_wake_subject(home, target) != subject
-            or ('wake_subject' in record and record['wake_subject'] != subject)
+    subject = _wake_subject(home, record['session_id'], host_unstamped=True)
+    from gateway.owner_identity import host_owner_subject
+    # Unstamped local history is admitted as the socket's host peer. Adoption
+    # writes that same host stamp; it must not invalidate the pending receipt.
+    saved_subject = record.get('wake_subject')
+    if saved_subject is None and subject == host_owner_subject():
+        saved_subject = subject
+
+    if (_wake_subject(home, target, host_unstamped=True) != subject
+            or ('wake_subject' in record and saved_subject != subject)
             or (not record.get('admission_id') and record.get('target_session_id') not in (None, target))):
         raise GatewayRPCError('permission_denied')
     return target, subject
@@ -130,8 +140,10 @@ async def _wake_rpc(home: Path, record: dict, save) -> dict | None:
     target_session = await asyncio.to_thread(resolve_session, record["session_id"], home)
     token = set_hermes_home_override(home)
     try:
-        forwarded = {'subject': record['wake_subject']} if record.get('wake_subject') else {}
-        async with connect_gateway(endpoint=discovery.endpoint, **forwarded) as client:
+        from gateway.owner_identity import host_owner_subject
+        subject = record.get('wake_subject')
+        forwarded = {'subject': subject} if subject and subject != host_owner_subject() else {}
+        async with connect_gateway(endpoint=discovery.endpoint, purpose='session-wake', **forwarded) as client:
             snapshot = await client.rpc("session.resume",
                 session_id=target_session,
                 omit_messages=True, defer_history=True)

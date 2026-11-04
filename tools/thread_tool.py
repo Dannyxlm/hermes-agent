@@ -118,10 +118,15 @@ def _handle(caller: Caller, profile: str, session_id: str) -> str:
 # ── who is calling, and which chat is meant ───────────────────────────────────────────────────
 
 def _subject(home: Path, session_id: str):
-    """The login principal a local chat acts for, or None (messaging, cron, subagent, socket-uid rows)."""
+    """The host owner a local interactive chat acts for, or None for non-local/foreign rows."""
     from cron.session_delivery import _wake_subject
+    from gateway.owner_identity import host_owner_subject, same_owner
     try:
-        return _wake_subject(home, session_id)
+        stamp = _wake_subject(home, session_id)
+        # Interactive tools use the gateway's unified owner; scheduled wakes keep
+        # the exact stored login in _wake_subject for their narrower grant.
+        owner = host_owner_subject()
+        return owner if same_owner(stamp, owner) else None
     except (sqlite3.Error, OSError):  # an unreadable store proves no principal
         return None
 
@@ -175,7 +180,8 @@ def _resolve(caller: Caller, handle) -> Thread:
         current = ts.tip(conn, sid)
         row = conn.execute("SELECT title, model, archived FROM sessions WHERE id=?", (current,)).fetchone()
         launch = ts.launch_of(conn, profile, lineage)
-    if _subject(home, current) != caller.subject:
+    from gateway.owner_identity import same_owner
+    if not same_owner(_subject(home, current), caller.subject):
         raise missing
     return Thread(profile, home, current, lineage, (row["title"] or "") if row else "", row["model"] if row else None,
                   launch, bool(row["archived"]) if row else False)
@@ -266,7 +272,9 @@ async def _with_owner(home: Path, subject: str, fn):
     if found.state != "ready" or found.endpoint is None:
         raise ThreadError("owner_unavailable", "The Hermes gateway that hosts these chats isn't running; try again shortly.")
     try:
-        async with connect_gateway(endpoint=found.endpoint, subject=subject) as client:
+        from gateway.owner_identity import host_owner_subject
+        async with connect_gateway(endpoint=found.endpoint,
+                                   subject=None if subject == host_owner_subject() else subject) as client:
             return await fn(client)
     except GatewayRPCError as exc:
         raise ThreadError("owner_refused", f"The gateway refused the request: {exc}") from exc
@@ -300,10 +308,10 @@ def _menu(cfg: dict) -> tuple[dict, str | None, dict]:
 
 def _profile_model(home: Path) -> dict:
     from hermes_yaml import YAMLError
-    from utils import load_yaml_file_readonly
+    from hermes_cli.config_backend import read_config_doc_readonly, ConfigBackendUnavailable
     try:
-        model = (load_yaml_file_readonly(home / "config.yaml") or {}).get("model")
-    except (OSError, YAMLError):  # a teammate without a readable config just shows no model
+        model = (read_config_doc_readonly(home / "config.yaml") or {}).get("model")
+    except (OSError, YAMLError, ConfigBackendUnavailable):  # an unavailable teammate shows no model
         return {}
     if isinstance(model, dict):
         return {k: v for k, v in (("model", model.get("default")), ("provider", model.get("provider"))) if v}

@@ -49,6 +49,71 @@ async def test_private_control_peer_mints_profile_bound_ticket(tmp_path, purpose
         await server.stop()
 
 
+def test_wake_grant_preserves_exact_login_without_owner_or_host_authority():
+    from gateway.owner_identity import host_owner_subject, principal_subject
+    from gateway.runtime_bootstrap import TicketStore, redeem_session_ticket
+    from gateway.session_identity import authenticated_subject
+
+    subject = authenticated_subject({'provider': 'basic', 'user_id': 'alice'})
+    store = TicketStore('boot', frozenset({'a', 'b'}))
+    ticket = store.mint(profile_id='a', subject=subject, purpose='session-wake')
+    grant = redeem_session_ticket(store, ticket)
+    assert grant['profile_id'] == 'a'
+    assert grant['capabilities'] == frozenset({'session:create', 'session:read', 'session:submit', 'session:control'})
+    identity = {'provider': 'local', 'user_id': grant['subject'], 'native_bootstrap': True,
+                'bootstrap_purpose': grant['purpose'], 'profile_id': grant['profile_id'],
+                'instance_id': grant['instance_id'], 'capabilities': grant['capabilities']}
+    assert principal_subject(identity) == subject
+    assert principal_subject({**identity, 'native_bootstrap': False}) == host_owner_subject()
+    assert principal_subject({**identity, 'bootstrap_purpose': 'interactive'}) == host_owner_subject()
+    with pytest.raises(PermissionError):
+        store.mint(profile_id='a', subject=subject, purpose='session-wake', scope='host')
+    with pytest.raises(PermissionError):
+        redeem_session_ticket(store, ticket)
+
+
+@pytest.mark.parametrize('subject_kind', ['login', 'host-owner'])
+def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind):
+    from types import SimpleNamespace
+    from gateway.owner_identity import host_owner_subject
+    from gateway.session_contract import Principal
+    from gateway.session_identity import authenticated_subject
+    from gateway.session_local_migration import (bind_native_transport, require_history_claim,
+                                                 adopt_legacy_session, unbind_native_transport)
+    from hermes_state import SessionDB
+    from hermes_state_runtime import RuntimeStoreError
+
+    subject = (host_owner_subject() if subject_kind == 'host-owner' else
+               authenticated_subject({'provider': 'basic', 'user_id': 'alice'}))
+    actor = Principal(subject, str(tmp_path), frozenset({'session:create', 'session:read'}), 'wake')
+    identity = {'provider': 'local', 'profile_id': str(tmp_path), 'instance_id': 'fixture',
+                'native_bootstrap': True, 'bootstrap_purpose': 'session-wake'}
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('foreign', 'cli', user_id='uid:99999999')
+        db.create_session('own', 'tui', user_id=subject)
+        db.create_session('unstamped', 'cli')
+        authority = SimpleNamespace(db=db, profile_id=str(tmp_path), instance_id='fixture')
+        bind_native_transport(authority, actor, identity)
+        with db._read_ctx() as conn:
+            with pytest.raises(RuntimeStoreError, match='permission_denied'):
+                require_history_claim(authority, conn, actor, 'foreign')
+            require_history_claim(authority, conn, actor, 'own')
+            if subject_kind == 'host-owner':
+                require_history_claim(authority, conn, actor, 'unstamped')
+            else:
+                with pytest.raises(RuntimeStoreError, match='permission_denied'):
+                    require_history_claim(authority, conn, actor, 'unstamped')
+        with pytest.raises(RuntimeStoreError, match='not_found'):
+            adopt_legacy_session(authority, actor, db.get_session('foreign'))
+        unbind_native_transport(authority, actor)
+        with pytest.raises(RuntimeStoreError, match='not_found'):
+            adopt_legacy_session(authority, actor, db.get_session('own'))
+        # Interactive native bootstrap still owns the legacy import lane.
+        bind_native_transport(authority, actor, {**identity, 'bootstrap_purpose': 'interactive'})
+        with db._read_ctx() as conn:
+            require_history_claim(authority, conn, actor, 'foreign')
+
+
 def test_ticket_atomic_single_use_profile_purpose_expiry_and_capacity(monkeypatch):
     from gateway.runtime_bootstrap import TicketStore
     clock = [0.0]

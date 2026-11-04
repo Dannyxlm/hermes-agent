@@ -108,6 +108,7 @@ export interface PlanUsage {
   plan?: string | null
   gauges?: PlanUsageGauge[]
   top_tier_model_ids?: string[]
+  subscription_model_ids?: string[]
   featured_model_ids?: string[]
   paused_reason?: string | null
   credits_pay?: boolean | null
@@ -648,6 +649,7 @@ export interface SetupRuntimeCheckResult {
   model?: string | null
   source?: string | null
   error?: string | null
+  error_code?: string | null
   free_tier_route?: boolean | null
   profile?: string | null
 }
@@ -855,6 +857,7 @@ export interface ModelOptionProvider {
 export interface ModelCapabilities {
   fast: boolean
   ultrafast?: boolean
+  daybreak?: boolean
   reasoning: boolean
   can_disable_reasoning?: boolean | null
 }
@@ -1897,11 +1900,13 @@ export interface RoomEvent {
   created_at: number
   idempotent?: boolean
 }
+/** ``hosted_rooms._ACTOR_FIELDS``; member replies carry ``profile`` plus, when known, ``display_name`` and the peer ``connection_id`` (``hosted_room_discussion._member_actor``). */
 export interface RoomActor {
   kind: string
   id: string
-  display_name?: string | null
   profile?: string | null
+  display_name?: string | null
+  connection_id?: string | null
 }
 export interface GroupsCreateParams {
   profile?: string | null
@@ -1931,8 +1936,9 @@ export interface GroupsStateParams {
 export interface GroupsStateResult {
   room: Room
   driver_status?: RoomDriverStatus | null
+  context?: RoomContext | null
 }
-/** ``HostedRoomService.status(room_id)``; ``pending_actions`` rows are ``{kind: retry, task_id}`` or the driver's approval action (``kind: approval`` + run/session/approval context). ``member_activity`` lists live tasks in admission order (absent from older gateways). */
+/** ``HostedRoomService.status(room_id)``; ``pending_actions`` rows are the exact attempt (``hosted_room_service.attempt_action``: ``kind`` + ``member_id``/``task_id``/``execution_generation``) or the driver's approval action (``kind: approval`` + run/session/approval context), or a stalled room preparation's Retry (``task_id`` ``prepare:<room_id>``, ``member_id`` the members not woken). ``member_activity`` lists live tasks in admission order (absent from older gateways). ``last_error`` is this room's last preparation failure, null once one succeeds. */
 export interface RoomDriverStatus {
   running: boolean
   working: boolean
@@ -1940,13 +1946,20 @@ export interface RoomDriverStatus {
   counts: Record<string, number>
   pending_actions: Record<string, unknown>[]
   member_activity?: RoomMemberActivity[]
+  last_error?: string | null
+  max_rounds?: number | null
   peer_routes: PeerRouteStatus[]
   stoppable_tasks?: RoomStoppableTask[]
 }
-/** One live room task: ``status`` is ``queued``, ``running`` or ``stopping``. */
+/** One live room task: ``status`` is ``queued``, ``running`` or ``stopping``. ``thread_id`` and ``round_index`` name the thread and 0-based round it works in; ``started_at`` is when it began running; ``tool`` (the tool it is in now) and ``progress_at`` (its last frame) come only from the process running the turn. */
 export interface RoomMemberActivity {
   member_id: string
   status: string
+  thread_id?: string | null
+  round_index?: number | null
+  started_at?: number | null
+  tool?: string | null
+  progress_at?: number | null
 }
 export interface PeerRouteStatus {
   room_id: string
@@ -1959,6 +1972,13 @@ export interface RoomStoppableTask {
   cancel_generation: number
   status: string
   member_id: string
+}
+/** ``gateway/hosted_room_context.py::room_context``: the purpose and shared notes every member's turn prompt carries (inside the user-role message). */
+export interface RoomContext {
+  purpose: string
+  notes: string
+  routing?: 'everyone' | 'lead'
+  lead_member_id?: string
 }
 export interface GroupsSendParams {
   profile?: string | null
@@ -1982,6 +2002,19 @@ export interface GroupsRenameParams {
 }
 export interface GroupsRenameResult {
   room: Room
+}
+export interface GroupsContextParams {
+  profile?: string | null
+  room_id: string
+  event_id: string
+  purpose: string
+  notes: string
+  routing?: 'everyone' | 'lead' | null
+  lead_member_id?: string | null
+}
+export interface GroupsContextResult {
+  context: RoomContext
+  event: RoomEvent
 }
 export interface GroupsLogParams {
   profile?: string | null
@@ -2065,6 +2098,8 @@ export interface GroupsRetryParams {
   profile?: string | null
   room_id: string
   task_id: string
+  member_id?: string | null
+  execution_generation?: number | null
 }
 export interface GroupsRetryResult {
   retried?: boolean
@@ -2229,43 +2264,6 @@ export interface BotRelayReplyParams {
   reply?: string | null
   error?: string | null
   reason?: string | null
-}
-export interface BrowserControllerRegisterParams {
-  session_id: string
-  controller_id: string
-  browser_profile_id: string
-  capabilities?: string[] | null
-  protocol_version?: unknown | null
-  principal_id?: string | null
-}
-export interface BrowserControllerRegisterResult {
-  scope: ControllerScope
-}
-export interface ControllerScope {
-  principal_id: string
-  profile_id: string
-  session_id: string
-  controller_id: string
-  browser_profile_id: string
-  transport_family: string
-  capabilities: string[]
-}
-export interface BrowserControllerResultParams {
-  session_id: string
-  command_id: string
-  ok?: unknown | null
-  result?: unknown | null
-  error?: unknown | null
-}
-export interface BrowserControllerResultResult {
-  accepted: boolean
-}
-/** Every controller call names the session the controller is attached to. */
-export interface BrowserControllerParams {
-  session_id: string
-}
-export interface BrowserControllerDetachResult {
-  detached?: boolean
 }
 export interface HumanInputScope {
   profile: string
@@ -2442,19 +2440,20 @@ export interface LiveWindowResult {
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
 }
-/** ``agent.i18n_languages.language_options`` row. ``source`` is ``bundled``, ``overlay`` or ``plugin:<name>`` — the highest layer that supplies the language. */
+/** ``agent.i18n_languages.language_options`` row. ``source`` is ``bundled``, ``overlay`` or ``plugin:<name>`` — the highest layer that supplies the language. ``surfaces`` are the surfaces some layer has strings for; a renderer leaves out a language it does not bundle and that lacks its surface, since picking it would only show English. */
 export interface LanguageOption {
   id: string
   endonym: string
   rtl: boolean
   source: string
+  surfaces: LocaleSurface[]
 }
+export type LocaleSurface = 'core' | 'tui' | 'desktop'
 export interface I18nCatalogParams {
   profile?: string | null
   lang: string
   surface?: LocaleSurface
 }
-export type LocaleSurface = 'core' | 'tui' | 'desktop'
 /** ``messages`` is ONLY the pack + user-overlay layer for that surface (flat dotted keys); the client merges it over its bundled ``en``/``<lang>``. ``lang`` is the canonical id the request resolved to (``pt-BR`` → ``pt-br``; an unknown id resolves to ``en`` with an empty layer). */
 export interface I18nCatalogResult {
   lang: string
@@ -2480,6 +2479,7 @@ export interface ClientCapabilitiesResult {
   server_requests: string[]
   declines_not_shown?: boolean
   session_change_cursor?: number
+  canonical_clarify_batch?: boolean
 }
 /** Client→server method params / server→client request params. Unknown keys are rejected. */
 export type Params = Record<string, never>
@@ -2696,6 +2696,13 @@ export interface FileAttachParams {
   path?: string | null
   data_url?: string | null
   name?: string | null
+  staged_upload?: StagedFileUpload | null
+}
+/** Source identity returned by the browser upload route, checked against the live profile. */
+export interface StagedFileUpload {
+  install_id: string
+  path: string
+  profile_home: string
 }
 export interface FileAttachResult {
   attached: boolean
@@ -4253,6 +4260,7 @@ export interface ProfilesConfigureParams {
 export interface ProfilesConfigureResult {
   ok: boolean
   applied: ProfilesConfigureApplied
+  credentials_required?: Record<string, boolean> | null
   confirm_required?: boolean | null
   confirm_message?: string | null
 }
@@ -4483,6 +4491,14 @@ export interface FailedDelegation {
   error?: string | null
   dispatched_at?: number | null
   completed_at?: number | null
+}
+export interface SubagentRosterResult {
+  sessions?: SubagentRosterEntry[]
+}
+export interface SubagentRosterEntry {
+  session_id: string
+  subagents?: number
+  background?: number
 }
 export interface SubagentIdParams {
   session_id: string
@@ -5277,16 +5293,14 @@ export interface CronRemovedJob {
 export interface BrowserManageParams {
   action?: BrowserAction
   url?: string | null
-  enabled?: boolean | null
   session_id?: string | null
   profile?: string | null
 }
-export type BrowserAction = 'status' | 'connect' | 'disconnect' | 'use'
+export type BrowserAction = 'status' | 'connect' | 'disconnect'
 export interface BrowserManageResult {
   connected: boolean
   url?: string | null
   messages?: string[] | null
-  browser_use?: boolean | null
 }
 /** Handlers that look a live session up with ``_sessions.get(params.get("session_id"))``: an absent / unknown id falls back to the launch profile's config, so it is never required. */
 export interface _SessionScoped {
@@ -5545,6 +5559,7 @@ export interface McpServerRuntimeRow {
   status: McpRuntimeStatus
   source: McpServerSource
   plugin?: string | null
+  needs_auth?: boolean
 }
 export type McpRuntimeStatus = 'connected' | 'disabled' | 'connecting' | 'failed' | 'lazy' | 'configured'
 /** ``preset`` (catalog id) and/or ``config`` (url/command/args/env/headers/auth/tools); a ``bearer_token`` is written to the profile's .env, only the header template persists. */
@@ -5661,7 +5676,7 @@ export interface PluginToolsetRow {
   label: string
   description: string
 }
-/** ``toggle``: ``key``/``name`` + ``enable``; ``install``: ``identifier``/``repo`` or ``catalog_name`` (+ ``force``, ``enable``, ``ref``); ``update``: ``name`` (+ ``accept_capabilities`` to apply a re-pin that widened the plugin after the user confirmed the ``delta``, + ``force`` to apply an update whose security scan returned caution after the user saw the findings); ``remove``: ``name`` (user installs only); ``settings``: ``key`` + ``values`` (``{setting_key: value}``, non-secret schema keys only); ``presence``: ``names`` (catalog names, answered in that order). */
+/** ``toggle``: ``key``/``name`` + ``enable``; ``install``: ``identifier``/``repo`` or ``catalog_name`` (+ ``force``, ``enable``, ``ref``, ``inspected_sha`` = the commit ``inspect`` read: a custom source with no ``ref`` whose branch moved since is refused); ``inspect``: ``identifier``/``repo`` or ``catalog_name``; ``install_desktop``: ``identifier``/``repo`` (any source ``install`` takes) or ``catalog_name``, always with ``ref`` (the commit ``inspect`` read and the dialog showed; another commit is refused) (+ ``force``) — the desktop half onto the host that serves this client; ``remove_desktop``: ``name`` (+ ``force`` for a package's own half); ``update``: ``name`` (+ ``accept_capabilities`` to apply a re-pin that widened the plugin after the user confirmed the ``delta``, + ``force`` to apply an update whose security scan returned caution after the user saw the findings); ``remove``: ``name`` (user installs only); ``settings``: ``key`` + ``values`` (``{setting_key: value}``, non-secret schema keys only); ``presence``: ``names`` (catalog names, answered in that order). */
 export interface PluginsManageParams {
   profile?: string | null
   action?: PluginsAction
@@ -5673,12 +5688,13 @@ export interface PluginsManageParams {
   catalog_name?: string | null
   force?: boolean | null
   ref?: string | null
+  inspected_sha?: string | null
   accept_capabilities?: boolean | null
   values?: Record<string, unknown> | null
   names?: string[] | null
 }
-export type PluginsAction = 'list' | 'toggle' | 'install' | 'update' | 'remove' | 'settings' | 'onboarding' | 'presence'
-/** ``list`` → ``plugins`` + counts; ``toggle`` → ``ok``/``unchanged``/``restart_required``/``name`` (the canonical key written)/``plugin``; ``install`` → ``hermes_cli.plugins_cmd.dashboard_install_plugin``'s ok payload; ``toggle``/``install``/``update`` that loaded a plugin also carry ``gateway_reloaded`` (the running gateway picked it up and re-wired its handlers) and ``activation`` — the honest split of what is live now vs deferred, so ``restart_required`` is True only when no gateway answered; ``update`` → ``ok``/``unchanged``/``sha``, or ``ok=false`` + ``consent_required`` with the ``delta`` (``{surface: [added...]}``) / ``delta_lines`` a widened pin adds — nothing changed until the client retries with ``accept_capabilities`` — or ``ok=false`` + ``scan_blocked`` with ``scan_verdict`` / ``scan_findings`` (retry a caution verdict with ``force``); ``remove`` → ``ok``/``name`` plus ``cleared_memory_provider`` when the removed plugin was the live ``memory.provider``. */
+export type PluginsAction = 'list' | 'toggle' | 'install' | 'inspect' | 'install_desktop' | 'remove_desktop' | 'update' | 'remove' | 'settings' | 'onboarding' | 'presence'
+/** ``list`` → ``plugins`` + counts; ``toggle`` → ``ok``/``unchanged``/``restart_required``/``name`` (the canonical key written)/``plugin``; ``install`` → ``hermes_cli.plugins_cmd.dashboard_install_plugin``'s ok payload; ``inspect`` → ``ok``/``agent``/``desktop``/``agent_name``/``desktop_name``/``sha`` (the commit read)/``warnings``/``insecure`` or ``ok=false`` + ``error``; ``toggle``/``install``/``update`` that loaded a plugin also carry ``gateway_reloaded`` (the running gateway picked it up and re-wired its handlers) and ``activation`` — the honest split of what is live now vs deferred, so ``restart_required`` is True only when no gateway answered or the running gateway/backend cannot import the plugin's Python dependencies (``activation.missing_dependencies``); ``update`` → ``ok``/``unchanged``/``sha``, or ``ok=false`` + ``consent_required`` with the ``delta`` (``{surface: [added...]}``) / ``delta_lines`` a widened pin adds — nothing changed until the client retries with ``accept_capabilities`` — or ``ok=false`` + ``scan_blocked`` with ``scan_verdict`` / ``scan_findings`` (retry a caution verdict with ``force``); ``remove`` → ``ok``/``name`` plus ``cleared_memory_provider`` when the removed plugin was the live ``memory.provider``. */
 export interface PluginsManageResult {
   plugins?: AgentPluginRow[] | null
   user_count?: number | null
@@ -5709,6 +5725,14 @@ export interface PluginsManageResult {
   written?: string[] | null
   onboarding?: OnboardingCatalogPlugin[] | null
   presence?: CatalogPluginPresence[] | null
+  agent?: boolean | null
+  desktop?: boolean | null
+  agent_name?: string | null
+  desktop_name?: string | null
+  insecure?: boolean | null
+  path?: string | null
+  paired_with_agent?: boolean | null
+  unpaired_from?: string | null
 }
 /** ``methods_tools._plugin_rows`` + ``plugins_cmd_catalog.catalog_row_fields`` provenance. */
 export interface AgentPluginRow {
@@ -5731,6 +5755,7 @@ export interface AgentPluginRow {
   update_target?: string | null
   pinned_sha?: string | null
   settings_schema?: PluginSettingField[] | null
+  tools?: string[]
 }
 export interface PluginServerRow {
   name: string
@@ -5752,13 +5777,15 @@ export interface PluginSettingField {
   has_value?: boolean | null
 }
 export type PluginSettingFieldType = 'string' | 'number' | 'boolean' | 'enum' | 'secret' | 'json'
-/** What a plugin loaded mid-run does NOW vs later (``hermes_cli.plugins_activation``). ``activated_now`` kinds (``{kind: [names]}``): ``gateway_commands`` (slash names), ``locales`` (``<lang>.<surface>`` language-pack layers), ``gateway_transforms`` / ``hooks`` (hook names), ``callbacks`` (platforms / ``slack:<action_id>``) — live in the running gateway once it reloaded (``gateway_reloaded``). ``live_now``: the plugin's MCP servers (connected, with their tools, or the error) and skills, usable in every open chat of the profile from its next turn — the chats also get a note listing them. ``deferred`` kinds: ``tools`` (Python tool names) and ``prompt`` (section ids) apply from the next session. */
+/** What a plugin loaded mid-run does NOW vs later (``hermes_cli.plugins_activation``). ``activated_now`` kinds (``{kind: [names]}``): ``gateway_commands`` (slash names), ``locales`` (``<lang>.<surface>`` language-pack layers), ``gateway_transforms`` / ``hooks`` (hook names), ``callbacks`` (platforms / ``slack:<action_id>``) — live in the running gateway once it reloaded (``gateway_reloaded``). ``live_now``: the plugin's MCP servers (connected, with their tools, or the error) and skills, usable in every open chat of the profile from its next turn — the chats also get a note listing them. ``deferred`` kinds: ``tools`` (Python tool names) and ``prompt`` (section ids) apply from the next session. ``missing_dependencies``: the plugin's declared Python requirements a running process cannot import (installed after it booted, or never); ``missing_in`` names which processes (``gateway``, ``backend`` = the Desktop / dashboard process) — only restarting them loads them. */
 export interface PluginActivation {
   name: string
   key: string
   activated_now?: Record<string, string[]>
   live_now?: PluginLiveNow | null
   deferred?: Record<string, string[]>
+  missing_dependencies?: string[]
+  missing_in?: PluginRestartTarget[]
 }
 export interface PluginLiveNow {
   mcp_servers?: PluginLiveServer[]
@@ -5776,6 +5803,7 @@ export interface PluginLiveSkill {
   name: string
   description?: string
 }
+export type PluginRestartTarget = 'gateway' | 'backend'
 /** One security-scan finding (``tools.plugin_guard``) on a plugin tree the scan blocked. */
 export interface PluginScanFinding {
   pattern_id: string
@@ -6184,6 +6212,59 @@ export interface DefaultsSetResult {
   changed: boolean
   operation_id: string | null
 }
+export interface GroupsAttachmentUploadParams {
+  profile?: string | null
+  room_id: string
+  upload_id: string
+  kind: string
+  name: string
+  mime: string
+  data_base64: string
+}
+export interface RoomAttachment {
+  attachment_id: string
+  kind: string
+  name: string
+  size: number
+  mime: string
+  sha256: string
+  state: string
+  created_at: number
+  idempotent: boolean
+  event_id?: string | null
+  [key: string]: unknown
+}
+export interface GroupsAttachmentDownloadParams {
+  profile?: string | null
+  room_id: string
+  event_id: string
+  attachment_id: string
+}
+export interface RoomAttachmentBytes {
+  attachment_id: string
+  kind: string
+  name: string
+  size: number
+  mime: string
+  sha256: string
+  state: string
+  created_at: number
+  idempotent: boolean
+  event_id?: string | null
+  data_base64: string
+  [key: string]: unknown
+}
+export interface GroupsDiscardParams {
+  profile?: string | null
+  room_id: string
+  member_id: string
+  task_id: string
+  execution_generation: number
+}
+export interface GroupsDiscardResult {
+  discarded?: boolean
+  task: RoomTaskReceipt
+}
 export interface CanonicalShellExecParams {
   session_id: string
   command: string
@@ -6284,8 +6365,8 @@ export interface CanonicalSessionInfo {
   enabled_toolsets?: string[] | null
   tool_availability?: Record<string, unknown> | null
   tool_availability_warnings?: string[] | null
-  browser_backend_notice?: string | null
   unknown_toolsets?: string[] | null
+  usage?: Usage | null
   source: string
   model?: string | null
   lazy: boolean
@@ -6530,59 +6611,6 @@ export interface WorkerPersistParams {
 }
 /** The operation's durable receipt (``message_id`` for an append, delegation results, …). */
 export type WorkerPersistResult = Record<string, unknown>
-export interface GroupsAttachmentUploadParams {
-  profile?: string | null
-  room_id: string
-  upload_id: string
-  kind: string
-  name: string
-  mime: string
-  data_base64: string
-}
-export interface RoomAttachment {
-  attachment_id: string
-  kind: string
-  name: string
-  size: number
-  mime: string
-  sha256: string
-  state: string
-  created_at: number
-  idempotent: boolean
-  event_id?: string | null
-  [key: string]: unknown
-}
-export interface GroupsAttachmentDownloadParams {
-  profile?: string | null
-  room_id: string
-  event_id: string
-  attachment_id: string
-}
-export interface RoomAttachmentBytes {
-  attachment_id: string
-  kind: string
-  name: string
-  size: number
-  mime: string
-  sha256: string
-  state: string
-  created_at: number
-  idempotent: boolean
-  event_id?: string | null
-  data_base64: string
-  [key: string]: unknown
-}
-export interface GroupsDiscardParams {
-  profile?: string | null
-  room_id: string
-  member_id: string
-  task_id: string
-  execution_generation: number
-}
-export interface GroupsDiscardResult {
-  discarded?: boolean
-  task: RoomTaskReceipt
-}
 export interface CanonicalCreateParams {
   profile?: string | null
   started_by_session?: string | null
@@ -6624,6 +6652,7 @@ export interface CanonicalSnapshot {
   session_id: string
   stored_session_id: string
   messages: TranscriptMessage[]
+  messages_omitted?: boolean | null
   display_messages?: TranscriptMessage[] | null
   message_count: number
   running: boolean
@@ -6638,6 +6667,7 @@ export interface CanonicalSnapshot {
   info: CanonicalSnapshotInfo
   pending_connection?: ConnectionRequestPayload | null
   todo_state?: TodoState | null
+  open_requests?: OpenRequestEntry[] | null
 }
 export interface CanonicalPendingAdmission {
   admission_id: string
@@ -6680,8 +6710,8 @@ export interface CanonicalSnapshotInfo {
   enabled_toolsets?: string[] | null
   tool_availability?: Record<string, unknown> | null
   tool_availability_warnings?: string[] | null
-  browser_backend_notice?: string | null
   unknown_toolsets?: string[] | null
+  usage?: Usage | null
   desktop_protocol: 'hermes-gateway-v1'
   source?: string | null
   created?: boolean | null
@@ -6796,6 +6826,7 @@ export interface CanonicalEventsResult {
   truncated: boolean
   snapshot_required: boolean
   count: number
+  open_requests?: OpenRequestEntry[] | null
 }
 export interface CanonicalReplayEvent {
   type: string
@@ -7427,6 +7458,7 @@ export interface MessageStartPayload {
   display_text?: string | null
   notification_category?: string | null
   text?: string | null
+  turn_id?: string | null
 }
 /** Display-only notice identity; never replaces the user-role model input. */
 export interface NoticePresentation {
@@ -7439,11 +7471,14 @@ export interface NoticePresentation {
   failed_count?: number | null
   duration_seconds?: number | null
 }
-/** ``message.delta``. A session-authority local-viewer turn also publishes ``text: null``: the reply segment boundary (the agent's ``stream_delta_callback(None)``, before tool lines) that closes the classic CLI's reply box. Every other viewer ignores an empty chunk. */
+/** ``message.delta``. A session-authority local-viewer turn also publishes ``text: null``: the reply segment boundary (the agent's ``stream_delta_callback(None)``, before tool lines) that closes the classic CLI's reply box. Every other viewer ignores an empty chunk. A prompt turn stamps ``turn_id`` + ``segment`` (interim seals before it) + ``offset`` (UTF-16 code units of that segment already sent): a client drops a re-sent chunk it already applied. */
 export interface MessageDeltaPayload {
   text: string | null
   rendered?: string | null
   verbose?: boolean | null
+  turn_id?: string | null
+  segment?: number | null
+  offset?: number | null
 }
 /** ``prompt_turn._invoke_agent._stream`` (message.delta: ``text`` + optional ``rendered``), ``agent_callbacks._agent_cbs`` (reasoning.delta / thinking.delta), ``tool_progress._progress_reasoning`` (reasoning.available). ``verbose`` rides only when the session's verbose reasoning mode is on. */
 export interface StreamDeltaPayload {
@@ -7455,6 +7490,8 @@ export interface StreamDeltaPayload {
 export interface MessageInterimPayload {
   text: string
   already_streamed: boolean
+  turn_id?: string | null
+  segment?: number | null
 }
 /** ``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` / ``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) / ``compute_host_bridge`` (``text`` + ``status``). */
 export interface MessageCompletePayload {
@@ -7789,20 +7826,6 @@ export interface BrowserProgressPayload {
   message: string
   level: string
 }
-/** ``gateway/browser_control_broker.py`` FRAME_COMMAND params. */
-export interface BrowserControllerCommandPayload {
-  command_id: string
-  action: string
-  arguments: Record<string, unknown>
-  controller_id?: string | null
-  browser_profile_id?: string | null
-  tool_call_id?: string | null
-}
-/** ``gateway/browser_control_broker.py::_cancel_frame``. */
-export interface BrowserControllerCancelPayload {
-  command_id: string
-  tool_call_id?: string | null
-}
 /** ``methods_voice._vr_on_status``; states come from the recorder (idle / listening / transcribing …). */
 export interface VoiceStatusPayload {
   state: string
@@ -7904,15 +7927,7 @@ export interface RpcMethods {
   'bot_relay.reply': { params: BotRelayReplyParams; result: OkResult }
   /** Replace this gateway's view of agents on other connections; answers the accepted row count. */
   'bot_relay.roster.sync': { params: BotRelayRosterSyncParams; result: BotRelayRosterSyncResult }
-  /** Hard-detach only the controller owned by this authenticated transport. */
-  'browser.controller.detach': { params: BrowserControllerParams; result: BrowserControllerDetachResult }
-  /** Acknowledge a heartbeat only for this transport's own attached controller. */
-  'browser.controller.heartbeat': { params: BrowserControllerParams; result: OkResult }
-  /** Attach this connection as the browser controller for one session; fails closed (4403). */
-  'browser.controller.register': { params: BrowserControllerRegisterParams; result: BrowserControllerRegisterResult }
-  /** Deliver one command result to the broker; accepted is false for unknown or settled command ids. */
-  'browser.controller.result': { params: BrowserControllerResultParams; result: BrowserControllerResultResult }
-  /** Inspect, attach to, or drop the CDP browser the tools use, or switch Browser Use mode (``use``, applies to new sessions); ``messages`` narrate a connect. */
+  /** Inspect, attach to, or drop the CDP browser the tools use; ``messages`` narrate a connect. */
   'browser.manage': { params: BrowserManageParams; result: BrowserManageResult }
   /** Lock one answer of a batch clarify request (editable until every question is locked). */
   'clarify.lock': { params: ClarifyLockParams; result: ClarifyLockResult }
@@ -8018,14 +8033,22 @@ export interface RpcMethods {
   'gateway.ping': { params: PingParams; result: GatewayPingResult }
   /** Resolve one exact pending approval raised by a local or peer room member. */
   'groups.approve': { params: GroupsApproveParams; result: GroupsApproveResult }
+  /** Read one committed attachment for a live room viewer. */
+  'groups.attachment.download': { params: GroupsAttachmentDownloadParams; result: RoomAttachmentBytes }
+  /** Store one attachment for a later groups.send manifest (idempotent per upload_id). */
+  'groups.attachment.upload': { params: GroupsAttachmentUploadParams; result: RoomAttachment }
   /** Describe the hosted-room protocol implemented by this gateway. */
   'groups.capabilities': { params: GroupsCapabilitiesParams; result: GroupsCapabilitiesResult }
+  /** Set one hosted room's purpose and shared notes; members see them from the next message. */
+  'groups.context': { params: GroupsContextParams; result: GroupsContextResult }
   /** Create a hosted room idempotently; authority is this gateway's stable install identity. */
   'groups.create': { params: GroupsCreateParams; result: GroupsCreateResult }
   /** Fence this gateway's stale room authority against a proven newer epoch. */
   'groups.demote': { params: GroupsDemoteParams; result: GroupsDemoteResult }
   /** Permanently tombstone a hosted room id after stopping its work and revoking peer routes. */
   'groups.disband': { params: GroupsDisbandParams; result: GroupsDisbandResult }
+  /** Discard one indeterminate room task after explicit user confirmation. */
+  'groups.discard': { params: GroupsDiscardParams; result: GroupsDiscardResult }
   /** List rooms hosted by this gateway, most recently changed first. */
   'groups.list': { params: GroupsListParams; result: GroupsListResult }
   /** A monotonic room-log delta after since_seq, bounded by count and page bytes. */
@@ -8408,6 +8431,8 @@ export interface RpcMethods {
   'subagent.interrupt': { params: SubagentIdParams; result: SubagentInterruptResult }
   /** Live children owned by this session (other sessions' children never leak). */
   'subagent.list': { params: SessionParams; result: SubagentListResult }
+  /** Per-conversation counts of live delegated children and running background processes, limited to conversations stored in the named profile (launch profile when omitted). Needs no attached session. */
+  'subagent.roster': { params: ProfileParams; result: SubagentRosterResult }
   /** Queue steering text into a live delegated child owned by this session. */
   'subagent.steer': { params: SubagentSteerParams; result: SubagentSteerResult }
   /** Last 16KB of an owned child's live transcript. */
@@ -8501,10 +8526,6 @@ export const RPC_METHODS = [
   'bot_relay.outbox.drain',
   'bot_relay.reply',
   'bot_relay.roster.sync',
-  'browser.controller.detach',
-  'browser.controller.heartbeat',
-  'browser.controller.register',
-  'browser.controller.result',
   'browser.manage',
   'clarify.lock',
   'cli.exec',
@@ -8561,10 +8582,14 @@ export const RPC_METHODS = [
   'gateway.capabilities',
   'gateway.ping',
   'groups.approve',
+  'groups.attachment.download',
+  'groups.attachment.upload',
   'groups.capabilities',
+  'groups.context',
   'groups.create',
   'groups.demote',
   'groups.disband',
+  'groups.discard',
   'groups.list',
   'groups.log',
   'groups.peer.invite',
@@ -8770,6 +8795,7 @@ export const RPC_METHODS = [
   'spawn_tree.save',
   'subagent.interrupt',
   'subagent.list',
+  'subagent.roster',
   'subagent.steer',
   'subagent.tail',
   'subscription.change',
@@ -8847,7 +8873,7 @@ export interface CanonicalRpcMethods {
   /** Native-owner only: admit the dispatcher's current claim on a kanban task. */
   'kanban.run': { params: KanbanRunParams; result: KanbanRunResult }
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
-  /** Retire a still-queued admission; a started one is unaffected. */
+  /** Retire a queued admission; a started one is interrupted in the same call. */
   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
   /** Current receipt of one admission the caller submitted (or controls). */
   'prompt.receipt': { params: PromptReceiptParams; result: PromptReceiptResult }
@@ -9016,10 +9042,6 @@ export interface BackendGatewayEventMap {
   'billing.step_up.verification': BillingStepUpVerificationPayload
   /** A bot-relay outbox envelope is queued; drain it. */
   'bot_relay.outbox.pending': ChangeSignalPayload
-  /** Withdraw a pending controller command. */
-  'browser.controller.cancel': BrowserControllerCancelPayload
-  /** Dispatch one browser action to the attached controller. */
-  'browser.controller.command': BrowserControllerCommandPayload
   /** Browser (CDP) connect / install progress line. */
   'browser.progress': BrowserProgressPayload
   /** A /btw side question was answered. */
@@ -9175,8 +9197,6 @@ export const GATEWAY_EVENT_TYPES = [
   'background.complete',
   'billing.step_up.verification',
   'bot_relay.outbox.pending',
-  'browser.controller.cancel',
-  'browser.controller.command',
   'browser.progress',
   'btw.complete',
   'connection.request',
