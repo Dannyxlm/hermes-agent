@@ -42,6 +42,7 @@ function harness() {
   let currentTasks = [task]
   let isCurrent = true
   let unknown = false
+  let echoThread: string | null = null
   let eventCounter = 0
   const accepted = new Map<string, HostedEvent>()
 
@@ -86,6 +87,10 @@ function harness() {
       }
 
       if (!existing) {
+        if (echoThread !== null) {
+          event.payload.thread_id = echoThread
+        }
+
         accepted.set(String(params.event_id), event)
         events.push(event)
       }
@@ -147,6 +152,9 @@ function harness() {
     setCurrent: (value: boolean) => {
       isCurrent = value
     },
+    setEchoThread: (value: string) => {
+      echoThread = value
+    },
     setUnknown: (value: boolean) => {
       unknown = value
     }
@@ -154,6 +162,67 @@ function harness() {
 }
 
 describe('hosted-room sends', () => {
+  it.each(['standup', 'campfire'] as const)(
+    'accepts main normalization in a marked %s and allows the next post',
+    async kind => {
+      const h = harness()
+      const meeting = { ...room, meeting: { kind, schedule_local: '08:15', timezone: 'UTC' } }
+      h.setRoom(meeting)
+      h.setEchoThread('main')
+      await h.controller.open(meeting)
+
+      expect(await h.controller.send('First post', ['iris'])).toBe(true)
+      expect(h.controller.state.get().pending).toBeNull()
+      expect(h.storage.size).toBe(0)
+      expect(await h.controller.send('Second post', ['vox'])).toBe(true)
+      expect(h.controller.state.get().issue).toBeNull()
+      expect(h.events).toHaveLength(2)
+      expect(h.events.map(event => event.payload.thread_id)).toEqual(['main', 'main'])
+    }
+  )
+
+  it('accepts the normalized echo when retrying a persisted pre-normalization operation', async () => {
+    const h = harness()
+    const meeting = { ...room, meeting: { kind: 'standup' as const, schedule_local: '08:15', timezone: 'UTC' } }
+    h.setRoom(meeting)
+    h.setEchoThread('main')
+    h.setUnknown(true)
+    await h.controller.open(meeting)
+    expect(await h.controller.send('Keep these exact bytes', ['iris'])).toBe(false)
+    const original = h.controller.state.get().pending!
+    expect(original.payload.thread_id).not.toBe('main')
+    h.controller.dispose()
+    const reopened = new HostedRoomsController(h.deps)
+    await reopened.open(meeting)
+    h.setUnknown(false)
+    expect(await reopened.retry()).toBe(true)
+    expect(reopened.state.get().pending).toBeNull()
+    expect(h.storage.size).toBe(0)
+    expect(h.events).toHaveLength(1)
+    expect(
+      h.request.mock.calls.filter(([method]) => method === 'groups.send').map(([, params]) => params?.payload)
+    ).toEqual([original.payload, original.payload])
+  })
+
+  it.each([
+    { meeting: undefined, echo: 'main' },
+    { meeting: null, echo: 'main' },
+    { meeting: { kind: 'standup' as const, schedule_local: '08:15', timezone: 'UTC' }, echo: 'unexpected-thread' }
+  ])(
+    'keeps an unconfirmed receipt for a thread mismatch outside the marked-main exception: %j',
+    async ({ meeting, echo }) => {
+      const h = harness()
+      const selected = { ...room, meeting }
+      h.setRoom(selected)
+      h.setEchoThread(echo)
+      await h.controller.open(selected)
+      expect(await h.controller.send('Do not confirm a different thread', ['iris'])).toBe(false)
+      expect(h.controller.state.get().issue).toBe('unknownDelivery')
+      expect(h.controller.state.get().pending).not.toBeNull()
+      expect(h.storage.size).toBe(1)
+    }
+  )
+
   it('persists the immutable operation before dispatch and reuses it after a lost acknowledgement and reload', async () => {
     const h = harness()
     await h.controller.open(room)
