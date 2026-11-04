@@ -127,6 +127,20 @@ def test_host_owner_wake_uses_socket_peer_without_forwarding_os_subject(wake_own
     assert wake_owner.subjects == [None]
 
 
+def test_unstamped_host_wake_keeps_its_binding_after_owner_adoption(wake_owner):
+    with SessionDB(wake_owner.home / 'state.db') as db:
+        db._write_sql('UPDATE sessions SET user_id=NULL WHERE id=?', ('chat',))
+    path, record = queue(wake_owner)
+    assert record['wake_subject'] is None
+    wake_owner.ready = True
+    first = pending._drain_one(path)
+    assert first['status'] == 'transferred', first
+    again = pending._drain_one(path)
+    assert again['status'] == 'transferred', again
+    assert again['admission_id'] == first['admission_id']
+    assert wake_owner.subjects == [None, None]
+
+
 def test_login_owned_tui_wake_reaches_real_admission(wake_owner):
     path, _ = queue(wake_owner)
     wake_owner.ready = True
