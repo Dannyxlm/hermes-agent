@@ -46,13 +46,14 @@ def unbind_native_transport(authority, actor):
 
 
 def _can_adopt_history(authority, actor, row):
-    from gateway.owner_identity import same_owner
+    from gateway.owner_identity import host_owner_subject, same_owner
     if getattr(authority, '_native_legacy_transports', {}).get(actor.transport_id) == actor:
         return True
-    # Wakes may adopt only history already stamped for their own principal; they
-    # never inherit native transport authority over an arbitrary unbound row.
+    # Named wakes need an exact owner stamp. Only the attested host peer may
+    # resume old unstamped local history; foreign stamps are never adopted.
     return (getattr(authority, '_wake_legacy_transports', {}).get(actor.transport_id) == actor
-            and same_owner(row.get('user_id'), actor.subject))
+            and (same_owner(row.get('user_id'), actor.subject)
+                 or (not row.get('user_id') and actor.subject == host_owner_subject())))
 
 
 def require_history_claim(authority, conn, actor, sid):
@@ -67,6 +68,10 @@ def require_history_claim(authority, conn, actor, sid):
     own_profile = row['profile_name'] in (None, '', authority.db._own_profile_name() or 'default')
     if own_profile and _owner_user(row) and same_owner(row['user_id'], actor.subject):
         return  # Its owner (a login stamp is the machine owner's); authorize_history re-checks it.
+    from hermes_state_local_migration import legacy_history_row
+    if (own_profile and not row['user_id'] and legacy_history_row(dict(row))
+            and _can_adopt_history(authority, actor, dict(row))):
+        return  # Only a host-owner wake may claim unstamped local history.
     if getattr(authority, '_native_legacy_transports', {}).get(actor.transport_id) != actor:
         raise RuntimeStoreError('permission_denied')
 

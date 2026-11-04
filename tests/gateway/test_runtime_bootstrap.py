@@ -91,12 +91,18 @@ def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind
     with SessionDB(tmp_path / 'state.db') as db:
         db.create_session('foreign', 'cli', user_id='uid:99999999')
         db.create_session('own', 'tui', user_id=subject)
+        db.create_session('unstamped', 'cli')
         authority = SimpleNamespace(db=db, profile_id=str(tmp_path), instance_id='fixture')
         bind_native_transport(authority, actor, identity)
         with db._read_ctx() as conn:
             with pytest.raises(RuntimeStoreError, match='permission_denied'):
                 require_history_claim(authority, conn, actor, 'foreign')
             require_history_claim(authority, conn, actor, 'own')
+            if subject_kind == 'host-owner':
+                require_history_claim(authority, conn, actor, 'unstamped')
+            else:
+                with pytest.raises(RuntimeStoreError, match='permission_denied'):
+                    require_history_claim(authority, conn, actor, 'unstamped')
         with pytest.raises(RuntimeStoreError, match='not_found'):
             adopt_legacy_session(authority, actor, db.get_session('foreign'))
         unbind_native_transport(authority, actor)
