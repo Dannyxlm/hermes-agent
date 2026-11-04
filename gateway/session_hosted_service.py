@@ -79,7 +79,11 @@ class CanonicalHostedRoomService(HostedControls, HostedRoomService):
                            and t['payload'].get('attachments', []) == (params.get('attachments') or [])))]
             if len(matches) != 1:
                 raise RuntimeStoreError('permission_denied')
-            payload = matches[0]['payload']
+            matched_task = matches[0]
+            payload = matched_task['payload']
+            if operation == 'execute':
+                from gateway.hosted_room_memory import local_memory_context
+                result['memory_context'] = local_memory_context(self, matched_task)
             if operation == 'attachment':
                 # Bytes only: the prompt/manifest already attested for the submit would
                 # otherwise compete with the chunk for the bounded response line.

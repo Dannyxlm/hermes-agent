@@ -126,7 +126,9 @@ def _group(authority, actor, method, params, *, host_scope=False, automation=Fal
             raise RuntimeStoreError('runtime_coordination_required')
         if not params.get('room_id'):
             raise RuntimeStoreError('invalid_params')
-        return _execution_control(service, method, params, automation=automation)
+        from gateway.hosted_room_memory import authenticated_room_trigger
+        with authenticated_room_trigger(actor.subject, automation):
+            return _execution_control(service, method, params, automation=automation)
 
     def capabilities():
         from gateway.session_hosted_members import member_roster

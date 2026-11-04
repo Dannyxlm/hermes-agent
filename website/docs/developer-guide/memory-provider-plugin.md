@@ -187,6 +187,26 @@ each operation's previous content reflects earlier operations in that batch.
 Older Hermes versions can omit `previous_content`. Providers that require exact
 identity should skip destructive mirroring when it is absent.
 
+### Hosted-room memory provenance
+
+A `bot_room` platform label, owner-looking sender ID or prompt prefix is not
+memory-write authority. During a canonical member admission, providers may read
+`agent.hosted_room_memory.current_hosted_room_memory(session_id, profile_id)`.
+It returns `None` outside that exact executing session/profile, or a version-1
+server description with `room_id`, `profiles` (the entire seated roster),
+`member_profile` and `trigger` (`owner` or `team-room`). Read it at write time;
+never cache it as a session-wide permission or accept an equivalent client field.
+
+The canonical `groups.send` handler records an authenticated trigger receipt in
+the same transaction as the new user event. Execution revalidates ownership,
+the running task/generation and exact admitted input, then requires every member
+to resolve to a local profile. Local profile-daemon hops obtain the description
+through the OS-authenticated source-owner socket. Historical events without a
+receipt, peer-containing rosters and missing local profiles are unattested.
+Providers still choose their own trusted-profile allowlist and memory policy;
+this description grants neither owner authorship nor approval/egress authority.
+Older hosts lack this optional API and should remain proposal-only.
+
 ### Oversized prefetch results
 
 External `prefetch()` results are returned in full by default, preserving the
