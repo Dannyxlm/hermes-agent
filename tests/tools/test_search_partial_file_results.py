@@ -52,9 +52,16 @@ def test_unreadable_subtree_preserves_matches_or_fails_clearly(
         locked.chmod(0o700)
 
     if not readable_matches:
-        assert result.get("error"), result
+        # A permission-only traversal is a valid empty readable-scope result, not
+        # an invocation failure. Keep the skipped scope explicit (v0.22.7 policy).
+        assert not result.get("error"), result
         assert not result.get("files"), result
         assert result["total_count"] == 0
+        assert str(locked) in result["warning"]
+        assert "unreadable" in result["warning"]
+        assert "Nothing matched in the readable part" in result["warning"]
+        if multi_root:
+            assert "searched 2" in result["warning"]
         return
     assert not result.get("error"), result
     assert result["files"] == [str(readable)]

@@ -4,7 +4,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { en } from '@/i18n/en'
 import { installBrowserDesktopBridge } from '@/lib/browser-desktop-bridge'
-import { $notifications } from '@/store/notifications'
 import { deferred } from '@/test/deferred'
 import { clearWebappSession, seedWebappSession } from '@/test/webapp-session'
 
@@ -792,18 +791,13 @@ describe('GatewaySettings', () => {
     render(<GatewaySettings />)
     fireEvent.click(await screen.findByRole('button', { name: 'Test SSH' }))
 
-    try {
-      await waitFor(() =>
-        expect($notifications.get()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ kind: 'error', message: expect.stringContaining('Path was not found') })
-          ])
-        )
+    await waitFor(() =>
+      expect(notifyError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: cause }),
+        expect.any(String)
       )
-      expect($notifications.get().some((n: { message?: string }) => n.message === 'SSH connection failed.')).toBe(false)
-    } finally {
-      $notifications.set([])
-    }
+    )
+    expect(notifyError.mock.calls[0][0].message).not.toBe('SSH connection failed.')
   })
 
   it('surfaces the Tailscale browser-check guidance for an interactive-auth SSH test failure', async () => {
