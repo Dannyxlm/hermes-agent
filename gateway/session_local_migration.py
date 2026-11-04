@@ -20,6 +20,13 @@ def bind_native_transport(authority, actor, identity):
     # A scheduled wake retains create for resuming its own unbound history, not
     # the native owner's permission to import arbitrary routeless legacy rows.
     if identity.get('bootstrap_purpose') == 'session-wake':
+        if (identity.get('provider') == 'local' and identity.get('native_bootstrap')
+                and identity.get('profile_id') == actor.profile_id == authority.profile_id
+                and identity.get('instance_id') == authority.instance_id
+                and {'session:read', 'session:create'} <= actor.capabilities):
+            if not hasattr(authority, '_wake_legacy_transports'):
+                authority._wake_legacy_transports = {}
+            authority._wake_legacy_transports[actor.transport_id] = actor
         return
     # The machine owner signed in to the Webapp is the same person native Desktop is (owner_identity).
     from gateway.owner_identity import host_owner_subject
@@ -35,6 +42,17 @@ def bind_native_transport(authority, actor, identity):
 
 def unbind_native_transport(authority, actor):
     getattr(authority, '_native_legacy_transports', {}).pop(actor.transport_id, None)
+    getattr(authority, '_wake_legacy_transports', {}).pop(actor.transport_id, None)
+
+
+def _can_adopt_history(authority, actor, row):
+    from gateway.owner_identity import same_owner
+    if getattr(authority, '_native_legacy_transports', {}).get(actor.transport_id) == actor:
+        return True
+    # Wakes may adopt only history already stamped for their own principal; they
+    # never inherit native transport authority over an arbitrary unbound row.
+    return (getattr(authority, '_wake_legacy_transports', {}).get(actor.transport_id) == actor
+            and same_owner(row.get('user_id'), actor.subject))
 
 
 def require_history_claim(authority, conn, actor, sid):
@@ -249,7 +267,7 @@ def adopts_client_history(authority, actor, row):
     from hermes_state_local_migration import client_history_row, validate_legacy_row
     live = authority.sessions.get(row['id'])
     if (not client_history_row(row) or (live is not None and not is_history_mount(live))
-            or getattr(authority, '_native_legacy_transports', {}).get(actor.transport_id) != actor):
+            or not _can_adopt_history(authority, actor, row)):
         return False
     try:
         validate_legacy_row(authority.db, row, subject=actor.subject)
@@ -261,7 +279,7 @@ def adopts_client_history(authority, actor, row):
 def adopt_legacy_session(authority, actor, row):
     if actor.profile_id != authority.profile_id:
         raise RuntimeStoreError('profile_mismatch')
-    if (getattr(authority, '_native_legacy_transports', {}).get(actor.transport_id) != actor
+    if (not _can_adopt_history(authority, actor, row)
             or not {'session:read', 'session:create'} <= actor.capabilities):
         raise RuntimeStoreError('not_found')
     from hermes_state_local_migration import legacy_creation_source, validate_legacy_row

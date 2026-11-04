@@ -78,7 +78,8 @@ def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind
     from gateway.owner_identity import host_owner_subject
     from gateway.session_contract import Principal
     from gateway.session_identity import authenticated_subject
-    from gateway.session_local_migration import bind_native_transport, require_history_claim
+    from gateway.session_local_migration import (bind_native_transport, require_history_claim,
+                                                 adopt_legacy_session, unbind_native_transport)
     from hermes_state import SessionDB
     from hermes_state_runtime import RuntimeStoreError
 
@@ -96,6 +97,11 @@ def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind
             with pytest.raises(RuntimeStoreError, match='permission_denied'):
                 require_history_claim(authority, conn, actor, 'foreign')
             require_history_claim(authority, conn, actor, 'own')
+        with pytest.raises(RuntimeStoreError, match='not_found'):
+            adopt_legacy_session(authority, actor, db.get_session('foreign'))
+        unbind_native_transport(authority, actor)
+        with pytest.raises(RuntimeStoreError, match='not_found'):
+            adopt_legacy_session(authority, actor, db.get_session('own'))
         # Interactive native bootstrap still owns the legacy import lane.
         bind_native_transport(authority, actor, {**identity, 'bootstrap_purpose': 'interactive'})
         with db._read_ctx() as conn:
