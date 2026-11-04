@@ -25,14 +25,14 @@ class TestSavedLoginProcess:
             thread.join(2)
 
     def test_empty_rpc_registry_fills_exact_published_target_once(self, desktop, door, signin, signin_cdp, monkeypatch, caplog):
-        from tools import browser_supervisor, browser_tool_session
+        from tools import browser_supervisor, browser_use_cli
         caplog.set_level(10)
         result, done, thread = start_producer(desktop.home)
         state = wait_until(lambda: _Producer._pending(desktop, 'default'))
         # This is the reviewer's cross-process fixture: no producer supervisor in the RPC process.
         monkeypatch.setattr(browser_supervisor.SUPERVISOR_REGISTRY, 'get', lambda task: None)
         daemon = Mock(return_value={'success': False})
-        monkeypatch.setattr(browser_tool_session, '_run_browser_command', daemon)
+        monkeypatch.setattr(browser_use_cli, '_run_cli_killing_process_group', daemon)
         receipt = _Producer._action(desktop, 'default', 'saved_login', 'choose',
             request_id=state['signin']['id'], request_revision=1, login_handle=signin.meta.id)
         assert done.wait(10)
