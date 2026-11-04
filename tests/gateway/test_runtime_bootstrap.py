@@ -72,6 +72,36 @@ def test_wake_grant_preserves_exact_login_without_owner_or_host_authority():
         redeem_session_ticket(store, ticket)
 
 
+@pytest.mark.parametrize('subject_kind', ['login', 'host-owner'])
+def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind):
+    from types import SimpleNamespace
+    from gateway.owner_identity import host_owner_subject
+    from gateway.session_contract import Principal
+    from gateway.session_identity import authenticated_subject
+    from gateway.session_local_migration import bind_native_transport, require_history_claim
+    from hermes_state import SessionDB
+    from hermes_state_runtime import RuntimeStoreError
+
+    subject = (host_owner_subject() if subject_kind == 'host-owner' else
+               authenticated_subject({'provider': 'basic', 'user_id': 'alice'}))
+    actor = Principal(subject, str(tmp_path), frozenset({'session:create', 'session:read'}), 'wake')
+    identity = {'provider': 'local', 'profile_id': str(tmp_path), 'instance_id': 'fixture',
+                'native_bootstrap': True, 'bootstrap_purpose': 'session-wake'}
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('foreign', 'cli', user_id='uid:99999999')
+        db.create_session('own', 'tui', user_id=subject)
+        authority = SimpleNamespace(db=db, profile_id=str(tmp_path), instance_id='fixture')
+        bind_native_transport(authority, actor, identity)
+        with db._read_ctx() as conn:
+            with pytest.raises(RuntimeStoreError, match='permission_denied'):
+                require_history_claim(authority, conn, actor, 'foreign')
+            require_history_claim(authority, conn, actor, 'own')
+        # Interactive native bootstrap still owns the legacy import lane.
+        bind_native_transport(authority, actor, {**identity, 'bootstrap_purpose': 'interactive'})
+        with db._read_ctx() as conn:
+            require_history_claim(authority, conn, actor, 'foreign')
+
+
 def test_ticket_atomic_single_use_profile_purpose_expiry_and_capacity(monkeypatch):
     from gateway.runtime_bootstrap import TicketStore
     clock = [0.0]

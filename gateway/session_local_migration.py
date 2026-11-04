@@ -17,6 +17,10 @@ from hermes_state_runtime import RuntimeStoreError
 
 
 def bind_native_transport(authority, actor, identity):
+    # A scheduled wake retains create for resuming its own unbound history, not
+    # the native owner's permission to import arbitrary routeless legacy rows.
+    if identity.get('bootstrap_purpose') == 'session-wake':
+        return
     # The machine owner signed in to the Webapp is the same person native Desktop is (owner_identity).
     from gateway.owner_identity import host_owner_subject
     native = (identity.get('provider') == 'local' and identity.get('profile_id') == authority.profile_id
