@@ -8,7 +8,7 @@ from hermes_state_runtime import RuntimeStoreError
 
 def _same_read_owner(conn, anchor, session_id):
     from hermes_state_mutation_binding import (
-        _history_sources, _login_label, _owner_user, history_binding, same_history_owner,
+        _history_row, _login_label, _owner_user, history_binding, same_history_owner,
     )
     if same_history_owner(conn, anchor['id'], session_id):
         return True
@@ -23,7 +23,7 @@ def _same_read_owner(conn, anchor, session_id):
     if row is None or row['session_key'] or row['chat_id'] or row['origin_json']:
         return False
     _profile_id, subject = json.loads(binding)
-    return (row['source'] in _history_sources()
+    return (_history_row(row)
             and _owner_user(row) in (None, '', subject, _login_label(subject)))
 
 
