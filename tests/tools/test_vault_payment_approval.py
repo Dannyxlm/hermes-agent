@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 import tools.approval as approval_module
+from agent.vault_backends.base import LoginBackend
 from tools import approval_context
 from tools.approval import clear_session
 from tools.approval_context import set_current_session_key
@@ -33,6 +34,7 @@ def _meta(**kw):
 
 
 class _Backend:
+    fill_context = LoginBackend.fill_context
     name, display_name, needs_unlock = "onepassword", "1Password", True
 
     def __init__(self, meta, limit_text=None):
