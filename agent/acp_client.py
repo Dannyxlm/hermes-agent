@@ -80,6 +80,8 @@ def _acp_supported(command: str, args: list[str]) -> bool | None:
             errors="replace", timeout=5,
             stdin=subprocess.DEVNULL,
             check=False,
+            # Same Tier-1-scrubbed environment as the real ACP child (_spawn), never the full parent env.
+            env=_build_subprocess_env(),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None

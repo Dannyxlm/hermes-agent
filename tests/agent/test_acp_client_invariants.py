@@ -493,6 +493,20 @@ def test_probe_true_when_help_advertises_acp():
         assert _acp_supported("acme-agent", ["--acp", "--stdio"]) is True
 
 
+def test_probe_runs_help_with_the_scrubbed_child_env(monkeypatch):
+    # The --help probe executes the configured ACP binary too, so it must get the same Tier-1-scrubbed
+    # environment as the real ACP child, never the gateway's full environment.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "synthetic-tier1-value")
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-tier1-value")
+    _ACP_PROBE_CACHE.pop("acme-scrub-agent", None)
+    with patch("agent.acp_client.subprocess.run", return_value=_completed(stdout="Usage: acme [--acp]")) as run:
+        assert _acp_supported("acme-scrub-agent", ["--acp"]) is True
+    env = run.call_args.kwargs.get("env")
+    assert env is not None, "probe inherited the parent environment"
+    assert "TELEGRAM_BOT_TOKEN" not in env and "GITHUB_TOKEN" not in env
+    assert env.get("HOME")
+
+
 def test_probe_false_when_help_lacks_acp_and_run_prompt_fast_fails(tmp_path):
     with patch("agent.acp_client.subprocess.run", return_value=_completed(stdout="Usage: other [--print] [--model]")), \
             pytest.raises(RuntimeError, match="ACP transport not supported"):
