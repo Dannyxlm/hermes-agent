@@ -2296,7 +2296,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         )
         self._current_id = None
         next_entry, _pending = self._select_unlocked(refresh=False, model=model)
-        if next_entry is not None and available_count == 1:
+        if next_entry is not None and len(self._available_entries(model=model)[0]) == 1:
             # A single-entry pool cannot rotate: returning its only entry would
             # report a recovery without changing the credential, and the
             # caller retries the same 401 indefinitely.
@@ -2391,7 +2391,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
     def acquire_lease(self, credential_id: Optional[str] = None, *, model: Optional[str] = None) -> Optional[str]:
         """Acquire a soft lease on a credential.
 
-        With *model*, validate even an explicit id against its availability. Otherwise
+        Validate even an explicit id against availability (model-scoped when supplied). Otherwise
         prefer the least-leased available entry (priority breaks ties), including
         above the soft cap rather than blocking.
         """

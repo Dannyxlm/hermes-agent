@@ -136,3 +136,50 @@ def test_text_auto_fallback_keeps_the_destination_model(auth_store):
         })
     assert client is not None
     assert model == "claude-haiku-4-5-20251001"
+
+
+def test_eager_rate_limit_recovery_uses_requested_model(auth_store):
+    import run_agent
+
+    pool = load_pool("anthropic")
+    assert run_agent._pool_may_recover_from_rate_limit(pool, model="claude-fable-5-1") is False
+    assert run_agent._pool_may_recover_from_rate_limit(pool, model="claude-haiku-4-5-20251001") is True
+
+
+def test_startup_notice_scopes_the_current_models_bench(auth_store):
+    from hermes_cli.cli_agent_setup_mixin import _credential_pool_notice
+
+    assert _credential_pool_notice("anthropic", model="claude-fable-5-1")[0] is True
+    assert _credential_pool_notice("anthropic", model="claude-haiku-4-5-20251001") == (False, [])
+
+
+def test_auto_drops_vendor_override_before_native_main_selection(auth_store):
+    with aux.aux_probe_mode():
+        client, model = aux.resolve_provider_client(
+            "auto", "google/gemini-2.5-flash", task="compression", main_runtime={
+                "provider": "anthropic", "model": "claude-haiku-4-5-20251001",
+            },
+        )
+    assert client is not None
+    assert model == "claude-haiku-4-5-20251001"
+
+
+def test_unmatched_rotation_recounts_after_elapsed_model_bench(auth_store, monkeypatch):
+    now = time.time()
+    auth_path = auth_store / "auth.json"
+    store = json.loads(auth_path.read_text())
+    store["credential_pool"]["openai-codex"][0]["model_cooldowns"]["gpt-6.1"] = now + 60
+    auth_path.write_text(json.dumps(store))
+    pool = load_pool("openai-codex")
+    monkeypatch.setattr(time, "time", lambda: now)
+    select = pool._select_unlocked
+
+    def select_after_expiry(**kwargs):
+        monkeypatch.setattr(time, "time", lambda: now + 120)
+        return select(**kwargs)
+
+    monkeypatch.setattr(pool, "_select_unlocked", select_after_expiry)
+    assert pool.mark_exhausted_and_rotate(
+        status_code=401, api_key_hint="unmatched-fixture", model="gpt-6.1",
+    ) is None
+    assert pool.current() is None

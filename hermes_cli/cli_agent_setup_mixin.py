@@ -61,7 +61,7 @@ def _cooldown_cause(entry) -> str:
     return t("cli.startup.cooldown_cause_http", code=entry.last_error_code)
 
 
-def _credential_pool_notice(provider: str) -> tuple:
+def _credential_pool_notice(provider: str, *, model: str | None = None) -> tuple:
     """``(cooling, lines)`` on why *provider*'s pool has nothing selectable right now, for the
     startup notice. *cooling* is True when the first line is a live cooldown with its remaining
     time; a dead (quarantined) sign-in adds a line naming the re-login."""
@@ -69,9 +69,9 @@ def _credential_pool_notice(provider: str) -> tuple:
     from agent.credential_pool import STATUS_DEAD, STATUS_EXHAUSTED, load_pool
     try:
         pool = load_pool(provider)
-        if not pool.has_credentials() or pool.has_available():
+        if not pool.has_credentials() or pool.has_available(model=model):
             return False, []
-        next_at = pool.next_available_at()
+        next_at = pool.next_available_at(model=model)
         entries = pool.entries()
     except Exception:
         return False, []
@@ -467,7 +467,7 @@ class CLIAgentSetupMixin:
         if error is None or getattr(error, "code", None) == "no_provider_configured":
             return False
         provider = getattr(error, "provider", None) or self.requested_provider
-        cooling, lines = _credential_pool_notice(provider) if provider and provider != "auto" else (False, [])
+        cooling, lines = _credential_pool_notice(provider, model=getattr(self, "model", None)) if provider and provider != "auto" else (False, [])
         _cprint("")
         if cooling:
             # A live cooldown is a wait, not a lost login: lead with it and skip the re-auth hint.

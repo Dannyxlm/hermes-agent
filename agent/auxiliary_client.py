@@ -2420,7 +2420,7 @@ def _try_nous(vision: bool = False, *, model: Optional[str] = None) -> tuple[Opt
             )
     # Recommendation discovery needs a credential before its model is known. Re-select
     # the actual request model so an unrelated bench never decides the request account.
-    if _load_pool_with_credentials("nous") is not None:
+    if not requested_model and _load_pool_with_credentials("nous") is not None:
         selected = _resolve_nous_pool_runtime_api(model=model)
         if selected is None:
             return None, None
@@ -4585,6 +4585,10 @@ def _resolve_auto_route(
     runtime = _normalize_main_runtime(main_runtime)
     _warn_stale_openai_base_url(runtime.get("provider", ""))
     main_provider, main_model, base_url, api_key, api_mode = _main_route_target(runtime, task)
+    # Vendor-qualified overrides cannot target a bare native main model. Drop them
+    # before credential selection so the pool checks the model we will actually send.
+    if model and "/" in model and main_model and "/" not in main_model:
+        model = None
     routed = _try_main_provider_route(main_provider, model or main_model, base_url, api_key, api_mode)
     if routed is not None:
         return routed
