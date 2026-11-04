@@ -597,6 +597,20 @@ def _checkout_changed(before, after):
     return after is None or any(after[k] != before[k] for k in after)
 
 
+def _resolve_fill_values(backend, handle, kind, classified):
+    """Resolve only the saved item's values and select its matching inspected controls."""
+    from agent.vault_login_classifier import select_checkout_fills, select_password_fill
+    from agent.vault_store import ADDRESS_FIELDS, PAYMENT_FIELDS
+
+    if kind == "login":
+        secret = {"password": backend.resolve_password(handle)}
+        fills = select_password_fill(classified, secret["password"])
+    else:
+        secret = backend.resolve_secret(handle)
+        fills = select_checkout_fills(classified, secret, PAYMENT_FIELDS if kind == "payment" else ADDRESS_FIELDS)
+    return secret, fills
+
+
 def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, effective_task_id: str) -> str:
     """Inspect the page, resolve the item's secret and write it; runs inside the backend's fill_context
     after the origin guard passed."""
@@ -608,11 +622,9 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
         build_inspection_js,
         classify_checkout_control,
         classify_login_control,
-        select_checkout_fills,
-        select_password_fill,
     )
     from agent.vault_backends import UnlockRequired
-    from agent.vault_store import ADDRESS_FIELDS, PAYMENT_FIELDS, VaultError, scrub_secret_from_text
+    from agent.vault_store import VaultError, scrub_secret_from_text
 
     # ── Inspect + classify page controls ────────────────────────────────────
     classify = classify_login_control if meta.kind == "login" else classify_checkout_control
@@ -684,12 +696,7 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
 
     # ── Resolve secret and fill (secret never enters any logged string) ─────
     try:
-        if meta.kind == "login":
-            secret = {"password": backend.resolve_password(handle)}
-            fills = select_password_fill(classified, secret["password"])
-        else:
-            secret = backend.resolve_secret(handle)
-            fills = select_checkout_fills(classified, secret, PAYMENT_FIELDS if meta.kind == "payment" else ADDRESS_FIELDS)
+        secret, fills = _resolve_fill_values(backend, handle, meta.kind, classified)
     except UnlockRequired:
         out = {"success": False, "error_type": "unlock_required",
                "error": f"{backend.display_name} locked again; call browser_vault action=unlock."}
