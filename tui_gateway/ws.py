@@ -167,6 +167,7 @@ class WSTransport:
         # Socket writes need an async boundary: several batches can queue on the loop during a stall.
         self._send_lock = asyncio.Lock()
         self._abort_requested = False
+        self._socket_close_started = False  # owning-loop latch shared by deadline and overflow
 
     def _on_loop(self) -> bool:
         try:
@@ -328,6 +329,9 @@ class WSTransport:
     async def _close_socket(self, code: int, reason: str) -> None:
         """Close the peer socket so ``handle_ws``'s ``receive_text`` unblocks and its disconnect teardown
         runs. The server library bounds this (websockets ``close_timeout`` → abort)."""
+        if self._socket_close_started:
+            return
+        self._socket_close_started = True
         try:
             await self._ws.close(code=code)
         except Exception as exc:

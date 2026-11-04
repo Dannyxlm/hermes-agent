@@ -308,6 +308,23 @@ def test_overflow_closes_only_the_slow_peer_and_healthy_keeps_streaming():
         loop.close()
 
 
+def test_deadline_then_fanout_abort_closes_the_socket_once(monkeypatch):
+    monkeypatch.setattr("tui_gateway.ws._WS_SEND_DEADLINE_S", 0.01)
+
+    async def run():
+        socket = _SocketWS()
+        transport = WSTransport(socket, asyncio.get_running_loop())
+        await transport._safe_send_many(['{}'])
+        await asyncio.sleep(0)  # let the deadline's scheduled close run
+        assert socket.close_codes == [1011]
+        transport.abort()
+        await asyncio.sleep(0)  # let the independently scheduled abort run
+        assert socket.close_codes == [1011]
+        assert transport.closed is True
+
+    asyncio.run(run())
+
+
 def test_fanout_close_and_detach_leave_peer_sockets_open():
     kept, detached = RecordingTransport(), RecordingTransport()
     fan = FanoutTransport(kept, detached)
