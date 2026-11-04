@@ -1802,6 +1802,17 @@ def _update_run_channel(args) -> str:
         raise
 
 
+def _refuse_in_progress_git_operation():
+    """Never begin an update while another Git transaction owns the checkout."""
+    git_operation = git_operation_in_progress(_m().PROJECT_ROOT)
+    if git_operation:
+        root = _m().PROJECT_ROOT
+        print(f"✗ Cannot update while a Git {git_operation} is in progress in {root}.")
+        print(f"  Finish it or run `git {git_operation} --abort`, then re-run `hermes update`.")
+        _record_stop("git_in_progress", without_receipt="failed")
+        sys.exit(1)
+
+
 def _cmd_update_impl(args, gateway_mode: bool):
     """Apply the update; the command boundary owns errors, receipts and stdio."""
     # Marks this frame as the CURRENT updater for
@@ -1811,13 +1822,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
     _commit.begin_update_attempt()  # nothing an earlier update in this process armed is ours (O5)
     from hermes_cli.update_proxy_env import prefer_dotenv_proxy_env
     prefer_dotenv_proxy_env()  # the .env loaded at import beats a system proxy the Desktop injected
-    git_operation = git_operation_in_progress(_m().PROJECT_ROOT)
-    if git_operation:
-        root = _m().PROJECT_ROOT
-        print(f"✗ Cannot update while a Git {git_operation} is in progress in {root}.")
-        print(f"  Finish it or run `git {git_operation} --abort`, then re-run `hermes update`.")
-        _record_stop("git_in_progress", without_receipt="failed")  # before the receipt opens: a metrics row only
-        sys.exit(1)
+    _refuse_in_progress_git_operation()
 
     # Self-heal abandoned .git/*.lock files (a crashed fetch) and aborted-transfer pack temps
     # before anything else touches the checkout. Run at START, not only in the apply path
