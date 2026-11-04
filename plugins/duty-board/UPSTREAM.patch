@@ -62,7 +62,7 @@
 +    except Exception:  # health: allow BLE001 -- Pinned upstream scoped-language lookup fails closed to config or English.
 @@ -105 +105 @@
 -        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8").splitlines()
-+        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8-sig").splitlines()
++        lines = (Path(home) / "config.yaml").read_text(encoding="utf-8-sig").splitlines()  # config-reader: ok — pinned upstream side-effect-free display.language read before authorization; display-only, falls back to English
 @@ -129 +129 @@
 -    except Exception:
 +    except Exception:  # health: allow BLE001 -- Pinned upstream display-only locale fallback does not change authorization.
