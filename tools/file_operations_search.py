@@ -1258,7 +1258,7 @@ class SearchMixin:
             return SearchResult(error=_SEARCH_INTERRUPTED_ERROR)
         if (result.exit_code not in {0, 1, 124} and not bounded_sigpipe
                 and not permission_only):
-            detail = diagnostics.strip() or "no diagnostics"
+            detail = f"exit code {result.exit_code}: {diagnostics.strip() or 'no diagnostics'}"
             if order == "modified":
                 # ripgrep 14+ was already verified by the capability gate, so this
                 # failure is an invocation/traversal error, not a version problem.
@@ -1289,7 +1289,7 @@ class SearchMixin:
             return SearchResult(files=[], total_count=0,
                                 warning=f"{warning} {_PERMISSION_SEARCH_HINT}", **skip)
         if permission_only and all_files:
-            warning = f"Partial file search results: ripgrep skipped unreadable paths. {warning}"
+            warning = f"Partial file search results: ripgrep exit code 2 skipped unreadable paths. {warning}"
         return SearchResult(
             files=all_files[offset:offset + limit], total_count=len(all_files),
             truncated=len(all_files) > offset + limit or bool(limit_reason),
