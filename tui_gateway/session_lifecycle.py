@@ -153,8 +153,12 @@ def _ensure_active_session_slot(sid: str, session: dict) -> str | None:
     return limit_message
 
 
-_CANONICAL_PENDING_SQL = """SELECT status FROM session_admissions WHERE target_session_id=? AND status!='terminal'
-    UNION ALL SELECT status FROM worker_executions WHERE session_id=? AND status!='terminal' LIMIT 1"""
+# Unknown in either ledger pauses the whole FIFO, even when queued followers exist.
+_CANONICAL_PENDING_SQL = """SELECT status FROM (
+    SELECT status FROM session_admissions WHERE target_session_id=? AND status!='terminal'
+    UNION ALL SELECT status FROM worker_executions WHERE session_id=? AND status!='terminal'
+    ) ORDER BY CASE status WHEN 'unknown' THEN 0 WHEN 'started' THEN 1 WHEN 'running' THEN 1
+        WHEN 'registered' THEN 2 ELSE 3 END LIMIT 1"""
 
 
 def _end_unless_ledger_busy(db, session_id: str, session_key, end_reason: str) -> bool:

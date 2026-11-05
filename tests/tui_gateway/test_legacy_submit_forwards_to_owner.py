@@ -151,7 +151,8 @@ def test_outcome_unknown_work_is_still_refused_and_never_forwarded(monkeypatch, 
         _owner(monkeypatch, db, key, epoch)
         reply = server.handle_request({"id": "p", "method": "prompt.submit",
                                        "params": {"session_id": sid, "text": "hi"}})
-        assert reply["error"]["code"] == 4090 and reply["error"]["data"] == {"reason": "SESSION_NOT_OWNED"}
+        assert reply["error"]["code"] == 4090 and reply["error"]["data"] == {
+            "reason": "SESSION_NOT_OWNED", "ownership_reason": "outcome_unknown"}
         assert len(list_session_admissions(db, session_id=key)) == 1 and turns == []
     finally:
         server._sessions.pop(sid, None)

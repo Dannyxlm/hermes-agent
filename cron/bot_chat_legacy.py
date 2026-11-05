@@ -82,10 +82,8 @@ def _queued(root: Path) -> list[tuple[Path, dict]]:
                 _warned.add(path)
                 logger.error("Unreadable legacy Bot Chat pending record %s kept as evidence: %s", path, exc)
             continue
-        if record.get("status") == "queued" or (
-                record.get("session_id") and record.get("admission_id") and (
-                    record.get("status") == "transferred" or (
-                        record.get("status") in {"settled", "failed"} and not record.get("bookkeeping_settled")))):
+        if record.get("status") in {"queued", "transferred"} or (
+                record.get("status") in {"settled", "failed"} and not record.get("bookkeeping_settled")):
             found.append((path, record))
     return sorted(found, key=lambda item: (item[1].get("sequence", 0), item[0].name))
 
@@ -148,13 +146,17 @@ def _dispose(path: Path, record: dict) -> bool:
 
 def _close_terminal_wake(path: Path, record: dict) -> None:
     """Repair old terminal receipts too, without ever submitting their payload again."""
-    if (not record.get("session_id") or not record.get("admission_id")
-            or record.get("status") not in {"settled", "failed"} or record.get("bookkeeping_settled")):
+    if record.get("status") not in {"settled", "failed"} or record.get("bookkeeping_settled"):
         return
     from cron.session_delivery import transfer_pending
     from cron.session_delivery_outcome import settle_pending
 
-    if "admission_outcome" not in record:
+    if not (record.get("session_id") and record.get("admission_id")):
+        from cron.bot_chat_outcome import observe_pending
+        if not observe_pending(record):
+            return
+        atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+    elif "admission_outcome" not in record:
         if not transfer_pending(path, record):
             return
         atomic_json_write(path, record, fsync_dir=True, mode=0o600)
@@ -173,7 +175,12 @@ def _drain_one(path: Path) -> dict | None:
         if record.get("status") not in {"queued", "transferred"}:
             _close_terminal_wake(path, record)
             return record  # A legacy claim or unknown turn is never replayed.
-        if record.get("status") == "transferred" and not record.get("admission_id"):
+        if record.get("status") == "transferred" and not (
+                record.get("session_id") and record.get("admission_id")):
+            from cron.bot_chat_outcome import observe_pending
+            if observe_pending(record):
+                atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+                _close_terminal_wake(path, record)
             return record
         if _dispose(path, record):
             atomic_json_write(path, record, fsync_dir=True, mode=0o600)
@@ -188,6 +195,9 @@ def drain_pending(key: str) -> dict | None:
 
 def drain_legacy_pending() -> None:
     """Hand queued records to their owner and observe admitted wakes; never replay uncertain turns."""
+    from cron.bot_chat_outcome import settle_bot_chat_jobs
+
+    settle_bot_chat_jobs()
     root = get_hermes_home().resolve() / "cron" / "bot_chat_pending"
     if not root.is_dir():
         return

@@ -74,10 +74,10 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
     # its live marker says "someone is working on it", never "someone crashed". Leave the marker for its writer —
     # clearing it would cancel the live turn's own account of itself. See #94778.
     writer_state = marker_writer_state(marker)
-    if writer_state == "alive" and marker.get("writer_pid") != os.getpid():
-        logger.info("auto-continue for %s held back: marker writer pid %s is still alive (reader pid %s); the "
-                    "marker is ownership evidence and the owner clears it", session_key,
-                    marker.get("writer_pid"), os.getpid())
+    if marker.get("writer_pid") != os.getpid() and writer_state != "dead":
+        logger.info("auto-continue for %s held back: foreign marker writer pid %s is %s (reader pid %s); "
+                    "recovery requires proof the writer died", session_key,
+                    marker.get("writer_pid"), writer_state, os.getpid())
         return None
     enabled, freshness_secs, max_attempts = _auto_continue_config()
     age = time.time() - marker["started_at"]

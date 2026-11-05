@@ -48,7 +48,8 @@ def test_legacy_submit_refuses_while_canonical_ledger_holds_work(monkeypatch, tm
     try:
         refused = submit()
         assert refused["error"]["code"] == 4090, refused
-        assert refused["error"]["data"] == {"reason": "SESSION_NOT_OWNED"}
+        assert refused["error"]["data"] == {"reason": "SESSION_NOT_OWNED", "ownership_reason": (
+            "outcome_unknown" if ledger == "unknown" else "owner_unavailable")}
         assert turns == [] and db.get_messages_as_conversation(key) == []
         if ledger == "unknown":
             # Once the operator discards the lost turn through the gateway the barrier lifts.
