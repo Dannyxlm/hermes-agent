@@ -656,9 +656,12 @@ def _prefer_refreshable_claude_code_token(env_token: str, creds: Optional[dict[s
 
 
 def _resolve_anthropic_pool_token(*, skip_borrowed: bool = False, model: Optional[str] = None) -> Optional[str]:
-    """First available Anthropic OAuth token from credential_pool, read-only: enumerates with ``clear_expired=False,
-    refresh=False`` (never ``select()``) so diagnostic call sites (account_usage, ``hermes models``) never mutate
-    auth.json or hit the network; refresh-on-expiry belongs to the API call path's pool recovery.
+    """First available Anthropic OAuth token without proactive OAuth refresh.
+
+    Enumerates with ``clear_expired=False, refresh=False`` (never ``select()``),
+    leaving refresh-on-expiry to the API call path's pool recovery. This is not
+    a read-only operation: pool loading may persist seeding/normalization, and
+    enumeration may resync stale rows or prune aged manual DEAD credentials.
 
     *model* scopes per-model cooldowns: a row benched only for another model (e.g. a Fable-only
     ``credits_required`` 429) stays eligible. Model-less usage/discovery ignores model-scoped

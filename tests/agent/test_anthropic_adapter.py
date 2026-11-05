@@ -367,10 +367,9 @@ class TestResolveAnthropicToken:
         assert resolve_anthropic_token() is None
 
 
-    def test_pool_resolution_is_read_only(self, monkeypatch, tmp_path):
-        """The resolver must enumerate the pool read-only — clear_expired and
-        refresh must both be False so a bare resolve never writes auth.json or
-        triggers a network refresh from diagnostic call sites (#50108 MED)."""
+    def test_pool_resolution_disables_proactive_refresh_and_cooldown_clearing(self, monkeypatch, tmp_path):
+        """Diagnostics disable explicit refresh and cooldown clearing, not all
+        pool maintenance writes (loading/resync/pruning may still persist)."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -386,12 +385,12 @@ class TestResolveAnthropicToken:
             captured.update(kwargs)
             return ([pool_entry], [])
 
-        pool = SimpleNamespace(_available_entries=_available_entries)
+        pool = SimpleNamespace(_available_entries=_available_entries, token_is_blocked=lambda *_args, **_kwargs: False)
         monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: pool)
 
         assert resolve_anthropic_token() == "pool-oauth-token"
         assert captured == {"clear_expired": False, "refresh": False, "model": None}
-        # Model-aware callers scope the read to that model's cooldowns, still read-only.
+        # Model-aware callers retain the same explicit refresh/clearing policy.
         assert resolve_anthropic_token(model="claude-opus-5-5") == "pool-oauth-token"
         assert captured == {"clear_expired": False, "refresh": False, "model": "claude-opus-5-5"}
 
