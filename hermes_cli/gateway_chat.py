@@ -88,7 +88,37 @@ def wants_latest(args):
     return getattr(args, "continue_last", None) is True
 
 
+def _preset_policy(args) -> dict:
+    name = getattr(args, "preset", None)
+    if name is None:
+        return {}
+    if getattr(args, "resume", None) or getattr(args, "continue_last", None):
+        raise GatewayClientError("Unsupported --preset with --resume / --continue: presets only shape a new session.")
+    if bypass_launch(args):
+        raise GatewayClientError("Unsupported --preset with --safe-mode / --ignore-user-config: presets require profile config.")
+    from hermes_cli.config import get_config_path
+    from hermes_cli.config_effective import load_user_config_effective
+
+    cfg = load_user_config_effective(get_config_path())
+    backends = (cfg.get("delegation") or {}).get("backends") or {}
+    model_map = backends.get("model_map") or {}
+    options = {o["name"]: o for o in model_map.get("options") or [] if isinstance(o, dict) and o.get("name")}
+    if name not in options:
+        raise GatewayClientError(f"Unsupported preset {name!r}: unknown name. Configured names: "
+                                 f"{', '.join(options) or '(none configured)'}")
+    preset = options[name]
+    policy = {key: preset[src] for key, src in (("model", "model"), ("provider", "provider"),
+                                               ("reasoning", "reasoning_effort")) if preset.get(src) is not None}
+    from hermes_cli.models import normalize_provider
+    from hermes_cli.providers import _plugin_alias_owner
+    provider = _plugin_alias_owner(normalize_provider(getattr(args, "provider", None) or policy.get("provider")))
+    if preset.get("service_tier") is not None and provider == _plugin_alias_owner(normalize_provider(preset.get("provider"))):
+        policy["service_tier"] = preset["service_tier"]
+    return policy
+
+
 def validate_options(args):
+    _preset_policy(args)
     unsupported = [name for name in _UNSUPPORTED if getattr(args, name, None)]
     if getattr(args, "create_if_missing", False) and not continue_title(args):
         unsupported.append("create-if-missing without -c <name>")
@@ -166,6 +196,7 @@ async def _resume_latest(client, args, launch=None):
 
 
 async def run_gateway_chat(args, emitter=None):
+    preset = _preset_policy(args)
     from hermes_cli.launch_provenance import take_launch
     family_launch = take_launch(args)
     from hermes_cli.gateway_chat_view import GatewayChatView
@@ -213,7 +244,7 @@ async def run_gateway_chat(args, emitter=None):
             if source not in sources:
                 raise GatewayClientError(f"Gateway does not support source {source!r}")
             parameters = contract.get("parameters", [])
-            policy = _requested_policy(args)
+            policy = {**preset, **_requested_policy(args)}
             policy.pop("source", None)
             if create_if_missing:
                 policy["title"] = title

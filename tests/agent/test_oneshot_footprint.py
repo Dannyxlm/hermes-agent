@@ -61,6 +61,21 @@ def test_oneshot_delegation_budget_charges_total_children_then_refuses(oneshot, 
     assert delegate_tool._oneshot_spawn_budget(parent, 50) is None
 
 
+def test_oneshot_oversized_batch_reports_remaining_budget_without_charging(oneshot, monkeypatch):
+    from types import SimpleNamespace
+    from tools import delegate_tool
+
+    monkeypatch.setattr(delegate_tool, "_get_oneshot_max_children", lambda: 2)
+    parent = SimpleNamespace(_oneshot_children_spawned=0)
+    err = delegate_tool._oneshot_spawn_budget(parent, 3)
+    assert err is not None and "exhausted" not in err
+    assert "asks for 3" in err and "only 2 of 2 remain" in err and "at most 2 tasks" in err
+    assert parent._oneshot_children_spawned == 0
+    assert delegate_tool._oneshot_spawn_budget(parent, 2) is None
+    assert parent._oneshot_children_spawned == 2
+    assert "exhausted (2/2" in delegate_tool._oneshot_spawn_budget(parent, 1)
+
+
 def test_gateway_owned_oneshot_session_keeps_skill_manage_and_takes_its_prompt_from_the_frozen_policy(tmp_path, monkeypatch):
     """The gateway daemon never has the client's HERMES_SINGLE_QUERY_SESSION: a `chat -q` session it owns is
     one-shot by its frozen ``oneshot`` source, so it gets the one-shot skills prompt; its tool list still offers

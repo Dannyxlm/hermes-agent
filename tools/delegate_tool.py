@@ -563,6 +563,11 @@ def _oneshot_spawn_budget(parent_agent: Any, requested: int) -> Optional[str]:
         return None
     spent = getattr(parent_agent, "_oneshot_children_spawned", 0)
     if spent + requested > cap:
+        if spent < cap:
+            remaining = cap - spent
+            return (f"This batch asks for {requested} subagents, but only {remaining} of {cap} remain in this "
+                    f"one-shot run (delegation.oneshot_max_children). Send at most {remaining} tasks, "
+                    "or do the remaining work yourself in this session.")
         return (
             f"Delegation budget for this one-shot run is exhausted ({spent}/{cap} subagents used; "
             f"delegation.oneshot_max_children). Do the remaining work yourself in this session — reviewing "

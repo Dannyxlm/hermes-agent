@@ -97,6 +97,84 @@ class TestChatVerboseArg:
         assert {k: captured[k] for k in ("api_key", "base_url") if k in captured} == expected
 
 
+@pytest.mark.parametrize("query_flags, quiet", [
+    (["-q", "hi", "--oneshot"], False),
+    (["--query-file", "PROMPT_FILE", "--oneshot"], False),
+    (["-q", "hi", "-Q"], True),
+    (["--query-file", "PROMPT_FILE", "-Q", "--oneshot"], True),
+])
+def test_cmd_chat_preset_reaches_session_create(monkeypatch, tmp_path, query_flags, quiet):
+    """The default chat dispatch must not drop a preset before the transport resolves it."""
+    import types
+    from contextlib import asynccontextmanager
+    from hermes_cli import gateway_chat, gateway_chat_startup, main as main_mod
+    from hermes_cli._parser import build_top_level_parser
+    from hermes_cli.gateway_chat_view import GatewayChatView
+
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    config = home / "config.yaml"
+    config.write_text("""model: {default: profile-default, provider: anthropic}
+delegation:
+  backends:
+    model_map:
+      options:
+        - {name: build, model: preset-model, provider: openai-codex, reasoning_effort: high, service_tier: fast}
+""")
+    original = config.read_bytes()
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("hi", encoding="utf-8-sig")
+    calls = []
+
+    class Peer:
+        async def rpc(self, method, **params):
+            calls.append((method, params))
+            if method == "runtime.describe":
+                return {"session_create": {"sources": ["cli", "oneshot"], "parameters": [
+                    "cwd", "model", "provider", "reasoning", "service_tier"]}}
+            assert method == "session.create"
+            return {"stored_session_id": "stored"}
+
+    @asynccontextmanager
+    async def connected():
+        yield Peer()
+
+    async def rendered(self, query, *, oneshot):
+        assert query == "hi" and oneshot is True
+        assert self.quiet is quiet
+        return 0
+
+    fake_cli = types.ModuleType("cli")
+    fake_cli.main = lambda **kwargs: pytest.fail("preset silently dispatched to classic cli.main")
+    monkeypatch.setitem(sys.modules, "cli", fake_cli)
+    monkeypatch.setattr(main_mod, "_start_chat_background_prefetch", lambda: None)
+    monkeypatch.setattr(main_mod, "_has_any_provider_configured", lambda: True)
+    monkeypatch.setattr(main_mod, "_pin_kanban_board_env", lambda: None)
+    monkeypatch.setattr(main_mod, "_confirm_startup_expensive_model_override", lambda args: None)
+    from hermes_cli.observability import shared_metrics_consent
+    monkeypatch.setattr(shared_metrics_consent, "offer_consent_before_chat", lambda args: None)
+    monkeypatch.setattr(gateway_chat_startup, "ensure_launch_provider", lambda args: True)
+    monkeypatch.setattr(gateway_chat, "_register_terminal_process", lambda: None)
+    monkeypatch.setattr(gateway_chat, "connect_gateway", connected)
+    monkeypatch.setattr(GatewayChatView, "run", rendered)
+    # A TTY ensures --oneshot/-Q, not piped stdio, supplies the finite-run semantics.
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    parser, _, chat_parser = build_top_level_parser()
+    chat_parser.set_defaults(func=main_mod.cmd_chat)
+    flags = [str(prompt) if flag == "PROMPT_FILE" else flag for flag in query_flags]
+    args = parser.parse_args(["chat", "--preset", "build", *flags])
+    with pytest.raises(SystemExit) as finished:
+        args.func(args)
+    assert finished.value.code == 0
+    create = next(params for method, params in calls if method == "session.create")
+    assert {key: create[key] for key in ("model", "provider", "reasoning", "service_tier", "source")} == {
+        "model": "preset-model", "provider": "openai-codex", "reasoning": "high",
+        "service_tier": "fast", "source": "oneshot"}
+    assert config.read_bytes() == original
+
+
 class TestAcceptHooksOnAgentSubparsers:
     """Verify --accept-hooks is accepted at every agent-subcommand
     position (before the subcommand, between group/subcommand, and

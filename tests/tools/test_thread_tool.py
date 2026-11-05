@@ -55,6 +55,10 @@ def home(tmp_path, monkeypatch):
         raise AssertionError("a guard let this call reach the owner")
 
     import tools.thread_tool as tool
+    from hermes_cli import models
+    monkeypatch.setattr(models, "provider_model_ids", lambda provider: {
+        "anthropic": ["claude-haiku-5-5", "claude-opus-5-5"], "openai-codex": ["gpt-6.1-sol"]
+    }.get(provider, []))
     monkeypatch.setattr(tool, "_run", no_owner)
     return home
 
@@ -465,6 +469,61 @@ def owner(home, monkeypatch):
     monkeypatch.setattr(tool, "_run", asyncio.run)
     monkeypatch.setattr(tool, "_with_owner", with_owner)
     return fake
+
+
+@pytest.mark.parametrize("route", ["explicit", "option", "profile"])
+def test_create_refuses_unknown_catalog_model_before_owner_rpc(home, owner, monkeypatch, route):
+    from hermes_cli import models
+
+    providers = []
+
+    def catalog(provider):
+        providers.append(provider)
+        return ["gpt-6.1-sol", "gpt-6-astra"]
+
+    monkeypatch.setattr(models, "provider_model_ids", catalog)
+    args = {"model": "gpt-6.1", "provider": "openai-codex"}
+    if route == "option":
+        path = home / "config.yaml"
+        path.write_text(MENU.replace("gpt-6.1-sol", "gpt-6.1"))
+        args = {"option": "build"}
+    elif route == "profile":
+        (home / "profiles" / "iris" / "config.yaml").write_text("model:\n  provider: openai-codex\n")
+        args = {"model": "gpt-6.1", "profile": "iris"}
+    out = call(action="create", title="work", brief="do it", **args)
+    assert out.get("error") == "invalid_request", out
+    assert "did you mean gpt-6.1-sol" in out["message"]
+    assert providers == ["openai-codex"]
+    assert owner.calls == []
+
+
+def test_create_allows_exact_catalog_ids_case_insensitively_and_empty_catalogs(home, owner, monkeypatch):
+    from hermes_cli import models
+
+    monkeypatch.setattr(models, "provider_model_ids", lambda provider: ["gpt-6.1-sol"])
+    assert call(action="create", title="valid", brief="b", model="GPT-6.1-SOL", provider="openai-codex")["success"]
+    monkeypatch.setattr(models, "provider_model_ids", lambda provider: [])
+    assert call(action="create", title="custom", brief="b", model="private-id", provider="custom")["success"]
+    assert len([m for m, _ in owner.calls if m == "session.create"]) == 2
+
+
+@pytest.mark.parametrize("marker", ["env", "policy"])
+def test_oneshot_worker_cannot_create_threads_but_can_list(home, owner, monkeypatch, marker):
+    from gateway.session_policy import build_policy, policy_scope
+
+    monkeypatch.delenv("HERMES_SINGLE_QUERY_SESSION", raising=False)
+    scope = contextlib.nullcontext()
+    if marker == "env":
+        monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
+    else:
+        scope = policy_scope(build_policy({"source": "oneshot", "model": "m", "cwd": str(home)}, {}))
+    with scope:
+        out = call(action="create", title="work", brief="do it")
+        assert out.get("error") == "oneshot_worker", out
+        assert "do the work yourself" in out["message"]
+        assert "delegation.oneshot_max_children" in out["message"]
+        assert call(action="list")["success"] is True
+    assert owner.calls == []
 
 
 def test_create_opens_a_marked_thread_and_a_retry_in_the_same_turn_reports_how_it_stands(home, owner):

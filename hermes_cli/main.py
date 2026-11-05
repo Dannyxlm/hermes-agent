@@ -1683,9 +1683,13 @@ def cmd_chat(args):
     from hermes_cli.launch_provenance import prepare_launch
     prepare_launch(args)
     from hermes_cli.stream_json import stream_json_requested
-    # stream-json and the --safe-mode / --ignore-user-config bypass keep the transport client; the
-    # classic CLI (interactive, -q/-Q) is main's HermesCLI with a gateway-backed agent (gateway_agent.py).
-    if stream_json_requested(args) or _bypass_chat_launch(args):
+    # Presets are resolved by the transport client, not classic HermesCLI. Explicit TUI
+    # launches still refuse them before dispatch instead of silently changing surfaces.
+    if getattr(args, "preset", None) and (getattr(args, "tui", False) or getattr(args, "tui_native", False)):
+        _refuse_unforwarded_tui_flags(args)
+    # stream-json and the --safe-mode / --ignore-user-config bypass keep the transport client;
+    # other classic launches use HermesCLI with a gateway-backed agent (gateway_agent.py).
+    if stream_json_requested(args) or _bypass_chat_launch(args) or getattr(args, "preset", None):
         from hermes_cli.gateway_chat_startup import launch_gateway_chat
         sys.exit(launch_gateway_chat(args))
     _apply_safe_mode(args)
