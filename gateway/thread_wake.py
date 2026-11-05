@@ -1,7 +1,9 @@
 """Thread updates: the session owner wakes a chat when threads it opened finish the work the ``thread`` tool
 sent them.
 
-Every local chat is run by the canonical owner (this gateway), and the dashboard is only a viewer. So the
+The owner (this gateway) runs every chat's automatic turns. A Desktop or TUI chat's typed turns may run in
+the dashboard instead, which holds the chat's lease while it is open and checks this ledger before each turn
+(``DEFERS_TO_LEDGER``), so the owner adopts such a chat while it is idle and the update still reaches it. The
 wake lives here, under gateway housekeeping: a thread sweeps every ``SWEEP_S``. When no thread is active, a
 sweep is one indexed query per profile store. For each idle lead chat with settled, unreported results
 (``tools.thread_state.wake_state``), it claims them, writes a pending update (the claimed results, the exact
@@ -154,10 +156,14 @@ def _admission(conn, lineage, key: str):
 
 
 def _busy(conn, lineage) -> bool:
-    """A lead mid-turn (or with a turn queued or cut off) gets its update once that settles."""
+    """A lead mid-turn (or with a turn queued or cut off) gets its update once that settles. The durable
+    turn lease covers turns this ledger never sees: the user's own, in a chat the dashboard hosts."""
     ids = list(lineage)
-    return conn.execute(f"SELECT 1 FROM session_admissions WHERE target_session_id IN ({','.join('?' * len(ids))}) "
-                        "AND status IN ('queued','started','unknown') LIMIT 1", ids).fetchone() is not None
+    marks = ",".join("?" * len(ids))
+    return conn.execute(f"SELECT 1 FROM session_admissions WHERE target_session_id IN ({marks}) "
+                        "AND status IN ('queued','started','unknown') "
+                        f"UNION ALL SELECT 1 FROM session_turn_leases WHERE conversation_id IN ({marks}) "
+                        "AND expires_at > ? LIMIT 1", [*ids, *ids, time.time()]).fetchone() is not None
 
 
 def _owner(home: Path, session_id: str, fn):

@@ -633,7 +633,8 @@ def _send(caller: Caller, args: dict) -> dict:
     async def go(client):
         snap, at = await _attach(client, thread)
         notes = []
-        if await _clear_paused(client, at, rows, force):
+        if cleared := await _clear_paused(client, at, rows, force):
+            _handed_back(caller, [row["admission_id"] for row in rows if row["admission_id"] in cleared and ts.tool_sent(row)])
             notes.append("Cleared a turn a gateway restart had cut off, so the thread's queue moves again.")
         if mode == "interrupt" and snap.get("running") and running is not None:
             if ts.tool_sent(running) or force:
@@ -833,6 +834,7 @@ def _stop(caller: Caller, args: dict) -> dict:
     async def go(client):
         snap, at = await _attach(client, thread)
         cleared = await _clear_paused(client, at, rows, force)
+        _handed_back(caller, [row["admission_id"] for row in rows if row["admission_id"] in cleared and ts.tool_sent(row)])
         cancelled, cancelled_running = [], []
         for row in queued:
             receipt = await client.rpc("prompt.cancel", session_id=at.session_id, admission_id=row["admission_id"])

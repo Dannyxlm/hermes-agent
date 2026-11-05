@@ -71,8 +71,13 @@ _AUTOMATIC_SESSION_END_REASONS = frozenset({"ws_orphan_reap", "ws_disconnect", "
 
 def _lease_metadata(live_session_id: str) -> dict:
     """Writer identity for a lease: ``live_session_id`` is half of ``_is_same_writer``. Bot Chat delivery is
-    admitted by the session authority (gateway/session_bot), never gated on a lease flag."""
-    return {"live_session_id": live_session_id}
+    admitted by the session authority (gateway/session_bot), never gated on a lease flag.
+
+    ``defers_to_ledger``: every turn here checks the owner's durable ledger first
+    (``_ensure_active_session_slot`` -> ``_canonical_ledger_refusal``), so the owner may adopt a chat this
+    backend holds while it is idle, and that chat's automatic turns (thread updates, scheduled wakes) reach it."""
+    from hermes_cli.active_sessions import DEFERS_TO_LEDGER
+    return {"live_session_id": live_session_id, DEFERS_TO_LEDGER: True}
 
 
 def _claim_active_session_slot(
