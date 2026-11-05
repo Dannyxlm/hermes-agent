@@ -210,3 +210,35 @@ def test_terminal_pending_retries_writeback_without_replay(owner_home, bot_run, 
     assert jobs.get_job(job_id)["last_status"] == "ok"
     assert pending.read_pending(key)["bookkeeping_settled"]
     assert admitted == [key]
+
+
+def test_superseded_terminal_record_is_not_rewritten_each_tick(owner_home, bot_run, monkeypatch):
+    home, _db = owner_home
+    run, admitted = bot_run
+    job_id, old_key = run()
+    old_row = executions.latest_execution(job_id)
+    scheduler.run_one_job(jobs.get_job(job_id))
+    producer = dict(id=job_id, name=jobs.get_job(job_id)["name"], execution_id=old_row["id"])
+    record = pending.defer(old_key, producer, "Gate ready", home, for_failure=False)
+    record["status"] = "transferred"
+    path = home / "cron" / "bot_chat_pending" / (old_key + ".json")
+    atomic_json_write(path, record)
+    terminal(home, old_key)
+    writes = []
+    original = pending.atomic_json_write
+
+    def write(target, *args, **kwargs):
+        writes.append(target)
+        return original(target, *args, **kwargs)
+
+    monkeypatch.setattr(pending, "atomic_json_write", write)
+    pending.drain_legacy_pending()
+    saved = pending.read_pending(old_key)
+    assert saved["status"] == "settled" and not saved.get("bookkeeping_settled")
+    assert writes == [path]  # The observation changed once, not twice on its first tick.
+    writes.clear()
+    pending.drain_legacy_pending()
+    pending.drain_legacy_pending()
+    assert pending.read_pending(old_key) == saved
+    assert writes == []
+    assert len(admitted) == 2

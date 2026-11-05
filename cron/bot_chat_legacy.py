@@ -153,9 +153,11 @@ def _close_terminal_wake(path: Path, record: dict) -> None:
 
     if not (record.get("session_id") and record.get("admission_id")):
         from cron.bot_chat_outcome import observe_pending
+        before = dict(record)
         if not observe_pending(record):
             return
-        atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+        if record != before:
+            atomic_json_write(path, record, fsync_dir=True, mode=0o600)
     elif "admission_outcome" not in record:
         if not transfer_pending(path, record):
             return
