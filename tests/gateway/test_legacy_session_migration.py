@@ -140,6 +140,56 @@ async def test_legacy_adoption_refuses_live_owner_and_foreign_profile_without_wr
 
 
 @pytest.mark.asyncio
+async def test_legacy_adoption_takes_an_idle_chat_a_ledger_deferring_backend_holds(tmp_path, monkeypatch):
+    """A Desktop/TUI chat the dashboard opened and keeps open holds its lease for hours. The dashboard
+    checks this ledger before every turn, so the owner adopts the chat while it is idle and the chat's
+    automatic turns (thread updates, scheduled wakes) reach it. Mid-turn it still refuses."""
+    from gateway import run
+    from gateway.config import GatewayConfig
+    from gateway.session import SessionStore
+    from gateway.session_authority import initialize_session_authority
+    from gateway.session_contract import Principal
+    from gateway.session_local_title import resolve_titled_session
+    from hermes_cli.active_sessions import active_session_liveness_guard, release_active_session
+    from hermes_state_errors import SessionTurnLeaseLostError
+    from hermes_state_runtime import RuntimeStoreError
+    from tui_gateway import session_lifecycle
+
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
+    monkeypatch.setattr(session_lifecycle, '_load_cfg', lambda: {}, raising=False)  # bound by tui_gateway.server
+    store = SessionStore(tmp_path / 'sessions', GatewayConfig())
+    db = store._db
+    db.create_session('old-dash', source='desktop', model='old', cwd=str(tmp_path))
+    db.append_message('old-dash', role='user', content='OPEN_IN_DESKTOP')
+    runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False)
+    authority = await initialize_session_authority(runner, profile_id=str(tmp_path), instance_id='first')
+    native = Principal('native', str(tmp_path), frozenset({'session:read', 'session:create'}), 'socket')
+    authority._native_legacy_transports = {native.transport_id: native}
+    registry = Path(db.db_path).parent
+    # The dashboard's own claim path, exactly as a Desktop chat's first turn takes it.
+    lease, refusal = session_lifecycle._claim_active_session_slot(
+        'old-dash', live_session_id='live-1', surface='desktop', profile_home=registry)
+    assert lease is not None, refusal
+    try:
+        with active_session_liveness_guard('old-dash', registry_home=registry) as held:
+            assert held  # still a lease for every other purpose (caps, cross-backend exclusivity)
+        assert db.try_acquire_session_turn_lease('old-dash', 'dashboard-turn')
+        with pytest.raises((RuntimeStoreError, SessionTurnLeaseLostError)):
+            resolve_titled_session(authority, native, 'old-dash')  # a turn is live there: refused, nothing bound
+        with db._read_ctx() as conn:
+            assert not conn.execute("SELECT 1 FROM state_meta WHERE key LIKE 'gateway.local_policy.v1:%'").fetchall()
+        db.release_session_turn_lease('old-dash', 'dashboard-turn')
+        ref = resolve_titled_session(authority, native, 'old-dash')  # idle: adopted while the lease stays
+        assert ref.session_id == 'old-dash'
+        with db._read_ctx() as conn:
+            assert conn.execute("SELECT 1 FROM state_meta WHERE key=?",
+                                ('gateway.local_policy.v1:old-dash',)).fetchone()
+    finally:
+        release_active_session(lease)
+
+
+@pytest.mark.asyncio
 async def test_upgraded_oneshot_and_tool_history_resumes_by_id_and_title_but_stays_out_of_pickers(tmp_path, monkeypatch):
     """main's `chat -q` stored ``oneshot`` rows (``--source tool`` stored ``tool``) and printed
     `hermes --resume <id>` for each. After the upgrade, the native owner adopts them by id and by

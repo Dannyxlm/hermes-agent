@@ -547,6 +547,34 @@ def test_a_busy_lead_gets_its_update_when_idle(home, owner):
     assert deliver(home, "default", "parent")
 
 
+def test_a_lead_mid_turn_in_another_host_waits_too(home, owner):
+    """The user typing in a chat the dashboard hosts leaves nothing in this ledger; the durable turn
+    lease both hosts take is what says a turn is live there."""
+    from gateway.thread_wake import deliver
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "a1", "terminal", "completed", reply="result")
+        assert db.try_acquire_session_turn_lease("parent", "dashboard-turn")
+    assert not deliver(home, "default", "parent") and owner.calls == []
+    with _db(home) as db:
+        db.release_session_turn_lease("parent", "dashboard-turn")
+    assert deliver(home, "default", "parent")
+
+
+def test_a_paused_turn_the_tool_clears_wakes_no_one_about_it(home, owner):
+    """stop (or send) discards the tool's own cut-off turn; that turn then reads stopped, which the lead
+    caused itself, so no thread update reports it."""
+    from gateway.thread_wake import deliver
+    with _db(home) as db:
+        thread(db, "t1")
+        admit(db, "t1", "cut", "unknown")
+    out = call(action="stop", thread_id="t1")
+    assert out["cleared_paused"] == ["cut"], out
+    with _db(home) as db:
+        settle(db, "cut", "interrupted")
+    assert not deliver(home, "default", "parent") and owner.submits() == []
+
+
 def test_a_refused_or_lost_update_is_retried_as_the_same_admission(home, owner):
     """The submit is refused, then admitted with its receipt lost, while another thread settles in between: the
     retry carries the identical payload under the same key (the owner's digest rule would refuse a drifted one),

@@ -112,6 +112,11 @@ MAX_CONCURRENT_SESSIONS = "MAX_CONCURRENT_SESSIONS"
 # call for different operator action, and collapsing the second into a silent go-ahead is exactly the
 # fail-open hole that let two writers share one session (#94595 review, blocker 2).
 SESSION_COORDINATION_UNAVAILABLE = "SESSION_COORDINATION_UNAVAILABLE"
+#: Lease metadata a backend sets when it checks the session owner's durable ledger before every turn
+#: (tui_gateway: ``session_lifecycle._canonical_ledger_refusal``) and so never runs beside the owner's
+#: FIFO. The owner may adopt a chat such a backend holds while no turn is live; a holder without it
+#: (the classic CLI keeps its own history and never reads the ledger) still fences adoption.
+DEFERS_TO_LEDGER = "defers_to_ledger"
 
 # Advertised through the gateway. A module constant, not a config flag: it holds
 # because try_acquire_active_session checks atomically, so it cannot drift from the
@@ -487,9 +492,12 @@ def _drop_lease(
     return kept
 
 
-def _holds_session(entries: list[dict[str, Any]], session_id: str) -> bool:
+def _holds_session(entries: list[dict[str, Any]], session_id: str, *, deferring_ok: bool = False) -> bool:
     target = str(session_id or "")
-    return bool(target) and any(str(e.get("session_id") or "") == target for e in entries)
+    return bool(target) and any(
+        str(e.get("session_id") or "") == target
+        and not (deferring_ok and (e.get("metadata") or {}).get(DEFERS_TO_LEDGER) is True)
+        for e in entries)
 
 
 def _read_live_entries(
@@ -804,10 +812,11 @@ def active_session_registry_snapshot(
 @contextmanager
 def active_session_liveness_guard(
     session_id: str, *, registry_home: str | Path | None = None,
-    own_live_lease_ids: set[str] | None = None,
+    own_live_lease_ids: set[str] | None = None, deferring_ok: bool = False,
 ) -> Iterator[bool]:
     """Hold the registry lock while reporting whether ``session_id`` is leased, so no
-    new backend can acquire a lease between the check and the caller's ``end_session``."""
+    new backend can acquire a lease between the check and the caller's ``end_session``.
+    ``deferring_ok`` ignores leases whose holder defers to the owner's ledger (``DEFERS_TO_LEDGER``)."""
     state_path, lock_path = _lease_paths(registry_home=registry_home)
     with _FileLock(lock_path):
         entries = _prune_dead(
@@ -815,7 +824,7 @@ def active_session_liveness_guard(
         )
         entries = _drop_self_orphans(entries, own_live_lease_ids)
         _write_entries(state_path, entries)
-        yield _holds_session(entries, session_id)
+        yield _holds_session(entries, session_id, deferring_ok=deferring_ok)
 
 
 @contextmanager

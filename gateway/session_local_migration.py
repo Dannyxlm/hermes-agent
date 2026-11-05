@@ -358,8 +358,11 @@ def adopt_legacy_session(authority, actor, row):
                'session_id': sid, 'route': route, 'entry': entry.to_dict(), 'policy': asdict(policy),
                'legacy_session_id': row['id'], 'lineage': [row['id']]}
     try:
-        # Same lock order as old Bot Chat: mailbox (if any), liveness, SQLite.
-        with active_session_liveness_guard(row['id'], registry_home=Path(authority.db.db_path).parent) as active:
+        # Same lock order as old Bot Chat: mailbox (if any), liveness, SQLite. A holder that defers to this
+        # ledger (a dashboard/Desktop backend) doesn't fence adoption: it refuses or forwards its own next turn
+        # once we hold work, and bind_legacy_target refuses while any turn lease is live.
+        with active_session_liveness_guard(row['id'], registry_home=Path(authority.db.db_path).parent,
+                                           deferring_ok=True) as active:
             if active:
                 raise RuntimeStoreError('runtime_coordination_required')
             commit_local_session(authority.db, epoch=authority.epoch, receipt=receipt)
