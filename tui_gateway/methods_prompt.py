@@ -719,12 +719,24 @@ SESSION_OWNER_BUSY = "SESSION_OWNER_BUSY"
 SESSION_OWNER_UNCONFIRMED = "SESSION_OWNER_UNCONFIRMED"
 
 
+def _ownership_refusal_data(refusal) -> dict | None:
+    """Keep the compatibility code while distinguishing its different recovery paths."""
+    reason = getattr(refusal, "reason", None)
+    if not reason:
+        return None
+    data = {"reason": reason}
+    if reason == "SESSION_NOT_OWNED":
+        ledger_status = getattr(refusal, "ledger_status", None)
+        data["ownership_reason"] = ("outcome_unknown" if ledger_status == "unknown" else
+                                    "owner_unavailable" if ledger_status is not None else "owner_live_elsewhere")
+    return data
+
+
 def _slot_refusal(rid, sid, session, text, params, refusal, internal_hosted_submit) -> dict:
     """The answer to a refused slot: a ledger refusal of a client submit goes to the owner's FIFO."""
     if getattr(refusal, "ledger_status", None) is not None and not internal_hosted_submit:
         return _submit_to_ledger_owner(rid, sid, session, text, params, refusal)
-    reason = getattr(refusal, "reason", None)
-    return _err(rid, 4090, str(refusal), {"reason": reason} if reason else None)
+    return _err(rid, 4090, str(refusal), _ownership_refusal_data(refusal))
 
 
 def _submit_to_ledger_owner(rid, sid, session, text, params, refusal) -> dict:
@@ -735,7 +747,7 @@ def _submit_to_ledger_owner(rid, sid, session, text, params, refusal) -> dict:
     (only Discard / a gateway resume resolves it); anything else that cannot be queued is refused
     with the reason and the advice to send when the turn ends."""
     from tui_gateway import owner_forward
-    not_owned = _err(rid, 4090, str(refusal), {"reason": getattr(refusal, "reason", None) or "SESSION_NOT_OWNED"})
+    not_owned = _err(rid, 4090, str(refusal), _ownership_refusal_data(refusal))
     if getattr(refusal, "ledger_status", None) == "unknown":
         return not_owned
     why = None

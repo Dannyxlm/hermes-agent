@@ -141,6 +141,11 @@ class ProcessCheckpointMixin:
             # (and recorded exit) outlives its spawner, so tail it from the start.
             fields["output_log"] = log
             session = ProcessSession(id=entry["session_id"], detached=True, **fields)
+            if session.heartbeat_seconds > 0:
+                # No heartbeat cursor is checkpointed. The reader replays the log from
+                # zero, so include that recovered output in the first heartbeat too.
+                session._heartbeat_total_at_last = 0
+                self.arm_heartbeat(session, session.heartbeat_seconds)
             if session.output_log:
                 self._track_started(session, self._log_reader_loop, f"proc-log-reader-{session.id}")
             else:

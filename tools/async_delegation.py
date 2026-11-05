@@ -203,29 +203,39 @@ def _persist_dispatch(record: dict[str, Any]) -> None:
 
 
 def _prune_durable_records() -> None:
-    """Bound terminal history, preferring delivered records for deletion."""
+    """Bound settled history separately from completions still awaiting delivery."""
     require_ledger_owner()
-    cutoff = time.time() - _DURABLE_RETENTION_SECONDS
+    now = time.time()
+    cutoff = now - _DURABLE_RETENTION_SECONDS
     with _DB_LOCK, _transaction() as conn:
-        conn.execute(
-            "DELETE FROM async_delegations WHERE delivery_state='delivered' AND updated_at < ?", (cutoff,))
-        terminal_count = conn.execute(
-            "SELECT COUNT(*) FROM async_delegations WHERE state NOT IN ('running','finalizing')").fetchone()[0]
+        conn.execute("""DELETE FROM async_delegations
+               WHERE state NOT IN ('running','finalizing')
+                 AND delivery_state IN ('delivered','dropped') AND updated_at < ?""", (cutoff,))
+        terminal_count = conn.execute("""SELECT COUNT(*) FROM async_delegations
+               WHERE state NOT IN ('running','finalizing')
+                 AND delivery_state IN ('delivered','dropped')""").fetchone()[0]
         if terminal_count > _MAX_RETAINED_COMPLETED:
             conn.execute("""DELETE FROM async_delegations WHERE delegation_id IN (
                      SELECT delegation_id FROM async_delegations
                      WHERE state NOT IN ('running','finalizing')
-                     ORDER BY CASE delivery_state WHEN 'delivered' THEN 0 ELSE 1 END,
-                              updated_at ASC LIMIT ?
+                       AND delivery_state IN ('delivered','dropped')
+                     ORDER BY updated_at ASC LIMIT ?
                    )""", (terminal_count - _MAX_RETAINED_COMPLETED,))
         pending_count = conn.execute("""SELECT COUNT(*) FROM async_delegations
                WHERE state NOT IN ('running','finalizing') AND delivery_state='pending'""").fetchone()[0]
         if pending_count > _MAX_DURABLE_PENDING:
-            conn.execute("""DELETE FROM async_delegations WHERE delegation_id IN (
+            # Keep the disposition through this prune so queued copies still encounter
+            # the durable claim gate, not the missing-row legacy delivery fallback.
+            conn.execute("""UPDATE async_delegations SET delivery_state='dropped',
+                     delivery_claim=NULL, delivery_claimed_at=NULL, updated_at=?
+                   WHERE delegation_id IN (
                      SELECT delegation_id FROM async_delegations
                      WHERE state NOT IN ('running','finalizing') AND delivery_state='pending'
                      ORDER BY updated_at ASC LIMIT ?
-                   )""", (pending_count - _MAX_DURABLE_PENDING,))
+                   )""", (now, pending_count - _MAX_DURABLE_PENDING))
+            logger.warning("Async delegation pending retention limit (%d) exceeded; "
+                           "terminally dropped %d oldest completions (results remain queryable).",
+                           _MAX_DURABLE_PENDING, pending_count - _MAX_DURABLE_PENDING)
 
 
 def _persist_completion(event: dict[str, Any], result: dict[str, Any]) -> None:

@@ -725,9 +725,8 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
     second-writer fallback: a target whose authority is not ready gets the payload parked under
     the same delivery id (``cron.bot_chat_legacy.defer``) and admitted by a later tick.
     """
-    import hashlib
-    import json
     import uuid
+    from cron.bot_chat_outcome import delivery_key
     from hermes_constants import get_hermes_home
     from hermes_cli.profiles import get_profile_dir
     from tools.bot_live_delivery import (
@@ -747,13 +746,9 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str, *,
         # run_one_job/claim_fire attach the durable execution id before delivery. The
         # transient fallback supports direct helper callers, never deduping recurring
         # runs by their (potentially identical) output or previous last_run timestamp.
-        run_id = job.get("execution_id")
-        if not run_id:
-            run_id = job.setdefault("_bot_chat_run_id", uuid.uuid4().hex)
-        key = hashlib.sha256(json.dumps(
-            [str(source_home), job_id, str(run_id), str(home)],
-            ensure_ascii=False, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
+        if not job.get("execution_id"):
+            job.setdefault("_bot_chat_run_id", uuid.uuid4().hex)
+        key = delivery_key(source_home, job, home)
         # Read BEFORE discovery: the previous owner may have exited after accepting.
         receipt = read_delivery_result(home, key)
         target = f"bot-chat:{profile_label}"
