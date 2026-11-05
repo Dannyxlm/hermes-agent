@@ -363,6 +363,23 @@ def _route(caller: Caller, args: dict) -> dict:
     return route
 
 
+def _validate_model(route: dict, home: Path) -> None:
+    """Only explicit model choices are checked; profiles keep owning their defaults."""
+    from difflib import get_close_matches
+    from hermes_cli.models import provider_model_ids
+
+    model = route.get("model")
+    if not model:
+        return
+    provider = route.get("provider") or _profile_model(home).get("provider")
+    catalog = provider_model_ids(provider)
+    ids = {name.lower(): name for name in catalog}
+    if ids and model.lower() not in ids:
+        closest = get_close_matches(model.lower(), ids, n=1)
+        hint = f"did you mean {ids[closest[0]]}?" if closest else f"choose from: {', '.join(catalog[:5])}"
+        raise ThreadError("invalid_request", f"Unknown model {model!r} for provider {provider!r}; {hint}")
+
+
 # ── guards ─────────────────────────────────────────────────────────────────────────────────────
 
 def _active(conn, launch_rows) -> int:
@@ -509,6 +526,10 @@ def _wake_hint(caller: Caller) -> str:
 
 
 def _create(caller: Caller, args: dict) -> dict:
+    from agent.oneshot_footprint import is_single_query_session
+    if is_single_query_session():
+        raise ThreadError("oneshot_worker", "One-shot worker runs can't open threads; do the work yourself in this "
+                          "run, or use your delegate_task budget (delegation.oneshot_max_children).")
     if caller.launch is not None:
         raise ThreadError("depth_limit", "Threads can't open threads. Use delegate_task for subtasks, or say in your "
                           "final message what more work you'd open, and the chat that opened you can.")
@@ -517,6 +538,7 @@ def _create(caller: Caller, args: dict) -> dict:
     route = _route(caller, args)
     profile = route["profile"]
     home = ts.homes()[profile]
+    _validate_model(route, home)
     cwd = args.get("cwd")
     if cwd is not None and not (isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd)):
         raise ThreadError("invalid_request", "cwd must be an existing absolute directory.")

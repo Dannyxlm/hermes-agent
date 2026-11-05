@@ -4,6 +4,112 @@ import argparse
 import pytest
 
 
+@pytest.fixture
+def preset_config(tmp_path, monkeypatch):
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    config = home / "config.yaml"
+    config.write_text("""delegation:
+  backend: default
+  backends:
+    model_map:
+      options:
+        - {name: build, model: preset-model, provider: openai-codex, reasoning_effort: high, service_tier: fast}
+        - {name: deep, model: other-model, provider: anthropic}
+""")
+    return config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overrides, expected", [
+    ([], {"model": "preset-model", "provider": "openai-codex", "reasoning": "high", "service_tier": "fast"}),
+    (["-m", "explicit", "--provider", "openai-codex", "--reasoning", "low"],
+     {"model": "explicit", "provider": "openai-codex", "reasoning": "low", "service_tier": "fast"}),
+    (["-m", "explicit", "--provider", "anthropic", "--reasoning", "none"],
+     {"model": "explicit", "provider": "anthropic", "reasoning": "none"}),
+])
+async def test_preset_creation_fills_only_missing_flags(monkeypatch, preset_config, overrides, expected):
+    from contextlib import asynccontextmanager
+    from hermes_cli import gateway_chat
+    from hermes_cli._parser import build_top_level_parser
+    from hermes_cli.gateway_chat_view import GatewayChatView
+    calls = []
+    original = preset_config.read_bytes()
+
+    class Peer:
+        async def rpc(self, method, **params):
+            calls.append((method, params))
+            if method == "runtime.describe":
+                return {"session_create": {"sources": ["cli", "oneshot"], "parameters": [
+                    "cwd", "model", "provider", "reasoning", "service_tier"]}}
+            return {"stored_session_id": "stored"}
+
+    @asynccontextmanager
+    async def connected():
+        yield Peer()
+
+    async def rendered(self, query, *, oneshot):
+        assert query == "literal" and oneshot
+        return 0
+
+    monkeypatch.setattr(gateway_chat, "connect_gateway", connected)
+    monkeypatch.setattr(GatewayChatView, "run", rendered)
+    args = build_top_level_parser()[0].parse_args(["chat", "--preset", "build", "-q", "literal", "--oneshot", *overrides])
+    assert await gateway_chat.run_gateway_chat(args) == 0
+    create = next(params for method, params in calls if method == "session.create")
+    assert {k: create[k] for k in expected} == expected
+    assert ("service_tier" in create) == ("service_tier" in expected)
+    assert create["source"] == "oneshot"
+    assert preset_config.read_bytes() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["unknown", "resume", "latest", "continue", "named", "create-if-missing", "tui", "old-gateway"])
+async def test_preset_refusals_never_create_a_session(monkeypatch, capsys, preset_config, case):
+    from contextlib import asynccontextmanager
+    from hermes_cli import gateway_chat, gateway_chat_startup, main as main_mod
+    calls = []
+
+    class Peer:
+        async def rpc(self, method, **params):
+            calls.append(method)
+            assert method == "runtime.describe", "refused preset reached a session RPC"
+            return {"session_create": {"sources": ["cli"], "parameters": ["cwd", "model", "provider", "reasoning"]}}
+
+    @asynccontextmanager
+    async def connected():
+        yield Peer()
+
+    monkeypatch.setattr(gateway_chat, "connect_gateway", connected)
+    monkeypatch.setattr(gateway_chat, "_register_terminal_process", lambda: None)
+    monkeypatch.setattr(gateway_chat_startup, "ensure_launch_provider", lambda args: True)
+    args = argparse.Namespace(preset="build", query="q", quiet=True)
+    if case == "unknown":
+        import asyncio
+        args.preset = "typo"
+        assert await asyncio.to_thread(gateway_chat.launch_from_args, args) == 2
+        err = capsys.readouterr().err
+        assert "unknown" in err.lower() and "build" in err and "deep" in err
+    elif case == "tui":
+        args.tui = True
+        monkeypatch.setattr(main_mod, "_launch_tui", lambda *_a, **_k: pytest.fail("TUI launched"))
+        with pytest.raises(SystemExit) as refused:
+            main_mod.cmd_chat(args)
+        assert refused.value.code == 2 and "--preset" in capsys.readouterr().err
+    else:
+        if case in {"resume", "latest"}:
+            args.resume = "stored" if case == "resume" else "latest"
+        elif case != "old-gateway":
+            args.continue_last = True if case == "continue" else "name"
+            args.create_if_missing = case == "create-if-missing"
+        with pytest.raises(gateway_chat.GatewayClientError) as refused:
+            await gateway_chat.run_gateway_chat(args)
+        message = str(refused.value)
+        assert "service_tier" in message if case == "old-gateway" else "new session" in message
+    assert calls == (["runtime.describe"] if case == "old-gateway" else [])
+
+
 def test_unsupported_launch_options_fail_before_connection(monkeypatch, capsys):
     from hermes_cli import gateway_chat
     calls = []
