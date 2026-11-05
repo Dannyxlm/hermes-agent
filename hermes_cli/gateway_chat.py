@@ -109,8 +109,10 @@ def _preset_policy(args) -> dict:
     preset = options[name]
     policy = {key: preset[src] for key, src in (("model", "model"), ("provider", "provider"),
                                                ("reasoning", "reasoning_effort")) if preset.get(src) is not None}
-    provider = getattr(args, "provider", None) or policy.get("provider")
-    if preset.get("service_tier") is not None and provider == preset.get("provider"):
+    from hermes_cli.models import normalize_provider
+    from hermes_cli.providers import _plugin_alias_owner
+    provider = _plugin_alias_owner(normalize_provider(getattr(args, "provider", None) or policy.get("provider")))
+    if preset.get("service_tier") is not None and provider == _plugin_alias_owner(normalize_provider(preset.get("provider"))):
         policy["service_tier"] = preset["service_tier"]
     return policy
 

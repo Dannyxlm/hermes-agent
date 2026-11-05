@@ -26,6 +26,10 @@ def preset_config(tmp_path, monkeypatch):
     ([], {"model": "preset-model", "provider": "openai-codex", "reasoning": "high", "service_tier": "fast"}),
     (["-m", "explicit", "--provider", "openai-codex", "--reasoning", "low"],
      {"model": "explicit", "provider": "openai-codex", "reasoning": "low", "service_tier": "fast"}),
+    (["--provider", "chatgpt"],
+     {"model": "preset-model", "provider": "chatgpt", "reasoning": "high", "service_tier": "fast"}),
+    (["--provider", "codex"],
+     {"model": "preset-model", "provider": "codex", "reasoning": "high", "service_tier": "fast"}),
     (["-m", "explicit", "--provider", "anthropic", "--reasoning", "none"],
      {"model": "explicit", "provider": "anthropic", "reasoning": "none"}),
 ])
@@ -92,11 +96,14 @@ async def test_preset_refusals_never_create_a_session(monkeypatch, capsys, prese
         err = capsys.readouterr().err
         assert "unknown" in err.lower() and "build" in err and "deep" in err
     elif case == "tui":
-        args.tui = True
+        from hermes_cli._parser import build_top_level_parser
+        args = build_top_level_parser()[0].parse_args(["chat", "--preset", "build", "--tui"])
         monkeypatch.setattr(main_mod, "_launch_tui", lambda *_a, **_k: pytest.fail("TUI launched"))
         with pytest.raises(SystemExit) as refused:
             main_mod.cmd_chat(args)
-        assert refused.value.code == 2 and "--preset" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert refused.value.code == 2 and "--preset" in err
+        assert 'hermes chat --cli --preset NAME -q "..."' in err
     else:
         if case in {"resume", "latest"}:
             args.resume = "stored" if case == "resume" else "latest"

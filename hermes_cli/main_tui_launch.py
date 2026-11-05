@@ -453,8 +453,9 @@ _TUI_UNFORWARDED = {"api_key": "--api-key", "base_url": "--base-url", "reasoning
 def _refuse_unforwarded_tui_flags(args) -> None:
     flags = [flag for name, flag in _TUI_UNFORWARDED.items() if getattr(args, name, None)]
     if flags:
+        launch_flags = ' '.join(f"{flag} NAME" if flag == "--preset" else flag for flag in flags)
         print(f"Error: Unsupported --tui options: {', '.join(flags)}. No session was started.\n"
-              f"  Use classic chat for this launch: hermes chat --cli {' '.join(flags)} ...\n"
+              f"  Use classic chat for this launch: hermes chat --cli {launch_flags} -q \"...\"\n"
               "  Or set model.base_url / agent.reasoning_effort in config.yaml (/reasoning in the TUI).",
               file=sys.stderr)
         raise SystemExit(2)
