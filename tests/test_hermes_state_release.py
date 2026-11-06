@@ -48,6 +48,156 @@ def _settle(db, epoch, claim, steer):
         _transfers={steer['admission_id']: True})
 
 
+def test_whole_profile_snapshot_includes_lead_and_new_admission_not_historical_idle(ledger):
+    path, db, epoch, _, _, _, _, admitted = ledger
+    db.create_session('new-at-start', source='api_server')
+    new = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        session_id='new-at-start', request_id='new', payload={'text': 'SECRET NEW'})
+    batch = release.snapshot_release_evidence(path, scope=None)
+    assert batch.scope is None and batch.complete
+    assert {admitted['lead']['admission_id'], admitted['foreign']['admission_id'],
+            new['admission_id']} <= {row.key.id for row in batch.rows}
+    assert 'SECRET' not in json.dumps(asdict(batch))
+
+
+def test_stale_pre_enumerated_scope_cannot_certify_whole_profile_coverage(ledger):
+    path, db, epoch, _, _, _, _, _ = ledger
+    earlier_scope = release.ReleaseScope(('work', 'lead', 'foreign'))
+    db.create_session('racing-new-target', source='api_server')
+    arrival = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        session_id='racing-new-target', request_id='racing-new-target', payload={})
+    # Planted old integration: its narrower explicit scope can truthfully pass,
+    # but mislabelling that as whole-profile coverage loses this admitted ID.
+    scoped = release.snapshot_release_evidence(path, scope=earlier_scope)
+    assert scoped.complete and arrival['admission_id'] not in {r.key.id for r in scoped.rows}
+    whole = release.snapshot_release_evidence(path, scope=None)
+    assert whole.complete and arrival['admission_id'] in {r.key.id for r in whole.rows}
+
+
+def test_unrelated_legacy_lease_is_not_certified_by_same_target_ledger(ledger):
+    path, db, _, _, _, _, _, _ = ledger
+    # A running/started ledger row has no persisted link to an arbitrary lease
+    # holder. The reader must not invent that link merely from a shared root.
+    assert db.try_acquire_session_turn_lease('work', 'unrelated-legacy-holder')
+    batch = release.snapshot_release_evidence(path, scope=None)
+    assert not batch.complete
+    assert 'lease_identity_unavailable' in batch.issues
+
+
+def test_whole_profile_discovery_and_settlement_share_read_linearization(ledger, monkeypatch):
+    path, db, epoch, claim, steer, _, worker, _ = ledger
+    original = release._read_admissions
+
+    def interleave(*args, **kwargs):
+        rows = original(*args, **kwargs)
+        _settle(db, epoch, claim, steer)
+        db.create_session('after-linearization', source='api_server')
+        rt.admit_session_input(db, epoch=epoch, principal_id='api',
+            session_id='after-linearization', request_id='late', payload={})
+        return rows
+
+    monkeypatch.setattr(release, '_read_admissions', interleave)
+    batch = release.snapshot_release_evidence(path, scope=None)
+    assert batch.complete and batch.scope is None
+    rows = {row.key.id: row for row in batch.rows}
+    assert rows[claim['admission_id']].status == 'started'
+    assert rows[worker].status == 'registered'
+    assert 'after-linearization' not in {row.key.target_session_id for row in batch.rows}
+
+
+def test_whole_profile_untracked_active_compression_root_lease_not_idle_history(ledger):
+    path, db, epoch, _, _, _, _, _ = ledger
+    db.create_session('compression-child', source='subagent', parent_session_id='legacy')
+    db._execute_write(lambda c: c.execute(
+        "UPDATE sessions SET end_reason='compression' WHERE id='legacy'"))
+    assert db.try_acquire_session_turn_lease('compression-child', 'synthetic-legacy-holder')
+    active = release.snapshot_release_evidence(path, scope=None)
+    assert not active.complete and 'untracked_active_lease' in active.issues
+    # The actual writer keys this continuation's lease to the compressed root.
+    assert db._session_turn_lease_key('compression-child') == 'legacy'
+    admission = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        session_id='compression-child', request_id='compressed-turn', payload={})
+    # A queued arrival is not evidence for the legacy turn holding this lease.
+    queued_only = release.snapshot_release_evidence(path, scope=None)
+    assert not queued_only.complete and 'untracked_active_lease' in queued_only.issues
+    claimed = rt.claim_session_input(db, epoch=epoch, session_id='compression-child')
+    assert isinstance(claimed, dict)
+    tracked = release.snapshot_release_evidence(path, scope=None)
+    assert not tracked.complete and tracked.issues == ('lease_identity_unavailable',)
+    assert admission['admission_id'] in {row.key.id for row in tracked.rows}
+    rt.settle_session_input(db, epoch=epoch, admission_id=claimed['admission_id'],
+        generation=claimed['generation'], outcome='completed')
+    assert not release.snapshot_release_evidence(path, scope=None).complete
+    db._execute_write(lambda c: c.execute('UPDATE session_turn_leases SET expires_at=0'))
+    assert release.snapshot_release_evidence(path, scope=None).complete
+    db._execute_write(lambda c: c.execute('DROP TABLE session_turn_leases'))
+    missing = release.snapshot_release_evidence(path, scope=None)
+    assert not missing.complete and 'schema_incomplete' in missing.issues
+
+
+def test_whole_profile_lookup_uses_only_saved_keys_and_exact_tombstones(ledger):
+    path, db, epoch, claim, steer, queued, _, _ = ledger
+    before = release.snapshot_release_evidence(path, scope=None)
+    keys = tuple(row.key for row in before.rows if row.key.target_session_id == 'work')
+    _settle(db, epoch, claim, steer)
+    rt.cancel_session_input(db, epoch=epoch, admission_id=queued['admission_id'])
+    later = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        session_id='foreign', request_id='not-captured', payload={})
+    after = release.lookup_release_evidence(path, scope=None, keys=keys)
+    assert after.scope is None and after.complete
+    assert {row.key.id for row in after.rows} == {key.id for key in keys}
+    assert later['admission_id'] not in {row.key.id for row in after.rows}
+    assert all(row.terminal for row in after.rows)
+    from hermes_state_mutation_retirement import retire_terminal_receipts
+    db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+    retired = release.lookup_release_evidence(path, scope=None, keys=keys)
+    assert not retired.missing_keys and all(row.storage == 'tombstone' for row in retired.rows)
+    assert 'lineage_unavailable' in retired.issues
+    assert not release.lookup_release_evidence(path, scope=None, keys=()).rows
+
+
+def test_whole_profile_read_is_pinned_before_discovery_or_authority_interleaving(ledger, monkeypatch):
+    path, db, epoch, _, _, _, _, _ = ledger
+    original = release._authority
+    admitted = []
+
+    def interleave(conn, issues):
+        # At this seam no authority, session IDs, or ledger rows have been
+        # returned yet. The reader must already have pinned its WAL read.
+        next_epoch = rt.begin_runtime_epoch(db, instance_id='racing-owner')
+        db.create_session('racing-session', source='api_server')
+        admitted.append(rt.admit_session_input(db, epoch=next_epoch, principal_id='api',
+            session_id='racing-session', request_id='racing', payload={}))
+        return original(conn, issues)
+
+    monkeypatch.setattr(release, '_authority', interleave)
+    before = release.snapshot_release_evidence(path, scope=None)
+    assert before.complete and before.authority_epoch == epoch
+    assert admitted[0]['admission_id'] not in {row.key.id for row in before.rows}
+    monkeypatch.setattr(release, '_authority', original)
+    after = release.snapshot_release_evidence(path, scope=None)
+    assert after.complete and after.authority_instance_id == 'racing-owner'
+    assert admitted[0]['admission_id'] in {row.key.id for row in after.rows}
+
+
+@pytest.mark.parametrize('source,config', [
+    ('tool', {}), ('subagent', {'_delegate_from': 'legacy'}),
+    ('api_server', {'_branched_from': 'legacy'}), ('api_server', {'_reset_from': 'legacy'}),
+])
+def test_whole_profile_fork_ledger_cannot_cover_untracked_parent_lease(ledger, source, config):
+    path, db, epoch, _, _, _, _, _ = ledger
+    db._execute_write(lambda c: c.execute(
+        "UPDATE sessions SET end_reason='compression' WHERE id='legacy'"))
+    db.create_session('fork', source=source, parent_session_id='legacy', model_config=config)
+    assert db.try_acquire_session_turn_lease('legacy', 'synthetic-parent-holder')
+    rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id='fork',
+        request_id='fork-turn', payload={})
+    assert isinstance(rt.claim_session_input(db, epoch=epoch, session_id='fork'), dict)
+    assert db._session_turn_lease_key('fork') == 'fork'
+    batch = release.snapshot_release_evidence(path, scope=None)
+    assert not batch.complete and batch.issues == ('untracked_active_lease',)
+
+
 def test_snapshot_then_terminal_exact_readback_and_retirement(ledger):
     path, db, epoch, claim, steer, queued, worker, _ = ledger
     before = release.snapshot_release_evidence(path, scope=_scope())
@@ -124,6 +274,11 @@ def test_sql_authorizer_denies_content_before_it_can_be_redacted(ledger, monkeyp
     assert reads and not denied
     assert 'SECRET' not in json.dumps(asdict(result))
     assert not release.snapshot_release_evidence(path, scope=_scope()).rows
+    whole = release.snapshot_release_evidence(path, scope=None)
+    assert whole.complete and {row.key.target_session_id for row in whole.rows} == {'lead', 'foreign'}
+    retired_whole = release.lookup_release_evidence(path, scope=None, keys=tuple(row.key for row in before.rows))
+    assert {row.key for row in retired_whole.rows} == {row.key for row in before.rows}
+    assert not denied and 'SECRET' not in json.dumps(asdict(whole))
 
 
 def test_cross_scope_missing_and_wrong_execution_identity_are_incomplete(ledger):

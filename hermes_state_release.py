@@ -1,8 +1,10 @@
 """Content-free, read-only release evidence from the canonical runtime ledger.
 
-Callers supply the database and the *entire explicit session-ID allowlist* for a
-restart scope, including physical transcript IDs they want inspected. No profile,
-lineage expansion, process liveness or execution/admission linkage is inferred.
+Callers supply a profile database and either an explicit session-ID allowlist or
+None for an atomic whole-profile snapshot. None includes the lead and all ledger
+targets, regardless of age. Each profile has its own SQLite read linearization;
+this is not an all-time, cross-profile atomic, or all-OS-work guarantee.
+No execution/admission/lease-holder linkage is invented from matching targets.
 This is an operator reader, not an authorization boundary for untrusted clients.
 
 Snapshot captures all unresolved admissions/workers without an age cutoff. Save
@@ -104,7 +106,7 @@ class ReleaseEvidence:
 
 @dataclass(frozen=True)
 class ReleaseEvidenceBatch:
-    scope: ReleaseScope
+    scope: ReleaseScope | None
     authority_epoch: int | None
     authority_instance_id: str | None
     rows: tuple[ReleaseEvidence, ...]
@@ -152,9 +154,11 @@ def _authority(conn, issues):
 def _read_admissions(conn, scope, issues, *, ids=None, active_only=False):
     if not _has_columns(conn, 'session_admissions', _ADMISSION_COLUMNS, issues):
         return []
-    sql = ('SELECT ' + ','.join(_ADMISSION_COLUMNS) + ' FROM session_admissions '
-           'WHERE target_session_id IN (SELECT value FROM json_each(?))')
-    params = [json.dumps(scope.included_session_ids)]
+    sql = 'SELECT ' + ','.join(_ADMISSION_COLUMNS) + ' FROM session_admissions WHERE 1'
+    params = []
+    if scope is not None:
+        sql += ' AND target_session_id IN (SELECT value FROM json_each(?))'
+        params.append(json.dumps(scope.included_session_ids))
     if ids is not None:
         sql += ' AND admission_id IN (SELECT value FROM json_each(?))'
         params.append(json.dumps(ids))
@@ -168,9 +172,11 @@ def _read_admissions(conn, scope, issues, *, ids=None, active_only=False):
 def _read_workers(conn, scope, issues, *, ids=None, active_only=False):
     if not _has_columns(conn, 'worker_executions', _WORKER_COLUMNS, issues):
         return []
-    sql = ('SELECT ' + ','.join(_WORKER_COLUMNS) + ' FROM worker_executions '
-           'WHERE session_id IN (SELECT value FROM json_each(?))')
-    params = [json.dumps(scope.included_session_ids)]
+    sql = 'SELECT ' + ','.join(_WORKER_COLUMNS) + ' FROM worker_executions WHERE 1'
+    params = []
+    if scope is not None:
+        sql += ' AND session_id IN (SELECT value FROM json_each(?))'
+        params.append(json.dumps(scope.included_session_ids))
     if ids is not None:
         sql += ' AND execution_id IN (SELECT value FROM json_each(?))'
         params.append(json.dumps(ids))
@@ -210,10 +216,56 @@ def _project(raw, kind: Literal['admission', 'execution'], issues,
     return ReleaseEvidence(key, raw['status'], None, worker_kind=raw['kind'], storage=storage)
 
 
-def _snapshot_coverage(conn, scope, issues):
+def _whole_profile_lease_coverage(conn, rows, issues, read_at):
+    """Conservative SQLite lease coverage; never infer OS holder liveness.
+
+    Walk exactly the writer's compression-parent edges (including subagent
+    continuations but not parent-bound branch/delegate/reset forks or tools).
+    Only root IDs cross the result boundary; model_config and holders do not.
+    An unexpired lease without unresolved ledger work cannot be certified. Idle
+    historical sessions are not admissions and do not become synthetic turns.
+    """
+    if not _has_columns(conn, 'session_turn_leases', ('conversation_id', 'expires_at'), issues):
+        return
+    if not _has_columns(conn, 'sessions',
+                        ('id', 'parent_session_id', 'source', 'model_config', 'end_reason'), issues):
+        return
+    edge = "parent.end_reason='compression' AND COALESCE(child.source,'')!='tool'"
+    for marker in ('_branched_from', '_delegate_from', '_reset_from'):
+        edge += (" AND COALESCE(CASE WHEN json_valid(child.model_config) THEN "
+                 f"json_extract(child.model_config,'$.{marker}') END,'')!=parent.id")
+    # A queued admission or delivered steering input cannot account for an
+    # executing legacy turn just because it happens to share the same target.
+    targets = tuple(dict.fromkeys(row.key.target_session_id for row in rows
+        if row.key.kind == 'execution' or row.status in ('started', 'unknown')))
+    untracked = conn.execute(f"""WITH RECURSIVE lineage(id) AS (
+        SELECT value FROM json_each(?)
+        UNION
+        SELECT parent.id FROM lineage r JOIN sessions child ON child.id=r.id
+        JOIN sessions parent ON parent.id=child.parent_session_id WHERE {edge}
+    ), roots(id) AS (
+        SELECT r.id FROM lineage r WHERE NOT EXISTS (
+            SELECT 1 FROM sessions child JOIN sessions parent ON parent.id=child.parent_session_id
+            WHERE child.id=r.id AND {edge})
+    ) SELECT 1 FROM session_turn_leases l WHERE l.expires_at>?
+      AND NOT EXISTS (SELECT 1 FROM roots WHERE roots.id=l.conversation_id) LIMIT 1""",
+        (json.dumps(targets), read_at)).fetchone()
+    if untracked:
+        issues.append('untracked_active_lease')
+    elif conn.execute('SELECT 1 FROM session_turn_leases WHERE expires_at>? LIMIT 1',
+                      (read_at,)).fetchone():
+        # The schema has no holder -> admission/execution binding. A matching
+        # root tells us which ledger to report, not who owns the active lease.
+        issues.append('lease_identity_unavailable')
+
+
+def _snapshot_coverage(conn, scope, issues, rows, read_at):
     if not _has_columns(conn, 'sessions', ('id',), issues):
         return
     if 'schema_incomplete' in issues:
+        return
+    if scope is None:
+        _whole_profile_lease_coverage(conn, rows, issues, read_at)
         return
     for sid in scope.included_session_ids:
         if not conn.execute('SELECT 1 FROM sessions WHERE id=?', (sid,)).fetchone():
@@ -223,24 +275,29 @@ def _snapshot_coverage(conn, scope, issues):
             issues.append('untracked_session')
 
 
-def snapshot_release_evidence(db_path: str | Path, *, scope: ReleaseScope) -> ReleaseEvidenceBatch:
-    """One consistent SQLite snapshot of active work in the explicit restart scope.
+def snapshot_release_evidence(db_path: str | Path, *, scope: ReleaseScope | None = None) -> ReleaseEvidenceBatch:
+    """One consistent SQLite snapshot of active work, optionally whole-profile.
 
-    No timestamps, payloads, transcript bodies, SessionDB constructors, migrations
-    or writes are used. A session with no runtime ledger evidence is explicitly
-    untracked (possibly legacy/idle), not a manufactured completed turn.
+    No payloads, transcript bodies, SessionDB constructors, migrations
+    or writes are used. Explicit scopes retain their legacy untracked-session
+    uncertainty. Whole-profile coverage is bounded to the ledger and turn leases
+    at the first read in this transaction, not all OS work or future arrivals.
     """
     issues = []
     epoch, instance = None, None
     rows = []
     try:
         with _reader(db_path) as conn:
+            # BEGIN is deferred: this database read pins the WAL snapshot and
+            # its lease-expiry clock BEFORE any interleaved ledger reads.
+            read_at = conn.execute("SELECT (julianday('now')-2440587.5)*86400 "
+                                   "FROM sqlite_master LIMIT 1").fetchone()
             epoch, instance = _authority(conn, issues)
             admissions = _read_admissions(conn, scope, issues, active_only=True)
             workers = _read_workers(conn, scope, issues, active_only=True)
             rows = [_project(row, 'admission', issues) for row in admissions]
             rows.extend(_project(row, 'execution', issues) for row in workers)
-            _snapshot_coverage(conn, scope, issues)
+            _snapshot_coverage(conn, scope, issues, rows, read_at[0] if read_at else 0)
     except (sqlite3.Error, OSError):
         issues.append('database_unavailable')
         rows = []
@@ -277,7 +334,7 @@ def _lookup_rows(conn, scope, keys, issues):
     live.update({('execution', row['execution_id']): row for row in workers})
     rows, missing = [], []
     for key in keys:
-        if key.target_session_id not in scope.included_session_ids:
+        if scope is not None and key.target_session_id not in scope.included_session_ids:
             issues.append('outside_scope')
             missing.append(key)
             continue
@@ -303,7 +360,7 @@ def _lookup_rows(conn, scope, keys, issues):
     return rows, missing
 
 
-def lookup_release_evidence(db_path: str | Path, *, scope: ReleaseScope,
+def lookup_release_evidence(db_path: str | Path, *, scope: ReleaseScope | None = None,
                             keys: tuple[EvidenceKey, ...]) -> ReleaseEvidenceBatch:
     """Read saved exact IDs, including terminal rows/tombstones, in one transaction.
 
@@ -313,6 +370,8 @@ def lookup_release_evidence(db_path: str | Path, *, scope: ReleaseScope,
     Epoch drift on a bound identity keeps its current status visible but marks the
     batch incomplete: this reader cannot certify the intervening adoption proof.
     Tombstone retention is upstream-owned; expired/missing rows cannot prove completion.
+    None removes the session allowlist, NOT the exact saved-key bounds: only the
+    requested IDs are selected, and each target and nullable fence is preserved.
     """
     issues = []
     epoch, instance = None, None
