@@ -365,7 +365,7 @@ def _project_tree_inputs(
     rows = db.list_sessions_rich(
         limit=session_limit, offset=0, order_by_last_active=True, min_message_count=1,
         include_children=False, exclude_sources=_PROJECT_TREE_EXCLUDED_SOURCES,
-        include_archived=False, compact_rows=True)
+        include_archived=False, compact_rows=True, exclude_threads=True)
     sessions = [_project_tree_row(r) for r in rows]
     # Parallel-warm the git cache so build_tree's resolver doesn't cold-probe each cwd in turn.
     git_probe.warm_roots(s["cwd"] for s in sessions if s.get("cwd"))

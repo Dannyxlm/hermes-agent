@@ -190,7 +190,8 @@ def _list_scope(home: Path, *, source, sources, exclude_sources, cwd_prefix, min
         source=source or None, sources=source_list or None,
         exclude_sources=exclude_list or None, cwd_prefix=(cwd_prefix or None),
         min_message_count=max(0, min_messages), include_archived=archived == "include",
-        archived_only=archived == "only", include_subagents=include_subagents)
+        archived_only=archived == "only", include_subagents=include_subagents,
+        exclude_threads=True)
 
 
 # (store, filters) -> (journal cursor, total, archived_count) of the last answer. A list's totals move

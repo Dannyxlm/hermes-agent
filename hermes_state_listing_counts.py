@@ -4,9 +4,10 @@ from hermes_state_sessions_metadata import _where_sql
 from hermes_state_local import exclude_superseded_segments
 
 
-def listing_counts(db, *, include_archived=False, archived_only=False, **scope):
+def listing_counts(db, *, include_archived=False, archived_only=False, exclude_threads=False, **scope):
     where, params = _session_filter_where(
-        include_archived=True, archived_only=False, **scope)
+        include_archived=True, archived_only=False,
+        thread_profile=(db._own_profile_name() or "default") if exclude_threads else None, **scope)
     if scope.get('exclude_children'):
         exclude_superseded_segments(db, where, params)
     row = db._read_one(

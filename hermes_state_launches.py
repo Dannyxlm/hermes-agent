@@ -31,6 +31,20 @@ def thread_parents(db, profile, lineages):
     return result
 
 
+def exclude_threads_where(profile):
+    """SQL list scope, before paging/counts. Only bound thread-tool provenance qualifies.
+
+    The launch binding retains the created root across compression; Chats filters it
+    before projecting its tip. Never infer thread ownership from a parent edge.
+    Keep this opt-in: Family, active rosters and direct reads retain every child.
+    """
+    return """s.id NOT IN (
+        SELECT child_session_id FROM work_launches
+        WHERE substr(launch_id,1,7)='thread:' AND child_profile=?
+          AND child_session_id IS NOT NULL AND length(trim(launcher_session_id))>0
+    )""", [profile]
+
+
 def short_title(title):
     return title if title is None or len(title) <= 40 else title[:39] + '…'
 
