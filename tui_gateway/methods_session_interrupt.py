@@ -97,7 +97,8 @@ def _(rid, params: dict) -> dict:
         # A relay never owns the local running slot. Its stale pending cache must not
         # divert Stop away from a later local turn after the owner/relay has gone.
         if params.get("admission_id") is not None or (not session.get("running") and any(
-                r["receipt"].get("status") != "terminal" for r in session.get("_forwarded_admissions", {}).values())):
+                not r.get('observed_only') and r["receipt"].get("status") != "terminal"
+                for r in session.get("_forwarded_admissions", {}).values())):
             return _interrupt_forwarded(rid, sid, session, params)
         _note_user_input(session)
         if _session_uses_compute_host(session):
@@ -129,7 +130,7 @@ def _(rid, params: dict) -> dict:
 
 
 def _forwarded_control(rid, sid, session, verb, admission_id, generation=None, *, stop=False):
-    from tui_gateway.owner_forward import control_forwarded, pending_submissions
+    from tui_gateway.owner_forward import cached_blocking_unknown, control_forwarded, pending_submissions
     from hermes_state_runtime import RuntimeStoreError
     from hermes_cli.gateway_client import GatewayRPCError
     from websockets.exceptions import WebSocketException
@@ -140,10 +141,15 @@ def _forwarded_control(rid, sid, session, verb, admission_id, generation=None, *
     except GatewayRPCError as exc:
         return _err(rid, 4090, str(exc), data=exc.data)
     except (OSError, RuntimeError, TimeoutError, WebSocketException) as exc:
+        with session['history_lock']:
+            record = session.get('_forwarded_admissions', {}).get(admission_id)
+            if record is not None and record.get('observed_only'):
+                record['receipt'] = {**record['receipt'], 'controls': []}
         return _err(rid, 4090, str(exc), data={"reason": "SESSION_OWNER_UNCONFIRMED"})
     finally:
         _emit("session.info", sid, {"stored_session_id": session.get("session_key"),
-                                    "pending_submissions": pending_submissions(session)})
+                                    "pending_submissions": pending_submissions(session),
+                                    "blocking_unknown": cached_blocking_unknown(session)})
     return _ok(rid, result)
 
 
@@ -152,6 +158,8 @@ def _interrupt_forwarded(rid, sid, session, params):
     with session["history_lock"]:
         records = list(session.get("_forwarded_admissions", {}).items())
     selected = params.get("admission_id")
+    if selected is None:
+        records = [(aid, row) for aid, row in records if not row.get('observed_only')]
     if selected is not None:
         records = [(aid, row) for aid, row in records if aid == selected]
         if not records:

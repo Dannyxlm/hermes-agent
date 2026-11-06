@@ -3890,7 +3890,7 @@
       "result": {
         "name": "result",
         "schema": {
-          "$ref": "#/components/schemas/AdmissionStatus"
+          "$ref": "#/components/schemas/AdmissionControlStatus"
         }
       }
     },
@@ -6167,6 +6167,85 @@
           "subagent_id"
         ],
         "title": "ActiveSubagent",
+        "type": "object"
+      },
+      "AdmissionControlStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/CanonicalSessionRef"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "started",
+              "unknown",
+              "terminal"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "authority_epoch": {
+            "title": "Authority Epoch",
+            "type": "integer"
+          },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Generation"
+          },
+          "controls": {
+            "anyOf": [
+              {
+                "items": {
+                  "const": "resolve_unknown",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controls"
+          }
+        },
+        "required": [
+          "admission_id",
+          "ref",
+          "sequence",
+          "status",
+          "outcome",
+          "authority_epoch",
+          "execution_generation"
+        ],
+        "title": "AdmissionControlStatus",
         "type": "object"
       },
       "AdmissionStatus": {
@@ -9934,6 +10013,64 @@
           "user_code"
         ],
         "title": "BillingStepUpVerificationPayload",
+        "type": "object"
+      },
+      "BlockingUnknownAdmission": {
+        "additionalProperties": false,
+        "description": "Owner-verified barrier metadata, never input text or client-inferred identity.",
+        "properties": {
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/BlockingUnknownRef"
+          },
+          "status": {
+            "const": "unknown",
+            "title": "Status",
+            "type": "string"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          },
+          "controls": {
+            "items": {
+              "const": "resolve_unknown",
+              "type": "string"
+            },
+            "title": "Controls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "admission_id",
+          "ref",
+          "status",
+          "execution_generation",
+          "controls"
+        ],
+        "title": "BlockingUnknownAdmission",
+        "type": "object"
+      },
+      "BlockingUnknownRef": {
+        "additionalProperties": false,
+        "properties": {
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "session_id"
+        ],
+        "title": "BlockingUnknownRef",
         "type": "object"
       },
       "BotRelayDeliverParams": {
@@ -43466,6 +43603,22 @@
             ],
             "title": "Execution Generation"
           },
+          "controls": {
+            "anyOf": [
+              {
+                "items": {
+                  "const": "resolve_unknown",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Controls"
+          },
           "result": {
             "anyOf": [
               {},
@@ -49158,6 +49311,21 @@
             "default": null,
             "title": "Pending Submissions"
           },
+          "blocking_unknown": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BlockingUnknownAdmission"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Blocking Unknown"
+          },
           "queue_receipts": {
             "anyOf": [
               {
@@ -50329,6 +50497,21 @@
             ],
             "default": null,
             "title": "Pending Submissions"
+          },
+          "blocking_unknown": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BlockingUnknownAdmission"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Blocking Unknown"
           },
           "queue_receipts": {
             "anyOf": [

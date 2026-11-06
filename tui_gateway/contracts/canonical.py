@@ -44,16 +44,21 @@ class PromptReceiptParams(Params):
     include_result: bool | None = None
 
 
+class AdmissionControlStatus(AdmissionStatus):
+    # Absent on old owners: never infer support or permission from status alone.
+    controls: list[Literal['resolve_unknown']] | None = None
+
+
 # The legacy bridge serves these values too, but its parameters carry a runtime session/profile.
 method("prompt.cancel", params=ForwardedAdmissionParams, result=AdmissionStatus,
        doc="Cancel this live session's forwarded admission on its owner, including a racing claim.")
-method("prompt.receipt", params=ForwardedAdmissionParams, result=AdmissionStatus,
+method("prompt.receipt", params=ForwardedAdmissionParams, result=AdmissionControlStatus,
        doc="Refresh this live session's forwarded admission without resubmitting it.")
 method("prompt.resolve_unknown", params=ForwardedResolveParams, result=AdmissionStatus,
        doc="Discard the exact forwarded unknown generation on its owner; never replay it.")
 
 
-class PromptReceiptResult(AdmissionStatus):
+class PromptReceiptResult(AdmissionControlStatus):
     """``result`` / ``usage``: the structured turn result committed at settlement, only with
     ``include_result`` on a terminal admission that saved one."""
 

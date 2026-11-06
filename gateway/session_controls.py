@@ -877,6 +877,15 @@ class AuthorityConnection:
     async def receipt(self, ref, params):
         receipt = await self.authority.receipt(self.actor, ref, params.get('admission_id'))
         out = asdict(receipt)
+        out['controls'] = []
+        if receipt.status == 'unknown' and type(receipt.execution_generation) is int:
+            try:
+                self.authority.authorize(self.actor, ref, 'session:control')
+            except RuntimeStoreError as exc:
+                if exc.reason != 'permission_denied':
+                    raise
+            else:
+                out['controls'] = ['resolve_unknown']
         if params.get('include_result') is True and receipt.status == 'terminal':
             # The exact structured result the turn committed with settlement (`finish_result`):
             # a finite viewer reads its ledger (tokens, cost, model, exit reason) from here, the same

@@ -1590,7 +1590,7 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
     agent = session.get("agent")
-    info = _session_info(agent, session)
+    info = {**_session_info(agent, session), **_session_control_info(session)}
     if agent is None and not _metadata_mirror(session):
         info.update(_lazy_info_route(session, session.get("model_override") or {}), tools={}, skills={}, lazy=True)
     return _ok(rid, info)

@@ -154,11 +154,11 @@ def _ensure_active_session_slot(sid: str, session: dict) -> str | None:
 
 
 # Unknown in either ledger pauses the whole FIFO, even when queued followers exist.
-_CANONICAL_PENDING_SQL = """SELECT status FROM (
-    SELECT status FROM session_admissions WHERE target_session_id=? AND status!='terminal'
-    UNION ALL SELECT status FROM worker_executions WHERE session_id=? AND status!='terminal'
+_CANONICAL_PENDING_SQL = """SELECT status,admission_id FROM (
+    SELECT status,admission_id,seq FROM session_admissions WHERE target_session_id=? AND status!='terminal'
+    UNION ALL SELECT status,NULL,0 FROM worker_executions WHERE session_id=? AND status!='terminal'
     ) ORDER BY CASE status WHEN 'unknown' THEN 0 WHEN 'started' THEN 1 WHEN 'running' THEN 1
-        WHEN 'registered' THEN 2 ELSE 3 END LIMIT 1"""
+        WHEN 'registered' THEN 2 ELSE 3 END, admission_id IS NULL, seq LIMIT 1"""
 
 
 def _end_unless_ledger_busy(db, session_id: str, session_key, end_reason: str) -> bool:
@@ -229,6 +229,7 @@ def _canonical_ledger_refusal(session: dict):
     # prompt.submit forwards a typed prompt to the owner's FIFO for work that ends on its own
     # (tui_gateway/owner_forward.py); an ``unknown`` admission is never forwarded past.
     refusal.ledger_status = row[0]
+    refusal.ledger_admission_id = row[1]
     return refusal
 
 
@@ -891,9 +892,9 @@ def _interrupt_session_turn(
 
 def _session_control_info(session):
     """Receipt projection shared by cold and warm resume; no replay or transcript inference."""
-    from tui_gateway.owner_forward import pending_submissions
+    from tui_gateway.owner_forward import blocking_unknown, pending_submissions
     from tui_gateway.local_queue_receipts import snapshot
-    info = {"pending_submissions": pending_submissions(session)}
+    info = {"pending_submissions": pending_submissions(session), "blocking_unknown": blocking_unknown(session)}
     with _session_db(session) as db:
         if db is not None:
             info["queue_receipts"] = snapshot(db, session["session_key"], _sessions)

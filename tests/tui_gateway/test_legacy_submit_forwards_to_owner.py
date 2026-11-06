@@ -257,10 +257,10 @@ def test_forwarded_websocket_failure_is_a_typed_uncertain_control_error(monkeypa
 class _OwnerClient:
     """``GatewayClient``'s surface (``rpc`` + ``events``) over a real ``AuthorityConnection``."""
 
-    def __init__(self, authority):
+    def __init__(self, authority, identity=None):
         from gateway.session_controls import AuthorityConnection
         self.loop, self.events = asyncio.get_running_loop(), asyncio.Queue()
-        self.conn = AuthorityConnection(authority, self, {"user_id": "desktop"})
+        self.conn = AuthorityConnection(authority, self, identity or {"user_id": "desktop"})
 
     def write(self, frame):  # the owner's fanout to this socket
         self.loop.call_soon_threadsafe(self.events.put_nowait, frame)
@@ -284,7 +284,7 @@ def _legacy(monkeypatch, db):
         monkeypatch.setattr(server, name, lambda *_a, **_k: None)
     monkeypatch.setattr(server, "_restart_completed_failed_agent_build", lambda *_a: False)
     turns, emitted = [], []
-    monkeypatch.setattr(server, "_run_after_agent_ready", lambda *a: turns.append(a[1]))
+    monkeypatch.setattr(server, "_run_after_agent_ready", lambda *a, **kw: turns.append(a[1]))
     monkeypatch.setattr(server, "_emit", lambda event, sid, payload=None: emitted.append((event, sid, payload)) or True)
     created = server.handle_request({"id": "c", "method": "session.create", "params": {"source": "desktop"}})
     return created["result"]["session_id"], created["result"]["stored_session_id"], turns, emitted
@@ -302,11 +302,13 @@ def _owner(monkeypatch, db, key, epoch):
     except ImportError:  # main: no forwarder; the submit is refused and the assertions below fail
         return authority
 
+    endpoint = SimpleNamespace(profile_id=authority.profile_id)
+
     @contextlib.asynccontextmanager
-    async def connect(_home, endpoint):
-        assert endpoint == "ready-owner"
+    async def connect(_home, selected):
+        assert selected is endpoint
         yield _OwnerClient(authority)
-    monkeypatch.setattr(owner_forward, "discover_owner", lambda _home: "ready-owner")
+    monkeypatch.setattr(owner_forward, "discover_owner", lambda _home: endpoint)
     monkeypatch.setattr(owner_forward, "connect_owner", connect)
     return authority
 
@@ -375,16 +377,24 @@ def test_outcome_unknown_work_is_still_refused_and_never_forwarded(monkeypatch, 
     try:
         db.create_session(key, "test")
         first = begin_runtime_epoch(db, instance_id="gateway-1")
-        admit_session_input(db, epoch=first, principal_id="bot", session_id=key, request_id="dm-1",
-                            payload={"text": "lost?"})
-        claim_session_input(db, epoch=first, session_id=key)
+        lost = admit_session_input(db, epoch=first, principal_id="bot", session_id=key, request_id="dm-1",
+                                   payload={"text": "lost?"})
+        claimed = claim_session_input(db, epoch=first, session_id=key)
         epoch = begin_runtime_epoch(db, instance_id="gateway-2")
         recover_session_inputs(db, epoch=epoch)
         _owner(monkeypatch, db, key, epoch)
         reply = server.handle_request({"id": "p", "method": "prompt.submit",
                                        "params": {"session_id": sid, "text": "hi"}})
-        assert reply["error"]["code"] == 4090 and reply["error"]["data"] == {
-            "reason": "SESSION_NOT_OWNED", "ownership_reason": "outcome_unknown"}
+        assert reply["error"]["code"] == 4090
+        data = reply['error']['data']
+        assert data['reason'] == 'SESSION_NOT_OWNED' and data['ownership_reason'] == 'outcome_unknown'
+        assert data['blocking_unknown'] == [{
+            'admission_id': lost['admission_id'], 'ref': {'profile_id': 'owned', 'session_id': key},
+            'status': 'unknown', 'execution_generation': claimed['generation'], 'controls': ['resolve_unknown']}]
+        assert 'lost?' not in str(data)  # metadata only, not the blocked turn's private input
+        receipt = server.handle_request({'id': 'refresh', 'method': 'prompt.receipt',
+            'params': {'session_id': sid, 'admission_id': lost['admission_id']}})
+        assert receipt['result']['status'] == 'unknown' and receipt['result']['controls'] == ['resolve_unknown']
         assert len(list_session_admissions(db, session_id=key)) == 1 and turns == []
     finally:
         server._sessions.pop(sid, None)

@@ -749,7 +749,8 @@ def _submit_to_ledger_owner(rid, sid, session, text, params, refusal) -> dict:
     from tui_gateway import owner_forward
     not_owned = _err(rid, 4090, str(refusal), _ownership_refusal_data(refusal))
     if getattr(refusal, "ledger_status", None) == "unknown":
-        return not_owned
+        data = {**_ownership_refusal_data(refusal), 'blocking_unknown': owner_forward.blocking_unknown(session, refusal)}
+        return _err(rid, 4090, str(refusal), data)
     why = None
     if not owner_forward.forwardable(refusal, session, text, params):
         why = ("a rewind or attachment cannot join its queue" if isinstance(text, str) and text.strip()

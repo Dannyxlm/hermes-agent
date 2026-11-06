@@ -230,6 +230,74 @@ class _Relay:
                     "pending_submissions": pending_submissions(self.session), "owner_connected": False})
 
 
+def blocking_unknown(session: dict, refusal=None) -> list[dict]:
+    """Refresh the ledger's exact barrier through the profile-bound owner's receipt RPC.
+
+    A local ledger ID is only a lookup hint, never control authority. No attach (which would
+    read pending bodies), submit, or recovery write occurs. Offline/old/unentitled owners
+    cannot advertise Discard. Observed barriers share the existing receipt/control cache,
+    but are not this window's submitted prompts and ordinary Stop must not touch them.
+    """
+    from tui_gateway import server
+    from tui_gateway.contracts.common import BlockingUnknownAdmission
+    from hermes_cli.gateway_client import GatewayRPCError
+    from hermes_state_runtime import RuntimeStoreError
+    from pydantic import ValidationError
+    from websockets.exceptions import WebSocketException
+
+    refusal = refusal if refusal is not None else server._canonical_ledger_refusal(session)
+    aid = getattr(refusal, 'ledger_admission_id', None)
+    with session['history_lock']:
+        records = session.get('_forwarded_admissions', {})
+        for old in [key for key, row in records.items() if row.get('observed_only')]:
+            del records[old]
+    if getattr(refusal, 'ledger_status', None) != 'unknown' or not aid:
+        return []  # A worker-only barrier has no admission control on this bridge.
+    home = Path(session.get('profile_home') or server._hermes_home).resolve()
+    target = str(session['session_key'])
+
+    async def refresh():
+        endpoint = discover_owner(home)
+        async with connect_owner(home, endpoint) as client:
+            receipt = await client.rpc('prompt.receipt', session_id=target, admission_id=aid)
+        if (receipt.get('admission_id') != aid or receipt.get('ref') != {
+                'session_id': target, 'profile_id': endpoint.profile_id}):
+            raise RuntimeStoreError('profile_mismatch')
+        shaped = BlockingUnknownAdmission.model_validate({
+            key: receipt.get(key, [] if key == 'controls' else None) for key in (
+                'admission_id', 'ref', 'status', 'execution_generation', 'controls')}).model_dump()
+        with session['history_lock']:
+            records = session.setdefault('_forwarded_admissions', {})
+            if aid not in records:
+                records[aid] = {'home': home, 'endpoint': endpoint, 'target': target,
+                                'receipt': receipt, 'observed_only': True}
+            else:
+                records[aid]['receipt'] = receipt
+        return [shaped]
+    async def refresh_bounded():
+        async with asyncio.timeout(ADMIT_TIMEOUT_S):
+            return await refresh()
+    try:
+        return asyncio.run(refresh_bounded())
+    except (GatewayRPCError, RuntimeStoreError, ValidationError, OSError, RuntimeError,
+            TimeoutError, WebSocketException):
+        logger.debug('Owner could not verify unknown admission for %s', target, exc_info=True)
+        return []
+
+
+def cached_blocking_unknown(session: dict) -> list[dict]:
+    """Project only verified receipts retained by the existing owner control path."""
+    from tui_gateway import server
+    home = Path(session.get('profile_home') or server._hermes_home).resolve()
+    with session['history_lock']:
+        return [{key: row['receipt'][key] for key in (
+                    'admission_id', 'ref', 'status', 'execution_generation')}
+                | {'controls': row['receipt'].get('controls') or []}
+                for row in session.get('_forwarded_admissions', {}).values()
+                if row.get('observed_only') and row['home'] == home
+                and row['target'] == session.get('session_key') and row['receipt'].get('status') == 'unknown']
+
+
 def pending_submissions(session: dict) -> list[dict]:
     """Session-owned identity, not relay-owned state: safe to read after socket loss."""
     controls = {"queued": ["cancel"], "started": ["interrupt"], "unknown": ["resolve_unknown"]}
@@ -238,7 +306,7 @@ def pending_submissions(session: dict) -> list[dict]:
                  "input_id": r["input_id"], "execution_generation": r["receipt"].get("execution_generation"),
                  "controls": controls[r["receipt"]["status"]]}
                 for aid, r in session.get("_forwarded_admissions", {}).items()
-                if r["receipt"].get("status") in controls]
+                if not r.get('observed_only') and r["receipt"].get("status") in controls]
 
 
 def control_forwarded(session: dict, method: str, admission_id: str, generation=None, *, stop=False) -> dict:
@@ -257,6 +325,8 @@ def control_forwarded(session: dict, method: str, admission_id: str, generation=
         if home != record["home"]:
             raise RuntimeStoreError("profile_mismatch")
         target, expected_ref = record["target"], record["receipt"].get("ref")
+        if record.get('observed_only') and target != session.get('session_key'):
+            raise RuntimeStoreError('not_found')
 
     async def call():
         endpoint = discover_owner(home)
@@ -268,6 +338,9 @@ def control_forwarded(session: dict, method: str, admission_id: str, generation=
                 record["endpoint"], record["receipt"] = endpoint, receipt
             if method == "prompt.receipt":
                 return receipt
+            if record.get('observed_only') and (stop or method != 'prompt.resolve_unknown'
+                    or 'resolve_unknown' not in (receipt.get('controls') or [])):
+                raise RuntimeStoreError('permission_denied')
             verb = method
             if stop:
                 if receipt["status"] == "terminal":

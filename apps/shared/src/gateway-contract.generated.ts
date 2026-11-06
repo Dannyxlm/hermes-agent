@@ -573,6 +573,7 @@ export interface SessionLiveInfo {
   credential_warning?: string | null
   lazy?: boolean | null
   pending_submissions?: ForwardedPendingSubmission[] | null
+  blocking_unknown?: BlockingUnknownAdmission[] | null
   queue_receipts?: LocalQueueReceipt[] | null
   owner_connected?: boolean | null
   [key: string]: unknown
@@ -633,6 +634,18 @@ export interface ForwardedPendingSubmission {
   user: string
   execution_generation?: number | null
   controls: ('cancel' | 'interrupt' | 'resolve_unknown')[]
+}
+/** Owner-verified barrier metadata, never input text or client-inferred identity. */
+export interface BlockingUnknownAdmission {
+  admission_id: string
+  ref: BlockingUnknownRef
+  status: 'unknown'
+  execution_generation: number
+  controls: 'resolve_unknown'[]
+}
+export interface BlockingUnknownRef {
+  profile_id: string
+  session_id: string
 }
 export interface LocalQueueReceipt {
   input_id: string
@@ -3375,6 +3388,7 @@ export interface SessionCwdSetResult {
   credential_warning?: string | null
   lazy?: boolean | null
   pending_submissions?: ForwardedPendingSubmission[] | null
+  blocking_unknown?: BlockingUnknownAdmission[] | null
   queue_receipts?: LocalQueueReceipt[] | null
   owner_connected?: boolean | null
   [key: string]: unknown
@@ -6260,6 +6274,16 @@ export interface CanonicalSessionRef {
   profile_id: string
   session_id: string
 }
+export interface AdmissionControlStatus {
+  admission_id: string
+  ref: CanonicalSessionRef
+  sequence: number
+  status: 'queued' | 'started' | 'unknown' | 'terminal'
+  outcome: string | null
+  authority_epoch: number
+  execution_generation: number | null
+  controls?: 'resolve_unknown'[] | null
+}
 export interface ForwardedResolveParams {
   session_id: string
   profile?: string | null
@@ -6338,6 +6362,7 @@ export interface PromptReceiptResult {
   outcome: string | null
   authority_epoch: number
   execution_generation: number | null
+  controls?: 'resolve_unknown'[] | null
   result?: unknown | null
   usage?: Record<string, unknown> | null
 }
@@ -8345,7 +8370,7 @@ export interface RpcMethods {
   /** Cancel this live session's forwarded admission on its owner, including a racing claim. */
   'prompt.cancel': { params: ForwardedAdmissionParams; result: AdmissionStatus }
   /** Refresh this live session's forwarded admission without resubmitting it. */
-  'prompt.receipt': { params: ForwardedAdmissionParams; result: AdmissionStatus }
+  'prompt.receipt': { params: ForwardedAdmissionParams; result: AdmissionControlStatus }
   /** Discard the exact forwarded unknown generation on its owner; never replay it. */
   'prompt.resolve_unknown': { params: ForwardedResolveParams; result: AdmissionStatus }
   /** Send a user turn to a live session; busy sessions queue / steer / redirect instead of refusing. */
