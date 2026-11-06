@@ -495,7 +495,8 @@ def get_profiles_sessions(
             include_subagents, exclude = subagent_listing_scope(
                 home, source=filters["source"], sources=filters["sources"],
                 exclude_sources=filters["exclude_sources"])
-            scoped = {**filters, "exclude_sources": exclude, "include_subagents": include_subagents}
+            scoped = {**filters, "exclude_sources": exclude, "include_subagents": include_subagents,
+                      "exclude_threads": True}
             rows = db.list_sessions_rich(
                 limit=per_profile, offset=0, order_by_last_active=order == "recent",
                 # Same SQL-level blob skip as /api/sessions.
@@ -563,7 +564,7 @@ def get_profiles_sessions_sidebar(
             source=source, exclude_sources=exclude or None, limit=cap[key], offset=0,
             min_message_count=1, include_archived=False, archived_only=False,
             order_by_last_active=True, compact_rows=True, include_pinned=True,
-            include_subagents=include_subagents)
+            include_subagents=include_subagents, exclude_threads=True)
 
     def _build_slices(db, cache_key, recents_subagents):
         # ``usage`` is aggregated in SQL rather than over the recents window: the window is a

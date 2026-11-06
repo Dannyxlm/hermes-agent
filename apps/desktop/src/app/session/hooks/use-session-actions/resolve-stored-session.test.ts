@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setApiRequestConnection, setApiRequestLocalMode } from '@/api/client'
 import type * as HermesModule from '@/hermes'
 import { getSession } from '@/hermes'
 import { $activeGatewayProfile, $profiles } from '@/store/profile'
 import { $projectTree } from '@/store/projects'
 import { $cronSessions, $messagingSessions, $sessions, $unlistedSessionOwnerRows } from '@/store/session'
+import { rememberUnlistedSessionRows } from '@/store/session-list-membership'
 import { $removedSessionIds, tombstoneSessions, untombstoneSessions } from '@/store/session-removal'
 import type { SessionInfo } from '@/types/hermes'
 
+import { captureDisplayHydration } from './display-hydration'
 import { cachedSessionRow, resolveStoredSession } from './utils'
 
 vi.mock('@/hermes', async importActual => ({
@@ -145,6 +148,32 @@ describe('resolveStoredSession profile ownership', () => {
     expect($sessions.get()).toEqual([])
     // owner resolution still finds the row on the off-list stub atom
     expect($unlistedSessionOwnerRows.get().find(s => s.id === 's1')?.hidden).toBe(true)
+  })
+
+  it('keeps a Family thread directly resolvable off-list without promoting or mutating it', async () => {
+    const worker = { ...session({ id: 'thread-tip', _lineage_root_id: 'thread-root', _lineage_ids: ['thread-root', 'thread-tip'], source: 'tui' }), thread_parent_id: 'lead' }
+    mockGetSession.mockResolvedValueOnce(worker)
+
+    const resolved = await resolveStoredSession('thread-root', {
+      connectionId: 'rig', profile: 'meta', targetProfile: 'meta'
+    } as never)
+
+    expect(resolved).toMatchObject({ id: 'thread-tip', thread_parent_id: 'lead', profile: 'meta', connection_id: 'rig' })
+    expect($sessions.get()).toEqual([])
+    expect($unlistedSessionOwnerRows.get()).toEqual([resolved])
+    expect(await resolveStoredSession('thread-root', { connectionId: 'rig', profile: 'meta', targetProfile: 'meta' } as never)).toBe(resolved)
+    expect(mockGetSession).toHaveBeenCalledTimes(1)
+    expect(resolved?.hidden).toBeUndefined()
+    expect(resolved?.archived).toBeUndefined()
+  })
+
+  it('keeps off-list Family twins separate across profiles and connections', async () => {
+    const twin = session({ id: 's1', profile: 'default', connection_id: 'other', hidden: true })
+    $unlistedSessionOwnerRows.set([twin])
+    mockGetSession.mockResolvedValueOnce({ ...session({ id: 's1', source: 'tui' }), thread_parent_id: 'lead' })
+    const resolved = await resolveStoredSession('s1', { connectionId: 'rig', profile: 'meta', targetProfile: 'meta' } as never)
+    expect($sessions.get()).toEqual([])
+    expect($unlistedSessionOwnerRows.get()).toEqual([resolved, twin])
   })
 
   it('returns an internal delegate child without promoting it into regular sessions', async () => {
@@ -308,14 +337,71 @@ describe('cachedSessionRow owner preference', () => {
     $messagingSessions.set([])
     $sessions.set([])
     $projectTree.set([])
+    $unlistedSessionOwnerRows.set([])
+    setApiRequestConnection('rig')
     mockGetSession.mockReset()
   })
 
   afterEach(() => {
+    $unlistedSessionOwnerRows.set([])
+    setApiRequestConnection(null)
+    setApiRequestLocalMode(false)
     $cronSessions.set([])
     $messagingSessions.set([])
     $sessions.set([])
     $projectTree.set([])
+  })
+
+  it.each(['rig', 'local'])('returns the real listed row instead of its ambient-connection tagged draft stub (%s)', connectionId => {
+    setApiRequestLocalMode(connectionId === 'local')
+    setApiRequestConnection(connectionId === 'local' ? null : connectionId)
+    const real = session({ id: 's1', profile: 'work', title: 'Real conversation', preview: 'Latest answer' })
+    $sessions.set([real])
+    $unlistedSessionOwnerRows.set([session({ id: 's1', profile: 'work', connection_id: connectionId, title: null })])
+
+    expect(cachedSessionRow('s1')).toBe(real)
+    expect(cachedSessionRow('s1', { connectionId, profile: 'work' })).toBe(real)
+  })
+
+  it('never shadows a tagged off-list twin on a different connection or profile', () => {
+    const real = session({ id: 's1', profile: 'work', title: 'Real conversation' })
+    const foreign = session({ id: 's1', profile: 'work', connection_id: 'elsewhere', title: 'Foreign twin' })
+    const otherProfile = session({ id: 's1', profile: 'other', connection_id: 'rig', title: 'Other profile' })
+    $sessions.set([real])
+    $unlistedSessionOwnerRows.set([foreign, otherProfile])
+
+    expect(cachedSessionRow('s1', { connectionId: 'elsewhere', profile: 'work' })).toBe(foreign)
+    expect(cachedSessionRow('s1', { connectionId: 'rig', profile: 'other' })).toBe(otherProfile)
+  })
+
+  it.each(['rig', 'elsewhere'])('keeps display hydration only when off-list parking preserves the ambient owner (%s)', connection => {
+    const stored = session({ id: 's1', profile: 'work' })
+    $sessions.set([stored])
+
+    const hydration = captureDisplayHydration({
+      flights: new Map(), key: 's1', runtimeIdByStoredSessionIdRef: { current: new Map() },
+      sessionStateByRuntimeIdRef: { current: new Map() }, stored, storedSessionId: 's1'
+    })
+
+    expect(hydration.owns()).toBe(true)
+    rememberUnlistedSessionRows([{ ...stored, _thread_list_excluded: true }], connection)
+    $sessions.set([])
+
+    expect(hydration.owns()).toBe(connection === 'rig')
+  })
+
+  it('revokes an untagged display hydration when the actual ambient connection changes', () => {
+    const stored = session({ id: 's1', profile: 'work' })
+    $sessions.set([stored])
+
+    const hydration = captureDisplayHydration({
+      flights: new Map(), key: 's1', runtimeIdByStoredSessionIdRef: { current: new Map() },
+      sessionStateByRuntimeIdRef: { current: new Map() }, stored, storedSessionId: 's1'
+    })
+
+    setApiRequestConnection('elsewhere')
+
+    expect(hydration.owns()).toBe(false)
   })
 
   it('prefers a self-describing project-tree row over an ownerless Recents duplicate', () => {

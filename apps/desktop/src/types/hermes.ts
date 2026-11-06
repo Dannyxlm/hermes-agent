@@ -3,6 +3,7 @@ import type { ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } fr
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
 
 import type { BackendManagedSourceUpdate } from './hermes-managed-source'
+import type { SessionListMembership } from './session-list-membership'
 
 export * from './hermes-managed-source'
 
@@ -612,7 +613,7 @@ export interface SessionCreateResponse {
   stored_session_id?: string
 }
 
-export interface SessionInfo {
+export interface SessionInfo extends SessionListMembership {
   archived?: boolean
   cwd?: null | string
   /** Git branch checked out in {@link cwd} when the session started/resumed.
@@ -669,10 +670,6 @@ export interface SessionInfo {
   _reset_from?: null | string
   /** Parent of a genuine /branch fork. The sidebar nests only these. */
   _branched_from?: null | string
-  /** True for an internal delegate_task child. Exact-id endpoints return these
-   *  rows for direct watch/resume, but ordinary session lists must not surface
-   *  them. Undefined against backends predating the projection. */
-  is_internal_child?: boolean
   /** Durable server-side pin flag (`sessions.pinned`). The list endpoints
    *  back-fill pinned conversations past their LIMIT, so a pinned row is
    *  always present in a page — which makes this authoritative for the

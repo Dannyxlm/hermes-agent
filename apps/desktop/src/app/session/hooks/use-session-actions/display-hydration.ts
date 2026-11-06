@@ -1,5 +1,6 @@
 import type { MutableRefObject } from 'react'
 
+import { ambientOwnerConnectionId } from '@/api/client'
 import type { SessionInfo } from '@/hermes'
 import { isSessionRemovalPending } from '@/store/session-removal'
 
@@ -33,7 +34,7 @@ export function captureDisplayHydration({
   const identity = stored && {
     id: stored.id,
     lineageRootId: stored._lineage_root_id,
-    connectionId: stored.connection_id,
+    connectionId: stored.connection_id ?? ambientOwnerConnectionId(),
     profile: stored.profile
   }
 
@@ -54,7 +55,7 @@ export function captureDisplayHydration({
             row &&
             row.id === identity.id &&
             row._lineage_root_id === identity.lineageRootId &&
-            row.connection_id === identity.connectionId &&
+            (row.connection_id ?? ambientOwnerConnectionId()) === identity.connectionId &&
             row.profile === identity.profile
           ))
       )

@@ -1,4 +1,5 @@
 
+import { ambientOwnerConnectionId } from '@/api/client'
 import { resolveSessionRpcOwner } from '@/app/contrib/wiring-routing'
 import { textWithoutReferenceLines } from '@/components/assistant-ui/reference-kinds'
 import { getSession } from '@/hermes'
@@ -51,6 +52,7 @@ import {
   setWorkspaceCwdOwner,
   setYoloActive
 } from '@/store/session'
+import { isUnlistedResolvedSession, rememberUnlistedSessionRows } from '@/store/session-list-membership'
 import {
   $removedSessionIds,
   captureSessionTombstoneGenerations,
@@ -1886,16 +1888,13 @@ function upsertResolvedSession(
 
   const lineage = session._lineage_root_id ?? session.id
 
-  // A hidden row (canonical Bot Chat, room plumbing) is unlisted by design:
-  // inserting it into $sessions paints a sidebar row until the next refresh,
-  // and the keep-list then holds it there (#113273). Park it on the off-list
-  // owner atom the draft stubs ride — owner resolution still finds it via
-  // ownerLookupSessionRows, the sidebar never does.
-  if (session.hidden) {
-    setUnlistedSessionOwnerRows(prev => [
-      session,
-      ...prev.filter(existing => (existing._lineage_root_id ?? existing.id) !== lineage)
-    ])
+  // Hidden and Family-only rows stay readable through the off-list owner
+  // cache. Inserting them into $sessions would promote a direct open into
+  // a retained sidebar row (#113273).
+  const ambientConnection = ambientOwnerConnectionId() ?? null
+
+  if (isUnlistedResolvedSession(session, ambientConnection)) {
+    rememberUnlistedSessionRows([session], ambientConnection)
 
     return
   }
@@ -1945,13 +1944,13 @@ function projectTreeSessions(): SessionInfo[] {
 // "Best" means self-describing: the same conversation can appear both as an
 // ownerless legacy Recents copy and as a profile-stamped project-tree row, and
 // picking the ownerless one throws away the only routing information we have.
-export function cachedSessionRow(storedSessionId: string): SessionInfo | undefined {
+export function cachedSessionRow(storedSessionId: string, ownerRoute?: SessionProfileRoute): SessionInfo | undefined {
   const candidates = [
-    ...$sessions.get(),
-    ...$cronSessions.get(),
-    ...$messagingSessions.get(),
+    ...ownerLookupSessionRows(),
     ...projectTreeSessions()
-  ].filter(session => sessionMatchesStoredId(session, storedSessionId))
+  ].filter(session => sessionMatchesStoredId(session, storedSessionId) && (!ownerRoute ||
+    ((session.connection_id ?? ambientOwnerConnectionId()) === ownerRoute.connectionId &&
+      normalizeProfileKey(session.profile) === normalizeProfileKey(ownerRoute.profile))))
 
   return (
     candidates.find(session => session.connection_id?.trim()) ??
@@ -1991,7 +1990,7 @@ export async function probeStoredSession(
   // must reject its own stale response (see upsertResolvedSession).
   const tombstoneGenerationsAtRequestStart = captureSessionTombstoneGenerations()
 
-  const cached = cachedSessionRow(storedSessionId)
+  const cached = cachedSessionRow(storedSessionId, ownerRoute)
 
   if (ownerRoute) {
     const scope = {

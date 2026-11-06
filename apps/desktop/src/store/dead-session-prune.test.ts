@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setApiRequestConnection } from '@/api/client'
 import type * as HermesModule from '@/hermes'
 import type { ProfileInfo, SessionInfo } from '@/types/hermes'
 
@@ -15,10 +16,13 @@ vi.mock('@/hermes', async importOriginal => {
 })
 
 import { clearSessionDraft, stashSessionDraft, takeSessionDraft } from '@/store/composer'
+import { interruptedSendScopes } from '@/store/composer-outbox'
 import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts } from '@/store/composer-queue'
+import { $connectionsRegistry } from '@/store/connection-registry-state'
 import { $pinnedSessionIds } from '@/store/layout'
 import { $activeGatewayProfile, $profiles } from '@/store/profile'
-import { $sessions } from '@/store/session'
+import { $sessions, $unlistedSessionOwnerRows, _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/session'
+import { $sessionTiles } from '@/store/session-states'
 
 import { __runDeadSessionPrunePass, resetDeadSessionPrune, watchDeadSessionPrune } from './dead-session-prune'
 
@@ -45,6 +49,11 @@ beforeAll(() => {
 
 beforeEach(() => {
   window.localStorage.clear()
+  $connectionsRegistry.set(null)
+  $unlistedSessionOwnerRows.set([])
+  $sessionTiles.set([])
+  _resetSessionOwnerHintsForTests({ storage: true })
+  setApiRequestConnection(null)
   $sessions.set([])
   $pinnedSessionIds.set([])
   $queuedPromptsBySession.set({})
@@ -55,7 +64,15 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  $connectionsRegistry.set(null)
+  $unlistedSessionOwnerRows.set([])
+  $sessionTiles.set([])
+  _resetSessionOwnerHintsForTests({ storage: true })
+  setApiRequestConnection(null)
+  vi.unstubAllGlobals()
   clearSessionDraft('dead-draft-session')
+  clearSessionDraft('worker')
+  clearSessionDraft('dead')
   clearSessionDraft('__new__')
   $sessions.set([])
   $pinnedSessionIds.set([])
@@ -63,6 +80,91 @@ afterEach(() => {
 })
 
 describe('__runDeadSessionPrunePass', () => {
+  it('preserves restart references for a readable non-ambient worker without an owner hint, but still prunes an exactly owned dead id', async () => {
+    const actual = await vi.importActual<typeof HermesModule>('@/hermes')
+    getSessionMock.mockImplementation(actual.getSession)
+    $connectionsRegistry.set({ version: 1, primary: 'local', secureTokenStorage: true,
+      connections: ['local', 'rig'].map(id => ({ id, kind: id === 'local' ? 'local' : 'ssh', label: id, tokenSet: false, tokenPreview: null })) })
+    setApiRequestConnection('local')
+
+    const api = vi.fn(async request => {
+      const id = new URL(request.path, 'http://test').pathname.split('/').pop()
+
+      if (id === 'worker' && request.connectionId === 'rig' && request.profile === 'work') {
+        return row('worker', { profile: 'work', thread_parent_id: 'lead' })
+      }
+
+      throw notFound()
+    })
+
+    vi.stubGlobal('hermesDesktop', { api })
+    // Only the human lists after restart. Pins/drafts survive, but the worker's
+    // off-list row, tile and transient owner evidence have not been recovered.
+    $sessions.set([row('human', { connection_id: 'rig', profile: 'work' })])
+    $pinnedSessionIds.set(['worker', 'human', 'dead'])
+    stashSessionDraft('worker', 'unsent worker words', [])
+    stashSessionDraft('dead', 'gone words', [])
+    enqueueQueuedPrompt('worker', { text: 'next worker prompt', attachments: [] })
+    enqueueQueuedPrompt('dead', { text: 'gone prompt', attachments: [] })
+
+    for (const scope of ['worker', 'dead']) {
+      window.localStorage.setItem(`hermes:composer-outbox:v1:${JSON.stringify([scope, 'send'])}`, JSON.stringify({
+        scope, at: Date.now(), retry: { id: 'send', text: 'interrupted', attachmentIds: [] }
+      }))
+    }
+
+    setSessionOwnerHint('dead', { connectionId: 'rig', profile: 'work' })
+    expect($unlistedSessionOwnerRows.get()).toEqual([])
+    expect(await actual.getSession('worker', { connectionId: 'rig', profile: 'work' })).toMatchObject({ thread_parent_id: 'lead' })
+    api.mockClear()
+
+    await __runDeadSessionPrunePass()
+
+    expect($pinnedSessionIds.get()).toEqual(['worker', 'human'])
+    expect(takeSessionDraft('worker').text).toBe('unsent worker words')
+    expect(getQueuedPrompts('worker')).toHaveLength(1)
+    expect(interruptedSendScopes()).toEqual(['worker'])
+    expect(takeSessionDraft('dead').text).toBe('')
+    expect(getQueuedPrompts('dead')).toEqual([])
+    expect(api.mock.calls.some(([request]) => request.path.includes('/human'))).toBe(false)
+    expect(api.mock.calls.filter(([request]) => request.path.includes('/dead')).every(([request]) => request.connectionId === 'rig')).toBe(true)
+  })
+
+  it('treats parked Family rows and their roots as covered even when their source is offline', async () => {
+    $unlistedSessionOwnerRows.set([row('worker-tip', { _lineage_root_id: 'worker-root', connection_id: 'rig', thread_parent_id: 'lead' })])
+    $pinnedSessionIds.set(['worker-tip', 'worker-root'])
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect($pinnedSessionIds.get()).toEqual(['worker-tip', 'worker-root'])
+    expect(getSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('rechecks parked Family rows before applying an in-flight dead verdict', async () => {
+    $pinnedSessionIds.set(['worker'])
+    let rejectProbe!: (error: Error) => void
+    getSessionMock.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectProbe = reject }))
+    getSessionMock.mockRejectedValue(notFound())
+    const pass = __runDeadSessionPrunePass()
+    $unlistedSessionOwnerRows.set([row('worker', { connection_id: 'rig', thread_parent_id: 'lead' })])
+    rejectProbe(notFound())
+    await pass
+
+    expect($pinnedSessionIds.get()).toEqual(['worker'])
+  })
+
+  it('still prunes a deleted unowned id when the loaded registry has only the ambient source', async () => {
+    $connectionsRegistry.set({ version: 1, primary: 'local', secureTokenStorage: true,
+      connections: [{ id: 'local', kind: 'local', label: 'This device', tokenSet: false, tokenPreview: null }] })
+    $pinnedSessionIds.set(['dead'])
+    getSessionMock.mockRejectedValue(notFound())
+
+    await __runDeadSessionPrunePass()
+
+    expect($pinnedSessionIds.get()).toEqual([])
+  })
+
   it('unpins a pin whose session 404s on every profile', async () => {
     $sessions.set([row('unrelated')])
     $pinnedSessionIds.set(['dead-pin'])
@@ -301,6 +403,9 @@ describe('watchDeadSessionPrune', () => {
       $sessions.set([row('a')])
       vi.advanceTimersByTime(1_000)
       $sessions.set([row('a'), row('b')])
+      // Real owner stores persist on list changes; jsdom dispatches their
+      // storage events at 0ms. Count only timers left after that delivery.
+      vi.advanceTimersByTime(0)
       expect(vi.getTimerCount()).toBe(1)
 
       vi.advanceTimersByTime(1_000)

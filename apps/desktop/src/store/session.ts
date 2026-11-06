@@ -1,7 +1,7 @@
 import type { ConnectionState } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
-import { setApiRequestLocalMode } from '@/api/client'
+import { ambientOwnerConnectionId, setApiRequestLocalMode } from '@/api/client'
 import { lastVisibleMessageIsUser } from '@/app/chat/thread-loading'
 import type { ContextSuggestion } from '@/app/types'
 import type { HermesConnection } from '@/global'
@@ -13,6 +13,7 @@ import {
   rescopeConnectionScopedStores
 } from '@/lib/connection-scoped'
 import { hostHas } from '@/lib/host-capabilities'
+import { isThreadSession, sessionListRowKey } from '@/lib/session-list-membership'
 import { isMessagingSource } from '@/lib/session-source'
 import type { TileSessionFocusStamp } from '@/lib/session-timer-since'
 import {
@@ -644,7 +645,7 @@ export function mergeSessionPage(
 ): SessionInfo[] {
   const keep = keepIds instanceof Set ? keepIds : new Set(keepIds)
 
-  // Rows are identified by (profile, id), never bare id: two profiles can
+  // Rows are identified by (connection, profile, id), never bare id: two profiles can
   // hold sessions with the SAME stored id (restored backups, copied
   // state.dbs, cross-profile imports — #92454). Keyed by bare id, the twins
   // collapse into one sidebar row whose title/preview carry can stitch one
@@ -655,10 +656,10 @@ export function mergeSessionPage(
   // (Local normalize: importing @/store/profile here would be circular —
   // same '' → 'default' rule as normalizeProfileKey.)
   const profileKeyOf = (session: SessionInfo) => (session.profile ?? '').trim() || 'default'
-  const identity = (session: SessionInfo) => `${profileKeyOf(session)}::${session.id}`
+  const identity = (session: SessionInfo) => JSON.stringify([session.connection_id ?? null, profileKeyOf(session), session.id])
 
   const lineageIdentity = (session: SessionInfo) =>
-    `${profileKeyOf(session)}::${session._lineage_root_id ?? session.id}`
+    JSON.stringify([session.connection_id ?? null, profileKeyOf(session), session._lineage_root_id ?? session.id])
 
   // Carry a known title onto a row that arrives title-less, so a freshly
   // submitted session (e.g. a branch draft) holds its placeholder instead of
@@ -671,9 +672,20 @@ export function mergeSessionPage(
   const prevByLineage = new Map(previous.map(session => [lineageIdentity(session), session]))
 
   const merged = incoming
-    .filter(session => !session.is_internal_child)
+    .filter(session => !session.is_internal_child && !isThreadSession(session))
     .map(session => {
-      const prev = prevById.get(identity(session)) ?? prevByLineage.get(lineageIdentity(session))
+      // An untagged primary row may inherit a known owner, but never pick one
+      // of two same-profile connection twins just because it came first.
+      const untaggedMatches = session.connection_id ? [] : previous.filter(row =>
+        profileKeyOf(row) === profileKeyOf(session) && (row.id === session.id ||
+          (row._lineage_root_id ?? row.id) === (session._lineage_root_id ?? session.id) ||
+          session._lineage_ids?.includes(row.id)))
+
+      const matchedConnections = new Set(untaggedMatches.map(row => row.connection_id ?? null))
+
+      const prev = prevById.get(identity(session)) ?? prevByLineage.get(lineageIdentity(session)) ??
+        (matchedConnections.size === 1 ? untaggedMatches[0] : undefined)
+
       // User-send stamps last_active before the DB flushes the user row
       // (last_active = MAX(messages.timestamp)). Keep the fresher of the two.
       const last_active = Math.max(prev?.last_active ?? 0, session.last_active ?? 0)
@@ -725,7 +737,7 @@ export function mergeSessionPage(
   // are only unique per-profile (#92454), so a bare-id match would evict a
   // kept twin in another profile whose id merely coincides with a lineage.
   const incomingLineageIdMembers = new Set(
-    merged.flatMap(session => (session._lineage_ids ?? []).map(id => `${profileKeyOf(session)}::${id}`))
+    merged.flatMap(session => (session._lineage_ids ?? []).map(id => identity({ ...session, id })))
   )
 
   // The tombstone set is re-read here, not at the caller: optimistic removal
@@ -748,6 +760,7 @@ export function mergeSessionPage(
       // An internal delegate child is never listed; the authoritative page
       // already omits it, so the keep-list must not resurrect it (#94124).
       !session.is_internal_child &&
+      !isThreadSession(session) &&
       // The keep-list answers "live, not listed yet" — a hidden row (canonical
       // Bot Chat, room plumbing) is LISTED-NEVER by design, so a live turn or
       // open tab must not resurrect it into the sidebar (#113273).
@@ -1083,13 +1096,9 @@ function withUnlistedOwnerStubs(rows: SessionInfo[], stubs: readonly SessionInfo
     return rows
   }
 
-  const listed = new Set<string>()
-
-  for (const row of rows) {
-    listed.add(row.id)
-  }
-
-  const visible = stubs.filter(stub => !listed.has(stub.id))
+  const ambientConnection = ambientOwnerConnectionId() ?? null
+  const listed = new Set(rows.map(row => sessionListRowKey(row, ambientConnection)))
+  const visible = stubs.filter(stub => !listed.has(sessionListRowKey(stub, ambientConnection)))
 
   return visible.length ? [...rows, ...visible] : rows
 }
@@ -1106,7 +1115,7 @@ function withUnlistedOwnerStubs(rows: SessionInfo[], stubs: readonly SessionInfo
  * mirrors lookup priority: recents first (they can carry fresher optimistic
  * connection tags), then the cron and messaging slices. Unlisted-draft stubs
  * ($unlistedSessionOwnerRows) ride last: a real row for the same id always
- * shadows its stub, so a listed session never resolves off a stale stamp.
+ * shadows its same-owner stub, so a listed session never resolves off a stale stamp.
  */
 export function ownerLookupSessionRows(): SessionInfo[] {
   const cron = $cronSessions.get()

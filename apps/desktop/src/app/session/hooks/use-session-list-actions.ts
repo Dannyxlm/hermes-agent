@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
+import { readThreadListExclusions } from '@/api/session-list-membership'
 import { getApiRequestConnection, listAllProfileSessions, listSidebarSessions, type SessionInfo } from '@/hermes'
+import { isThreadSession, sessionListRowKey } from '@/lib/session-list-membership'
 import { sameCronSignature } from '@/lib/session-signatures'
 import {
   isMessagingSource,
@@ -43,6 +45,7 @@ import {
   setSessionsLoading,
   stampMessagingRowsWithListServer
 } from '@/store/session'
+import { rememberUnlistedSessionRows } from '@/store/session-list-membership'
 import {
   $removedSessionIds,
   captureSessionTombstoneGenerations,
@@ -160,6 +163,39 @@ function sessionsToKeep(scope?: string): Set<string> {
   }
 
   return keep
+}
+
+function retainedThreadCandidates(incomingRows: SessionInfo[], connection: null | string): SessionInfo[] {
+  const keep = sessionsToKeep()
+  const incoming = new Set(incomingRows.map(row => sessionListRowKey(row, connection)))
+
+  return $sessions.get().filter(row =>
+    isThreadSession(row) || (!incoming.has(sessionListRowKey(row, connection)) &&
+      (keep.has(row.id) || (row._lineage_root_id != null && keep.has(row._lineage_root_id)))))
+}
+
+async function readCurrentSessionPage(
+  fetchPage: () => ReturnType<typeof listSidebarSessions>, owns: () => boolean, connection: null | string
+) {
+  let activationEpoch = gatewayActivationEpoch()
+  let result = await fetchPage()
+  let excluded = new Set<string>()
+
+  // Activation may change during either read; keep the current refresh alive
+  // and repeat both reads instead of publishing the obsolete source's answer.
+  while (owns()) {
+    if (gatewayActivationEpoch() === activationEpoch) {
+      excluded = await readThreadListExclusions(
+        retainedThreadCandidates(result.recents.sessions ?? [], connection), connection,
+        () => owns() && gatewayActivationEpoch() === activationEpoch)
+    }
+
+    if (!owns() || gatewayActivationEpoch() === activationEpoch) { break }
+    activationEpoch = gatewayActivationEpoch()
+    result = await fetchPage()
+  }
+
+  return { result, excluded, activationEpoch }
 }
 
 interface UseSessionListActionsArgs {
@@ -333,6 +369,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
 
       const requestId = refreshSessionsRequestRef.current + 1
       refreshSessionsRequestRef.current = requestId
+      const connection = getApiRequestConnection()
       // The loading flag exists to drive the initial skeletons (they only render
       // while the list is empty). Turn-complete / reconnect refreshes over a
       // populated list used to flip it true→false anyway, churning every
@@ -346,6 +383,7 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
 
       const owns = () =>
         shouldPublish() &&
+        getApiRequestConnection() === connection &&
         refreshSessionsRequestRef.current === requestId &&
         sidebarProfileForScope(profileScopeRef.current) === sessionProfile
 
@@ -380,23 +418,9 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
             messagingExclude: MESSAGING_EXCLUDED_SOURCES
           })
 
-        let activationEpoch = gatewayActivationEpoch()
-        let result = await fetchPage()
+        const { result, excluded, activationEpoch } = await readCurrentSessionPage(fetchPage, owns, connection)
 
-        // A gateway activation that landed mid-request voids this page: it may
-        // describe the source the window just left. But every activation bumps
-        // the epoch, including a re-activation of the route already in front
-        // (a resume or profile click through ensureGatewayAgent), and those
-        // move no route atom, so no effect asks for the list again. Dropping
-        // the page there left the sidebar on "No sessions" while the backend
-        // held the rows (#67600). Still the newest refresh for this scope, so
-        // re-read under the current epoch instead.
-        while (owns() && gatewayActivationEpoch() !== activationEpoch) {
-          activationEpoch = gatewayActivationEpoch()
-          result = await fetchPage()
-        }
-
-        if (owns()) {
+        if (owns() && gatewayActivationEpoch() === activationEpoch) {
           const recents = result.recents
           const recentsErrors = recents.errors ?? result.errors
 
@@ -421,6 +445,11 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
           // that returns content-identical rows must keep the previous array
           // identity, or every sidebar memo keyed on $sessions recomputes and the
           // whole list re-renders once per turn/broadcast for nothing.
+          // Off-list is not unreadable: keep the exact owner/lineage for Family
+          // tiles without changing pins, hidden/archive flags or tombstones.
+          const unlisted = $sessions.get().filter(row => excluded.has(sessionListRowKey(row, connection)))
+          rememberUnlistedSessionRows(unlisted.map(row => ({ ...row, _thread_list_excluded: true })), connection)
+
           setSessions(prev => {
             const incoming = dropTombstoned(
               carryForwardFailedProfileSessions(prev, recents.sessions ?? [], recents.errors ?? result.errors)
@@ -429,7 +458,10 @@ export function useSessionListActions({ profileScope }: UseSessionListActionsArg
             // Filter AFTER the merge: the guard must also catch survivors
             // (a stale previous slice can still hold the doomed row through
             // the keep set once the tombstone prune has cleared membership).
-            const next = dropRemovalRaced(mergeSessionPage(prev, incoming, sessionsToKeep()), removalSnapshot)
+            const eligible = (row: SessionInfo) => !excluded.has(sessionListRowKey(row, connection))
+
+            const next = dropRemovalRaced(
+              mergeSessionPage(prev.filter(eligible), incoming.filter(eligible), sessionsToKeep()), removalSnapshot)
 
             return sameCronSignature(prev, next) ? prev : next
           })

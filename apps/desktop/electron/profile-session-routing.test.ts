@@ -11,11 +11,13 @@ import {
   fetchAllProfilesSessionsPerProfile,
   fetchPrimaryProfileSessions,
   fetchRegistrySessionRows,
+  fetchRemoteOwnerSessionRead,
   fetchRemoteProfileSessions,
   findRemoteOwnerProfileForSession,
   hasPinnedRegistrySessionSource,
   isAllProfilesAggregateRequest,
   isAllProfilesSessionListRequest,
+  isRemoteSessionOwnerRequest,
   isRemoteSessionRequestPath,
   mergeProfileSessionWindow,
   mergeRegistrySessionRows,
@@ -54,6 +56,45 @@ test('legacy remote owner route keeps the mutation identity query for the paired
   const snapshot = new URL('/api/sessions/s1/mutation-snapshot?profile=alpha', 'http://x')
   assert.equal(remoteOwnerRoutePath(snapshot.pathname, snapshot.searchParams, 'alpha'), '/api/sessions/s1/mutation-snapshot?profile=alpha')
   assert.equal(remoteOwnerRoutePath(snapshot.pathname, snapshot.searchParams, ''), '/api/sessions/s1/mutation-snapshot')
+})
+
+test('static membership follows only its explicit owner and preserves exact ids', () => {
+  const url = new URL('/api/sessions/list-membership?profile=worker&ids=%5B%22stored%22%5D', 'http://test')
+  assert.equal(isRemoteSessionRequestPath(url.pathname), false)
+  assert.equal(isRemoteSessionOwnerRequest('GET', url), true)
+  assert.equal(isRemoteSessionOwnerRequest('PATCH', url), false)
+  assert.equal(isRemoteSessionOwnerRequest('GET', new URL('/api/sessions/list-membership', url)), false)
+  const routed = new URL(remoteOwnerRoutePath(url.pathname, url.searchParams, 'worker'), url)
+  assert.equal(routed.pathname, '/api/sessions/list-membership')
+  assert.equal(routed.searchParams.get('profile'), 'worker')
+  assert.deepEqual(JSON.parse(routed.searchParams.get('ids') || '[]'), ['stored'])
+})
+
+test('aliased remote membership returns the Desktop owner only for the exact backend echo', async () => {
+  const url = new URL('/api/sessions/list-membership?profile=Desktop-worker&ids=%5B%22stored%22%5D', 'http://test')
+  const scope = remoteProfileQueryScope('Desktop-worker', 'backend-worker')
+  const path = remoteOwnerRoutePath(url.pathname, url.searchParams, scope)
+  const response = { profile: 'backend-worker', thread_session_ids: ['stored'] }
+
+  const read = async (profile: string | null, routed: string) => {
+    assert.equal(profile, 'Desktop-worker')
+    const query = new URL(routed, url).searchParams
+    assert.equal(query.get('profile'), 'backend-worker')
+    assert.deepEqual(JSON.parse(query.get('ids') || '[]'), ['stored'])
+
+    return response
+  }
+
+  assert.deepEqual(await fetchRemoteOwnerSessionRead('Desktop-worker', path, read), {
+    profile: 'Desktop-worker', thread_session_ids: ['stored']
+  })
+  assert.equal(response.profile, 'backend-worker')
+
+  for (const echoedProfile of ['another-owner', 'Desktop-worker']) {
+    await assert.rejects(fetchRemoteOwnerSessionRead('Desktop-worker', path, async () => ({ ...response, profile: echoedProfile })), /owner mismatch/i)
+  }
+
+  assert.equal(await fetchRemoteOwnerSessionRead('Desktop-worker', '/api/sessions/stored?profile=backend-worker', async () => response), response)
 })
 
 test('all-profiles session routing is limited to read-only list endpoints', () => {
@@ -771,6 +812,7 @@ test('archived merged pages reach every archived row from older and current back
       )
 
       const merged = [...base.sessions].sort((a: any, b: any) => b.last_active - a.last_active)
+
       const response = composeUnifiedSessionResponse(base, merged, offset, 200, base.total, base.profile_totals, [], {
         archivedOnly: true
       })
