@@ -2,23 +2,23 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useI18n } from '@/i18n'
+import { useStoresSelector } from '@/lib/use-session-slice'
 import { resetBrowseState } from '@/store/composer-input-history'
 import { $activeGatewayProfile } from '@/store/profile'
-import { $readOnlyStoredTranscripts, $sessionWriteVerdicts, isStoredTranscriptReadOnly } from '@/store/read-only-transcript'
+import { $cronRunReadOnlyVerdicts, $readOnlyStoredTranscripts, $sessionWriteVerdicts, isStoredTranscriptReadOnly } from '@/store/read-only-transcript'
 import { $connection, $gatewayState, $sessions } from '@/store/session'
 
 import { pickPlaceholder, shouldDisableComposerInput } from '../composer-utils'
 
 /** The composer consumes the same authority verdict as submit, before any Send gesture. */
 export function useComposerAvailability(disabledProp: boolean, storedId: string | null, sessionId: string | null | undefined) {
-  useStore($readOnlyStoredTranscripts)
-  useStore($sessionWriteVerdicts)
-  useStore($sessions)
-  useStore($connection)
-  useStore($activeGatewayProfile)
   const { t } = useI18n()
   const gatewayState = useStore($gatewayState)
-  const readOnly = isStoredTranscriptReadOnly(storedId)
+  // Subscribe to the verdict itself; the compiler can memoize an imperative store read.
+  const readOnly = useStoresSelector(
+    [$readOnlyStoredTranscripts, $sessionWriteVerdicts, $cronRunReadOnlyVerdicts, $sessions, $connection, $activeGatewayProfile],
+    () => isStoredTranscriptReadOnly(storedId)
+  )
   const disabled = disabledProp || readOnly
   const ordinary = useComposerPlaceholder({ disabled, reconnecting: gatewayState !== 'open', sessionId })
 

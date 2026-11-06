@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { sessionInfo } from '@/app/session/hooks/use-prompt-actions/index-test-utils'
 import { applyRuntimeInfo } from '@/app/session/hooks/use-session-actions/utils'
 import { I18nProvider } from '@/i18n'
-import { $readOnlyStoredTranscripts, $sessionWriteVerdicts } from '@/store/read-only-transcript'
+import { $cronRunReadOnlyVerdicts, $readOnlyStoredTranscripts, $sessionWriteVerdicts, recordCronRunVerdict } from '@/store/read-only-transcript'
 import { $connection, $gatewayState, $sessions } from '@/store/session'
 
 import { RICH_INPUT_SLOT } from './rich-editor'
@@ -26,7 +26,7 @@ function MountedComposer({ session }: { session: string }) {
   </I18nProvider></MemoryRouter></AssistantRuntimeProvider>
 }
 
-afterEach(() => { $connection.set(null); $sessions.set([]); cleanup(); $readOnlyStoredTranscripts.set(new Set()); $sessionWriteVerdicts.set(new Map()) })
+afterEach(() => { $connection.set(null); $sessions.set([]); cleanup(); $readOnlyStoredTranscripts.set(new Set()); $sessionWriteVerdicts.set(new Map()); $cronRunReadOnlyVerdicts.set(new Map()) })
 
 it('a successful foreign import mount disables the real composer before send; an owned/CLI verdict re-enables it', () => {
   $gatewayState.set('open')
@@ -36,6 +36,21 @@ it('a successful foreign import mount disables the real composer before send; an
   const editor = container.querySelector(`[data-slot="${RICH_INPUT_SLOT}"]`)
   expect(editor?.getAttribute('contenteditable')).toBe('false')
   act(() => { applyRuntimeInfo({ stored_session_id: 'tip', writable: true, read_only_reason: null }) })
+  expect(editor?.getAttribute('contenteditable')).toBe('true')
+  act(() => { applyRuntimeInfo({ stored_session_id: 'tip', writable: false, read_only_reason: 'session_read_only' }) })
+  expect(editor?.getAttribute('contenteditable')).toBe('false')
+})
+
+it('reacts to cron ownership changes without another session or gateway update', () => {
+  $gatewayState.set('open')
+  $sessions.set([sessionInfo({ id: 'cron-live' })])
+  recordCronRunVerdict('cron-live', false)
+  const { container } = render(<MountedComposer session="cron-live" />)
+  const editor = container.querySelector(`[data-slot="${RICH_INPUT_SLOT}"]`)
+  expect(editor?.getAttribute('contenteditable')).toBe('true')
+  act(() => { recordCronRunVerdict('cron-live', true) })
+  expect(editor?.getAttribute('contenteditable')).toBe('false')
+  act(() => { recordCronRunVerdict('cron-live', false) })
   expect(editor?.getAttribute('contenteditable')).toBe('true')
 })
 
