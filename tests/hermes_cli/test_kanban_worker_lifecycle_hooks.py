@@ -153,6 +153,9 @@ def test_raising_callbacks_never_break_worker_lifecycle(
     kanban_home, all_assignees_spawnable, monkeypatch,
 ):
     """Raising subscribers must not break spawn, crash reclaim, or stale reclaim."""
+    # The injected spawn PID has no systemd scope. Resource cleanup is not
+    # under test, and must never issue host commands for this synthetic run.
+    monkeypatch.setattr("hermes_cli.kanban_worker_resources._scope_command", lambda *args: "")
     mgr = get_plugin_manager()
     saved = {k: list(v) for k, v in mgr._hooks.items()}
 
