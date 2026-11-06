@@ -70,6 +70,7 @@ import {
   useComposerScope,
   useComposerSurfaceId
 } from './composer/scope'
+import { FamilyButton } from './family/button'
 import { useHistoryWindow } from './history-window'
 import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
 import { useFileDropZone } from './hooks/use-file-drop-zone'
@@ -195,6 +196,7 @@ function ChatHeader({
           <TitleMenuTrigger>{title}</TitleMenuTrigger>
         </SessionActionsMenu>
       </div>
+      <FamilyButton sessionId={selectedSessionId || activeSessionId || ''} />
     </header>
   )
 }

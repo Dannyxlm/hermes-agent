@@ -9,6 +9,7 @@
 import type { ErrorCodeKey } from '@/lib/error-surface'
 import type { TipId } from '@/lib/tips/catalog'
 
+import type { FamilyTranslations } from './family'
 import type { AppTourTranslations } from './types_app_tour'
 import type { BillingTranslations } from './types_billing'
 import type { BootTranslations } from './types_boot'
@@ -92,6 +93,7 @@ interface ModeOptionCopy {
 }
 
 export interface Translations extends NoticeTranslations {
+  family: FamilyTranslations
   /** Shared-metrics consent: first-run dialog + Settings › Safety toggles. */
   sharedMetrics: SharedMetricsTranslations
   appTour: AppTourTranslations

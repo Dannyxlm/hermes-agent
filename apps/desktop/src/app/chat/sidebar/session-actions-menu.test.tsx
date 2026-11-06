@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { atom } from 'nanostores'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { familyTranslations } from '@/i18n/family'
 import { refreshProjectTree } from '@/store/projects'
 
 import { SessionActionsMenu, SessionContextMenu } from './session-actions-menu'
@@ -26,6 +27,7 @@ vi.mock('@/hermes', () => ({
 vi.mock('@/i18n', () => ({
   useI18n: () => ({
     t: {
+      family: familyTranslations.en,
       common: {
         cancel: 'Cancel',
         close: 'Close',
@@ -105,6 +107,8 @@ vi.mock('@/store/session-color', () => ({
 vi.mock('@/store/session-states', () => ({
   $sessionStates: atom<Record<string, unknown>>({}),
   $sessionTiles: atom<unknown[]>([]),
+  knownOwnerForSession: vi.fn(() => undefined),
+  storedSessionIdForRuntimeId: vi.fn(() => null),
   closeAllOpenSessionTiles: vi.fn(),
   openSessionTile: vi.fn()
 }))
@@ -128,6 +132,16 @@ function renderMenu() {
 }
 
 describe('SessionActionsMenu', () => {
+  it('opens Family from the shared chat menu without falling to an unknown owner', async () => {
+    renderMenu()
+    const trigger = screen.getByRole('button', { name: 'Session actions' })
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Family' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(familyTranslations.en.noOwner)).toBeTruthy()
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
   it('opens the dropdown on click', async () => {
     renderMenu()
 

@@ -1,4 +1,3 @@
-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
 import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import { defineLocale, type TranslationOverrides } from './define-locale'
@@ -25,9 +24,12 @@ import { esProjects } from './es_projects'
 import { esSharedMetrics } from './es_shared_metrics'
 import { esThemePicker } from './es_theme_picker'
 import { esUpdateChannel } from './es_update_channel'
+// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+import { familyTranslations } from './family'
 import { introEs } from './intro-es'
 
 export const esOverrides = {
+  family: familyTranslations.es,
   sharedMetrics: esSharedMetrics,
   firstRun: esFirstRun,
   intro: introEs,

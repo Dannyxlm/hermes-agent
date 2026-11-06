@@ -1,4 +1,5 @@
 import { defineLocale, type TranslationOverrides } from './define-locale'
+import { familyTranslations } from './family'
 import { introZhHant } from './intro-zh-hant'
 import { zhHantArtifacts } from './zh-hant_artifacts'
 import { zhHantAssistant } from './zh-hant_assistant'
@@ -14,6 +15,7 @@ import { zhHantFirstRun } from './zh-hant_first_run'
 import { zhHantSettings } from './zh-hant_settings'
 
 export const zhHantOverrides = {
+  family: familyTranslations.zhHant,
 
   catalog: {
     add: '新增',

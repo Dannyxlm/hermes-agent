@@ -5,9 +5,45 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { PROBE_TIMEOUT_MS } from './backend-probes'
-import { parseLocalRuntimeVersion, resolveLocalRuntimeVersion, type VersionProbeRunner } from './local-runtime-version'
+import type { InstallStamp } from './install-stamp'
+import {
+  parseLocalRuntimeVersion,
+  resolveDesktopClientVersion,
+  resolveLocalRuntimeVersion,
+  type VersionProbeRunner
+} from './local-runtime-version'
 
 describe('local client version source', (): void => {
+  it.each(['bootstrap', 'bundled', 'light'] as const)(
+    'reports the immutable %s package version even when its runtime is unavailable',
+    async (payload: InstallStamp['payload']): Promise<void> => {
+      const stamp: InstallStamp = {
+        schemaVersion: 1,
+        commit: 'abcdef1234567890abcdef1234567890abcdef12',
+        commitDate: null,
+        branch: 'main',
+        builtAt: null,
+        dirty: false,
+        source: 'local',
+        distribution: 'desktop-app',
+        updateMechanism: 'external',
+        baseVersion: '1.2.3',
+        displayVersion: '1.2.3+10.gabcdef12',
+        distance: 10,
+        payload,
+        tag: null
+      }
+
+      await expect(resolveDesktopClientVersion(stamp, '/missing/runtime', '/isolated/home', '0.0.0')).resolves.toBe(
+        stamp.displayVersion
+      )
+    }
+  )
+
+  it('keeps an unstamped source install unknown when its runtime cannot answer', async () => {
+    await expect(resolveDesktopClientVersion(null, '/missing/runtime', '/isolated/home', '0.0.0')).resolves.toBe('')
+  })
+
   it('parses the exact version line emitted by the local launcher', (): void => {
     expect(parseLocalRuntimeVersion('Hermes Agent v0.21.5+6644.gb412ee9 (2026.9.24)\n')).toBe('0.21.5+6644.gb412ee9')
     expect(parseLocalRuntimeVersion('gateway: v0.21.5+6634\n')).toBe('')
@@ -72,13 +108,15 @@ describe('local client version source', (): void => {
 
         for (const _call of ['first', 'cached']) {
           let timerFired = false
+
           const timer = setTimeout(() => { timerFired = true }, 10)
           const startedAt: number = Date.now()
-          const pending: Promise<string> = resolveLocalRuntimeVersion(root, home, { isWindows: false })
+          const pending: Promise<string> = resolveDesktopClientVersion(null, root, home, '0.0.0')
 
           expect(Date.now() - startedAt).toBeLessThan(250)
           await new Promise(resolve => setTimeout(resolve, 30))
           expect(timerFired).toBe(true)
+
           clearTimeout(timer)
           await expect(pending).resolves.toBe('1.2.3')
         }

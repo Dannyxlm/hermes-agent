@@ -56,6 +56,20 @@ payload. See [BUILDING.md](BUILDING.md) for package and release contracts.
 
 ---
 
+## Family
+
+Open **Family** beside the selected chat title, or from a chat/tab menu. The
+current-chat view shows agent-created work; **Overview** lists the backend's
+current and earlier root families. Work threads stay out of Chats even when
+opened. Human-started conversations, including teammate chats, stay in Chats.
+
+**Open chat** uses the existing transcript and composer for reading and steering;
+**Answer in chat** opens the exact pending question's conversation. Neither action
+sends a message or approves anything. Only backend-advertised chat actions appear.
+Helpers without a chat remain readable as metadata; this browser does not add
+stop/restart controls. Older backends show an explicit unavailable state, and
+partial profile reads and truncated windows are labelled.
+
 ## Screenshot shortcut (macOS)
 
 Enable **Settings → Keyboard Shortcuts → Screenshot shortcut**, then press the

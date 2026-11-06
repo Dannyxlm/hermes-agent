@@ -437,9 +437,10 @@ export function useStatusbarItems({
   const rollbackBody = t.settings.about.channel.rollbackBody
 
   const clientVersionItem = useMemo<StatusbarItem>(() => {
-    const appVersion = desktopVersion?.appVersion
+    // The runtime checkout can advance without replacing the running client.
+    const appVersion = desktopVersion?.clientVersion ?? desktopVersion?.appVersion
     const upstream = updateStatus?.upstreamTracking
-    const sha = upstream?.installedSha?.slice(0, 7) ?? updateStatus?.currentSha?.slice(0, 7) ?? null
+    const sha = desktopVersion?.commit?.slice(0, 7) ?? null
     const behind = upstream?.behind ?? 0
     const trackingProblem = upstream?.state === 'error' || upstream?.state === 'stale'
     const applying = updateApply.applying || updateApply.stage === 'restart'
@@ -505,6 +506,8 @@ export function useStatusbarItems({
     }
   }, [
     desktopVersion?.appVersion,
+    desktopVersion?.clientVersion,
+    desktopVersion?.commit,
     connection?.mode,
     copy,
     updateApply.applying,
