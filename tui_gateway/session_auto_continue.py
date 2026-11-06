@@ -630,6 +630,8 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         elif (resp := _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs,
                 queued_prompt=queued)).get("error"):
             if resp["error"].get("data", {}).get("delivery_uncertain"):
+                _dispose_local_queue(session, [queued], "unknown")
+                _emit("session.info", sid, _session_control_info(session))
                 _emit("error", sid, {"message": str(resp["error"].get("message") or "queued dispatch uncertain")})
                 return True
             _dispose_local_queue(session, [queued], "cancelled")
@@ -641,6 +643,12 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             dispatch_failed = True
     except Exception as exc:
         _notif_log_failure("queued prompt dispatch failed", exc)
+        _dispose_local_queue(session, [queued], "unknown")
+        _emit("session.info", sid, _session_control_info(session))
+        if queued.get("_queue_receipt") is not None:
+            # A failed acknowledgement is not proof no turn started. Its exact
+            # callback or explicit Stop owns release; never dispatch a follower here.
+            return True
         _notif_release_turn(session)
         dispatch_failed = True
     if dispatch_failed:

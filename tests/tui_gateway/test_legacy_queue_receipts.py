@@ -157,6 +157,92 @@ def test_storage_failure_cannot_acknowledge_an_in_memory_only_queue(monkeypatch,
         db.close()
 
 
+@pytest.mark.parametrize('boundary', ['reset', 'unreachable_host'])
+def test_queue_clearing_boundaries_commit_cancellation_while_runtime_is_live(monkeypatch, tmp_path, boundary):
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key = _desktop_session(monkeypatch, db)
+        session = server._sessions[sid]
+        try:
+            _busy(session)
+            accepted = server._handle_busy_submit('B', sid, session, 'B', None, queued=True)
+            if boundary == 'reset':
+                session['running'] = False
+                monkeypatch.setattr(server, '_rebuild_session_agent', lambda *a, **k: session['agent'])
+                monkeypatch.setattr(server, '_session_info', lambda *a: {})
+                monkeypatch.setattr(server, '_restart_slash_worker', lambda *a: None)
+                server._reset_session_agent(sid, session)
+            else:
+                monkeypatch.setattr(server, '_get_compute_host_supervisor', lambda: SimpleNamespace(
+                    has_pending_turn=lambda _sid: False))
+                server._recover_unreachable_compute_host_turn(sid, session, session['inflight_turn'])
+            receipt = server._session_control_info(session)['queue_receipts'][0]
+            assert receipt['input_id'] == accepted['result']['input_id']
+            assert (receipt['status'], receipt['outcome']) == ('terminal', 'cancelled')
+            assert session.get('queued_prompt') is None
+            assert not server._drain_queued_prompt('again', sid, session)
+            from tui_gateway.local_queue_receipts import snapshot
+            assert snapshot(db, key, {}) == [receipt]
+        finally:
+            server._sessions.pop(sid, None)
+
+
+def test_dispatch_exception_is_unknown_without_waiting_for_backend_death(monkeypatch, tmp_path):
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, _key = _desktop_session(monkeypatch, db)
+        session, invoked = server._sessions[sid], []
+        try:
+            _busy(session)
+            accepted = server._handle_busy_submit('B', sid, session, 'B', None, queued=True)
+            later = server._handle_busy_submit('C', sid, session, 'C', None, queued=True, image_paths=[])
+            session['running'] = False
+
+            def ambiguous(*a, **k):
+                invoked.append(a[3])
+                raise RuntimeError('dispatch acknowledgement lost')
+            monkeypatch.setattr(server, '_run_prompt_submit', ambiguous)
+            assert server._drain_queued_prompt('drain', sid, session)
+            receipt = next(r for r in server._session_control_info(session)['queue_receipts']
+                           if r['input_id'] == accepted['result']['input_id'])
+            assert (receipt['status'], receipt['outcome']) == ('unknown', None)
+            assert session['running'] and invoked == ['B']
+            assert not server._drain_queued_prompt('again', sid, session)
+            assert session['queued_prompt']['_queue_receipt']['input_id'] == later['result']['input_id']
+            server._interrupt_session_turn(sid, session)
+            receipts = {r['input_id']: r for r in server._session_control_info(session)['queue_receipts']}
+            assert receipts[later['result']['input_id']]['outcome'] == 'cancelled'
+            assert receipts[accepted['result']['input_id']]['status'] == 'unknown'
+        finally:
+            server._sessions.pop(sid, None)
+
+
+def test_queued_terminal_callback_cannot_bypass_strict_nonreplay_marker(
+        monkeypatch, tmp_path, turn_env, marker_home, emits):
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, _key = _desktop_session(monkeypatch, db)
+        session, invoked = server._sessions[sid], []
+        session['agent'] = SimpleNamespace(session_id=session['session_key'], clear_interrupt=lambda: None,
+            run_conversation=lambda *a, **k: invoked.append(a) or {'final_response': 'answer'})
+        monkeypatch.setattr(server, '_ensure_active_session_slot', lambda *a: None)
+        monkeypatch.setattr(server, '_start_usage_ticker', lambda *a: (threading.Event(), SimpleNamespace(join=lambda: None)))
+        record = server.record_turn_start
+
+        def unavailable(*a, **kwargs):
+            if kwargs.get('strict'):
+                raise OSError('marker not durable')
+            return record(*a, **kwargs)
+        monkeypatch.setattr(server, 'record_turn_start', unavailable)
+        try:
+            _busy(session)
+            server._handle_busy_submit('B', sid, session, 'B', None, queued=True, auto_continue=False)
+            session['running'] = False
+            assert server._drain_queued_prompt('drain', sid, session)
+            assert invoked == []
+            receipt = server._session_control_info(session)['queue_receipts'][0]
+            assert (receipt['status'], receipt['outcome']) == ('terminal', 'failed')
+        finally:
+            server._sessions.pop(sid, None)
+
+
 def test_stop_durably_cancels_the_queue_before_dropping_it(monkeypatch, tmp_path):
     db = SessionDB(db_path=tmp_path / 'state.db')
     sid, _key = _desktop_session(monkeypatch, db)

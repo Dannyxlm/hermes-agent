@@ -177,6 +177,27 @@ def test_session_redirect_queues_while_compressing(monkeypatch):
 
 # ── manual compaction holds the session busy (#133504) ────────────────────
 
+@pytest.mark.parametrize('method', ['session.steer', 'session.redirect'])
+@pytest.mark.parametrize('ended', [False, True])
+def test_correction_demotion_returns_a_durable_queue_id_or_an_explicit_idle_rejection(monkeypatch, method, ended):
+    session = _session()
+
+    def compression_probe(_session):
+        session['running'] = not ended
+        return True
+
+    monkeypatch.setattr(server, '_session_compression_in_flight', compression_probe)
+    monkeypatch.setitem(server._sessions, 'sid', session)
+    reply = server.handle_request({'id': 'correction', 'method': method,
+                                   'params': {'session_id': 'sid', 'text': 'follow-up'}})
+    assert reply['result']['text'] == 'follow-up'
+    assert reply['result']['status'] == ('rejected' if ended else 'queued')
+    if ended:
+        assert not session.get('queued_prompt') and 'input_id' not in reply['result']
+    else:
+        assert reply['result']['input_id'] == session['queued_prompt']['_queue_receipt']['input_id']
+
+
 def test_submit_during_manual_compress_is_queued_and_reply_persists(monkeypatch):
     """A prompt sent while session.compress runs its LLM summary used to be admitted on the idle
     session, snapshot history_version N, and lose its reply when the compaction committed N+1."""

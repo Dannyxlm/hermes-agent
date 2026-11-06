@@ -40,9 +40,13 @@ def disposition(db, envelope, outcome):
         return
     status = {'dispatched': 'transferred', 'unknown': 'unknown'}.get(outcome, 'terminal')
     updated = {**receipt, 'status': status, 'outcome': None if outcome == 'unknown' else outcome}
-    db._execute_write(lambda conn: conn.execute('UPDATE state_meta SET value=? WHERE key=?',
-                                              (json.dumps(updated), _key(receipt))))
-    envelope['_queue_receipt'] = updated
+    def write(conn):
+        row = conn.execute('SELECT value FROM state_meta WHERE key=?', (_key(receipt),)).fetchone()
+        if row is not None and (stored := json.loads(row['value']))['status'] == 'terminal':
+            return stored  # A lost dispatch acknowledgement cannot undo an already committed completion.
+        conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(updated), _key(receipt)))
+        return updated
+    envelope['_queue_receipt'] = db._execute_write(write)
 
 
 def snapshot(db, session_id, live_sessions):

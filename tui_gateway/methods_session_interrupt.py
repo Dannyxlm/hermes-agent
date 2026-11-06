@@ -53,6 +53,8 @@ def _recover_unreachable_compute_host_turn(sid: str, session: dict, inflight_at_
         pending = True
     with session["history_lock"]:
         session["_turn_cancel_requested"] = True
+        cancelled = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
+        _dispose_local_queue(session, cancelled, "cancelled")
         session["queued_prompt"] = None
         session.pop("queued_prompts", None)
         session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
@@ -60,6 +62,8 @@ def _recover_unreachable_compute_host_turn(sid: str, session: dict, inflight_at_
         if not pending and session.get("running") and inflight_now is not None and inflight_now is inflight_at_interrupt:
             session["running"] = False
             _clear_inflight_turn(session)
+    for envelope in cancelled:
+        _restore_refused_queued_attachments(envelope, sid)
     _clear_pending(sid)
     with contextlib.suppress(Exception):
         _announce_cancelled_gateway_approvals(session, "interrupt", session_id=sid)
@@ -90,8 +94,10 @@ def _(rid, params: dict) -> dict:
                     resume_wake = False
                     return _ok(rid, {"status": "not_interrupted", "interrupted": False})
         sid = str(params.get("session_id") or "")
-        if params.get("admission_id") is not None or any(
-                r["receipt"].get("status") != "terminal" for r in session.get("_forwarded_admissions", {}).values()):
+        # A relay never owns the local running slot. Its stale pending cache must not
+        # divert Stop away from a later local turn after the owner/relay has gone.
+        if params.get("admission_id") is not None or (not session.get("running") and any(
+                r["receipt"].get("status") != "terminal" for r in session.get("_forwarded_admissions", {}).values())):
             return _interrupt_forwarded(rid, sid, session, params)
         _note_user_input(session)
         if _session_uses_compute_host(session):
@@ -122,20 +128,22 @@ def _(rid, params: dict) -> dict:
                 logger.debug("session.interrupt wake resume failed", exc_info=True)
 
 
-def _forwarded_control(rid, sid, session, verb, admission_id, generation=None):
+def _forwarded_control(rid, sid, session, verb, admission_id, generation=None, *, stop=False):
     from tui_gateway.owner_forward import control_forwarded, pending_submissions
     from hermes_state_runtime import RuntimeStoreError
     from hermes_cli.gateway_client import GatewayRPCError
+    from websockets.exceptions import WebSocketException
     try:
-        result = control_forwarded(session, verb, admission_id, generation)
+        result = control_forwarded(session, verb, admission_id, generation, stop=stop)
     except RuntimeStoreError as exc:
         return _err(rid, 4090, exc.reason, data={"reason": exc.reason})
     except GatewayRPCError as exc:
         return _err(rid, 4090, str(exc), data=exc.data)
-    except (OSError, RuntimeError, TimeoutError) as exc:
+    except (OSError, RuntimeError, TimeoutError, WebSocketException) as exc:
         return _err(rid, 4090, str(exc), data={"reason": "SESSION_OWNER_UNCONFIRMED"})
-    _emit("session.info", sid, {"stored_session_id": session.get("session_key"),
-                                "pending_submissions": pending_submissions(session)})
+    finally:
+        _emit("session.info", sid, {"stored_session_id": session.get("session_key"),
+                                    "pending_submissions": pending_submissions(session)})
     return _ok(rid, result)
 
 
@@ -148,18 +156,18 @@ def _interrupt_forwarded(rid, sid, session, params):
         records = [(aid, row) for aid, row in records if aid == selected]
         if not records:
             return _err(rid, 4090, "not_found", data={"reason": "not_found"})
+    first_error = None
     for aid, record in records:
         status = record["receipt"].get("status")
         if status == "terminal":
             continue
-        # Cancel's owner-side queued→started CAS handles a claim racing Stop. Once started was
-        # observed, an explicit generation is checked instead of silently stopping a successor.
-        verb = "session.interrupt" if status == "started" else "prompt.cancel"
-        reply = _forwarded_control(rid, sid, session, verb, aid,
-            params.get("execution_generation", record["receipt"].get("execution_generation")))
-        if "error" in reply:
-            return reply
-    return _ok(rid, {"status": "interrupted"})
+        # Select cancel vs interrupt only after refreshing this exact admission. An
+        # unknown/stale predecessor must not starve controls for the remaining FIFO.
+        reply = _forwarded_control(rid, sid, session, "session.interrupt", aid,
+                                   params.get("execution_generation"), stop=True)
+        if "error" in reply and first_error is None:
+            first_error = reply
+    return first_error or _ok(rid, {"status": "interrupted"})
 
 
 def _forwarded_method(name):

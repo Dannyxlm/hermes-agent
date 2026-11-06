@@ -241,7 +241,7 @@ def pending_submissions(session: dict) -> list[dict]:
                 if r["receipt"].get("status") in controls]
 
 
-def control_forwarded(session: dict, method: str, admission_id: str, generation=None) -> dict:
+def control_forwarded(session: dict, method: str, admission_id: str, generation=None, *, stop=False) -> dict:
     """Reattach to the same profile and read the exact admission before controlling it.
 
     Discovery may find a replacement gateway, but cannot select another home or another admission.
@@ -268,17 +268,24 @@ def control_forwarded(session: dict, method: str, admission_id: str, generation=
                 record["endpoint"], record["receipt"] = endpoint, receipt
             if method == "prompt.receipt":
                 return receipt
+            verb = method
+            if stop:
+                if receipt["status"] == "terminal":
+                    return receipt
+                if receipt["status"] == "unknown":
+                    raise RuntimeStoreError("unknown_execution")  # Stop is never human Discard.
+                verb = "session.interrupt" if receipt["status"] == "started" else "prompt.cancel"
             params = {"session_id": target}
-            if method != "session.interrupt":
+            if verb != "session.interrupt":
                 params["admission_id"] = admission_id
-            if method in ("session.interrupt", "prompt.resolve_unknown"):
+            if verb in ("session.interrupt", "prompt.resolve_unknown"):
                 observed = receipt.get("execution_generation")
                 if generation is not None and generation != observed:
                     raise RuntimeStoreError("stale_generation")
                 if observed is None or receipt["status"] not in ("started", "unknown"):
                     raise RuntimeStoreError("stale_generation")
                 params["execution_generation"] = observed
-            result = await client.rpc(method, **params)
+            result = await client.rpc(verb, **params)
             refreshed = await client.rpc("prompt.receipt", session_id=target, admission_id=admission_id)
             with session["history_lock"]:
                 record["receipt"] = refreshed

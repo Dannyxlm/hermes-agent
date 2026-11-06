@@ -120,12 +120,44 @@ def test_dispatch_refusal_cancels_but_uncertain_write_never_claims_noninvocation
     assert server._drain_queued_prompt('drain', env.sid, env.session)
     receipt = _receipt(env, accepted['result']['input_id'])
     assert (receipt['status'], receipt['outcome']) == (
-        ('transferred', 'dispatched') if uncertain else ('terminal', 'cancelled'))
+        ('unknown', None) if uncertain else ('terminal', 'cancelled'))
     server._sessions.pop(env.sid)
     cold = snapshot(env.db, env.key, {})[0]
     assert cold['status'] == ('unknown' if uncertain else 'terminal')
     assert cold['outcome'] == (None if uncertain else 'cancelled')
     assert env.frames == []
+
+
+@pytest.mark.parametrize('already_completed', [False, True])
+def test_uncertain_dispatch_is_visible_immediately_and_exact_late_completion_can_settle_it(
+        compute_queue, monkeypatch, already_completed):
+    env = compute_queue
+
+    def uncertain(frame, *, on_complete):
+        env.frames.append(frame)
+        env.callbacks.append(on_complete)
+        env.supervisor._pending_turns[frame['request_id']] = (env.sid, on_complete)
+        if already_completed:
+            env.supervisor._handle_host_frame({'type': 'turn.end', 'sid': env.sid,
+                                             'request_id': frame['request_id']})
+        raise OSError('flush acknowledgement lost')
+
+    monkeypatch.setattr(env.supervisor, 'submit_turn', uncertain)
+    _busy(env.session)
+    accepted = server._handle_busy_submit('B', env.sid, env.session, 'B', None, queued=True)
+    env.session['running'] = False
+    assert server._drain_queued_prompt('drain', env.sid, env.session)
+    receipt = _receipt(env, accepted['result']['input_id'])
+    assert (receipt['status'], receipt['outcome']) == (
+        ('terminal', 'completed') if already_completed else ('unknown', None))
+    assert env.session['running'] is (not already_completed)
+    assert bool(env.session.get('_compute_host_turn_id')) is (not already_completed)
+    assert not server._drain_queued_prompt('again', env.sid, env.session)
+    env.supervisor._handle_host_frame({'type': 'turn.end', 'sid': env.sid,
+                                     'request_id': env.frames[0]['request_id']})
+    receipt = _receipt(env, accepted['result']['input_id'])
+    assert (receipt['status'], receipt['outcome']) == ('terminal', 'completed')
+    assert not env.session['running'] and len(env.frames) == 1
 
 
 @pytest.mark.parametrize('failed', [False, True])
