@@ -1,4 +1,11 @@
+import { act, cleanup, waitFor } from '@testing-library/react'
+import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { $composerAttachments, type ComposerAttachment } from '@/store/composer'
+import { $connection, $currentCwd } from '@/store/session'
+
+import { actRender, Harness, type HarnessHandle } from './index-test-utils'
 
 import { uploadComposerAttachment } from '.'
 
@@ -142,5 +149,123 @@ describe('uploadComposerAttachment local cross-platform staging', () => {
     })
     expect(requestGateway).not.toHaveBeenCalledWith('image.attach', expect.anything())
     expect(uploaded.path).toBe('/root/tmp/photo.jpg')
+  })
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+
+  return { promise, resolve, reject }
+}
+
+describe('eager upload occurrence ownership through usePromptActions', () => {
+  afterEach(() => { cleanup(); $composerAttachments.set([]) })
+
+  it.each(['success', 'failure'] as const)('late A %s cannot patch re-added B or make submit join A', async outcome => {
+    $connection.set({ mode: 'local' } as never)
+    $currentCwd.set('/root')
+    const a = deferred<{ attached: boolean; ref_text: string }>()
+    const b = deferred<{ attached: boolean; ref_text: string }>()
+    let uploads = 0
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'file.attach') { return await (++uploads === 1 ? a.promise : b.promise) as never }
+
+      return {} as never
+    })
+
+    const chip: ComposerAttachment = { id: 'same-path', occurrenceId: 'A', kind: 'file', path: '/root/a.txt', label: 'a.txt' }
+    $composerAttachments.set([chip])
+    let handle: HarnessHandle | null = null
+    await actRender(createElement(Harness, { onReady: h => { handle = h }, refreshSessions: async () => undefined, requestGateway }))
+    await waitFor(() => expect(uploads).toBe(1))
+    await act(async () => { $composerAttachments.set([]) })
+    await act(async () => { $composerAttachments.set([{ ...chip, occurrenceId: 'B' }]) })
+    // B must have its own flight while A remains pending.
+    await waitFor(() => expect(uploads).toBe(2))
+    await act(async () => { b.resolve({ attached: true, ref_text: 'B-ref' }) })
+    await waitFor(() => expect($composerAttachments.get()[0]?.refText).toBe('B-ref'))
+    const pendingA = $composerAttachments.get()[0]
+    await act(async () => {
+      if (outcome === 'success') { a.resolve({ attached: true, ref_text: 'A-ref' }) }
+      else { a.reject(new Error('A failed')) }
+    })
+    expect($composerAttachments.get()[0]).toEqual(pendingA)
+    expect(await handle!.submitText('send B')).toBe(true)
+    expect(uploads).toBe(2)
+    const send = requestGateway.mock.calls.find(([method]) => method === 'prompt.submit')
+    expect(send).toBeDefined()
+    expect($composerAttachments.get()).toEqual([])
+  })
+
+  it('submit for staged B does not join removed A’s still-pending flight', async () => {
+    $connection.set({ mode: 'local' } as never)
+    $currentCwd.set('/root')
+    const a = deferred<{ attached: boolean; ref_text: string }>()
+    const requestGateway = vi.fn(async (method: string) => method === 'file.attach' ? await a.promise as never : {} as never)
+    const chip: ComposerAttachment = { id: 'same', occurrenceId: 'A', kind: 'file', path: '/root/a.txt', label: 'a.txt' }
+    $composerAttachments.set([chip])
+    let handle: HarnessHandle | null = null
+    await actRender(createElement(Harness, { onReady: h => { handle = h }, refreshSessions: async () => undefined, requestGateway }))
+    await waitFor(() => expect(requestGateway).toHaveBeenCalledWith('file.attach', expect.anything()))
+    await act(async () => { $composerAttachments.set([{ ...chip, occurrenceId: 'B', attachedSessionId: RUNTIME_SESSION_ID, refText: 'B-ref' }]) })
+    const send = handle!.submitTextRaw('B now')
+
+    try {
+      await waitFor(() => expect(requestGateway.mock.calls.some(([method]) => method === 'prompt.submit')).toBe(true))
+    } finally { a.resolve({ attached: true, ref_text: 'A-ref' }) }
+
+    expect(await send).toBe(true)
+    expect(requestGateway.mock.calls.filter(([method]) => method === 'file.attach')).toHaveLength(1)
+  })
+
+  it('a current occurrence failure stays visible and retries only on explicit submit', async () => {
+    $connection.set({ mode: 'local' } as never)
+    $currentCwd.set('/root')
+    let uploads = 0
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'file.attach') {
+        if (++uploads === 1) { throw new Error('current upload failed') }
+
+        return { attached: true, ref_text: 'recovered-ref' } as never
+      }
+
+      return {} as never
+    })
+
+    $composerAttachments.set([{ id: 'current-error', occurrenceId: 'C', kind: 'file', path: '/root/c.txt', label: 'c.txt' }])
+    let handle: HarnessHandle | null = null
+    await actRender(createElement(Harness, { onReady: h => { handle = h }, refreshSessions: async () => undefined, requestGateway }))
+    await waitFor(() => expect($composerAttachments.get()[0]?.uploadState).toBe('error'))
+    expect(uploads).toBe(1)
+    expect(await handle!.submitText('retry current')).toBe(true)
+    expect(uploads).toBe(2)
+  })
+
+  it('joins the current occurrence flight once without a second upload', async () => {
+    $connection.set({ mode: 'local' } as never)
+    $currentCwd.set('/root')
+    const upload = deferred<{ attached: boolean; ref_text: string }>()
+    let uploads = 0
+
+    const requestGateway = vi.fn(async (method: string) => {
+      if (method === 'file.attach') { uploads++;
+
+ return await upload.promise as never }
+
+      return {} as never
+    })
+
+    $composerAttachments.set([{ id: 'current', occurrenceId: 'C', kind: 'file', path: '/root/c.txt', label: 'c.txt' }])
+    let handle: HarnessHandle | null = null
+    await actRender(createElement(Harness, { onReady: h => { handle = h }, refreshSessions: async () => undefined, requestGateway }))
+    await waitFor(() => expect(uploads).toBe(1))
+    const send = handle!.submitTextRaw('send C')
+    await act(async () => { upload.resolve({ attached: true, ref_text: 'C-ref' }) })
+    expect(await send).toBe(true)
+    expect(uploads).toBe(1)
   })
 })

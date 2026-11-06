@@ -152,6 +152,8 @@ export const arAssistant = {
           body: provider =>
             `تعذّر على Hermes الاتصال بـ ${provider} لهذه المحادثة. أعد المحاولة؛ وإذا استمر الفشل، تحقّق من المزوّد في الإعدادات.`
         },
+        SESSION_OWNER_UNAVAILABLE: { title: "مالك المحادثة غير متاح", body: "أعد الاتصال بمالك المحادثة ثم استأنفها لتحديث حالتها. لم تتم إعادة إرسال الرسالة." },
+        SESSION_OUTCOME_UNKNOWN: { title: "الدور السابق يحتاج إلى مراجعة", body: "استأنف المحادثة ثم اختر تجاهل على بطاقة الدور ذي النتيجة المجهولة. لا تعد إرسال الدور غير المؤكد." },
         SESSION_NOT_OWNED: {
           title: 'المحادثة مفتوحة في مكان آخر',
           body: 'هذه المحادثة مفتوحة في نافذة Hermes أخرى أو في الطرفية. ابدأ محادثة جديدة هنا، أو أغلقها هناك أولًا.'
@@ -246,6 +248,7 @@ export const arAssistant = {
       errorOpenBillingSettings: 'فتح إعدادات الفوترة',
       errorRetryScheduled: (time, wait) => `ستتم إعادة المحاولة عند ${time} — بعد ${wait}`,
       errorRetryScheduledCancel: 'إلغاء',
+      errorResumeSession: "استئناف المحادثة",
       errorStartNewSession: 'بدء جلسة جديدة',
       errorSwitchProvider: 'تبديل المزوّد',
       errorSignInAgain: provider => `تسجيل الدخول إلى ${provider} مجدداً`,

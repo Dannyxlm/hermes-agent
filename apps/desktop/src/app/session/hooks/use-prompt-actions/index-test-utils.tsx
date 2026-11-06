@@ -62,6 +62,7 @@ export interface HarnessHandle {
   state: () => ClientSessionState
   activeSessionIdRef: MutableRefObject<string | null>
   cancelRun: () => Promise<void>
+  cancelRunRaw: () => Promise<void>
   editMessage: (edited: Parameters<ReturnType<typeof usePromptActions>['editMessage']>[0]) => Promise<void>
   reloadFromMessage: (parentId: null | string) => Promise<void>
   restoreToMessage: (messageId: string, target?: { text?: string; userOrdinal?: number | null }) => Promise<void>
@@ -224,6 +225,7 @@ export function Harness({
       handleEvent: event => act(() => handleGatewayEvent(event)),
       state: () => stateRef.current,
       activeSessionIdRef,
+      cancelRunRaw: actions.cancelRun,
       cancelRun: (...args: Parameters<typeof actions.cancelRun>) =>
         act(async () => actions.cancelRun(...args)) as Promise<void>,
       editMessage: (...args: Parameters<typeof actions.editMessage>) =>

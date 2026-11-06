@@ -20,13 +20,13 @@ import {
   $composerAttachments,
   type ComposerAttachment,
   patchMainComposerAttachmentOccurrence,
-  setComposerAttachmentUploadState,
   updateComposerAttachment
 } from '@/store/composer'
 import { serverOwnsComposerQueue } from '@/store/composer-queue'
 import { resetSessionBackground } from '@/store/composer-status'
 import { confirm } from '@/store/confirm'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
+import { pendingExecutionControl } from '@/store/pending-submissions'
 import { clearPreviewArtifacts } from '@/store/preview-status'
 import { clearAllPrompts } from '@/store/prompts'
 import {
@@ -373,7 +373,7 @@ export function usePromptActions({
     [selectedStoredSessionIdRef, updateSessionState]
   )
 
-  // In-flight drop-time eager uploads, keyed by attachment id. Submit joins
+  // In-flight drop-time eager uploads, keyed by chip occurrence. Submit joins
   // these before re-uploading so a drop-then-immediately-Enter can't fire
   // file.attach twice and stage duplicate copies on the gateway.
   const eagerUploadInFlight = useRef<Map<string, Promise<void>>>(new Map())
@@ -437,11 +437,13 @@ export function usePromptActions({
         // call file.attach and stage duplicate files. After it settles, take the
         // store's updated copy (its gateway ref, or its failure) over the stale
         // pre-upload snapshot.
-        const inFlight = eagerUploadInFlight.current.get(attachment.id)
+        const inFlight = eagerUploadInFlight.current.get(attachment.occurrenceId ?? attachment.id)
 
         if (inFlight) {
           await inFlight
-          attachment = $composerAttachments.get().find(item => item.id === attachment.id) ?? attachment
+          attachment = $composerAttachments.get().find(item =>
+            item.id === original.id && item.occurrenceId === original.occurrenceId
+          ) ?? attachment
         }
 
         // Already-synced or pathless refs (terminal, url, etc.) pass through.
@@ -513,26 +515,33 @@ export function usePromptActions({
     async (sessionId: string, attachment: ComposerAttachment) => {
       const remote = isSessionRemote(sessionId)
 
-      setComposerAttachmentUploadState(attachment.id, 'uploading')
+      const patchOccurrence = (patch: Partial<ComposerAttachment>) => attachment.occurrenceId
+        ? patchMainComposerAttachmentOccurrence(attachment, patch)
+        : updateComposerAttachment({ ...attachment, ...patch })
+
+      patchOccurrence({ uploadState: 'uploading' })
 
       try {
         // Update-only: if the user removed the chip while this was uploading,
         // don't resurrect it — just drop the staged result on the floor.
-        updateComposerAttachment(
-          await uploadComposerAttachment(attachment, {
+        const uploaded = await uploadComposerAttachment(attachment, {
             backendCwd: $currentCwd.get(),
             remote,
             requestGateway,
             sessionId,
             terminalBackend: $terminalBackend.get()
           })
-        )
+        patchOccurrence({
+          attachedSessionId: uploaded.attachedSessionId,
+          refText: uploaded.refText,
+          stagedUpload: uploaded.stagedUpload,
+          uploadState: undefined
+        })
       } catch (err) {
         // Leave the chip in place so submit-time sync can retry (or the user can
         // remove it) and flag the card; also toast so a hard failure (unreadable
         // file, gateway perms) isn't swallowed while the user keeps typing.
-        setComposerAttachmentUploadState(attachment.id, 'error')
-        notifyError(err, copy.dropFiles)
+        if (patchOccurrence({ uploadState: 'error' })) { notifyError(err, copy.dropFiles) }
       }
     },
     [copy.dropFiles, requestGateway]
@@ -551,17 +560,19 @@ export function usePromptActions({
         Boolean(attachment.path) &&
         !attachment.attachedSessionId &&
         !attachment.uploadState &&
-        !eagerUploadInFlight.current.has(attachment.id)
+        !eagerUploadInFlight.current.has(attachment.occurrenceId ?? attachment.id)
 
       if (!needsUpload) {
         continue
       }
 
-      const task = eagerlyUploadAttachment(activeSessionId, attachment).finally(() =>
-        eagerUploadInFlight.current.delete(attachment.id)
-      )
+      const key = attachment.occurrenceId ?? attachment.id
 
-      eagerUploadInFlight.current.set(attachment.id, task)
+      const task = eagerlyUploadAttachment(activeSessionId, attachment).finally(() => {
+        if (eagerUploadInFlight.current.get(key) === task) { eagerUploadInFlight.current.delete(key) }
+      })
+
+      eagerUploadInFlight.current.set(key, task)
     }
   }, [activeSessionId, composerAttachments, eagerlyUploadAttachment])
 
@@ -761,8 +772,10 @@ export function usePromptActions({
     // The ref is updated via useEffect on every activeSessionId change, so it
     // always reflects the current session — same pattern submitText uses.
     const sessionId = activeSessionIdRef.current
+    const storedSessionId = selectedStoredSessionIdRef.current
 
     const releaseBusy = () => {
+      if (activeSessionIdRef.current !== sessionId || selectedStoredSessionIdRef.current !== storedSessionId) { return }
       setMutableRef(busyRef, false)
       setBusy(false)
     }
@@ -776,6 +789,13 @@ export function usePromptActions({
 
       return
     }
+
+    const stopRequest = captureSubmissionDestination(storedSessionId ?? sessionId, requestGateway).requestGateway
+    // Read the live cache before Stop clears it; journal presence alone never identifies this turn.
+    const liveState = updateSessionState(sessionId, state => state, storedSessionId)
+
+    const executionControl = liveState.turnLive && !liveState.interrupted
+      ? pendingExecutionControl(storedSessionId ?? sessionId, liveState.streamExecutionControl) : undefined
 
     // Frontend busy clears immediately; gateway wind-down can lag. Mark so a
     // fast edit/resend still interrupt-first instead of racing 4009 (#83855).
@@ -791,6 +811,7 @@ export function usePromptActions({
         busy: false,
         awaitingResponse: false,
         streamId: null,
+        streamExecutionControl: null,
         pendingBranchGroup: null,
         needsInput: false,
         interrupted: true,
@@ -824,13 +845,17 @@ export function usePromptActions({
     try {
       await withSessionNotFoundResume(
         sessionId,
-        selectedStoredSessionIdRef.current,
-        liveId => requestGateway('session.interrupt', { session_id: liveId }),
+        storedSessionId,
+        liveId => stopRequest('session.interrupt', { session_id: liveId, ...executionControl }),
         {
-          requestGateway,
+          requestGateway: stopRequest,
           onRecovered: recoveredId => {
-            activeSessionIdRef.current = recoveredId
-            setActiveSessionId(recoveredId)
+            updateSessionState(recoveredId, state => state, storedSessionId)
+
+            if (activeSessionIdRef.current === sessionId && selectedStoredSessionIdRef.current === storedSessionId) {
+              activeSessionIdRef.current = recoveredId
+              setActiveSessionId(recoveredId)
+            }
           }
         }
       )
@@ -1490,6 +1515,7 @@ export function usePromptActions({
       // Recovery moves this edit to a new runtime; a user switching chats does
       // not transfer ownership of the foreground flags to the edit.
       let rollbackSessionId = sessionId
+
       const onSessionRecovered = (recoveredId: string) => {
         rollbackSessionId = recoveredId
       }

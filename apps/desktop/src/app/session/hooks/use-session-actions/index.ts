@@ -61,7 +61,7 @@ import {
 import { $projectScope } from '@/store/project-scope'
 import { projectProfile, resolveNewSessionCwd } from '@/store/projects'
 import { clearAllPrompts } from '@/store/prompts'
-import { clearStoredTranscriptReadOnly, markStoredTranscriptReadOnly } from '@/store/read-only-transcript'
+import { markStoredTranscriptReadOnly, recordResumedSessionWriteVerdict } from '@/store/read-only-transcript'
 import {
   $activeSessionStoredIdRotation,
   $connection,
@@ -98,6 +98,7 @@ import {
   setYoloActive
 } from '@/store/session'
 import { clearSessionControl } from '@/store/session-control'
+import { captureSessionControlScope } from '@/store/session-control-scope'
 import { $focusedStoredSessionId } from '@/store/session-focus'
 import { isSessionOwnerResolutionError } from '@/store/session-owner-resolution'
 import {
@@ -1342,6 +1343,7 @@ export function useSessionActions({
         ambientConnectionId
       )
 
+      const verdictScope = captureSessionControlScope(storedSessionId, sessionOwner)
       rememberResolvedResumeOwner(storedSessionId, ownerRoute, storedForProfile, sessionOwner)
 
       const sessionRestScope = transcriptRestScope(ownerRoute, storedForProfile, ambientConnectionId)
@@ -1553,7 +1555,7 @@ export function useSessionActions({
                 ? Boolean(settlePendingClarifyToolCall(cachedViewState.messages, {}, false).streamId)
                 : false
 
-              const runtimeInfo = applyRuntimeInfo(activated.info, { owner: sessionOwner })
+              const runtimeInfo = applyRuntimeInfo(activated.info, { owner: sessionOwner, controlScope: verdictScope })
 
               // `omit_messages` means the response carries NO transcript, not
               // an empty one — the cache is the base and the live projection is
@@ -2237,10 +2239,8 @@ export function useSessionActions({
 
         setActiveSessionId(resumed.session_id)
         activeSessionIdRef.current = resumed.session_id
-        // A live resume proves the owner routed — retire any read-only latch
-        // a previous no-owner open left behind (#94724: the backfill stamped
-        // the row, or a topology change made the owner resolvable again).
-        clearStoredTranscriptReadOnly(storedSessionId)
+        // Routability clears the fallback latch, never another owner's authority denial.
+        recordResumedSessionWriteVerdict(storedSessionId, resumed, verdictScope)
         const pendingApproval = restorePendingApproval(resumed, resumed.session_id)
         const pendingClarifyState = restorePendingClarifyFromSnapshot(resumed, resumed.session_id, resumeStartedAt)
         const pendingClarify = pendingClarifyState.request
@@ -2254,7 +2254,7 @@ export function useSessionActions({
         const clarifyAuthoritativelyAbsent =
           pendingClarifyState.authoritativeAbsent && !$clarifyRequests.get()[resumed.session_id]
 
-        const runtimeInfo = applyRuntimeInfo(resumed.info, { owner: sessionOwner })
+        const runtimeInfo = applyRuntimeInfo(resumed.info, { owner: sessionOwner, controlScope: verdictScope })
 
         patchSessionWorkspace(storedSessionId, runtimeInfo?.cwd)
 

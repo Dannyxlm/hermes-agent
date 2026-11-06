@@ -3,6 +3,7 @@ import type { ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } fr
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
 
 import type { BackendManagedSourceUpdate } from './hermes-managed-source'
+import type { SessionWriteCapability } from './session-capability'
 import type { SessionListMembership } from './session-list-membership'
 
 export * from './hermes-managed-source'
@@ -815,7 +816,7 @@ export interface SessionMessagesResponse {
   session_id: string
 }
 
-export interface SessionResumeResult {
+export interface SessionResumeResult extends SessionWriteCapability {
   /** Present when the backend found a fresh crash-interrupted turn and
    *  scheduled its automatic continuation; the turn arrives as a normal
    *  message.start stream right after this resume. */
@@ -866,10 +867,9 @@ export interface SessionResumeResult {
     request_id?: string
     smart_denied?: boolean
   }
-  // Server→client requests still unanswered for this session (clarify, sudo,
-  // vault prompts, …). The shared channel re-delivers them to the request
-  // handlers before this response resolves; listed here so resume can tell an
-  // authoritative "nothing pending" from a request the handler declined.
+  // Unanswered server→client requests (clarify, sudo, vault, …) are re-delivered before
+  // this response resolves. Listing them distinguishes authoritative "nothing pending"
+  // from a request the handler declined.
   open_requests?: Array<{ id: string; method: string; params: Record<string, unknown> & { session_id?: string } }>
   // The connection operation still blocking this session; resume restores the backend-owned card projection.
   pending_connection?: ConnectionRequestPayload
@@ -883,8 +883,7 @@ export interface SessionResumeResult {
   session_key?: string
   started_at?: number
   status?: string
-  /** Latest full task snapshot. Revisions let the renderer reject a response
-   * that raced with a newer live update. */
+  /** Full task snapshot; revisions reject responses raced by newer live updates. */
   todo_state?: {
     revision?: number
     todos?: unknown
@@ -893,7 +892,12 @@ export interface SessionResumeResult {
   turn_started_at?: number | null
 }
 
-export interface SessionRuntimeInfo {
+export interface SessionRuntimeInfo extends SessionWriteCapability {
+  profile_id?: unknown
+  profile_name?: unknown
+  blocking_unknown?: unknown
+  queue_receipts?: unknown
+  owner_connected?: boolean | null
   stored_session_id?: string
   pending_submissions?: unknown
   /** Canonical snapshot only: the session replay epoch and event sequence its pending set reflects. */

@@ -3931,6 +3931,9 @@ export const frOverrides = {
     queueDelete: 'Supprimer',
     queueResume: 'Reprendre',
     queueResumeTip: "Mis en pause par Arrêter — reprendre l'envoi des tours en file d'attente",
+    queueUpdates: "État des messages",
+    queueRestartCancelled: "Message en attente annulé ou interrompu. Il ne sera pas renvoyé.",
+    queueRestartUnknown: "Résultat du message en attente inconnu après le redémarrage. Vérifiez la conversation ; ne le renvoyez pas automatiquement.",
     queueLostNote: 'Tour perdu pendant le redémarrage',
     restoreImageDraft: "Restaurer le brouillon d'image",
     queueCancelFailed: "Impossible de retirer le tour en file d'attente",
@@ -5013,6 +5016,8 @@ export const frOverrides = {
           body: provider =>
             `Hermes n'a pas pu se connecter à ${provider} pour cette conversation. Réessayez ; si l'échec persiste, vérifiez le fournisseur dans Paramètres.`
         },
+        SESSION_OWNER_UNAVAILABLE: { title: "Propriétaire de la conversation indisponible", body: "Reconnectez-vous au propriétaire, puis reprenez la conversation pour actualiser son état. Le message n’a pas été renvoyé." },
+        SESSION_OUTCOME_UNKNOWN: { title: "Le tour précédent doit être vérifié", body: "Reprenez la conversation, puis utilisez Abandonner sur la carte du tour au résultat inconnu. Ne renvoyez pas le tour incertain." },
         SESSION_NOT_OWNED: {
           title: 'Conversation ouverte ailleurs',
           body: "Cette conversation est ouverte dans une autre fenêtre Hermes ou un terminal. Démarrez-en une nouvelle ici, ou fermez-la d'abord là-bas."
@@ -5089,6 +5094,7 @@ export const frOverrides = {
       errorOpenBillingSettings: 'Ouvrir les réglages de facturation',
       errorRetryScheduled: (time: string, wait: string) => `Nouvel essai à ${time} — dans ${wait}`,
       errorRetryScheduledCancel: 'Annuler',
+      errorResumeSession: "Reprendre la conversation",
       errorStartNewSession: 'Démarrer une nouvelle session',
       errorSwitchProvider: 'Changer de fournisseur',
       errorChooseModel: 'Choisir un modèle',

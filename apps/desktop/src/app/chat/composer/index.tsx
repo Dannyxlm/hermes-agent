@@ -36,7 +36,6 @@ import { $showsAdvancedChrome } from '@/store/interface-mode'
 import { $chatOnboardingSolo } from '@/store/onboarding-intro'
 import { sessionBlockingPrompt } from '@/store/prompts'
 import { toggleReview } from '@/store/review'
-import { $gatewayState } from '@/store/session'
 import { $botChatSessionIds, $sessionStates, $sessionTiles, isBotChatSession } from '@/store/session-states'
 import { useForcedTextDirection } from '@/store/text-direction'
 import { $threadScrolledUpBySession } from '@/store/thread-scroll'
@@ -53,7 +52,6 @@ import {
   implicitSlashAcceptIndex,
   liveComposerDraft,
   type QueueEditState,
-  shouldDisableComposerInput,
   slashArgStage
 } from './composer-utils'
 import { ContextMenu } from './context-menu'
@@ -70,7 +68,7 @@ import { useComposerDraft } from './hooks/use-composer-draft'
 import { useComposerDrop } from './hooks/use-composer-drop'
 import { useComposerEscCancel } from './hooks/use-composer-esc-cancel'
 import { useComposerMetrics } from './hooks/use-composer-metrics'
-import { useComposerPlaceholder } from './hooks/use-composer-placeholder'
+import { useComposerAvailability } from './hooks/use-composer-placeholder'
 import { useComposerPopout } from './hooks/use-composer-popout'
 import { useComposerQueue } from './hooks/use-composer-queue'
 import { useComposerScreenshot } from './hooks/use-composer-screenshot'
@@ -133,7 +131,7 @@ function controlRowGridClass(singleColumn: boolean, stacked: boolean): string {
 export function ChatBar({
   busy,
   cwd,
-  disabled,
+  disabled: disabledProp,
   focusKey,
   freshDraftKey,
   gateway,
@@ -192,6 +190,7 @@ export function ChatBar({
   const awaitingInput = useStore(scope.$awaitingInput)
   const blockingPrompt = useStore(useMemo(() => sessionBlockingPrompt(sessionId ?? null), [sessionId]))
   const activeQueueSessionKey = useComposerQueueScopeKey(queueSessionKey, sessionId, freshDraftKey)
+  const { disabled, inputDisabled, placeholder } = useComposerAvailability(disabledProp, activeQueueSessionKey, sessionId)
   const statusDrawer = useStatusDrawer(activeQueueSessionKey)
   const { codingDrawerId, collapsed: statusDrawerCollapsed, statusDrawerId, toggle: toggleStatusDrawer } = statusDrawer
 
@@ -282,9 +281,6 @@ export function ChatBar({
   const emoji = useEmojiCompletions()
 
   const { t } = useI18n()
-  const gatewayState = useStore($gatewayState)
-  const reconnecting = gatewayState !== 'open'
-  const inputDisabled = shouldDisableComposerInput(disabled, gatewayState)
 
   // The draft engine — detached source of truth (DOM + draftRef + edge
   // selectors); typing never re-renders the chrome. ChatBar owns `queueEditRef`
@@ -457,10 +453,6 @@ export function ChatBar({
     rememberDraftRetry,
     takeDraftRetry
   })
-
-  // Resting / reconnecting / starting placeholder text, re-rolled only on a real
-  // conversation change.
-  const placeholder = useComposerPlaceholder({ disabled, reconnecting, sessionId })
 
   // Trigger / completion engine: @// detection, the adapter-driven item list,
   // popover selection, and chip insertion. The keydown nav block below consumes

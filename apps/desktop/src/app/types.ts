@@ -1,3 +1,4 @@
+import type { GatewayEvent } from '@hermes/shared'
 import type * as React from 'react'
 
 import type { ChatMessage } from '@/lib/chat-messages'
@@ -191,6 +192,8 @@ export interface ClientSessionState {
   /** `turn_id` of the newest message.start (tui_gateway/stream_segments.py): a
    *  re-sent start of the same turn is not a new occurrence. */
   streamTurnId?: null | string
+  /** Exact admission observed on the accepted message.start; absent on legacy/local starts. */
+  streamExecutionControl?: (Required<Pick<GatewayEvent, 'admission_id' | 'execution_generation'>> & { ownerKey: string }) | null
   /** A blocking clarify prompt is waiting on the user for this session. Drives
    *  the sidebar "needs input" indicator; cleared when the turn resumes/ends. */
   needsInput: boolean

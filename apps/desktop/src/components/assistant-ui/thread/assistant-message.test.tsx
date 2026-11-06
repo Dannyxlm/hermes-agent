@@ -13,7 +13,7 @@ import { en } from '@/i18n/en'
 import type { ErrorCardCopy } from '@/i18n/types'
 import { $touchPointer } from '@/lib/touch-interaction'
 import { $displayTimestamps } from '@/store/display-timestamps'
-import { $activeSessionId } from '@/store/session'
+import { $activeSessionId, $selectedStoredSessionId, $sessionResumeRequest } from '@/store/session'
 import { type SessionTileDelegate, setSessionTileDelegate } from '@/store/session-states'
 
 import { stubThreadEnvironment } from '../test-utils'
@@ -358,6 +358,22 @@ describe('stopped reply marker', () => {
 })
 
 describe('ownership refusal recovery (#106217)', () => {
+  it.each(['SESSION_OWNER_UNAVAILABLE', 'SESSION_OUTCOME_UNKNOWN'])('the %s action refreshes this chat without resending or creating a new chat', async code => {
+    $selectedStoredSessionId.set('recovery-target')
+    $sessionResumeRequest.set(null)
+    const onReload = vi.fn(async () => undefined)
+    render(<Harness assistant={failedMessage({ code, layer: 'gateway', retryable: false })} onReload={onReload} />)
+    const button = await screen.findByRole('button', { name: en.assistant.thread.errorResumeSession })
+    expect($sessionResumeRequest.get()).toBeNull()
+    fireEvent.click(button)
+    expect($sessionResumeRequest.get()).toMatchObject({ sessionId: 'recovery-target', authoritativeSnapshot: true })
+    expect(onReload).not.toHaveBeenCalled()
+    expect(requestFreshSession).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Start new session' })).toBeNull()
+    $selectedStoredSessionId.set(null)
+  })
+
   it('offers Start new session and suppresses Retry for live-owner refusals', async () => {
     render(<Harness assistant={ownershipRefusalMessage()} />)
 

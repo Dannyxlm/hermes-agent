@@ -7,13 +7,94 @@ import { applyRuntimeInfo } from '@/app/session/hooks/use-session-actions/utils'
 import { isSteerableEntry } from '@/store/composer-queue'
 import type { SessionInfo } from '@/types/hermes'
 
-import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts, migrateQueuedPrompts } from './composer-queue'
-import { readPendingSubmissions, reconcilePendingSubmissions, trackPendingSubmission } from './pending-submissions'
-import { $sessions } from './session'
+import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts, migrateQueuedPrompts, removeQueuedPrompt, simulateComposerQueueReloadForTests } from './composer-queue'
+import { journaledPendingSessions, readPendingSubmissions, reconcileLocalQueueReceipts, reconcilePendingSubmissions, trackPendingSubmission } from './pending-submissions'
+import { $activeGatewayProfile } from './profile'
+import { $connection, $sessions } from './session'
 
 beforeEach(() => {
+  $sessions.set([])
+  $connection.set(null)
+  $activeGatewayProfile.set('default')
   window.localStorage.clear()
   $queuedPromptsBySession.set({})
+})
+
+it('successful legacy resume control info projects only verified metadata and keeps it separate from submitted pending', () => {
+  applyRuntimeInfo({ stored_session_id: 'chat', pending_submissions: [], blocking_unknown: [{ admission_id: 'observed',
+    ref: { profile_id: 'default', session_id: 'chat' }, status: 'unknown', execution_generation: 4, controls: ['resolve_unknown'] }] })
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'observed', text: '', attachments: [], serverExecutionGeneration: 4 }])
+  expect(readPendingSubmissions('chat').observed).toBeUndefined()
+  expect(journaledPendingSessions()).toEqual([])
+  reconcilePendingSubmissions('chat', [])
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+  applyRuntimeInfo({ stored_session_id: 'chat', pending_submissions: [] })
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+  applyRuntimeInfo({ stored_session_id: 'chat', blocking_unknown: [] })
+  expect(getQueuedPrompts('chat')).toEqual([])
+})
+
+it.each([
+  undefined, null, [], [{}],
+  [{ admission_id: 'x', status: 'unknown', execution_generation: 4, controls: ['resolve_unknown'] }],
+  ...[
+    { ref: { profile_id: 'foreign', session_id: 'chat' } },
+    { ref: { profile_id: 'default', session_id: 'wrong-chat' } },
+    { execution_generation: undefined }, { execution_generation: '4' }, { execution_generation: -1 },
+    { execution_generation: 1.5 }, { execution_generation: NaN },
+    { controls: [] }, { controls: ['interrupt'] }, { controls: ['resolve_unknown', 'cancel'] },
+    { admission_id: '' }, { status: 'started' }
+  ].map(patch => [{ admission_id: 'x', ref: { profile_id: 'default', session_id: 'chat' }, status: 'unknown',
+    execution_generation: 4, controls: ['resolve_unknown'], ...patch }])
+])('unverified blocking metadata never acquires a card or blocks the quiet queue: %j', value => {
+  enqueueQueuedPrompt('chat', { id: 'quiet', text: 'quiet local', attachments: [] })
+  applyRuntimeInfo({ stored_session_id: 'chat', profile_id: 'default', blocking_unknown: value })
+  expect(getQueuedPrompts('chat').map(entry => [entry.id, entry.serverStatus])).toEqual([['quiet', undefined]])
+})
+
+it('older fences/generations and foreign sources cannot retire or replace the correct observed evidence', () => {
+  const value = (generation: number) => [{ admission_id: 'observed', ref: { profile_id: 'default', session_id: 'chat' },
+    status: 'unknown', execution_generation: generation, controls: ['resolve_unknown'] }]
+
+  const info = (sequence: number, blocking_unknown: unknown) => ({ stored_session_id: 'chat', blocking_unknown, replay_epoch: 'epoch', last_sequence: sequence })
+  applyRuntimeInfo(info(10, value(9)))
+  applyRuntimeInfo(info(7, []))
+  applyRuntimeInfo(info(11, value(8)))
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'observed', serverExecutionGeneration: 9 }])
+  applyRuntimeInfo(info(12, []), { controlScope: { connectionId: 'foreign', profile: 'default' } })
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+  applyRuntimeInfo({ stored_session_id: 'other', blocking_unknown: [] })
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+  applyRuntimeInfo(info(13, []))
+  expect(getQueuedPrompts('chat')).toEqual([])
+  applyRuntimeInfo(info(10, value(9)))
+  expect(getQueuedPrompts('chat')).toEqual([])
+  // Empty discovery is unavailable, not proof of terminal absence.
+  applyRuntimeInfo(info(14, value(9)))
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'observed', serverExecutionGeneration: 9 }])
+})
+
+it('a fresh owner receipt with no served control revokes the observed Discard without making a replayable input', () => {
+  const info = (controls: string[]) => ({ stored_session_id: 'chat', blocking_unknown: [{ admission_id: 'observed',
+    ref: { profile_id: 'default', session_id: 'chat' }, status: 'unknown', execution_generation: 4, controls }] })
+
+  applyRuntimeInfo(info(['resolve_unknown']))
+  applyRuntimeInfo(info([]))
+  expect(getQueuedPrompts('chat')).toEqual([])
+  applyRuntimeInfo(info(['resolve_unknown']))
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'observed', serverControls: ['resolve_unknown'] }])
+})
+
+it('observed metadata never reads another viewer input text or submission identity', () => {
+  const row = { admission_id: 'observed', ref: { profile_id: 'default', session_id: 'chat' },
+    status: 'unknown', execution_generation: 4, controls: ['resolve_unknown'] }
+
+  Object.defineProperties(row, {
+    user: { get: () => { throw new Error('private input read') } },
+    input_id: { get: () => { throw new Error('submission identity read') } }
+  })
+  applyRuntimeInfo({ stored_session_id: 'chat', blocking_unknown: [row] })
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'observed', text: '', serverControls: ['resolve_unknown'] }])
 })
 
 it('projects resumed runtime pending receipts under durable identity without making them sendable', () => {
@@ -43,7 +124,7 @@ it('carries the queued-row controls the owner lists onto the card, and none when
     { id: 'served', serverControls: ['steer', 'replace'] },
     { id: 'older', serverControls: undefined }
   ])
-  expect(Object.values(readPendingSubmissions('chat')).some(entry => 'controls' in entry)).toBe(false)
+  expect(readPendingSubmissions('chat').served.controls).toEqual(['steer', 'replace'])
 })
 
 it('a steer in transfer hides its card without retiring it, so a return to the queue repaints it in place (RT-35)', () => {
@@ -102,6 +183,81 @@ it('recovers remote pending text into the queue and journal without a local subm
   for (const receipt of snapshot) {
     expect(journal[receipt.admission_id].text).toBe(receipt.user)
   }
+})
+
+it('a stale queued projection cannot replace unknown execution identity or Discard controls', () => {
+  reconcilePendingSubmissions('chat', [{ admission_id: 'forwarded', input_id: 'input', status: 'unknown', user: 'lost', execution_generation: 8, controls: ['resolve_unknown'] }])
+  reconcilePendingSubmissions('chat', [{ admission_id: 'forwarded', input_id: 'input', status: 'queued', user: 'lost', execution_generation: 3, controls: ['cancel'] }])
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'forwarded', serverStatus: 'unknown', serverExecutionGeneration: 8, serverControls: ['resolve_unknown'] }])
+})
+
+it('retains actual legacy forwarded Stop across a stale queued frame and renderer reload', () => {
+  reconcilePendingSubmissions('chat', [{ admission_id: 'legacy', status: 'started', user: 'running', execution_generation: 9, controls: ['interrupt'] }])
+  simulateComposerQueueReloadForTests()
+  reconcilePendingSubmissions('chat', [{ admission_id: 'legacy', status: 'queued', user: 'old', execution_generation: 1, controls: ['cancel'] }])
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'legacy', serverStatus: 'started', serverExecutionGeneration: 9, serverControls: ['interrupt'] }])
+})
+
+it.each(['profile', 'connection'])('does not borrow controls from a same-id foreign %s receipt', dimension => {
+  reconcilePendingSubmissions('chat', [{ admission_id: 'foreign', status: 'unknown', user: 'lost', execution_generation: 8, controls: ['resolve_unknown'] }])
+
+  if (dimension === 'profile') { $activeGatewayProfile.set('foreign') }
+  else { $connection.set({ mode: 'remote', connectionId: 'other' } as never) }
+
+  reconcilePendingSubmissions('chat', [{ admission_id: 'foreign', status: 'queued', user: 'old', execution_generation: 1, controls: ['cancel'] }])
+  expect(getQueuedPrompts('chat')).toMatchObject([{ serverStatus: 'unknown', serverControls: [] }])
+})
+
+it('a stale queued frame cannot invent canonical Stop permission or borrow a foreign owner control', () => {
+  reconcilePendingSubmissions('chat', [{ admission_id: 'canonical', status: 'started', user: 'no Stop', execution_generation: 8 }])
+  reconcilePendingSubmissions('chat', [{ admission_id: 'canonical', status: 'queued', user: 'old', controls: ['interrupt'], execution_generation: 1 }])
+  expect(getQueuedPrompts('chat')).toEqual([])
+  reconcilePendingSubmissions('chat', [{ admission_id: 'foreign', status: 'unknown', user: 'lost', execution_generation: 8, controls: ['resolve_unknown'] }])
+  $activeGatewayProfile.set('foreign')
+  reconcilePendingSubmissions('chat', [{ admission_id: 'foreign', status: 'queued', user: 'old', execution_generation: 1, controls: ['cancel'] }])
+  expect(getQueuedPrompts('chat').every(entry => !entry.serverControls?.length)).toBe(true)
+})
+
+it.each([
+  ['unknown', 'profile'], ['terminal', 'profile'], ['unknown', 'connection'], ['terminal', 'connection']
+])('acknowledges a local %s receipt across info, resume and renderer reload, but not new evidence or another %s', (status, dimension) => {
+  const receipt = { input_id: 'local-input', session_id: 'chat', status, user: 'input', outcome: status === 'terminal' ? 'cancelled' : null, reason: 'restart' }
+  const info = { stored_session_id: 'chat', queue_receipts: [receipt] }
+  applyRuntimeInfo(info)
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+  expect(removeQueuedPrompt('chat', 'local-queue:local-input')).toBe(true)
+  reconcileLocalQueueReceipts('chat', [receipt])
+  expect(getQueuedPrompts('chat')).toEqual([])
+  simulateComposerQueueReloadForTests()
+  applyRuntimeInfo(info)
+  expect(getQueuedPrompts('chat')).toEqual([])
+  reconcileLocalQueueReceipts('chat', [{ ...receipt, reason: 'new evidence' }])
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+  expect(removeQueuedPrompt('chat', 'local-queue:local-input')).toBe(true)
+
+  if (dimension === 'profile') { $activeGatewayProfile.set('foreign') }
+  else { $connection.set({ mode: 'remote', connectionId: 'foreign' } as never) }
+
+  applyRuntimeInfo(info)
+  expect(getQueuedPrompts('chat')).toHaveLength(1)
+})
+
+it('new terminal evidence resurfaces after acknowledging unknown without replay or an RPC', () => {
+  const receipt = { input_id: 'progress', session_id: 'chat', user: 'input', outcome: null }
+  reconcileLocalQueueReceipts('chat', [{ ...receipt, status: 'unknown' }])
+  expect(removeQueuedPrompt('chat', 'local-queue:progress')).toBe(true)
+  reconcileLocalQueueReceipts('chat', [{ ...receipt, status: 'terminal', outcome: 'cancelled' }])
+  expect(getQueuedPrompts('chat')).toMatchObject([{ queueReceipt: { status: 'terminal', outcome: 'cancelled' }, serverControls: [] }])
+  expect(getQueuedPrompts('chat').every(entry => !isSteerableEntry(entry))).toBe(true)
+})
+
+it('a late transferred frame cannot erase unknown, while an actual completion may settle it', () => {
+  const receipt = { input_id: 'local-input', session_id: 'chat', user: 'input', outcome: null }
+  reconcileLocalQueueReceipts('chat', [{ ...receipt, status: 'unknown', reason: 'backend_restart_after_dispatch' }])
+  reconcileLocalQueueReceipts('chat', [{ ...receipt, status: 'transferred' }])
+  expect(getQueuedPrompts('chat')).toMatchObject([{ queueReceipt: { status: 'unknown' } }])
+  reconcileLocalQueueReceipts('chat', [{ ...receipt, status: 'terminal', outcome: 'completed' }])
+  expect(getQueuedPrompts('chat')).toEqual([])
 })
 
 it('maps optimistic input identity to the admission identity before local drain can replay it', () => {

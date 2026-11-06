@@ -18,6 +18,7 @@ import { clearAllPrompts } from '@/store/prompts'
 import { providerWaitText, setSessionProviderWait } from '@/store/provider-wait'
 import { setCurrentUsage, setTurnStartedAt } from '@/store/session'
 import { refreshSupportedSessionControlAfterTurn } from '@/store/session-control'
+import { sessionControlOwnerKey, sessionControlScopeForEvent } from '@/store/session-control-scope'
 import { $focusedStoredSessionId } from '@/store/session-focus'
 import { $sessionStates } from '@/store/session-states'
 import { lightDesktopMessagingCompletion } from '@/store/session-unread'
@@ -212,6 +213,8 @@ function handleMessageStart(ctx: GatewayEventContext): boolean {
       // frame (#119569) can no longer claim its heartbeat-settled bubble.
       heartbeatSettledStreamId: null,
       streamTurnId: turnId || null,
+      streamExecutionControl: typeof ctx.event.admission_id === 'string' && typeof ctx.event.execution_generation === 'number'
+        ? { admission_id: ctx.event.admission_id, execution_generation: ctx.event.execution_generation, ownerKey: sessionControlOwnerKey(sessionControlScopeForEvent(ctx.event)) } : null,
       // Keep the submit-time seed (submit.ts seedOptimistic) — resetting
       // here would hide the submit→accept round trip from the timer.
       // Backend-originated turns (queue drain elsewhere, goal follow-up)
