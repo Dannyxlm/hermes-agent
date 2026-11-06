@@ -4,6 +4,7 @@ operation may proceed, else a refusal (error dict or message). Origin-owned stat
 so test patches keep working."""
 
 import contextvars as _ctxvars
+import json
 import logging
 import threading
 from contextlib import suppress
@@ -311,3 +312,58 @@ def _curator_consolidation_delete_guard(
         f"forwarding target is not permitted here — the deterministic inactivity prune handles "
         f"staleness archival separately. Keeping '{name}' active.",
         _fail_closed=True)
+
+
+# Owner law (CloudSeed): an owner-authored SKILL.md under the default root's skills dir stays within
+# its cap in ``<root>/laws/skills-budget.json`` (``main_cap_bytes``; a file already over it is held to
+# its ``over_cap`` size, which ratchets down as it is slimmed). SKILL.md loads whole on every use, so
+# depth belongs in references/. No budget file means no law: stock Hermes behaves as before.
+_MAIN_BUDGET_PARTS = ("laws", "skills-budget.json")
+_MAIN_BUDGET_DEFAULT_AUTHOR = "Ava"
+
+
+def _frontmatter_field(text: Optional[str], key: str) -> Optional[str]:
+    with suppress(Exception):
+        from agent.skill_utils import parse_frontmatter
+        value = parse_frontmatter(text or "")[0].get(key)
+        return str(value).strip() if value is not None else None
+    return None
+
+
+def _main_size_budget_error(skill_dir: Path, content: str, before: Optional[str],
+                            before_bytes: int) -> Optional[str]:
+    """Refusal message when this SKILL.md write grows a governed skill past its cap, else None.
+
+    A write that does not grow the file (``before_bytes``, the on-disk size; 0 for a create) is
+    always allowed, so slimming an over-cap skill never gets stuck. A skill is governed when either
+    its old or new frontmatter names the budget's author, so a rewrite can't drop the author line to
+    grow past the cap. Fails open on any lookup error: the daily law check stays the backstop."""
+    new_bytes = len(content.encode("utf-8"))
+    if new_bytes <= before_bytes:
+        return None
+    try:
+        from hermes_constants import get_default_hermes_root
+        root = get_default_hermes_root()
+        budget_path = root.joinpath(*_MAIN_BUDGET_PARTS)
+        if not budget_path.is_file():
+            return None
+        if not skill_dir.resolve().is_relative_to((root / "skills").resolve()):
+            return None  # the law governs the shared library, not profile-local or external dirs
+        budget = json.loads(budget_path.read_text(encoding="utf-8-sig"))
+        author = str(budget.get("author") or _MAIN_BUDGET_DEFAULT_AUTHOR)
+        if author not in {_frontmatter_field(content, "author"), _frontmatter_field(before, "author")}:
+            return None
+        name = _frontmatter_field(content, "name") or skill_dir.name
+        cap = int(budget.get("main_cap_bytes", 15_000))
+        limit = max(cap, int((budget.get("over_cap") or {}).get(name, 0)))
+    except Exception:
+        logger.debug("SKILL.md size budget lookup failed; not enforced for this write", exc_info=True)
+        return None
+    if new_bytes <= limit:
+        return None
+    return (
+        f"Refused: SKILL.md for '{name}' would be {new_bytes:,} B, over its {limit:,} B cap "
+        f"(+{new_bytes - limit:,} B; {budget_path}). SKILL.md loads whole on every use. Move this "
+        f"depth to references/<topic>.md (skill_manage write_file, or extend an existing reference) "
+        f"and leave a one-line pointer in SKILL.md, in this same turn. Writes that keep SKILL.md the "
+        f"same size or smaller always pass; raising a cap needs an edited reason in that file.")

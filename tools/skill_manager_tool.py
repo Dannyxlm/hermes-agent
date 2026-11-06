@@ -31,7 +31,7 @@ from tools.skill_manager_guards import (
     _background_review_overlap_guard,
     _background_review_delete_guard, _background_review_preflight, _background_review_read_before_write_guard,
     _containing_skills_root, _curator_consolidation_delete_guard, _is_path_redirect, _pinned_guard,
-    _validate_delete_target, _is_background_review, _refusal as _err)
+    _validate_delete_target, _is_background_review, _main_size_budget_error, _refusal as _err)
 from tools.skill_manager_batch import (
     _PATCH_EITHER_OR, _PATCH_NEEDS_NEW_STRING, _PATCH_NEEDS_OLD_STRING, _op_shape_error, _skill_manage_batch)
 from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
@@ -410,15 +410,18 @@ def _locate_for_write(name: str, action: str, not_found_suffix: str = ""):
 
 def _guarded_write(name: str, skill_dir: Path, target: Path, action: str, label: str,
                    content: str) -> Optional[dict[str, Any]]:
-    """Read-before-write guard (existing targets only), the description budget for the root SKILL.md
-    (whichever action and file_path reach it), atomic write, then the security scan; a blocked scan
+    """Read-before-write guard (existing targets only), the description and size budgets for the root
+    SKILL.md (whichever action and file_path reach it), atomic write, then the security scan; a blocked scan
     restores the original (or unlinks a new file). Error dict or None."""
-    original = None
+    original, original_bytes = None, 0
     if target.exists():
         if read_guard := _background_review_read_before_write_guard(name, target, action, label):
             return read_guard
         original = target.read_text(encoding="utf-8-sig")
-    if target == skill_dir / "SKILL.md" and (err := _description_budget_error(content, before=original)):
+        original_bytes = target.stat().st_size
+    if target == skill_dir / "SKILL.md" and (err := _description_budget_error(content, before=original)
+                                             or _main_size_budget_error(skill_dir, content, original,
+                                                                        original_bytes)):
         return _err(err)
     from hermes_constants import mkdir_under_hermes_home
     mkdir_under_hermes_home(target.parent)
