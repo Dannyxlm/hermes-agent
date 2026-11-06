@@ -572,6 +572,9 @@ export interface SessionLiveInfo {
   system_prompt?: string | null
   credential_warning?: string | null
   lazy?: boolean | null
+  pending_submissions?: ForwardedPendingSubmission[] | null
+  queue_receipts?: LocalQueueReceipt[] | null
+  owner_connected?: boolean | null
   [key: string]: unknown
 }
 /** ``tui_gateway/server.py::_project_info_for_cwd``. */
@@ -622,6 +625,22 @@ export interface McpServerStatus {
   tool_count?: number | null
   error?: string | null
   [key: string]: unknown
+}
+export interface ForwardedPendingSubmission {
+  admission_id: string
+  input_id: string
+  status: 'queued' | 'started' | 'unknown'
+  user: string
+  execution_generation?: number | null
+  controls: ('cancel' | 'interrupt' | 'resolve_unknown')[]
+}
+export interface LocalQueueReceipt {
+  input_id: string
+  session_id: string
+  status: 'queued' | 'transferred' | 'terminal' | 'unknown'
+  outcome: string | null
+  reason?: string | null
+  user: unknown
 }
 /** ``provider_configured`` is the loose answer; the boot record's fields (``ready``, ``free_tier_account``, ``free_tier_route``, ``other_providers``, ``inference_provider``) ride along on the launch profile. An unknown ``profile`` answers ``ok=False`` + ``error``. */
 export interface SetupStatusResult {
@@ -2612,6 +2631,7 @@ export interface PromptSubmitResult {
   turn_isolation?: boolean | null
   admission_id?: string | null
   forwarded?: boolean | null
+  input_id?: string | null
 }
 export type PromptSubmitStatus = 'streaming' | 'queued' | 'steered' | 'redirected'
 export interface ClipboardPasteParams {
@@ -3354,6 +3374,9 @@ export interface SessionCwdSetResult {
   system_prompt?: string | null
   credential_warning?: string | null
   lazy?: boolean | null
+  pending_submissions?: ForwardedPendingSubmission[] | null
+  queue_receipts?: LocalQueueReceipt[] | null
+  owner_connected?: boolean | null
   [key: string]: unknown
 }
 export interface SessionCloseParams {
@@ -3535,6 +3558,8 @@ export interface SessionInterruptParams {
   session_id: string
   profile?: string | null
   expected_hosted_task_id?: string | null
+  admission_id?: string | null
+  execution_generation?: number | null
 }
 export interface SessionInterruptResult {
   status: InterruptStatus
@@ -3550,6 +3575,7 @@ export interface SessionCorrectionParams {
 export interface SessionCorrectionResult {
   status: CorrectionStatus
   text: string
+  input_id?: string | null
 }
 export type CorrectionStatus = 'queued' | 'redirected' | 'rejected'
 export interface SpawnTreeSaveParams {
@@ -4003,6 +4029,7 @@ export interface MobileSubmitResult {
   turn_isolation?: boolean | null
   admission_id?: string | null
   forwarded?: boolean | null
+  input_id?: string | null
   accepted: boolean
 }
 export interface MobileScopeParams {
@@ -6214,6 +6241,31 @@ export interface DefaultsSetResult {
   changed: boolean
   operation_id: string | null
 }
+export interface ForwardedAdmissionParams {
+  session_id: string
+  profile?: string | null
+  admission_id: string
+}
+/** ``gateway/session_contract.py::AdmissionReceipt`` as ``dataclasses.asdict`` sends it. */
+export interface AdmissionStatus {
+  admission_id: string
+  ref: CanonicalSessionRef
+  sequence: number
+  status: 'queued' | 'started' | 'unknown' | 'terminal'
+  outcome: string | null
+  authority_epoch: number
+  execution_generation: number | null
+}
+export interface CanonicalSessionRef {
+  profile_id: string
+  session_id: string
+}
+export interface ForwardedResolveParams {
+  session_id: string
+  profile?: string | null
+  admission_id: string
+  execution_generation: number
+}
 export interface GroupsAttachmentUploadParams {
   profile?: string | null
   room_id: string
@@ -6289,23 +6341,9 @@ export interface PromptReceiptResult {
   result?: unknown | null
   usage?: Record<string, unknown> | null
 }
-export interface CanonicalSessionRef {
-  profile_id: string
-  session_id: string
-}
 export interface PromptCancelParams {
   session_id: string
   admission_id: string
-}
-/** ``gateway/session_contract.py::AdmissionReceipt`` as ``dataclasses.asdict`` sends it. */
-export interface AdmissionStatus {
-  admission_id: string
-  ref: CanonicalSessionRef
-  sequence: number
-  status: 'queued' | 'started' | 'unknown' | 'terminal'
-  outcome: string | null
-  authority_epoch: number
-  execution_generation: number | null
 }
 export interface PromptResolveUnknownParams {
   session_id: string
@@ -6653,6 +6691,8 @@ export interface CanonicalCreateParams {
 export interface CanonicalSnapshot {
   session_id: string
   stored_session_id: string
+  writable?: boolean | null
+  read_only_reason?: string | null
   messages: TranscriptMessage[]
   messages_omitted?: boolean | null
   display_messages?: TranscriptMessage[] | null
@@ -6715,6 +6755,8 @@ export interface CanonicalSnapshotInfo {
   unknown_toolsets?: string[] | null
   usage?: Usage | null
   desktop_protocol: 'hermes-gateway-v1'
+  writable?: boolean | null
+  read_only_reason?: string | null
   source?: string | null
   created?: boolean | null
   model?: string | null
@@ -8300,6 +8342,12 @@ export interface RpcMethods {
   'prompt.background': { params: SideAgentParams; result: TaskIdResult }
   /** Side question over a snapshot of the live conversation; the answer arrives as btw.complete. */
   'prompt.btw': { params: SideAgentParams; result: TaskIdResult }
+  /** Cancel this live session's forwarded admission on its owner, including a racing claim. */
+  'prompt.cancel': { params: ForwardedAdmissionParams; result: AdmissionStatus }
+  /** Refresh this live session's forwarded admission without resubmitting it. */
+  'prompt.receipt': { params: ForwardedAdmissionParams; result: AdmissionStatus }
+  /** Discard the exact forwarded unknown generation on its owner; never replay it. */
+  'prompt.resolve_unknown': { params: ForwardedResolveParams; result: AdmissionStatus }
   /** Send a user turn to a live session; busy sessions queue / steer / redirect instead of refusing. */
   'prompt.submit': { params: PromptSubmitParams; result: PromptSubmitResult }
   /** Re-read ~/.hermes/.env (CLI /reload parity); built agents keep their pool until /new. */
@@ -8734,6 +8782,9 @@ export const RPC_METHODS = [
   'projects.update',
   'prompt.background',
   'prompt.btw',
+  'prompt.cancel',
+  'prompt.receipt',
+  'prompt.resolve_unknown',
   'prompt.submit',
   'reload.env',
   'reload.mcp',

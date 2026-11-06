@@ -439,6 +439,7 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
     ``steer`` → inject after the current atomic action. ``queued=True`` (client queue drain) forces queue mode: a "run
     after" message must NEVER become a live correction."""
     mode = "queue" if queued else _load_busy_input_mode()
+    import sqlite3
     explicit_images = image_paths is not None
     agent = session.get("agent")
     # Compression in flight demotes steer/interrupt to queue: a correction delivered
@@ -473,12 +474,21 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
             if claimed:
                 session["attached_images"] = claimed + list(session.get("attached_images", []))
             return None
+        before_queue = [dict(e) for e in ([session["queued_prompt"]] if session.get("queued_prompt") else [])
+                        + list(session.get("queued_prompts") or [])]
         envelope = _enqueue_prompt(session, text, transport,
             image_paths=image_paths if explicit_images or image_paths else None, turn_author=turn_author,
             auto_continue=auto_continue)
         # Durable AT ACCEPT (not when the turn runs): a cold resume sees the queued message and a
         # backend restart cannot lose it. Lives on the envelope, never the shared session slot.
         if envelope is not None:
+            try:
+                _accept_local_queue_receipt(session, envelope)
+            except (OSError, RuntimeError, sqlite3.Error) as exc:
+                _ac_set_queue(session, before_queue)
+                if claimed:
+                    session["attached_images"] = claimed + list(session.get("attached_images", []))
+                return _err(rid, 5000, f"Queue acceptance could not be saved: {exc}")
             if attachment_queue is not None:
                 attachment_queue["store"].queued(attachment_queue["ids"], attachment_queue["id"], sid)
                 envelope["_attachment_queue"] = attachment_queue
@@ -493,7 +503,57 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
     # pending steer buffer — silently destroying the earlier messages of the burst. See #86134.
     if mode == "interrupt" and not image_paths:
         _interrupt_busy_session(sid, session, agent)
-    return _ok(rid, {"status": "queued"})
+    return _ok(rid, {"status": "queued", **({"input_id": envelope["_queue_receipt"]["input_id"]}
+                                             if envelope is not None else {})})
+
+
+def _accept_local_queue_receipt(session, envelope):
+    from tui_gateway.local_queue_receipts import accept
+    _ensure_session_db_row(session)
+    with _session_db(session) as db:
+        if db is None:
+            raise RuntimeError("session storage unavailable")
+        return accept(db, session, envelope)
+
+
+def _dispose_local_queue(session, envelopes, outcome):
+    from tui_gateway.local_queue_receipts import disposition
+    envelopes = [e for e in envelopes if e.get("_queue_receipt") is not None]
+    if not envelopes:
+        return
+    with _session_db(session) as db:
+        if db is None:
+            raise RuntimeError("session storage unavailable")
+        for envelope in envelopes:
+            disposition(db, envelope, outcome)
+
+
+def _restore_local_queue_receipt(session, envelope):
+    if envelope.get("_queue_receipt") is not None:
+        _accept_local_queue_receipt(session, envelope)
+
+
+def _local_queue_terminal_kwargs(sid, session, envelope):
+    """Use the turn runner's existing durable terminal callback, not transcript heuristics."""
+    if envelope.get("_queue_receipt") is None:
+        return {}
+
+    def terminal(result):
+        outcome = {"settled": "completed", "cancelled": "interrupted", "failed": "failed"}[result["status"]]
+        with session["history_lock"]:
+            _dispose_local_queue(session, [envelope], outcome)
+        _emit("session.info", sid, _session_control_info(session))
+    return {"terminal_callback": terminal}
+
+
+def _queued_dispatch_kwargs(queued, generation):
+    kwargs = {"queued_prompt_generation": generation}
+    if "image_paths" in queued:
+        kwargs["image_paths"] = queued["image_paths"]
+    # A durable identified input is never a fresh automatic resend after an ambiguous dispatch.
+    if queued.get("_queue_receipt") is not None or not queued.get("_auto_continue", True):
+        kwargs["auto_continue"] = False
+    return kwargs
 
 
 def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
@@ -503,6 +563,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
             return False
         queue_generation = int(session.get("_queued_prompt_generation", 0))
+
         if selection := queued.get("_attachment_queue"):
             if selection.get("accepting"):
                 return False  # The submit wrapper still owns its receipt locks.
@@ -511,6 +572,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             except (ValueError, OSError) as exc:
                 _emit("error", sid, {"message": str(exc)})
                 return False
+        _dispose_local_queue(session, [queued], "dispatched")
         _ac_set_queue(session, session.get("queued_prompts") or [])
         session["running"] = True
         queued_transport = queued.get("transport")
@@ -527,19 +589,17 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             # envelope (claimed head first, then whatever advanced into the slot) so a legitimate follow-up isn't dropped.
             # See #84417.
             if session.get("_turn_cancel_requested"):
+                _dispose_local_queue(session, [queued], "cancelled")
                 _restore_refused_queued_attachments(queued, sid)
             else:
+                _restore_local_queue_receipt(session, queued)
                 if selection := queued.get("_attachment_queue"):
                     selection["store"].queued(selection["ids"], selection["id"], sid)
                 advanced = session.get("queued_prompt")
                 _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
             session["running"] = False
             return True
-    kwargs: dict = {"queued_prompt_generation": queue_generation}
-    if "image_paths" in queued:
-        kwargs["image_paths"] = queued["image_paths"]
-    if not queued.get("_auto_continue", True):
-        kwargs["auto_continue"] = False
+    kwargs = _queued_dispatch_kwargs(queued, queue_generation)
     # Re-place the accept-time rows (if any) at the transcript END before the turn's rows follow
     # them, and slot the dispatching envelope's fresh row for adoption. EVERY queued envelope is
     # re-placed in acceptance order: a later-accepted prompt's row must never sit behind while an
@@ -563,13 +623,16 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     dispatch_failed = False
     try:
         if not use_compute_host:
-            if _run_prompt_submit(rid, sid, session, queued["text"], **kwargs, **author_kwargs) is False:
+            if _run_prompt_submit(rid, sid, session, queued["text"], **kwargs, **author_kwargs,
+                                  **_local_queue_terminal_kwargs(sid, session, queued)) is False:
+                _dispose_local_queue(session, [queued], "cancelled")
                 _restore_refused_queued_attachments(queued, sid)
         elif (resp := _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs,
-                **({"queued_prompt": queued} if queued.get("_attachment_queue") else {}))).get("error"):
+                queued_prompt=queued)).get("error"):
             if resp["error"].get("data", {}).get("delivery_uncertain"):
                 _emit("error", sid, {"message": str(resp["error"].get("message") or "queued dispatch uncertain")})
                 return True
+            _dispose_local_queue(session, [queued], "cancelled")
             _restore_refused_queued_attachments(queued, sid)
             with session["history_lock"]:
                 session["running"] = False

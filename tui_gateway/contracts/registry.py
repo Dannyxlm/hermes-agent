@@ -26,6 +26,7 @@ class MethodContract:
     result: type[Result]
     doc: str = ""
     params_error: tuple[int, str] | None = None
+    required_keys: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,8 +75,9 @@ def method(name: str, *, params: type[Params], result: type[Result], doc: str = 
     return entry
 
 
-def canonical_method(name: str, *, params: type[Params], result: type[Result], doc: str = "") -> MethodContract:
-    entry = MethodContract(name, params, result, doc)
+def canonical_method(name: str, *, params: type[Params], result: type[Result], doc: str = "",
+                     required_keys: bool = False) -> MethodContract:
+    entry = MethodContract(name, params, result, doc, required_keys=required_keys)
     _declare(CANONICAL_METHODS, entry)
     return entry
 
@@ -138,7 +140,7 @@ def canonical_param_problems(contract: MethodContract, params: dict) -> list[str
         # Shared methods preserve handler-owned missing-field/permission refusals,
         # while refusing malformed values before the handler indexes them.
         return [".".join(str(p) for p in err.get("loc", ())) or "params" for err in exc.errors()
-                if (err.get("type") != "missing" if contract.name in METHODS
+                if (err.get("type") != "missing" if contract.name in METHODS and not contract.required_keys
                     else err.get("type") in ("extra_forbidden", "missing"))]
     return []
 

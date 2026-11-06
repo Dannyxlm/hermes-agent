@@ -824,6 +824,7 @@ def _interrupt_session_turn(
     with session["history_lock"]:
         session["_turn_cancel_requested"] = True
         cancelled = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
+        _dispose_local_queue(session, cancelled, "cancelled")
         session["queued_prompt"] = None
         session.pop("queued_prompts", None)
         session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
@@ -886,6 +887,17 @@ def _interrupt_session_turn(
         from tools.approval import resolve_gateway_approval
         resolve_gateway_approval(session["session_key"], "deny", resolve_all=True)
     return use_compute_host
+
+
+def _session_control_info(session):
+    """Receipt projection shared by cold and warm resume; no replay or transcript inference."""
+    from tui_gateway.owner_forward import pending_submissions
+    from tui_gateway.local_queue_receipts import snapshot
+    info = {"pending_submissions": pending_submissions(session)}
+    with _session_db(session) as db:
+        if db is not None:
+            info["queue_receipts"] = snapshot(db, session["session_key"], _sessions)
+    return info
 
 
 def _session_has_active_delegations(sid: str, session: dict | None = None) -> bool:

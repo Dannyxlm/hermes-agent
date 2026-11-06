@@ -15,7 +15,7 @@ from .base import JsonValue, Params, Result
 from .common import McpServerStatus, OpenModel, PlanGauge, ProjectRef, Usage
 from .events import SkinPayload
 from .groups_bot_relay import RoomParams, RoomTaskReceipt
-from .prompt_voice import ClarifyLockParams, ClarifyLockResult
+from .prompt_voice import ClarifyLockParams, ClarifyLockResult, ForwardedAdmissionParams, ForwardedResolveParams
 from .registry import canonical_method, method
 
 # ── admissions ────────────────────────────────────────────────────────────────────────────────
@@ -44,6 +44,15 @@ class PromptReceiptParams(Params):
     include_result: bool | None = None
 
 
+# The legacy bridge serves these values too, but its parameters carry a runtime session/profile.
+method("prompt.cancel", params=ForwardedAdmissionParams, result=AdmissionStatus,
+       doc="Cancel this live session's forwarded admission on its owner, including a racing claim.")
+method("prompt.receipt", params=ForwardedAdmissionParams, result=AdmissionStatus,
+       doc="Refresh this live session's forwarded admission without resubmitting it.")
+method("prompt.resolve_unknown", params=ForwardedResolveParams, result=AdmissionStatus,
+       doc="Discard the exact forwarded unknown generation on its owner; never replay it.")
+
+
 class PromptReceiptResult(AdmissionStatus):
     """``result`` / ``usage``: the structured turn result committed at settlement, only with
     ``include_result`` on a terminal admission that saved one."""
@@ -53,6 +62,7 @@ class PromptReceiptResult(AdmissionStatus):
 
 
 canonical_method("prompt.receipt", params=PromptReceiptParams, result=PromptReceiptResult,
+                 required_keys=True,
                  doc="Current receipt of one admission the caller submitted (or controls).")
 
 
@@ -62,6 +72,7 @@ class PromptCancelParams(Params):
 
 
 canonical_method("prompt.cancel", params=PromptCancelParams, result=AdmissionStatus,
+                 required_keys=True,
                  doc="Retire a queued admission; a started one is interrupted in the same call.")
 
 
@@ -72,6 +83,7 @@ class PromptResolveUnknownParams(Params):
 
 
 canonical_method("prompt.resolve_unknown", params=PromptResolveUnknownParams, result=AdmissionStatus,
+                 required_keys=True,
                  doc="Acknowledge a turn lost across an owner restart; the FIFO behind it resumes. "
                      "Never requeues the lost input.")
 

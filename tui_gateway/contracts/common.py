@@ -70,6 +70,24 @@ class McpServerStatus(OpenModel):
     error: str | None = None
 
 
+class LocalQueueReceipt(Result):
+    input_id: str
+    session_id: str
+    status: Literal['queued', 'transferred', 'terminal', 'unknown']
+    outcome: str | None
+    reason: str | None = None
+    user: JsonValue
+
+
+class ForwardedPendingSubmission(Result):
+    admission_id: str
+    input_id: str
+    status: Literal['queued', 'started', 'unknown']
+    user: str
+    execution_generation: int | None = None
+    controls: list[Literal['cancel', 'interrupt', 'resolve_unknown']]
+
+
 class SessionLiveInfo(OpenModel):
     """``tui_gateway/server.py::_session_info`` — the ``session.info`` event and the ``info`` field of
     ``session.create`` / ``session.resume`` / ``session.activate`` results."""
@@ -106,6 +124,9 @@ class SessionLiveInfo(OpenModel):
     system_prompt: str | None = None
     credential_warning: str | None = None
     lazy: bool | None = None
+    pending_submissions: list[ForwardedPendingSubmission] | None = None
+    queue_receipts: list[LocalQueueReceipt] | None = None
+    owner_connected: bool | None = None
 
 
 class StoredSessionRow(OpenModel):

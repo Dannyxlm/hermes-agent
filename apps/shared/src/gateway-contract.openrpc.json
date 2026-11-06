@@ -3859,6 +3859,60 @@
       }
     },
     {
+      "name": "prompt.cancel",
+      "summary": "Cancel this live session's forwarded admission on its owner, including a racing claim.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ForwardedAdmissionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AdmissionStatus"
+        }
+      }
+    },
+    {
+      "name": "prompt.receipt",
+      "summary": "Refresh this live session's forwarded admission without resubmitting it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ForwardedAdmissionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AdmissionStatus"
+        }
+      }
+    },
+    {
+      "name": "prompt.resolve_unknown",
+      "summary": "Discard the exact forwarded unknown generation on its owner; never replay it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ForwardedResolveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AdmissionStatus"
+        }
+      }
+    },
+    {
       "name": "prompt.submit",
       "summary": "Send a user turn to a live session; busy sessions queue / steer / redirect instead of refusing.",
       "params": [
@@ -13171,6 +13225,30 @@
             "title": "Stored Session Id",
             "type": "string"
           },
+          "writable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Writable"
+          },
+          "read_only_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Read Only Reason"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/TranscriptMessage"
@@ -13543,6 +13621,30 @@
             "const": "hermes-gateway-v1",
             "title": "Desktop Protocol",
             "type": "string"
+          },
+          "writable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Writable"
+          },
+          "read_only_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Read Only Reason"
           },
           "source": {
             "anyOf": [
@@ -24008,6 +24110,132 @@
         "title": "ForeignTurn",
         "type": "object"
       },
+      "ForwardedAdmissionParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "admission_id"
+        ],
+        "title": "ForwardedAdmissionParams",
+        "type": "object"
+      },
+      "ForwardedPendingSubmission": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "input_id": {
+            "title": "Input Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "started",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Generation"
+          },
+          "controls": {
+            "items": {
+              "enum": [
+                "cancel",
+                "interrupt",
+                "resolve_unknown"
+              ],
+              "type": "string"
+            },
+            "title": "Controls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "admission_id",
+          "input_id",
+          "status",
+          "user",
+          "controls"
+        ],
+        "title": "ForwardedPendingSubmission",
+        "type": "object"
+      },
+      "ForwardedResolveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "admission_id",
+          "execution_generation"
+        ],
+        "title": "ForwardedResolveParams",
+        "type": "object"
+      },
       "FreeTierAckNoticeResult": {
         "additionalProperties": false,
         "properties": {
@@ -29545,6 +29773,64 @@
         "title": "LlmOneshotResult",
         "type": "object"
       },
+      "LocalQueueReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "input_id": {
+            "title": "Input Id",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "transferred",
+              "terminal",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "user": {
+            "title": "User"
+          }
+        },
+        "required": [
+          "input_id",
+          "session_id",
+          "status",
+          "outcome",
+          "user"
+        ],
+        "title": "LocalQueueReceipt",
+        "type": "object"
+      },
       "LocaleSurface": {
         "enum": [
           "core",
@@ -34126,6 +34412,18 @@
             ],
             "default": null,
             "title": "Forwarded"
+          },
+          "input_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Id"
           },
           "accepted": {
             "title": "Accepted",
@@ -43612,6 +43910,18 @@
             ],
             "default": null,
             "title": "Forwarded"
+          },
+          "input_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Id"
           }
         },
         "title": "PromptSubmitResult",
@@ -48287,6 +48597,18 @@
           "text": {
             "title": "Text",
             "type": "string"
+          },
+          "input_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input Id"
           }
         },
         "required": [
@@ -48820,6 +49142,48 @@
             ],
             "default": null,
             "title": "Lazy"
+          },
+          "pending_submissions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ForwardedPendingSubmission"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Submissions"
+          },
+          "queue_receipts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LocalQueueReceipt"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Queue Receipts"
+          },
+          "owner_connected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Owner Connected"
           }
         },
         "title": "SessionCwdSetResult",
@@ -49450,6 +49814,30 @@
             ],
             "default": null,
             "title": "Expected Hosted Task Id"
+          },
+          "admission_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Admission Id"
+          },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Generation"
           }
         },
         "required": [
@@ -49926,6 +50314,48 @@
             ],
             "default": null,
             "title": "Lazy"
+          },
+          "pending_submissions": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ForwardedPendingSubmission"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pending Submissions"
+          },
+          "queue_receipts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LocalQueueReceipt"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Queue Receipts"
+          },
+          "owner_connected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Owner Connected"
           }
         },
         "title": "SessionLiveInfo",

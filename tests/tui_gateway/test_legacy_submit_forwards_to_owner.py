@@ -10,6 +10,7 @@ publication). Replaced: only the owner's discovery and socket dial (``owner_forw
 ``connect_owner``), by an in-process client speaking to the same ``AuthorityConnection``."""
 import asyncio
 import contextlib
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,99 @@ from hermes_state_runtime import (
 )
 from tui_gateway import server
 from tests.waiting import wait_until
+
+
+@pytest.mark.parametrize("action", ["cancel", "stop", "discard", "foreign", "claim_race"])
+def test_forwarded_controls_reach_only_the_exact_owner_admission(monkeypatch, tmp_path, action):
+    from gateway.session_contract import SessionRef
+    from tui_gateway import owner_forward
+    db = SessionDB(db_path=tmp_path / "state.db")
+    sid, key, turns, emitted = _legacy(monkeypatch, db)
+    monkeypatch.setattr(server, "_tts_stream_stop", lambda: None)
+    monkeypatch.setattr(server, "_resume_wake_after_interrupt", lambda: None)
+    try:
+        db.create_session(key, "test")
+        epoch = begin_runtime_epoch(db, instance_id="gateway")
+        bot = admit_session_input(db, epoch=epoch, principal_id="bot", session_id=key,
+                                  request_id="dm", payload={"text": "DM"})
+        claimed = claim_session_input(db, epoch=epoch, session_id=key)
+        authority = _owner(monkeypatch, db, key, epoch)
+        reply = server.handle_request({"id": "p", "method": "prompt.submit",
+                                       "params": {"session_id": sid, "text": "my question"}})
+        aid = reply["result"]["admission_id"]
+        session = server._sessions[sid]
+        wait_until(lambda: any(e == "session.info" for e, *_ in emitted), timeout=10)
+        if action in ("stop", "discard"):
+            settle_session_input(db, epoch=epoch, admission_id=bot["admission_id"],
+                                 generation=claimed["generation"], outcome="completed")
+            row = claim_session_input(db, epoch=epoch, session_id=key)
+            ref = SessionRef("owned", key)
+            authority._stamp_claim(ref, authority.sessions[key], row)
+            wait_until(lambda: owner_forward.pending_submissions(session)[0]["status"] == "started", timeout=10)
+        method, params = "prompt.cancel", {"session_id": sid, "admission_id": aid}
+        if action == "stop":
+            method = "session.interrupt"
+            params["execution_generation"] = row["generation"]
+        elif action == "discard":
+            authority.epoch = begin_runtime_epoch(db, instance_id="gateway-2")
+            recover_session_inputs(db, epoch=authority.epoch)
+            receipt = server.handle_request({"id": "r", "method": "prompt.receipt", "params": params})
+            assert receipt["result"]["status"] == "unknown", receipt
+            assert owner_forward.pending_submissions(session)[0]["controls"] == ["resolve_unknown"]
+            method = "prompt.resolve_unknown"
+            params["execution_generation"] = row["generation"]
+        elif action == "foreign":
+            session["profile_home"] = str(tmp_path / "foreign")
+        raced = []
+        if action == "claim_race":
+            cancel = authority.cancel_or_claimed
+
+            async def claim_after_the_owner_read_queued(actor, ref, admission_id):
+                settle_session_input(db, epoch=epoch, admission_id=bot["admission_id"],
+                                     generation=claimed["generation"], outcome="completed")
+                running = claim_session_input(db, epoch=epoch, session_id=key)
+                authority._stamp_claim(ref, authority.sessions[key], running)
+                raced.append(running)
+                return await cancel(actor, ref, admission_id)
+            monkeypatch.setattr(authority, "cancel_or_claimed", claim_after_the_owner_read_queued)
+        result = server.handle_request({"id": "control", "method": method, "params": params})
+        if raced:
+            row = raced[0]
+        current = {r["admission_id"]: r for r in list_session_admissions(db, session_id=key, pending_only=False)}
+        if action == "foreign":
+            assert result["error"]["data"]["reason"] == "profile_mismatch"
+            assert current[aid]["status"] == "queued"
+        elif action in ("stop", "claim_race"):
+            assert "error" not in result, result
+            assert authority.pending_stops[key] == row["generation"]
+            # A stale Stop cannot cancel the successor generation.
+            stale = server.handle_request({"id": "stale", "method": "session.interrupt",
+                "params": {"session_id": sid, "admission_id": aid, "execution_generation": row["generation"] - 1}})
+            assert stale["error"]["data"]["reason"] == "stale_generation"
+        else:
+            assert "error" not in result, result
+            assert current[aid]["status"] == "terminal"
+            assert current[aid]["outcome"] == ("interrupted" if action == "discard" else "cancelled")
+        assert turns == []
+        assert len(current) == 2
+    finally:
+        server._sessions[sid]["_finalized"] = True
+        server._sessions.pop(sid, None)
+        db.close()
+
+
+def test_relay_loss_is_not_an_owner_completion():
+    from tui_gateway import owner_forward
+    session, emitted = {"history_lock": threading.RLock()}, []
+    relay = owner_forward._Relay("ui", session, "key", None, None, "hi", lambda *a: emitted.append(a))
+
+    async def scenario():
+        events = asyncio.Queue()
+        await events.put(ConnectionError("owner lost"))
+        await relay._relay(SimpleNamespace(events=events), "a1")
+    asyncio.run(scenario())
+    assert not any(e == "message.complete" for e, *_ in emitted)
+    assert emitted[-1][2]["owner_connected"] is False
 
 
 class _OwnerClient:
@@ -61,7 +155,8 @@ def _legacy(monkeypatch, db):
 
 def _owner(monkeypatch, db, key, epoch):
     from gateway.session_authority import LiveSession, SessionAuthority
-    authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id="owned", instance_id="gateway",
+    authority = SessionAuthority(SimpleNamespace(_draining=False, _cached_agent_for=lambda _route: None),
+                                 profile_id="owned", instance_id="gateway",
                                  db=db, epoch=epoch)
     authority.sessions[key] = LiveSession(SimpleNamespace(platform=None, user_id="desktop"), "route")
     monkeypatch.setattr(authority, "_schedule", lambda ref: None)  # the test drives the FIFO
@@ -106,7 +201,7 @@ def test_desktop_prompt_during_a_gateway_turn_runs_after_it_in_the_owner_fifo(mo
         wait_until(lambda: any(e == "session.info" for e, *_ in emitted), timeout=10)
         pending = next(p for e, _s, p in emitted if e == "session.info")["pending_submissions"]
         assert pending == [{"admission_id": mine["admission_id"], "status": "queued", "user": "my own question",
-                            "input_id": mine["request_id"]}]
+                            "input_id": mine["request_id"], "execution_generation": None, "controls": ["cancel"]}]
         assert not any(e == "error" for e, *_ in emitted)
 
         # The gateway turn ends; the owner's FIFO runs the prompt next, exactly once.

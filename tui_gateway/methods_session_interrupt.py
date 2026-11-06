@@ -90,6 +90,9 @@ def _(rid, params: dict) -> dict:
                     resume_wake = False
                     return _ok(rid, {"status": "not_interrupted", "interrupted": False})
         sid = str(params.get("session_id") or "")
+        if params.get("admission_id") is not None or any(
+                r["receipt"].get("status") != "terminal" for r in session.get("_forwarded_admissions", {}).values()):
+            return _interrupt_forwarded(rid, sid, session, params)
         _note_user_input(session)
         if _session_uses_compute_host(session):
             with session["history_lock"]:
@@ -117,6 +120,64 @@ def _(rid, params: dict) -> dict:
                 _resume_wake_after_interrupt()
             except Exception:
                 logger.debug("session.interrupt wake resume failed", exc_info=True)
+
+
+def _forwarded_control(rid, sid, session, verb, admission_id, generation=None):
+    from tui_gateway.owner_forward import control_forwarded, pending_submissions
+    from hermes_state_runtime import RuntimeStoreError
+    from hermes_cli.gateway_client import GatewayRPCError
+    try:
+        result = control_forwarded(session, verb, admission_id, generation)
+    except RuntimeStoreError as exc:
+        return _err(rid, 4090, exc.reason, data={"reason": exc.reason})
+    except GatewayRPCError as exc:
+        return _err(rid, 4090, str(exc), data=exc.data)
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        return _err(rid, 4090, str(exc), data={"reason": "SESSION_OWNER_UNCONFIRMED"})
+    _emit("session.info", sid, {"stored_session_id": session.get("session_key"),
+                                "pending_submissions": pending_submissions(session)})
+    return _ok(rid, result)
+
+
+def _interrupt_forwarded(rid, sid, session, params):
+    """Stop only this window's forwarded admissions, never the unrelated owner turn ahead of them."""
+    with session["history_lock"]:
+        records = list(session.get("_forwarded_admissions", {}).items())
+    selected = params.get("admission_id")
+    if selected is not None:
+        records = [(aid, row) for aid, row in records if aid == selected]
+        if not records:
+            return _err(rid, 4090, "not_found", data={"reason": "not_found"})
+    for aid, record in records:
+        status = record["receipt"].get("status")
+        if status == "terminal":
+            continue
+        # Cancel's owner-side queued→started CAS handles a claim racing Stop. Once started was
+        # observed, an explicit generation is checked instead of silently stopping a successor.
+        verb = "session.interrupt" if status == "started" else "prompt.cancel"
+        reply = _forwarded_control(rid, sid, session, verb, aid,
+            params.get("execution_generation", record["receipt"].get("execution_generation")))
+        if "error" in reply:
+            return reply
+    return _ok(rid, {"status": "interrupted"})
+
+
+def _forwarded_method(name):
+    @method(name)
+    def _(rid, params):
+        session, err = _sess_nowait(params, rid)
+        if err:
+            return err
+        if not isinstance(params.get("admission_id"), str) or not params["admission_id"]:
+            return _err(rid, 4002, "admission_id is required")
+        if name == "prompt.resolve_unknown" and not isinstance(params.get("execution_generation"), int):
+            return _err(rid, 4002, "execution_generation is required")
+        return _forwarded_control(rid, str(params["session_id"]), session, name,
+                                  params["admission_id"], params.get("execution_generation"))
+
+
+for _forwarded_verb in ("prompt.cancel", "prompt.resolve_unknown", "prompt.receipt"):
+    _forwarded_method(_forwarded_verb)
 
 
 def _apply_correction(rid, session: dict, verb: str, text: str, accepted_status: str) -> dict:
@@ -153,18 +214,14 @@ def _correction_method(name: str, verb: str, accepted_status: str, supported, un
         # Redirect during the turn-build window (running=True, agent None): queue for the next turn instead of
         # a misleading 4010 the client swallows into a lost follow-up.
         if verb == "redirect" and agent is None and session.get("running"):
-            _enqueue_prompt(session, text, current_transport() or _stdio_transport)
-            session["last_active"] = time.time()
-            return _ok(rid, {"status": "queued", "text": text})
+            return _queue_correction(rid, params["session_id"], session, text)
         # Compression in flight: queue instead of steering/redirecting. A correction that
         # reaches the provider mid-compression aborts the compression (explicit_interrupt)
         # — the follow-up kills the turn that would answer it (#61042). Queued here, it
         # drains when compression finishes (the Discord-gateway contract; mirrors the
         # interrupt→queue demotion in gateway/run_busy.py for the channel busy path).
         if _session_compression_in_flight(session):
-            _enqueue_prompt(session, text, current_transport() or _stdio_transport)
-            session["last_active"] = time.time()
-            return _ok(rid, {"status": "queued", "text": text})
+            return _queue_correction(rid, params["session_id"], session, text)
         if not supported(agent):
             return _err(rid, 4010, unsupported)
         # An idle agent accepts steer() but only the next turn drains it, spliced after an old tool
@@ -172,6 +229,16 @@ def _correction_method(name: str, verb: str, accepted_status: str, supported, un
         if verb == "steer" and not session.get("running"):
             return _ok(rid, {"status": "rejected", "text": text})
         return _apply_correction(rid, session, verb, text, accepted_status)
+
+
+def _queue_correction(rid, sid, session, text):
+    reply = _handle_busy_submit(rid, sid, session, text, current_transport() or _stdio_transport,
+                               queued=True, image_paths=[])
+    if reply is None:
+        return _ok(rid, {"status": "rejected", "text": text})
+    if "result" in reply:
+        reply["result"]["text"] = text
+    return reply
 
 
 # Inject text into the next tool result without interrupting (AIAgent.steer(): no new user turn, no role

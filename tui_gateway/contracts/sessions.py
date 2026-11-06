@@ -727,6 +727,8 @@ method("session.compress", params=SessionCompressParams, result=SessionCompressR
 
 class SessionInterruptParams(SessionParams):
     expected_hosted_task_id: str | None = None  # only interrupt if this hosted task is the running one
+    admission_id: str | None = None  # forwarded turn only; never the owner's unrelated turn
+    execution_generation: int | None = None
 
 
 class InterruptStatus(WireEnum):
@@ -757,6 +759,7 @@ class SessionCorrectionParams(SessionParams):
 class SessionCorrectionResult(Result):
     status: CorrectionStatus
     text: str
+    input_id: str | None = None
 
 
 method("session.steer", params=SessionCorrectionParams, result=SessionCorrectionResult,

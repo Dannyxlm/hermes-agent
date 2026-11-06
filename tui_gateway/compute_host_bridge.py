@@ -339,6 +339,21 @@ def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -
     _drain_queued_prompt(rid, sid, session)
 
 
+def _settle_compute_host_queue(session: dict, queued_prompt: dict | None, done: dict) -> None:
+    """The exact turn's callback owns settlement; a supervisor crash proves no outcome."""
+    if queued_prompt is None:
+        return
+    if done.get("dispatch_refused") is True:
+        outcome = "cancelled"
+    elif done.get("reason") == "crash":
+        outcome = "unknown"
+    elif done.get("type") == "turn.error" or done.get("terminal_status") == "failed":
+        outcome = "failed"
+    else:
+        outcome = "interrupted" if done.get("interrupted") or done.get("terminal_status") == "cancelled" else "completed"
+    _dispose_local_queue(session, [queued_prompt], outcome)
+
+
 def _submit_prompt_to_compute_host(
     rid: str, sid: str, session: dict, text: Any, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None, display_kind: str | None = None,
@@ -349,6 +364,8 @@ def _submit_prompt_to_compute_host(
                                      queued_prompt_generation=queued_prompt_generation,
                                      display_kind=display_kind, display_metadata=display_metadata,
                                      auto_continue=auto_continue)
+    if receipt := (queued_prompt or {}).get("_queue_receipt"):
+        frame["queue_input_id"] = receipt["input_id"]
     # Caller JSON-RPC ids may repeat across sockets and turns. Use an opaque
     # dispatch lifetime token, installed before a fast child can send activity.
     turn_id = frame["turn_id"] = frame["request_id"] = uuid.uuid4().hex
@@ -360,8 +377,12 @@ def _submit_prompt_to_compute_host(
 
     def _complete(done: dict) -> None:
         with session["history_lock"]:
-            if session.get("_compute_host_turn_id") != turn_id:
+            if (session.get("_compute_host_turn_id") != turn_id
+                    or done.get("request_id") != turn_id or done.get("sid") != sid):
                 return
+            # Commit while this dispatch still owns the slot; a late callback must not
+            # settle or clear a replacement, even when the client reused its RPC id.
+            _settle_compute_host_queue(session, queued_prompt, done)
             session.pop("_compute_host_turn_id", None)
             session.pop("_compute_host_activity_ns", None)
         try:
@@ -374,6 +395,8 @@ def _submit_prompt_to_compute_host(
             _emit("error", sid, {"message": "The attachment send was refused before invocation, but its receipt "
                                 "could not be restored. Retain the originals and reconcile before retrying."})
         finally:
+            if queued_prompt is not None:
+                _emit("session.info", sid, _session_control_info(session))
             _on_compute_host_turn_done(rid, sid, session, done)
     from tui_gateway.host_supervisor import TurnDispatchRefused
     try:
