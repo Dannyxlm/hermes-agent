@@ -42,7 +42,8 @@ class ProcessCheckpointMixin:
                 if extra_entries:
                     tracked_ids = {item.get("session_id") for item in entries}
                     entries.extend(item for item in extra_entries if item.get("session_id") not in tracked_ids)
-                known = {*self._running, *self._finished}
+                known = {*self._running, *self._finished,
+                         *(item.get("session_id") for item in entries)}
             from hermes_cli.active_sessions import _FileLock
             from utils import atomic_json_write
             path = _checkpoint_path()
@@ -65,9 +66,10 @@ class ProcessCheckpointMixin:
         except (OSError, ValueError):
             return []
         return [entry for entry in on_disk if isinstance(entry, dict) and entry.get("session_id") not in known
-                and (log := adoptable_log(entry.get("output_log"))) and Path(log).exists()
-                and (_exit_path(log).exists() or self._detached_host_fate(
-                    entry.get("pid"), entry.get("host_start_time")) == "running")]
+                and ('completed_result' in entry or (
+                    (log := adoptable_log(entry.get("output_log"))) and Path(log).exists()
+                    and (_exit_path(log).exists() or self._detached_host_fate(
+                        entry.get("pid"), entry.get("host_start_time")) == "running")))]
 
     def recover_from_checkpoint(self) -> int:
         """On gateway startup, probe PIDs from the checkpoint file; returns how many
@@ -91,6 +93,23 @@ class ProcessCheckpointMixin:
         recovered = 0
         unresolved_scope_entries: list[dict[str, Any]] = []
         for entry in entries:
+            if 'completed_result' in entry:
+                from tools.process_registry_results import recover_completed_record
+                try:
+                    record = entry['completed_result']
+                    if record['id'] != entry['session_id']:
+                        raise ValueError('completed checkpoint identity mismatch')
+                    recover_completed_record(record)
+                    from tools.process_registry_results import _RESULT_FIELDS
+                    session = ProcessSession(**{k: record[k] for k in _RESULT_FIELDS if k in record},
+                                             exited=True, output_buffer=record['output'])
+                    session._completion_event.set()
+                    with self._lock:
+                        self._finished[session.id] = session
+                except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                    logger.warning('Could not recover completed result %s', entry.get('session_id'), exc_info=True)
+                    unresolved_scope_entries.append(entry)
+                continue  # Positively completed records must never probe or adopt a PID.
             pid, pid_scope = entry.get("pid"), entry.get("pid_scope", "host")
             if not pid:
                 continue

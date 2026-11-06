@@ -255,7 +255,7 @@ def prune_markers(home: Path, now: float | None = None) -> None:
     with contextlib.suppress(FileNotFoundError):
         for path in _marker_dir(home).iterdir():
             with contextlib.suppress(OSError):
-                if now - path.stat().st_mtime > MARKER_TTL_S:
+                if path.suffix in {'.claim', '.tmp'} and now - path.stat().st_mtime > MARKER_TTL_S:
                     path.unlink()
 
 

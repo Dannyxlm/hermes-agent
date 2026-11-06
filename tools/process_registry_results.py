@@ -30,21 +30,33 @@ _RESULT_FIELDS = (
 def _result_paths():
     """Prune by completion time, not start time (jobs can take days)."""
     directory = get_hermes_home() / "logs" / "process-results"
-    cutoff = time.time() - RESULT_RETENTION_SECONDS
+    if not directory.exists():
+        return []
+    from hermes_cli.active_sessions import _FileLock
+    with _FileLock(directory.with_suffix(".lock")):
+        return _retained_paths(directory, time.time() - RESULT_RETENTION_SECONDS)
+
+
+def _retained_paths(directory, cutoff):
     retained = []
+    obligations = []
     for path in directory.glob("proc_*.json"):
         try:
             modified = path.stat().st_mtime
+            notification = json.loads(path.read_text(encoding="utf-8-sig")).get("notification") or {}
+            if notification.get("status") in {"pending", "unknown"}:
+                obligations.append(path)
+                continue
             if modified < cutoff:
                 path.unlink(missing_ok=True)
             else:
                 retained.append((modified, path))
-        except FileNotFoundError:
-            continue  # Another producer pruned it.
+        except (FileNotFoundError, ValueError):
+            continue  # Concurrent pruning or an unreadable receipt; never delete blindly.
     retained.sort(key=lambda item: (item[0], item[1].name), reverse=True)
     for _, path in retained[MAX_RETAINED_RESULTS:]:
         path.unlink(missing_ok=True)
-    return [path for _, path in retained[:MAX_RETAINED_RESULTS]]
+    return obligations + [path for _, path in retained[:MAX_RETAINED_RESULTS]]
 
 
 def save_completed_result(session) -> None:
@@ -69,6 +81,27 @@ def save_completed_result(session) -> None:
     except OSError:
         # Preserve live delivery on disk failure, but never silently claim durability.
         logger.warning("Could not retain completed process result %s", session.id, exc_info=True)
+
+
+def recover_completed_record(record):
+    """Read a newer writer's fallback without creating or replaying notification obligations."""
+    session_id = record['id']
+    if not re.fullmatch(r"proc_[\w]+", session_id):
+        raise ValueError('invalid process result id')
+    from hermes_constants import assert_named_profile_home_live
+    from hermes_cli.active_sessions import _FileLock
+    directory = get_hermes_home() / 'logs' / 'process-results'
+    assert_named_profile_home_live(directory)
+    make_user_dir(directory, mode=0o700, parents=True, exist_ok=True)
+    path = directory / f'{session_id}.json'
+    with _FileLock(directory.with_suffix('.lock')):
+        if path.exists():
+            previous = json.loads(path.read_text(encoding='utf-8-sig'))
+            if (previous.get('started_at') != record['started_at']
+                    or previous.get('id') != session_id or not isinstance(previous.get('output'), str)):
+                raise ValueError('completed result identity or payload mismatch')
+            return  # The committed result may have a newer disposition than the checkpoint.
+        atomic_json_write(path, record, mode=0o600)
 
 
 def _owns_result(owner: str, parent: str | None) -> bool:

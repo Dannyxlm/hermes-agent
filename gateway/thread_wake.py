@@ -237,6 +237,8 @@ def _finish(home: Path, root: str, record: dict, *, delivered: bool) -> None:
 
 def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admission, busy: bool) -> bool:
     """Carry a pending update one step. True when this step had the owner admit it."""
+    if record.get("exhausted"):
+        return False  # A newer writer needs explicit recovery, not an invented consumption ACK.
     if admission is None:
         if record.get("cut"):  # the resend's intent is saved; clear the turn it replaces first
             _clear(home, tip, record["cut"])
