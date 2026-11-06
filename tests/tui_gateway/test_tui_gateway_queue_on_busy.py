@@ -624,18 +624,21 @@ def test_busy_image_prompts_keep_b_and_c_attachments_in_submission_order(monkeyp
     finally:
         server._sessions.pop("sid", None)
 
-    assert dispatched == [
+    # Identified queue inputs must settle durably and must not become crash auto-resends.
+    assert all(callable(kwargs['terminal_callback']) for _rid, _sid, _text, kwargs in dispatched)
+    assert [(rid, sid, text, {k: v for k, v in kwargs.items() if k != 'terminal_callback'})
+            for rid, sid, text, kwargs in dispatched] == [
         (
             "drain-b",
             "sid",
             "B",
-            {"image_paths": ["/tmp/b.png"], "queued_prompt_generation": 0},
+            {"image_paths": ["/tmp/b.png"], "queued_prompt_generation": 0, "auto_continue": False},
         ),
         (
             "drain-c",
             "sid",
             "C",
-            {"image_paths": ["/tmp/c.png"], "queued_prompt_generation": 0},
+            {"image_paths": ["/tmp/c.png"], "queued_prompt_generation": 0, "auto_continue": False},
         ),
     ]
 

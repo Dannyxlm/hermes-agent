@@ -177,9 +177,20 @@ def admit_session_input(db, *, epoch: int, principal_id: str, session_id: str,
     return db._execute_write(write)
 
 
-def get_session_admission(db, *, admission_id: str) -> dict | None:
+def get_session_admission(db, *, admission_id: str, metadata_only: bool = False) -> dict | None:
     with db._read_ctx() as conn:
-        from hermes_state_terminal import terminal_admission
+        from hermes_state_terminal import ADMISSION_PREFIX, terminal_admission
+        if metadata_only:
+            # Receipt/control discovery needs identity and fences, never executable input bodies.
+            columns = ('admission_id', 'target_session_id', 'principal_id', 'seq', 'status',
+                       'outcome', 'owner_epoch', 'generation')
+            row = conn.execute(f"SELECT {','.join(columns)} FROM session_admissions WHERE admission_id=?",
+                               (admission_id,)).fetchone()
+            if row is None:
+                fields = ','.join(f"json_extract(value, '$.{key}') AS {key}" for key in columns)
+                row = conn.execute(f'SELECT {fields} FROM state_meta WHERE key=?',
+                                   (ADMISSION_PREFIX + admission_id,)).fetchone()
+            return dict(row) if row is not None else None
         row = conn.execute('SELECT * FROM session_admissions WHERE admission_id=?', (admission_id,)).fetchone()
         return _row(row if row is not None else terminal_admission(conn, admission_id))
 

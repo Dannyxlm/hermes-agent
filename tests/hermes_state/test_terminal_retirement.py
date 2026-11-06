@@ -50,6 +50,10 @@ def test_used_history_retirement_is_atomic_and_exact(tmp_path, monkeypatch):
         replay = rt.admit_session_input(db, epoch=epoch, **args)
         assert replay['admission_id'] == row['admission_id'] and replay['status'] == 'terminal'
         assert replay['payload'] == {}, 'input history must not be archived in the identity tombstone'
+        metadata = rt.get_session_admission(db, admission_id=row['admission_id'], metadata_only=True)
+        assert metadata == {key: replay[key] for key in (
+            'admission_id', 'target_session_id', 'principal_id', 'seq', 'status', 'outcome', 'owner_epoch', 'generation')}
+        assert rt.get_session_admission(db, admission_id='absent', metadata_only=True) is None
         # Settlement stores this turn's suffix, flagged so no reader re-derives a boundary from it.
         assert admission_result(db, row['admission_id']) == {
             'result': {**result['result'], '_messages_are_turn_suffix': True}, 'usage': result['usage']}

@@ -562,7 +562,8 @@ class AuthorityConnection:
         if set(params) != {'session_id'}:
             raise RuntimeStoreError('invalid_params')
         await self.authority.resolve(self.actor, ref)
-        return await snapshot_info(self.authority, ref)
+        from gateway.session_history_mount import write_verdict
+        return {**await snapshot_info(self.authority, ref), **write_verdict(self.authority, self.actor, ref)}
 
     async def list_sessions(self, ref, params):
         if 'session:read' not in self.actor.capabilities:
@@ -698,12 +699,16 @@ class AuthorityConnection:
             info = await snapshot_info(self.authority, snapshot.handle.ref)
         from gateway.session_connections import pending_connection
         from gateway.session_server_requests import open_requests
+        from gateway.session_history_mount import write_verdict
+        verdict = write_verdict(self.authority, self.actor, ref)
+        info.update(verdict)
         history, display = list(snapshot.history), {}
         if params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(
                 [row for row in history if not model_only(row)], self.authority.profile_id)
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
+                **verdict,
                 **await _resume_transcript(self.authority, ref, snapshot, history, omit), **display,
                 'running': snapshot.handle.execution_state == 'running',
                 'authority_epoch': snapshot.handle.authority_epoch,
@@ -872,6 +877,15 @@ class AuthorityConnection:
     async def receipt(self, ref, params):
         receipt = await self.authority.receipt(self.actor, ref, params.get('admission_id'))
         out = asdict(receipt)
+        out['controls'] = []
+        if receipt.status == 'unknown' and type(receipt.execution_generation) is int:
+            try:
+                self.authority.authorize(self.actor, ref, 'session:control')
+            except RuntimeStoreError as exc:
+                if exc.reason != 'permission_denied':
+                    raise
+            else:
+                out['controls'] = ['resolve_unknown']
         if params.get('include_result') is True and receipt.status == 'terminal':
             # The exact structured result the turn committed with settlement (`finish_result`):
             # a finite viewer reads its ledger (tokens, cost, model, exit reason) from here, the same
