@@ -80,6 +80,11 @@ export type ChatMessage = {
 }
 
 export type GatewayEventPayload = {
+  blocking_unknown?: unknown
+  writable?: boolean | null
+  read_only_reason?: string | null
+  owner_connected?: boolean | null
+  queue_receipts?: unknown
   /** Unix seconds supplied by tests/newer gateways; the desktop falls back to
    * its local receipt clock when older gateways omit it. */
   timestamp?: number

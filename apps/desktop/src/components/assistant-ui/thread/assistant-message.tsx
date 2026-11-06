@@ -91,7 +91,7 @@ import { startManualProviderOAuth } from '@/store/onboarding'
 import { $activeGatewayProfile, normalizeProfileKey, requestFreshSession } from '@/store/profile'
 import { sessionApprovalRequest } from '@/store/prompts'
 import { requestSendDiagnostics } from '@/store/send-diagnostics'
-import { $connection, $currentModel, setModelPickerOpen } from '@/store/session'
+import { $connection, $currentModel, requestSessionResume, setModelPickerOpen } from '@/store/session'
 import { sessionTileDelegate } from '@/store/session-states'
 import { notifyThreadEditOpen } from '@/store/thread-scroll'
 import { $voicePlayback } from '@/store/voice-playback'
@@ -1127,6 +1127,18 @@ const OpenBillingAction: FC<{ className: string; label: string; surface?: ErrorS
   return textButton(className, () => (block ? runBillingRecovery(block) : requestBillingSettings()), label)
 }
 
+const ResumeConversationAction: FC<{ className: string }> = ({ className }) => {
+  const view = useSessionView()
+  const storedId = useStore(view.$storedId)
+  const { t } = useI18n()
+
+  return storedId ? textButton(className, () => {
+    if (view.kind === 'tile') {
+      void sessionTileDelegate()?.resumeTile(storedId, { refreshTranscript: true }).catch(error => notifyError(error, t.desktop.resumeFailed))
+    } else { requestSessionResume(storedId, undefined, { authoritativeSnapshot: true }) }
+  }, t.assistant.thread.errorResumeSession) : null
+}
+
 // One renderer per action (Error System Overhaul action table → the app's existing handlers).
 const ERROR_ACTION_RENDERERS: Record<ErrorActionId, (ctx: ErrorActionContext) => ReactNode> = {
   switch_to_model: ({ className, surface }) => {
@@ -1152,6 +1164,7 @@ const ERROR_ACTION_RENDERERS: Record<ErrorActionId, (ctx: ErrorActionContext) =>
       </button>
     </ActionBarPrimitive.Reload>
   ),
+  resume_session: ({ className }) => <ResumeConversationAction className={className} />,
   retry_at_reset: ({ className, surface }) =>
     surface?.resetsAt !== undefined ? <ScheduledRetryAction className={className} resetsAt={surface.resetsAt} /> : null,
   update_api_key: ({ className, copy, inRouter, surface }) =>

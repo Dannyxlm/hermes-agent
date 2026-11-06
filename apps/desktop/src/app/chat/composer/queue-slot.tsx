@@ -5,11 +5,12 @@ import type { Translations } from '@/i18n'
 import { useStoresSelector } from '@/lib/use-session-slice'
 import { type QueuedPromptEntry, removeQueuedPrompt, unparkQueuedPrompts } from '@/store/composer-queue'
 import { notifyError } from '@/store/notifications'
+import { observedUnknownMatches } from '@/store/pending-submissions'
 import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
 import { $sessionStates, $sessionTiles, storedSessionIdForRuntimeId } from '@/store/session-states'
 
 import type { QueueEditState } from './composer-utils'
-import { cancelQueuedPrompt, discardLostPrompt, steerQueuedPrompt } from './discard-lost-prompt'
+import { cancelQueuedPrompt, discardLostPrompt, interruptForwardedPrompt, refreshPendingPrompt, steerQueuedPrompt } from './discard-lost-prompt'
 import { QueuePanel } from './queue-panel'
 
 export interface ComposerQueueSlotInputs {
@@ -83,13 +84,29 @@ export function renderComposerQueueSlot({
   steerQueuedNow,
   t
 }: ComposerQueueSlotInputs): ReactNode {
+  queuedPrompts = queuedPrompts.filter(entry => !activeQueueSessionKey || observedUnknownMatches(activeQueueSessionKey, entry))
+
   return activeQueueSessionKey && queuedPrompts.length > 0 ? (
     <QueuePanel
       busy={busy}
       editingId={queueEdit?.entryId ?? null}
       entries={queuedPrompts}
       onDelete={id => {
-        const serverStatus = queuedPrompts.find(entry => entry.id === id)?.serverStatus
+        const entry = queuedPrompts.find(item => item.id === id)
+        const serverStatus = entry?.serverStatus
+
+        if (entry?.queueReceipt) {
+          if (entry.queueReceipt.status !== 'queued') { removeQueuedPrompt(activeQueueSessionKey, id) }
+
+          return
+        }
+
+        if (serverStatus === 'started' && gateway && typeof entry?.serverExecutionGeneration === 'number') {
+          interruptForwardedPrompt(sessionId, activeQueueSessionKey, id, entry.serverExecutionGeneration, gateway.request.bind(gateway))
+            .catch((error: unknown) => notifyError(error, t.composer.queueCancelFailed))
+
+          return
+        }
 
         // A server-owned row is an admission in the authority's FIFO, not local state: Delete
         // withdraws it there (a lost `unknown` turn is acknowledged, exactly like Discard). The
@@ -97,7 +114,7 @@ export function renderComposerQueueSlot({
         if (serverStatus && gateway) {
           const withdraw = serverStatus === 'unknown' ? discardLostPrompt : cancelQueuedPrompt
 
-          withdraw(sessionId, activeQueueSessionKey, id, gateway.request.bind(gateway)).catch((error: unknown) =>
+          withdraw(sessionId, activeQueueSessionKey, id, gateway.request.bind(gateway), entry?.serverExecutionGeneration, entry).catch((error: unknown) =>
             notifyError(error, t.composer.queueCancelFailed)
           )
 
@@ -115,13 +132,17 @@ export function renderComposerQueueSlot({
               // from the queue once the acknowledgement commits. Canonical
               // local sessions key the queue by their own session id, so the
               // stored key stands in when the runtime id is not bound yet.
-              discardLostPrompt(sessionId, activeQueueSessionKey, id, gateway.request.bind(gateway)).catch(
+              discardLostPrompt(sessionId, activeQueueSessionKey, id, gateway.request.bind(gateway), queuedPrompts.find(entry => entry.id === id)?.serverExecutionGeneration, queuedPrompts.find(entry => entry.id === id)).catch(
                 (error: unknown) => notifyError(error, t.composer.queueLostDiscard)
               )
             }
           : undefined
       }
       onEdit={beginQueuedEdit}
+      onRefresh={gateway ? id => {
+        refreshPendingPrompt(sessionId, activeQueueSessionKey, id, gateway.request.bind(gateway))
+          .catch((error: unknown) => notifyError(error, t.desktop.resumeFailed))
+      } : undefined}
       onResume={() => {
         unparkQueuedPrompts(activeQueueSessionKey)
 

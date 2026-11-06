@@ -30,7 +30,6 @@ import {
   SessionRecoveryAborted,
   shouldInterruptBeforeRewind,
   slashStatusText,
-  SUBMIT_IN_FLIGHT_TTL_MS,
   visibleUserIndexAtOrdinal,
   visibleUserOrdinal,
   withSessionNotFoundResume
@@ -71,27 +70,35 @@ describe('recent interrupt cooldown', () => {
   })
 })
 
-describe('submit in-flight TTL', () => {
-  it('blocks a second acquire while fresh and frees after TTL without explicit release', () => {
-    const key = 'lock-ttl'
-    const t0 = 2_000_000
+describe('submit in-flight ownership', () => {
+  it('holds past the entire 30-minute acknowledgement window until the operation settles', () => {
+    vi.useFakeTimers()
 
-    expect(acquireSubmitInFlight(key, t0)).toBe(true)
-    expect(isSubmitInFlight(key, t0 + 1)).toBe(true)
-    expect(acquireSubmitInFlight(key, t0 + 1)).toBe(false)
+    try {
+      const token = acquireSubmitInFlight('slow-ack')
+      expect(token).toBeTruthy()
+      vi.advanceTimersByTime(1_800_001)
+      expect(isSubmitInFlight('slow-ack')).toBe(true)
+      expect(acquireSubmitInFlight('slow-ack')).toBe(false)
 
-    expect(isSubmitInFlight(key, t0 + SUBMIT_IN_FLIGHT_TTL_MS)).toBe(false)
-    expect(acquireSubmitInFlight(key, t0 + SUBMIT_IN_FLIGHT_TTL_MS)).toBe(true)
+      if (token) { releaseSubmitInFlight('slow-ack', token) }
+      expect(isSubmitInFlight('slow-ack')).toBe(false)
+    } finally { vi.useRealTimers() }
   })
 
-  it('release clears the lock immediately', () => {
-    const key = 'lock-release'
-    const t0 = 3_000_000
+  it('operation A cannot release the replacement operation B', () => {
+    const a = acquireSubmitInFlight('same')
+    expect(a).toBeTruthy()
 
-    expect(acquireSubmitInFlight(key, t0)).toBe(true)
-    releaseSubmitInFlight(key)
-    expect(isSubmitInFlight(key, t0 + 1)).toBe(false)
-    expect(acquireSubmitInFlight(key, t0 + 1)).toBe(true)
+    if (!a) { throw new Error('missing A') }
+    releaseSubmitInFlight('same', a)
+    const b = acquireSubmitInFlight('same')
+    expect(b).toBeTruthy()
+    releaseSubmitInFlight('same', a)
+    expect(isSubmitInFlight('same')).toBe(true)
+
+    if (b) { releaseSubmitInFlight('same', b) }
+    expect(isSubmitInFlight('same')).toBe(false)
   })
 })
 

@@ -23,6 +23,9 @@
  */
 import { atom } from 'nanostores'
 
+import type { SessionResumeResult } from '@/types/hermes'
+
+import { captureSessionControlScope, sessionControlKey, type SessionControlScope } from './session-control-scope'
 import type { SessionOwnerResolutionError } from './session-owner-resolution'
 import { isSessionOwnerResolutionError } from './session-owner-resolution'
 
@@ -54,6 +57,30 @@ export function clearStoredTranscriptReadOnly(storedSessionId: string): void {
   $readOnlyStoredTranscripts.set(next)
 }
 
+export function recordResumedSessionWriteVerdict(
+  storedSessionId: string,
+  resumed: { writable?: boolean | null; info?: { writable?: boolean | null } },
+  scope = captureSessionControlScope(storedSessionId)
+): void {
+  clearStoredTranscriptReadOnly(storedSessionId)
+  recordSessionWriteVerdict(storedSessionId, resumed.writable ?? resumed.info?.writable, scope)
+}
+
+/** Per-session authority verdicts are independent of fallback routability and cron ownership. */
+export const $sessionWriteVerdicts = atom<ReadonlyMap<string, boolean>>(new Map())
+
+/** Refresh only on an explicit authority verdict; an older heartbeat is not permission to write. */
+export function recordSessionWriteVerdict(storedSessionId: string, writable: unknown, scope = captureSessionControlScope(storedSessionId)): void {
+  if (typeof writable !== 'boolean') { return }
+  const current = $sessionWriteVerdicts.get()
+
+  const key = sessionControlKey(storedSessionId, scope)
+
+  if (current.get(key) !== writable) {
+    $sessionWriteVerdicts.set(new Map(current).set(key, writable))
+  }
+}
+
 export function isStoredTranscriptReadOnly(storedSessionId: null | string | undefined): boolean {
   if (!storedSessionId) {
     return false
@@ -61,7 +88,7 @@ export function isStoredTranscriptReadOnly(storedSessionId: null | string | unde
 
   const id = storedSessionId.trim()
 
-  return $readOnlyStoredTranscripts.get().has(id) || isCronRunReadOnly(id)
+  return $readOnlyStoredTranscripts.get().has(id) || $sessionWriteVerdicts.get().get(sessionControlKey(id)) === false || isCronRunReadOnly(id)
 }
 
 /**
@@ -131,17 +158,17 @@ export type StoredTranscriptResumeOutcome<TResumed, TTranscript> =
  * stays authoritative and no misleading transport error replaces the real
  * diagnosis.
  */
-export async function resumeWithStoredTranscriptFallback<TResumed, TTranscript>(
+export async function resumeWithStoredTranscriptFallback<TResumed extends Partial<Pick<SessionResumeResult, 'session_id' | 'writable' | 'info'>>, TTranscript>(
   storedSessionId: string,
   resume: () => Promise<TResumed>,
-  fetchStoredTranscript: () => Promise<TTranscript>
+  fetchStoredTranscript: () => Promise<TTranscript>,
+  scope: SessionControlScope = captureSessionControlScope(storedSessionId)
 ): Promise<StoredTranscriptResumeOutcome<TResumed, TTranscript>> {
   try {
     const resumed = await resume()
 
-    // A live resume proves the owner is routable again (the backfill stamped
-    // the row, or a topology change resolved it) — drop the read-only latch.
-    clearStoredTranscriptReadOnly(storedSessionId)
+    // Routability clears the no-owner fallback, never an explicit authority denial.
+    recordResumedSessionWriteVerdict(storedSessionId, resumed, scope)
 
     return { mode: 'live', resumed }
   } catch (error) {

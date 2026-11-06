@@ -5550,7 +5550,7 @@ describe('usePromptActions live-owner refusal (#106217)', () => {
       if (method === 'prompt.submit') {
         throw new JsonRpcGatewayError(
           'Session 20260909_095312_6b93f5 already has a live owner (tui, pid 32977, lease age 22m).',
-          { code: 4090, data: { reason: 'SESSION_NOT_OWNED' } }
+          { code: 4090, data: { reason: 'SESSION_NOT_OWNED', ownership_reason: 'owner_live_elsewhere' } }
         )
       }
 

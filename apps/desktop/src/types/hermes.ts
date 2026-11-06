@@ -3,6 +3,7 @@ import type { ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } fr
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
 
 import type { BackendManagedSourceUpdate } from './hermes-managed-source'
+import type { SessionWriteCapability } from './session-capability'
 import type { SessionListMembership } from './session-list-membership'
 
 export * from './hermes-managed-source'
@@ -815,7 +816,7 @@ export interface SessionMessagesResponse {
   session_id: string
 }
 
-export interface SessionResumeResult {
+export interface SessionResumeResult extends SessionWriteCapability {
   /** Present when the backend found a fresh crash-interrupted turn and
    *  scheduled its automatic continuation; the turn arrives as a normal
    *  message.start stream right after this resume. */
@@ -893,7 +894,10 @@ export interface SessionResumeResult {
   turn_started_at?: number | null
 }
 
-export interface SessionRuntimeInfo {
+export interface SessionRuntimeInfo extends SessionWriteCapability {
+  blocking_unknown?: unknown
+  queue_receipts?: unknown
+  owner_connected?: boolean | null
   stored_session_id?: string
   pending_submissions?: unknown
   /** Canonical snapshot only: the session replay epoch and event sequence its pending set reflects. */

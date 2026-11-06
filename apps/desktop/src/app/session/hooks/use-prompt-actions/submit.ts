@@ -1,4 +1,4 @@
-import { type PromptSubmitResult, randomUuid } from '@hermes/shared'
+import { JsonRpcGatewayError, type PromptSubmitResult, randomUuid } from '@hermes/shared'
 import { type MutableRefObject, useCallback } from 'react'
 
 import { getSession, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
@@ -27,8 +27,8 @@ import { noteMessageSent } from '@/store/desktop-metrics'
 import { $hudMode } from '@/store/hud'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { consumePendingCredentialWarning, requestDesktopOnboarding } from '@/store/onboarding'
-import { trackPendingSubmission } from '@/store/pending-submissions'
-import { isStoredTranscriptReadOnly } from '@/store/read-only-transcript'
+import { recordBlockingUnknownRefusal, trackPendingSubmission } from '@/store/pending-submissions'
+import { isStoredTranscriptReadOnly, recordSessionWriteVerdict } from '@/store/read-only-transcript'
 import {
   $activeSessionId,
   $sessions,
@@ -39,9 +39,10 @@ import {
   setMessages,
   touchSessionActivity
 } from '@/store/session'
+import { captureSessionControlScope } from '@/store/session-control-scope'
 import { profileScopeForSessionOwner } from '@/store/session-request-router'
 import { $sessionStates, $sessionTiles } from '@/store/session-states'
-import type { SessionInfo } from '@/types/hermes'
+import type { SessionInfo, SessionResumeResult } from '@/types/hermes'
 
 import { cronRunWriteGateApplies, refreshCronRunWriteGate } from '../../../cron/open-cron-run'
 import type { ClientSessionState } from '../../../types'
@@ -64,7 +65,7 @@ import {
   type GatewayRequest,
   inlineErrorMessage,
   isAdmittedSubmissionConflict,
-  isForwardedReceipt,
+  isLegacyQueuedReceipt,
   isProviderSetupError,
   isSessionBusyError,
   isTargetSessionBusy,
@@ -195,6 +196,7 @@ export function rebindPaneToResumedRuntime({
 /** Canonical admission receipt; `user_row_id` binds the optimistic bubble to its durable row. */
 type SubmitReceipt = Pick<PromptSubmitResult, 'forwarded' | 'user_row_id'> & {
   admission_id?: string
+  input_id?: string | null
   submission_id?: string
   session_id?: string
   status?: string
@@ -211,6 +213,12 @@ function isPreAdmissionRefusal(error: unknown): boolean {
   const { code, message } = error as { code?: unknown; message?: unknown }
 
   return code === 4094 || (code === 4000 && typeof message === 'string' && /submission_id/.test(message))
+}
+
+function assertSessionWritable(storedId: string | null, message: string): void {
+  if (isStoredTranscriptReadOnly(storedId)) {
+    throw new JsonRpcGatewayError(message, { code: 4001, data: { reason: 'session_read_only' } })
+  }
 }
 
 export function useSubmitPrompt(deps: SubmitPromptDeps) {
@@ -563,18 +571,13 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       // session switch; this per-session lock makes that safe.
       const submitLockKey = targetStoredSessionId || sessionId || startingActiveSessionId || '__pending_new__'
 
-      if (!acquireSubmitInFlight(submitLockKey)) {
+      const submitLock = acquireSubmitInFlight(submitLockKey)
+
+      if (!submitLock) {
         return false
       }
 
-      let submitLockReleased = false
-
-      const releaseSubmitLock = () => {
-        if (!submitLockReleased) {
-          submitLockReleased = true
-          releaseSubmitInFlight(submitLockKey)
-        }
-      }
+      const releaseSubmitLock = () => releaseSubmitInFlight(submitLockKey, submitLock)
 
       const optimisticId = `user-${submissionId}`
 
@@ -603,6 +606,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           scope.setBusy(false)
           scope.setAwaitingResponse(false)
         }
+
+        return false
       }
 
       // Idempotent optimistic insert — re-running with the resolved sessionId
@@ -643,6 +648,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             pendingBranchGroup: null,
             sawAssistantPayload: false,
             streamId: null,
+            streamExecutionControl: null,
             // Fresh submit = new turn — clear any leftover interrupt flag, else
             // mutateStream/completeAssistantMessage drop every delta of this turn
             // (what made drained-after-interrupt sends go silent).
@@ -843,6 +849,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       // conversation; only a genuine new-chat draft may create a new session.
       // Resolves to the rebound runtime id, or false when the submit must stop.
       const resumeTargetStoredSession = async (storedId: string): Promise<false | string> => {
+        const verdictScope = captureSessionControlScope(storedId, destination.owner)
         let resumedSessionId: null | string = null
 
         try {
@@ -852,12 +859,12 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           // exact stored session is reused instead of resuming again.
           const cachedRuntimeId = takeRecoveredRuntime(storedId)
 
-          const resumed = cachedRuntimeId
+          const resumed: Pick<SessionResumeResult, 'session_id' | 'writable' | 'info'> = cachedRuntimeId
             ? { session_id: cachedRuntimeId }
             : await singleFlightSessionResume(storedId, async () => {
                 const resumeProfile = await resolveSessionProfile(storedId)
 
-                return requestGateway<{ session_id: string }>('session.resume', {
+                return requestGateway<Pick<SessionResumeResult, 'session_id' | 'writable' | 'info'>>('session.resume', {
                   session_id: storedId,
                   source: 'desktop',
                   omit_messages: true,
@@ -865,6 +872,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
                 })
               })
 
+          recordSessionWriteVerdict(storedId, resumed.writable ?? resumed.info?.writable, verdictScope)
           const resumeDrift = sessionDriftReason()
 
           if (resumeDrift) {
@@ -1033,6 +1041,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         requestGateway = destination.requestGateway
       }
 
+      const submissionControlScope = captureSessionControlScope(sessionId, destination.owner)
+
       try {
         // Attach runs BEFORE prompt.submit, so a stale runtime id fails there
         // first and submit's own recovery never runs — that asymmetry is why
@@ -1046,10 +1056,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
               requestGateway
             })
 
-        const syncedAttachments = attachResult.attachments
-        // Always a live string; pin it so TS narrows past the outer
-        // `string | null` sessionId binding for prompt.submit.
-        const liveSessionId = attachResult.sessionId
+        // Pin the recovered runtime independently of the mutable outer binding.
+        const { attachments: syncedAttachments, sessionId: liveSessionId } = attachResult
 
         sessionId = liveSessionId
 
@@ -1153,6 +1161,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
                 if (prepared.legacyAttempted) {
                   throw new Error('Legacy submission acknowledgement is unknown; automatic retry is unsafe')
                 }
+
+                assertSessionWritable(targetStoredSessionId, copy.readOnlyTranscriptSendBlocked)
 
                 const params: Record<string, unknown> = { ...prepared.params, session_id: liveId }
 
@@ -1283,7 +1293,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             }
 
             // RT-37: forwarded to the gateway owner's FIFO; its queued-row card stands for the send.
-            if (isForwardedReceipt(legacyAccepted, result)) {
+            if (isLegacyQueuedReceipt(legacyAccepted, result)) {
               abortForSessionSwitch(sessionId)
             }
 
@@ -1360,21 +1370,20 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
         return true
       } catch (err) {
-        releaseBusy()
-
+        recordBlockingUnknownRefusal(err, targetStoredSessionId, sessionId, submissionControlScope)
         unstageRefusedImages(err, usingComposerAttachments, scope, attachments)
 
         // A queued drain that raced a not-yet-settled turn gets a transient
         // "session busy" (4009). Don't surface an error bubble/toast — the entry
         // stays queued and the composer's bounded auto-drain retries when idle.
         if (options?.fromQueue && isSessionBusyError(err)) {
-          return false
+          return releaseBusy()
         }
 
         if (queueAdmission) {
           notifyError(err, copy.promptFailed)
 
-          return false
+          return releaseBusy()
         }
 
         const message = inlineErrorMessage(err, copy.promptFailed)
@@ -1410,14 +1419,14 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         if (targetIsCurrentView() && isProviderSetupError(err)) {
           requestDesktopOnboarding(copy.providerCredentialRequired)
 
-          return false
+          return releaseBusy()
         }
 
         if (targetIsCurrentView()) {
           notifyError(err, copy.promptFailed)
         }
 
-        return false
+        return releaseBusy()
       }
     },
     [

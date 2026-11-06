@@ -136,6 +136,8 @@ export const enErrorCodes: ThreadCopy['errorCodes'] = {
     body: provider =>
       `Hermes couldn't connect to ${provider} for this chat. Retry; if it keeps failing, check the provider in Settings.`
   },
+  SESSION_OWNER_UNAVAILABLE: { title: "Chat owner unavailable", body: "Reconnect to this chat’s owner, then resume to refresh its status. Your message was not resent." },
+  SESSION_OUTCOME_UNKNOWN: { title: "Earlier turn needs review", body: "Resume this chat to refresh the pending turn, then use Discard on its unknown-outcome card. Do not resend the uncertain turn." },
   SESSION_NOT_OWNED: {
     title: 'Chat open somewhere else',
     body: 'This chat is open in another Hermes window or terminal. Start a new chat here, or close it there first.'

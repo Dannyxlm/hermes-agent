@@ -1,19 +1,66 @@
 import type { GatewayRequest } from '@/app/session/hooks/use-prompt-actions/utils'
+import { getQueuedPrompts } from '@/store/composer-queue'
+import type { QueuedPromptEntry } from '@/store/composer-queue'
+import { observedUnknownMatches, reconcileBlockingUnknown, retireObservedUnknown } from '@/store/pending-submissions'
+import { captureSessionControlScope } from '@/store/session-control-scope'
 import { requestForOwnedSession } from '@/store/session-states'
 
 export async function discardLostPrompt(
   sessionId: string | null | undefined,
   queueSessionKey: string,
   admissionId: string,
-  request: GatewayRequest
+  request: GatewayRequest,
+  executionGeneration?: number,
+  expectedEntry?: QueuedPromptEntry
 ): Promise<unknown> {
-  const targetSessionId = sessionId ?? queueSessionKey
+  const entry = getQueuedPrompts(queueSessionKey).find(row => row.id === admissionId)
+
+  if (expectedEntry?.observedUnknown && !entry?.observedUnknown) { throw new Error('Observed barrier no longer served; refresh the session') }
+
+  if (entry?.observedUnknown && (!observedUnknownMatches(queueSessionKey, entry) ||
+      executionGeneration !== entry.serverExecutionGeneration || !entry.serverControls?.includes('resolve_unknown'))) {
+    throw new Error('Observed barrier owner or generation changed; refresh the session')
+  }
+
+  const targetSessionId = sessionId ?? entry?.observedUnknown?.ref.session_id ?? queueSessionKey
 
   // The owning socket's canonical protocol supplies the UNKNOWN admission's
   // generation. The current live execution generation may already be newer.
-  return requestForOwnedSession(queueSessionKey, request, 'prompt.resolve_unknown', {
+  const result = await requestForOwnedSession(queueSessionKey, request, 'prompt.resolve_unknown', {
     session_id: targetSessionId,
-    admission_id: admissionId
+    admission_id: admissionId,
+    ...(executionGeneration !== undefined ? { execution_generation: executionGeneration } : {})
+  })
+
+  if (entry?.observedUnknown) { retireObservedUnknown(queueSessionKey, entry, result) }
+
+  return result
+}
+
+/** Read the retained forwarded admission. The bridge publishes its refreshed pending projection. */
+export async function refreshPendingPrompt(
+  sessionId: string | null | undefined, queueSessionKey: string, admissionId: string, request: GatewayRequest
+): Promise<unknown> {
+  const scope = captureSessionControlScope(queueSessionKey)
+
+  const result = await requestForOwnedSession(queueSessionKey, request, 'prompt.receipt', {
+    session_id: sessionId ?? queueSessionKey, admission_id: admissionId
+  })
+
+  if (result && typeof result === 'object' && 'admission_id' in result && result.admission_id === admissionId) {
+    reconcileBlockingUnknown(queueSessionKey, [result], scope, undefined, false)
+  }
+
+  return result
+}
+
+/** Stop the exact forwarded execution observed on this card, never a successor. */
+export function interruptForwardedPrompt(
+  sessionId: string | null | undefined, queueSessionKey: string, admissionId: string,
+  executionGeneration: number, request: GatewayRequest
+): Promise<unknown> {
+  return requestForOwnedSession(queueSessionKey, request, 'session.interrupt', {
+    session_id: sessionId ?? queueSessionKey, admission_id: admissionId, execution_generation: executionGeneration
   })
 }
 

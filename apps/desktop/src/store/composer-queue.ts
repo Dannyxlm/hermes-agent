@@ -7,7 +7,9 @@ import {
   revokeAttachmentPreviewUrls,
   revokeDiscardedAttachmentPreviews
 } from './composer'
+import { acknowledgeLocalQueueReceipt } from './pending-submissions'
 import { $connection } from './session'
+import type { SessionControlScope } from './session-control-scope'
 import { knownOwnerForSession } from './session-states'
 
 /** Local owner routes use canonical admission; remote legacy queues stay local. */
@@ -38,6 +40,11 @@ export interface RemoveQueuedPromptOptions {
 export interface QueuedPromptEntry {
   id: string
   serverStatus?: string
+  serverExecutionGeneration?: number
+  /** Metadata observed on another viewer's barrier, never a submitted input. */
+  observedUnknown?: { ref: { profile_id: string; session_id: string }; scope: SessionControlScope }
+  /** Process-local queue receipt: never a replayable input or a forwarded admission. */
+  queueReceipt?: { status: 'queued' | 'terminal' | 'unknown'; outcome: string | null; reason?: string; ownerKey?: string }
   /** The queued-row verbs the owner serves for a server row (`steer`, `replace`); none from an
    *  owner that predates them. Projected from the pending snapshot, never set locally. */
   serverControls?: string[]
@@ -453,7 +460,7 @@ export const removeQueuedPrompt = (
   // Server-owned (admitted) rows retire through the gateway, never locally.
 
   mutateSession(sid, queue => {
-    removed = queue.find(e => e.id === id && !e.serverStatus)
+    removed = queue.find(e => e.id === id && (!e.serverStatus || (e.queueReceipt && e.queueReceipt.status !== 'queued')))
 
     return removed ? queue.filter(e => e.id !== id) : null
   })
@@ -461,6 +468,8 @@ export const removeQueuedPrompt = (
   if (!removed) {
     return false
   }
+
+  acknowledgeLocalQueueReceipt(removed)
 
   if (!options?.retainPreviewUrls) {
     revokeAttachmentPreviewUrls(removed.attachments)

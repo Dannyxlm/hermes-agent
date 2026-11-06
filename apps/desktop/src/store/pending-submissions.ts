@@ -1,6 +1,14 @@
+import { JsonRpcGatewayError } from '@hermes/shared'
+
+import type { ClientSessionState } from '@/app/types'
+import type { SessionRuntimeInfo } from '@/types/hermes'
+
 import { noteListedSubmissions } from './admitted-submissions'
 import { getQueuedPrompts, type QueuedPromptEntry, queuedSubmissionId, writeSessionQueue } from './composer-queue'
+import { recordSessionWriteVerdict } from './read-only-transcript'
 import { $sessions, resolveComposerSessionKey } from './session'
+import { captureSessionControlScope, sessionControlKey, sessionControlOwnerKey, type SessionControlScope } from './session-control-scope'
+import type { SessionOwnerScope } from './session-request-router'
 
 // One localStorage key per (session, admission). Every Desktop window of the origin shares this
 // storage with last-writer-wins per KEY, so a single journal blob let one window's
@@ -16,8 +24,13 @@ interface PendingSubmission {
   status?: string
   /** Where in the session's event order the owner last listed this admission as pending. */
   seen?: PendingSnapshotFence
-  /** The snapshot's queued-row controls; carried to the card only, never journaled. */
+  /** Actual served controls, retained with their owner, never inferred from status. */
   controls?: string[]
+  controlsOwnerKey?: string
+  executionGeneration?: number
+  observedUnknown?: QueuedPromptEntry['observedUnknown']
+  /** Presentation acknowledgement only, under the exact owner/lineage journal identity. */
+  localReceiptAcknowledgement?: QueuedPromptEntry['queueReceipt']
 }
 
 /** A canonical pending snapshot's place in its session's event order: the replay epoch and the
@@ -59,7 +72,7 @@ export function readPendingSubmissions(session: string): Record<string, PendingS
  *  last observed): the ones whose owner may have moved on while no window was watching. */
 export function journaledPendingSessions(): string[] {
   const sessions = new Set<string>()
-  const unsettled = (entry: null | PendingSubmission | undefined) => Boolean(entry?.status && entry.status !== 'retired')
+  const unsettled = (entry: null | PendingSubmission | undefined) => Boolean(entry?.status && entry.status !== 'retired' && !entry.observedUnknown)
 
   for (const [session, entries] of Object.entries(parse(window.localStorage.getItem(LEGACY_KEY), {} as Record<string, Record<string, PendingSubmission>>))) {
     if (Object.values(entries ?? {}).some(unsettled)) { sessions.add(session) }
@@ -192,7 +205,11 @@ const RETIRED_MEMORY = 200
 const isStale = (raw: { admission_id: string; status: string }, known: Record<string, PendingSubmission>) =>
   (STATUS_RANK[raw.status] ?? 0) < (STATUS_RANK[known[raw.admission_id]?.status ?? ''] ?? -1)
 
-function collectReceipts(value: RawReceipts, known: Record<string, PendingSubmission>) {
+function staleReceiptControls(entry: PendingSubmission, ownerKey: string): string[] {
+  return entry.controlsOwnerKey === ownerKey ? entry.controls ?? [] : []
+}
+
+function collectReceipts(value: RawReceipts, known: Record<string, PendingSubmission>, ownerKey: string) {
   const receipts = new Map<string, PendingSubmission>()
   const admissionByInput = new Map<string, string>()
 
@@ -214,12 +231,18 @@ function collectReceipts(value: RawReceipts, known: Record<string, PendingSubmis
       admissionByInput.set(raw.input_id, id)
     }
 
+    const status = stale ? known[id].status : raw.status
+    const controls = stale ? staleReceiptControls(known[id], ownerKey) : raw.controls
+    const executionGeneration = stale ? known[id].executionGeneration : raw.execution_generation
+
     receipts.set(id, {
       ...known[id],
       id,
       text: typeof raw.user === 'string' ? raw.user : (known[id]?.text ?? ''),
-      status: stale ? known[id].status : raw.status,
-      ...(Array.isArray(raw.controls) ? { controls: raw.controls.filter((c: unknown) => typeof c === 'string') } : {})
+      status,
+      executionGeneration: typeof executionGeneration === 'number' ? executionGeneration : undefined,
+      controls: Array.isArray(controls) ? controls.filter((c: unknown) => typeof c === 'string') : undefined,
+      controlsOwnerKey: ownerKey
     })
   }
 
@@ -246,22 +269,26 @@ function projectQueue(
   const next: QueuedPromptEntry[] = []
 
   for (const entry of current) {
+    if (entry.observedUnknown) { next.push(entry); receipts.delete(entry.id);
+
+ continue }
+
     const submissionId = queuedSubmissionId(entry)
     const receipt = receipts.get(admissionByInput.get(submissionId) ?? submissionId)
 
     if (receipt) {
-      if (receipt.status !== 'started') {
-        next.push({ ...entry, id: receipt.id, serverStatus: receipt.status, serverControls: receipt.controls })
+      if (receipt.status !== 'started' || receipt.controls?.includes('interrupt')) {
+        next.push({ ...entry, id: receipt.id, serverStatus: receipt.status, serverControls: receipt.controls, serverExecutionGeneration: receipt.executionGeneration })
       }
 
       receipts.delete(receipt.id)
-    } else if (!entry.serverStatus || stillPending.has(entry.id)) {
+    } else if (entry.observedUnknown || entry.queueReceipt || !entry.serverStatus || stillPending.has(entry.id)) {
       next.push(entry)
     }
   }
 
   for (const receipt of receipts.values()) {
-    if (receipt.status !== 'started') {
+    if (receipt.status !== 'started' || receipt.controls?.includes('interrupt')) {
       next.push({
         id: receipt.id,
         text: receipt.text,
@@ -269,7 +296,8 @@ function projectQueue(
         attachments: [],
         queuedAt: Date.now(),
         serverStatus: receipt.status,
-        serverControls: receipt.controls
+        serverControls: receipt.controls,
+        serverExecutionGeneration: receipt.executionGeneration
       })
     }
   }
@@ -290,7 +318,7 @@ function inOwnerOrder(entries: QueuedPromptEntry[], order: Map<string, number>):
   return next
 }
 
-function updateKnownReceipts(known: Record<string, PendingSubmission>, value: RawReceipts, fence?: PendingSnapshotFence): void {
+function updateKnownReceipts(known: Record<string, PendingSubmission>, value: RawReceipts, ownerKey: string, fence?: PendingSnapshotFence): void {
   // Only observed server records may be retired by their later absence. The retirement is kept
   // (text dropped) so a stale snapshot that still lists the admission cannot resurrect its card.
   for (const [id, entry] of Object.entries(known)) {
@@ -317,6 +345,9 @@ function updateKnownReceipts(known: Record<string, PendingSubmission>, value: Ra
         // A steer in transfer reads `started` but can still go back to its queue place: it never
         // raises the admission's rank, so the owner's later `queued` listing repaints its card.
         status: raw.steering === true ? (previous?.status ?? 'queued') : raw.status,
+        executionGeneration: typeof raw.execution_generation === 'number' ? raw.execution_generation : undefined,
+        controls: Array.isArray(raw.controls) ? raw.controls.filter((control: unknown) => typeof control === 'string') : undefined,
+        controlsOwnerKey: ownerKey,
         ...(fence && !predates(fence, previous?.seen) ? { seen: fence } : {})
       }
     }
@@ -325,7 +356,7 @@ function updateKnownReceipts(known: Record<string, PendingSubmission>, value: Ra
 
 /** Project one pending snapshot onto the session's queue. `fence` orders canonical snapshots so a
  *  delayed older one cannot retire an admission a newer one still listed. */
-export function reconcilePendingSubmissions(storedId: string, value: unknown, fence?: PendingSnapshotFence): void {
+export function reconcilePendingSubmissions(storedId: string, value: unknown, fence?: PendingSnapshotFence, scope = captureSessionControlScope(storedId)): void {
   if (!Array.isArray(value)) {
     return
   }
@@ -338,7 +369,8 @@ export function reconcilePendingSubmissions(storedId: string, value: unknown, fe
 
   const before = readPendingSubmissions(key)
   const known = { ...before }
-  const { receipts, admissionByInput } = collectReceipts(value, known)
+  const ownerKey = sessionControlOwnerKey(scope)
+  const { receipts, admissionByInput } = collectReceipts(value, known, ownerKey)
 
   const stillPending = new Set(Object.values(known).filter(entry =>
     entry.status && entry.status !== 'retired' && predates(fence, entry.seen) &&
@@ -347,12 +379,208 @@ export function reconcilePendingSubmissions(storedId: string, value: unknown, fe
   const current = getQueuedPrompts(key)
   const next = projectQueue(current, receipts, admissionByInput, stillPending)
 
-  updateKnownReceipts(known, value, fence)
+  updateKnownReceipts(known, value, ownerKey, fence)
   writeEntries(key, before, known)
 
   if (JSON.stringify(current) !== JSON.stringify(next)) {
     writeSessionQueue(key, next)
   }
+}
+
+/** Only a served capability for the exact execution observed on the live stream may target Stop. */
+export function pendingExecutionControl(storedId: string, live: ClientSessionState['streamExecutionControl']): { admission_id: string; execution_generation: number } | undefined {
+  if (!live || live.ownerKey !== sessionControlOwnerKey(captureSessionControlScope(storedId))) { return undefined }
+  const known = readPendingSubmission(journalKey(storedId), live.admission_id)
+
+  return known?.status === 'started' && known.controlsOwnerKey === live.ownerKey && known.controls?.includes('interrupt') && known.executionGeneration === live.execution_generation
+    ? { admission_id: live.admission_id, execution_generation: live.execution_generation } : undefined
+}
+
+/** Session-scoped control facts shared by primary and tiled successful resumes. */
+export function reconcileSessionControlInfo(info: SessionRuntimeInfo, owner?: SessionOwnerScope, capturedScope?: SessionControlScope): void {
+  if (!info.stored_session_id) { return }
+  const scope = capturedScope ?? captureSessionControlScope(info.stored_session_id, owner)
+  recordSessionWriteVerdict(info.stored_session_id, info.writable, scope)
+  reconcileLocalQueueReceipts(info.stored_session_id, info.queue_receipts, scope)
+  reconcileBlockingUnknown(info.stored_session_id, info.blocking_unknown, scope, pendingSnapshotFence(info.replay_epoch, info.last_sequence))
+  reconcilePendingSubmissions(info.stored_session_id, info.pending_submissions,
+    pendingSnapshotFence(info.replay_epoch, info.last_sequence), scope)
+}
+
+/** Reuse the bounded retired journal, not a new profile-keyed persistence family or server verb. */
+export function acknowledgeLocalQueueReceipt(entry: QueuedPromptEntry): void {
+  const receipt = entry.queueReceipt
+
+  if (!receipt?.ownerKey || receipt.status === 'queued') { return }
+  const before = readPendingSubmissions(receipt.ownerKey)
+  const after = { ...before }
+  delete after[entry.id]
+  after[entry.id] = { id: entry.id, text: '', status: 'retired', localReceiptAcknowledgement: receipt }
+  const retained = Object.fromEntries(Object.entries(after).slice(-RETIRED_MEMORY))
+  writeEntries(receipt.ownerKey, before, retained)
+}
+
+function isLocalQueueReceiptAcknowledged(id: string, receipt: NonNullable<QueuedPromptEntry['queueReceipt']>): boolean {
+  if (!receipt.ownerKey) { return false }
+  const acknowledged = readPendingSubmission(receipt.ownerKey, id)?.localReceiptAcknowledgement
+
+  return Boolean(acknowledged && (receipt.status === 'queued' || JSON.stringify(acknowledged) === JSON.stringify(receipt)))
+}
+
+function localQueueReceiptMatches(raw: RawReceipts[number], key: string): boolean {
+  return Boolean(raw && typeof raw.input_id === 'string' && typeof raw.session_id === 'string' &&
+    journalKey(raw.session_id) === key && ['queued', 'transferred', 'terminal', 'unknown'].includes(raw.status))
+}
+
+/** Durable local-queue dispositions are observations, never an outbox to drain. */
+export function reconcileLocalQueueReceipts(storedId: string, value: unknown, scope: SessionControlScope = captureSessionControlScope(storedId)): void {
+  if (!Array.isArray(value)) { return }
+  const key = journalKey(storedId)
+  const ownerKey = sessionControlKey(storedId, scope)
+  let next = getQueuedPrompts(key)
+
+  for (const raw of value) {
+    if (!localQueueReceiptMatches(raw, key)) { continue }
+
+    const id = `local-queue:${raw.input_id}`
+    const held = next.find(entry => entry.id === id)
+    next = next.filter(entry => entry.id !== id)
+
+    // A delayed queue/transfer heartbeat cannot undo the restart's cancellation or uncertainty.
+    if (held?.queueReceipt && held.queueReceipt.ownerKey === ownerKey && held.queueReceipt.status !== 'queued' &&
+        (raw.status === 'queued' || raw.status === 'transferred')) {
+      next.push(held)
+
+      continue
+    }
+
+    if (raw.status === 'transferred' || (raw.status === 'terminal' && raw.outcome === 'completed')) { continue }
+    const status: 'queued' | 'terminal' | 'unknown' = raw.status
+
+    const queueReceipt = { status, outcome: typeof raw.outcome === 'string' ? raw.outcome : null,
+      ...(typeof raw.reason === 'string' ? { reason: raw.reason } : {}), ownerKey }
+
+    if (isLocalQueueReceiptAcknowledged(id, queueReceipt)) { continue }
+    next.push({ id, text: typeof raw.user === 'string' ? raw.user : '', attachments: [],
+      queuedAt: held?.queuedAt ?? Date.now(), serverStatus: `local_${status}`, serverControls: [], queueReceipt })
+  }
+
+  if (JSON.stringify(next) !== JSON.stringify(getQueuedPrompts(key))) { writeSessionQueue(key, next) }
+}
+
+/** Validate the exact owner reference independently of the admission's scalar metadata. */
+function blockingUnknownRef(ref: unknown, storedId: string, scope: SessionControlScope): NonNullable<QueuedPromptEntry['observedUnknown']> | undefined {
+  if (!ref || typeof ref !== 'object' || !('profile_id' in ref) || !('session_id' in ref) ||
+      ref.profile_id !== scope.profile || typeof ref.session_id !== 'string' ||
+      sessionControlKey(ref.session_id, scope) !== sessionControlKey(storedId, scope)) { return undefined }
+
+  return { ref: { profile_id: scope.profile, session_id: ref.session_id }, scope }
+}
+
+/** Parse the owner's metadata-only contract; no input_id or user body is read. */
+function blockingUnknownReceipt(value: unknown, storedId: string, scope: SessionControlScope): PendingSubmission | undefined {
+  if (!value || typeof value !== 'object') { return undefined }
+  const raw = value as Record<string, unknown>
+  const { admission_id: id, status, execution_generation: generation, controls } = raw
+  const observedUnknown = blockingUnknownRef(raw.ref, storedId, scope)
+
+  if (!observedUnknown || typeof id !== 'string' || !id || status !== 'unknown' || typeof generation !== 'number' ||
+      !Number.isSafeInteger(generation) || generation < 0 || !Array.isArray(controls) ||
+      controls.some(control => control !== 'resolve_unknown')) { return undefined }
+
+  return { id, text: '', status: controls.length ? 'unknown' : 'unavailable', executionGeneration: generation, controls: controls.length ? ['resolve_unknown'] : [],
+    controlsOwnerKey: sessionControlOwnerKey(scope), observedUnknown }
+}
+
+/** Only the typed pre-admission unknown refusal may publish recovery controls from an error. */
+export function recordBlockingUnknownRefusal(error: unknown, storedId: string | null, runtimeId: string, scope: SessionControlScope): void {
+  if (!(error instanceof JsonRpcGatewayError) || !error.data || typeof error.data !== 'object') { return }
+  const data = error.data as Record<string, unknown>
+
+  if (data.reason === 'SESSION_NOT_OWNED' && data.ownership_reason === 'outcome_unknown') {
+    reconcileBlockingUnknown(storedId ?? runtimeId, data.blocking_unknown, scope)
+  }
+}
+
+/** Visibility/control always rechecks this card's captured owner against the current route. */
+export function observedUnknownMatches(storedId: string, entry: QueuedPromptEntry): boolean {
+  const observed = entry.observedUnknown
+
+  return !observed || (sessionControlOwnerKey(observed.scope) === sessionControlOwnerKey(captureSessionControlScope(storedId)) &&
+    sessionControlKey(observed.ref.session_id, observed.scope) === sessionControlKey(storedId, observed.scope))
+}
+
+/** A successful resolve retires only the exact observed barrier, not a newer generation or local input. */
+export function retireObservedUnknown(storedId: string, entry: QueuedPromptEntry, result: unknown): void {
+  if (!entry.observedUnknown || !result || typeof result !== 'object') { return }
+  const receipt = result as Record<string, unknown>
+  const scope = entry.observedUnknown.scope
+  const ownerKey = sessionControlKey(storedId, scope)
+  const before = readPendingSubmissions(ownerKey)
+  const held = before[entry.id]
+  const ref = blockingUnknownRef(receipt.ref, storedId, scope)
+
+  if (receipt.admission_id !== entry.id || receipt.status !== 'terminal' ||
+      receipt.execution_generation !== entry.serverExecutionGeneration ||
+      ref?.ref.session_id !== entry.observedUnknown.ref.session_id || held?.executionGeneration !== entry.serverExecutionGeneration) { return }
+
+  writeEntries(ownerKey, before, { ...before, [entry.id]: { ...held, status: 'retired', controls: [] } })
+  writeSessionQueue(journalKey(storedId), getQueuedPrompts(journalKey(storedId)).filter(current =>
+    !current.observedUnknown || current.id !== entry.id || current.serverExecutionGeneration !== entry.serverExecutionGeneration ||
+    sessionControlOwnerKey(current.observedUnknown.scope) !== sessionControlOwnerKey(scope)))
+}
+
+function retireAbsentBlockingUnknown(known: Record<string, PendingSubmission>, receipts: (PendingSubmission | undefined)[] | null, fence?: PendingSnapshotFence): void {
+  if (!receipts) { return }
+
+  for (const [id, held] of Object.entries(known)) {
+    if (held.observedUnknown && !receipts.some(receipt => receipt?.id === id) && !predates(fence, held.seen)) {
+      known[id] = { ...held, status: 'retired', controls: [] }
+    }
+  }
+
+  const retired = Object.keys(known).filter(id => known[id].status === 'retired')
+
+  for (const id of retired.slice(0, Math.max(0, retired.length - RETIRED_MEMORY))) { delete known[id] }
+}
+
+/** Observed barriers use the existing journal, in a route-owned slice separate from submitted inputs. */
+export function reconcileBlockingUnknown(storedId: string, value: unknown, scope = captureSessionControlScope(storedId), fence?: PendingSnapshotFence, complete = true): void {
+  if (!Array.isArray(value) || sessionControlOwnerKey(scope) !== sessionControlOwnerKey(captureSessionControlScope(storedId))) { return }
+  const key = journalKey(storedId)
+  const ownerKey = sessionControlKey(storedId, scope)
+  const before = readPendingSubmissions(ownerKey)
+  const after = { ...before }
+  const receipts = value.map(raw => blockingUnknownReceipt(raw, storedId, scope))
+
+  // A malformed listing cannot prove absence, nor acquire controls.
+  if (receipts.some(receipt => !receipt)) { return }
+
+  retireAbsentBlockingUnknown(after, complete ? receipts : null, fence)
+
+  for (const receipt of receipts) {
+    if (!receipt) { continue }
+    const held = before[receipt.id]
+
+    if (predates(fence, held?.seen) || (held?.executionGeneration ?? -1) > (receipt.executionGeneration ?? -1) ||
+        (held?.status === 'retired' && held.executionGeneration === receipt.executionGeneration)) { continue }
+
+    after[receipt.id] = { ...receipt, ...(fence ? { seen: fence } : {}) }
+  }
+
+  writeEntries(ownerKey, before, after)
+  const current = getQueuedPrompts(key)
+
+  const next = current.filter(entry => !after[entry.id]?.observedUnknown &&
+    (!entry.observedUnknown || sessionControlOwnerKey(entry.observedUnknown.scope) !== sessionControlOwnerKey(scope)))
+
+  for (const receipt of Object.values(after)) {
+    if (!receipt.observedUnknown || receipt.status !== 'unknown') { continue }
+    next.push({ id: receipt.id, text: '', attachments: [], queuedAt: Date.now(), serverStatus: 'unknown',
+      serverControls: receipt.controls, serverExecutionGeneration: receipt.executionGeneration, observedUnknown: receipt.observedUnknown })
+  }
+
+  if (JSON.stringify(current) !== JSON.stringify(next)) { writeSessionQueue(key, next) }
 }
 
 /** The fence of a canonical frame or snapshot, when it carries a usable one. */

@@ -49,6 +49,8 @@ export const ERROR_CODE_KEYS = [
   'empty_response',
   'loop_error',
   'SESSION_NOT_OWNED',
+  'SESSION_OWNER_UNAVAILABLE',
+  'SESSION_OUTCOME_UNKNOWN',
   // The gateway that owns the chat is mid-turn and could not queue this send: transient.
   'SESSION_OWNER_BUSY',
   // The chat is a scheduled job's session: it only runs that job, so a typed message never runs there.
@@ -343,6 +345,7 @@ export function formatErrorDiagnostics(input: {
 export type ErrorActionId =
   | 'retry'
   | 'retry_at_reset'
+  | 'resume_session'
   | 'update_api_key'
   | 'sign_in_again'
   | 'sign_in_free_tier'
@@ -395,6 +398,8 @@ const CODE_ACTIONS: Partial<Record<ErrorCodeKey, ErrorCardActions>> = {
   payload_too_large: { primary: 'compress', secondary: 'start_new_session' },
   provider_policy_blocked: { primary: 'open_provider_settings', secondary: 'choose_model' },
   SESSION_NOT_OWNED: { primary: 'start_new_session' },
+  SESSION_OWNER_UNAVAILABLE: { primary: 'resume_session' },
+  SESSION_OUTCOME_UNKNOWN: { primary: 'resume_session' },
   ssl_cert_verification: { primary: 'open_setup_guide_tls' },
   truncated: { primary: 'continue' },
   upstream_blocked: { primary: 'switch_provider' },

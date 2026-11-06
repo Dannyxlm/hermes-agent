@@ -18,6 +18,7 @@ interface QueuePanelProps {
   /** Acknowledge a turn the gateway lost across a restart (`unknown` row) so
    *  the queued turns behind it flow again. Absent on non-canonical hosts. */
   onDiscardLost?: (id: string) => void
+  onRefresh?: (id: string) => void
   onEdit: (entry: QueuedPromptEntry) => void
   /** Lift a park (explicit Stop/Esc halt) and let the queue flow again. */
   onResume: () => void
@@ -30,7 +31,7 @@ interface QueuePanelProps {
 }
 
 const entryPreview = (entry: QueuedPromptEntry, c: Translations['composer']) =>
-  entry.displayKind === 'hidden'
+  entry.observedUnknown ? c.queueUpdates : entry.displayKind === 'hidden'
     ? c.hiddenQueued
     : (entry.displayText ?? entry.text).trim() || (entry.attachments.length > 0 ? c.attachmentOnly : c.emptyTurn)
 
@@ -38,12 +39,27 @@ const entryPreview = (entry: QueuedPromptEntry, c: Translations['composer']) =>
  *  part of it — the entry gets an in-place expand/collapse toggle (#45664). */
 const shouldOfferExpandedPreview = (preview: string) => preview.length > 140 || preview.includes('\n')
 
+const queueDismissible = (entry: QueuedPromptEntry) =>
+  entry.queueReceipt?.status !== 'queued' && !(entry.serverStatus === 'unknown' && entry.serverControls?.length === 0)
+
+const queueNeedsAttention = (entry: QueuedPromptEntry) =>
+  entry.serverStatus === 'unknown' || entry.serverStatus === 'started' ||
+  Boolean(entry.queueReceipt && entry.queueReceipt.status !== 'queued')
+
+function QueueReceiptNote({ entry, c }: { entry: QueuedPromptEntry; c: Translations['composer'] }) {
+  const note = entry.queueReceipt?.status === 'terminal' ? c.queueRestartCancelled
+    : entry.queueReceipt?.status === 'unknown' ? c.queueRestartUnknown : null
+
+  return note ? <p className="text-xs text-muted-foreground">{note}</p> : null
+}
+
 export function QueuePanel({
   busy,
   editingId,
   entries,
   onDelete,
   onDiscardLost,
+  onRefresh,
   onEdit,
   onResume,
   onSendNow,
@@ -97,7 +113,7 @@ export function QueuePanel({
           isEditing &&
             'ring-1 ring-inset ring-[color-mix(in_srgb,var(--dt-composer-ring)_40%,transparent)] bg-accent/25'
         )}
-        dismiss={{ label: c.queueDelete, onDismiss: () => onDelete(entry.id) }}
+        dismiss={!queueDismissible(entry) ? undefined : { label: entry.serverStatus === 'started' ? c.stop : c.queueDelete, onDismiss: () => onDelete(entry.id) }}
         key={entry.id}
         leading={<Codicon className="text-muted-foreground/70" name="comment" size="0.8rem" />}
         trailing={
@@ -129,6 +145,8 @@ export function QueuePanel({
               isEditing,
               lost,
               onDiscardLost,
+              onRefresh,
+              refreshLabel: t.common.refresh,
               onEdit,
               onSendNow,
               onSteerNow,
@@ -147,6 +165,7 @@ export function QueuePanel({
           >
             {preview}
           </p>
+          <QueueReceiptNote c={c} entry={entry} />
           {(attachmentsCount > 0 || isEditing || lost) && (
             <div className="mt-0.5 flex items-center gap-1.5 text-[0.64rem] text-muted-foreground/75">
               {lost && <span data-slot="queue-lost-note">{c.queueLostNote}</span>}
@@ -165,8 +184,8 @@ export function QueuePanel({
 
   // A lost (`unknown`) turn pauses the FIFO until someone acknowledges it: its card and Discard
   // must be on screen without expanding the section, and the header names the pause (#134889 NF2).
-  const lostEntries = entries.filter(entry => entry.serverStatus === 'unknown')
-  const paused = parked || lostEntries.length > 0
+  const attentionEntries = entries.filter(queueNeedsAttention)
+  const paused = parked || entries.some(entry => entry.serverStatus === 'unknown')
 
   return (
     <StatusSection
@@ -186,8 +205,8 @@ export function QueuePanel({
         ) : undefined
       }
       icon={<Codicon className="text-muted-foreground/70" name={paused ? 'debug-pause' : 'layers'} size="0.8rem" />}
-      label={paused ? c.queuedPaused(entries.length) : c.queued(entries.length)}
-      preview={lostEntries.length > 0 ? lostEntries.map(renderRow) : undefined}
+      label={entries.some(entry => entry.queueReceipt || entry.serverStatus === 'started') ? c.queueUpdates : paused ? c.queuedPaused(entries.length) : c.queued(entries.length)}
+      preview={attentionEntries.length > 0 ? attentionEntries.map(renderRow) : undefined}
     >
       {entries.map(renderRow)}
     </StatusSection>
@@ -195,6 +214,7 @@ export function QueuePanel({
 }
 
 interface EntryActionsArgs {
+  refreshLabel: string
   busy: boolean
   c: Translations['composer']
   canSteer: boolean
@@ -203,6 +223,7 @@ interface EntryActionsArgs {
   isEditing: boolean
   lost: boolean
   onDiscardLost?: (id: string) => void
+  onRefresh?: (id: string) => void
   onEdit: (entry: QueuedPromptEntry) => void
   onSendNow: (id: string) => void
   onSteerNow?: (id: string) => void
@@ -212,6 +233,7 @@ interface EntryActionsArgs {
  *  server row gets only the edit/steer its owner serves, never send-next: reordering it would
  *  break the owner's one FIFO. */
 function renderEntryActions({
+  refreshLabel,
   busy,
   c,
   canSteer,
@@ -220,11 +242,12 @@ function renderEntryActions({
   isEditing,
   lost,
   onDiscardLost,
+  onRefresh,
   onEdit,
   onSendNow,
   onSteerNow
 }: EntryActionsArgs) {
-  return lost && onDiscardLost ? (
+  return lost && onDiscardLost && (!entry.serverControls || entry.serverControls.includes('resolve_unknown')) ? (
     <Tip label={c.queueLostDiscardTip}>
       <Button
         aria-label={c.queueLostDiscard}
@@ -240,6 +263,11 @@ function renderEntryActions({
     </Tip>
   ) : (
     <>
+      {onRefresh && entry.serverExecutionGeneration !== undefined && (
+        <Button aria-label={refreshLabel} onClick={() => onRefresh(entry.id)} size="micro" type="button" variant="text">
+          {refreshLabel}
+        </Button>
+      )}
       {(!entry.serverStatus || entry.serverControls?.includes('replace')) && (
         <Tip label={c.queueEdit}>
           <Button

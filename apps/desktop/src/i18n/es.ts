@@ -3911,6 +3911,9 @@ export const esOverrides = {
     queueDelete: 'Borrar',
     queueResume: 'Reanudar',
     queueResumeTip: 'La cola se pausó al detener; reanuda el envío de los turnos en cola',
+    queueUpdates: "Estado de los mensajes",
+    queueRestartCancelled: "Mensaje en cola cancelado o interrumpido. No se reenviará.",
+    queueRestartUnknown: "Resultado del mensaje en cola desconocido tras reiniciar. Revisa el chat; no lo reenvíes automáticamente.",
     queueLostNote: 'Turno perdido durante el reinicio',
     restoreImageDraft: 'Restaurar borrador con imagen',
     queueCancelFailed: 'No se pudo quitar el turno en cola',
@@ -4989,6 +4992,8 @@ export const esOverrides = {
           body: (provider: string) =>
             `Hermes no pudo conectar con ${provider} para este chat. Reinténtalo; si sigue fallando, revisa el proveedor en Configuración.`
         },
+        SESSION_OWNER_UNAVAILABLE: { title: "Propietario del chat no disponible", body: "Vuelve a conectar con el propietario y reanuda el chat para actualizar su estado. El mensaje no se ha reenviado." },
+        SESSION_OUTCOME_UNKNOWN: { title: "El turno anterior requiere revisión", body: "Reanuda el chat y usa Descartar en la tarjeta del turno con resultado desconocido. No reenvíes el turno incierto." },
         SESSION_NOT_OWNED: {
           title: 'Chat abierto en otro sitio',
           body: 'Este chat está abierto en otra ventana de Hermes o en un terminal. Empieza un chat nuevo aquí o ciérralo allí primero.'
@@ -5064,6 +5069,7 @@ export const esOverrides = {
       errorOpenBillingSettings: 'Abrir ajustes de facturación',
       errorRetryScheduled: (time: string, wait: string) => `Reintentando a las ${time}, dentro de ${wait}`,
       errorRetryScheduledCancel: 'Cancelar',
+      errorResumeSession: "Reanudar chat",
       errorStartNewSession: 'Iniciar sesión nueva',
       errorSwitchProvider: 'Cambiar proveedor',
       errorChooseModel: 'Elegir un modelo',
