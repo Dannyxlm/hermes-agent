@@ -44,8 +44,11 @@ export function requestFamily(target: FamilyTarget, overview: boolean): Promise<
 
 export function familyChatTarget(target: FamilyTarget, node: FamilyDisplayNode, answer: boolean): FamilyTarget | null {
   if (answer) {
-    return node.actions.includes('answer') && node.needs_you?.session_id
-      ? targetForProfile(target, node.needs_you.profile, node.needs_you.session_id) : null
+    // needs_you.session_id is a live control handle, not a stored transcript id.
+    // Resume the stored child; the ordinary chat attach resolves its live owner and pending requests.
+    return node.actions.includes('answer') && node.needs_you?.session_id && node.session_id &&
+      node.needs_you.profile === node.profile
+      ? targetForProfile(target, node.profile, node.session_id) : null
   }
 
   return node.actions.includes('open') && node.session_id

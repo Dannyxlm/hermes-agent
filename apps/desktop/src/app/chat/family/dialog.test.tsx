@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { familyTranslations } from '@/i18n/family'
 
-import { familyTarget, type FamilyTarget } from './actions'
+import { familyChatTarget, familyTarget, type FamilyTarget } from './actions'
 import { FamilyDialog } from './dialog'
 import { type FamilyDisplayNode, familyRows, parseFamily } from './model'
 
@@ -56,9 +56,9 @@ describe('Family rendered native-contract browser', () => {
     expect(rpc.mock.calls.every(call => call[2] === 'session.family')).toBe(true)
   })
 
-  it('offers only advertised actions, answering the exact needs-you chat rather than the parent', async () => {
+  it.each(['clarify', 'approval'] as const)('opens the stored child for %s, not its logical control handle', async kind => {
     rpc.mockResolvedValue(tree([
-      node({ status: 'needs_you', actions: ['answer'], needs_you: { kind: 'clarify', profile: 'reviewer', session_id: 'question-chat' } }),
+      node({ profile: 'reviewer', session_id: 'compressed-tip', status: 'needs_you', actions: ['answer'], needs_you: { kind, profile: 'reviewer', session_id: 'logical-control' } }),
       node({ node_id: 'helper:1', title: 'Read-only helper', session_id: null, actions: ['stop'], status: 'unknown' })
     ]))
     render(<FamilyDialog onClose={vi.fn()} target={target} />)
@@ -67,7 +67,7 @@ describe('Family rendered native-contract browser', () => {
     expect(screen.queryByRole('button', { name: /stop|resume/i })).toBeNull()
     expect(screen.getByText('No chat action available')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Answer in chat' }))
-    await waitFor(() => expect(open).toHaveBeenCalledWith('question-chat', expect.objectContaining({
+    await waitFor(() => expect(open).toHaveBeenCalledWith('compressed-tip', expect.objectContaining({
       route: { connectionId: 'box', profile: 'reviewer', targetProfile: 'reviewer', mode: 'remote' }
     })))
   })
@@ -138,6 +138,13 @@ describe('Family rendered native-contract browser', () => {
 })
 
 describe('Family identity and projection boundary', () => {
+  it('keeps stored navigation separate from control identity and rejects unbound answer targets', () => {
+    const pending = node({ actions: ['answer'], needs_you: { kind: 'clarify', profile: 'default', session_id: 'logical-control' } })
+    expect(familyChatTarget(target, pending, true)).toEqual({ ...target, sessionId: 'stored-child' })
+    expect(familyChatTarget(target, { ...pending, session_id: null }, true)).toBeNull()
+    expect(familyChatTarget(target, { ...pending, profile: 'different-profile' }, true)).toBeNull()
+    expect(familyChatTarget(target, { ...pending, actions: [] }, true)).toBeNull()
+  })
   it('translates a runtime selection to its stored parent before reading', () => {
     expect(familyTarget('runtime-parent')).toEqual(target)
     owner.mockReturnValue(undefined)
