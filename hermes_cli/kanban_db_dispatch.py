@@ -1181,11 +1181,10 @@ class _CrashSweep:
 
     crashed: list[str] = field(default_factory=list)
     rate_limited: list[str] = field(default_factory=list)
-    # ``(task_id, pid, claimer, dead_worker)``: accounted after the txn via
-    # ``_record_task_failure`` (needs its own write_txn).
+    # ``(task_id, pid, claimer, dead_worker)``: accounted in the reclaim txn.
     crash_details: list[tuple[str, int, str, _DeadWorker]] = field(default_factory=list)
-    # Worker-exit observer payloads, fired only after every reclaim/accounting
-    # txn has committed.
+    auto_blocked: list[str] = field(default_factory=list)
+    # Worker-exit observers fire only after the reclaim/accounting commit.
     exited_hook_payloads: list[dict] = field(default_factory=list)
 
 
@@ -1267,11 +1266,13 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
             else:
                 sweep.crashed.append(row["id"])
                 sweep.crash_details.append((row["id"], pid, row["claim_lock"], dead))
+        # Commit accounting with reclaim: a cleared claim cannot be rediscovered.
+        sweep.auto_blocked = _account_crashes(conn, sweep.crash_details)
     return sweep
 
 
 def _account_crashes(conn: sqlite3.Connection, crash_details: list) -> list[str]:
-    """Count each crash against the breaker; returns the task ids it tripped.
+    """Count each crash under the reclaim txn; returns the task ids it tripped.
 
     Protocol violations get a BOUNDED violation-only budget independent of
     ``consecutive_failures`` (per-task ``max_retries`` takes precedence);
@@ -1363,16 +1364,14 @@ def detect_crashed_workers(conn: sqlite3.Connection, board: Optional[str] = None
     from hermes_cli.kanban_worker_resources import collect_worker_scopes
 
     sweep = _reclaim_dead_workers(conn, board=board)
-    # Outside the main txn: account each crash and maybe trip the breaker.
-    auto_blocked = _account_crashes(conn, sweep.crash_details) if sweep.crash_details else []
     collect_worker_scopes(sweep.crash_details)
     # Side-channel attributes keep the public ``list[str]`` return stable;
     # ``dispatch_once`` reads them to populate ``DispatchResult``. Rate-limited
     # requeues did NOT count a failure and are NOT crashes.
-    detect_crashed_workers._last_auto_blocked = auto_blocked  # type: ignore[attr-defined]
+    detect_crashed_workers._last_auto_blocked = sweep.auto_blocked  # type: ignore[attr-defined]
     detect_crashed_workers._last_rate_limited = sweep.rate_limited  # type: ignore[attr-defined]
-    # Fired only now, after the reclaim txn AND breaker accounting have
-    # committed, so subscribers always observe fully durable board state.
+    # Fired only after the atomic reclaim/accounting txn has committed, so
+    # subscribers always observe fully durable board state.
     if sweep.exited_hook_payloads and _kb._kanban_observer_consumed("on_kanban_worker_exited"):
         _board = _kb.get_current_board()
         for hook_fields in sweep.exited_hook_payloads:
@@ -1436,7 +1435,8 @@ def _record_task_failure(
     if failure_limit is None:
         failure_limit = DEFAULT_FAILURE_LIMIT
     error = error[:500]
-    with _kb.write_txn(conn):
+    # No post-commit effects: compose atomically with reclaim via a savepoint.
+    with _kb.write_txn(conn, allow_nested=True):
         row = conn.execute(
             "SELECT consecutive_failures, status, max_retries, current_run_id "
             "FROM tasks WHERE id = ?", (task_id,),
