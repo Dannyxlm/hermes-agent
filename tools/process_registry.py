@@ -38,6 +38,7 @@ from tools.process_registry_output_log import ProcessOutputLogMixin, open_output
 from tools.process_registry_ownership import ProcessOwnershipMixin
 from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
+from tools.process_registry_delivery import mark_completion_consumed
 from tools.process_registry_activity import new_process_session
 from tools.process_registry_launch import ProcessLaunchMixin
 from tools.process_launches import fields as launch_fields
@@ -1400,24 +1401,8 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         self._release_finished_handles(session)
         self._write_checkpoint()
         if was_running and session.notify_on_complete:
-            notification = {
-                "type": "completion",
-                "session_id": session.id,
-                "session_key": session.session_key,
-                "task_id": session.task_id,
-                "owner_task_id": session.owner_task_id,
-                "command": session.command,
-                **launch_fields(session),
-                **({"handoff_note": session.handoff_note} if session.handoff_note else {}),
-                **self._exit_fields(session),
-                # A consumer that relays the output (a bot DM's reply) must know it is not whole.
-                **_completion_output(session),
-                # Stable producer identity across checkpoint recovery (unlike a
-                # consumer-observed completion timestamp).
-                "started_at": session.started_at,
-            }
-            _redact_process_result(notification)
-            self.completion_queue.put(notification)
+            from tools.process_registry_delivery import completion_event
+            self.completion_queue.put(completion_event(session))
 
     @staticmethod
     def _exit_fields(session: ProcessSession) -> dict:
@@ -1603,6 +1588,9 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
     @staticmethod
     def _owns_event(evt: dict, session_key: str, owns_event, is_async_delegation: bool) -> bool:
         """Routing verdict for one drained event (see drain_notifications); False = requeue."""
+        home = evt.get("_process_result_home")
+        if home and Path(home).resolve() != get_hermes_home().resolve():
+            return False
         evt_session_key = str(evt.get("session_key") or "")
         requires_positive_proof = is_async_delegation or bool(evt_session_key or evt.get("origin_ui_session_id"))
         if owns_event is not None and requires_positive_proof:
@@ -1614,7 +1602,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             return evt_session_key == session_key
         # Restored payloads from a previous process: an unfiltered drain cannot prove
         # ownership, so leave them for the owner.
-        return not (is_async_delegation and evt.get("restored"))
+        return not ((is_async_delegation or evt.get("_process_completion_recovery")) and evt.get("restored"))
 
     def restore_completions(self) -> int:
         """Rehydrate durable delegation completions from the LAUNCH profile's ledger, once per
@@ -1631,7 +1619,9 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         token = set_hermes_home_override(None)
         try:
             from tools.async_delegation import restore_undelivered_completions
-            return restore_undelivered_completions(self.completion_queue)
+            from tools.process_registry_delivery import restore_process_completions
+            return (restore_process_completions(self.completion_queue)
+                    + restore_undelivered_completions(self.completion_queue))
         except Exception as exc:
             logger.warning("Could not restore async delegation completions: %s", exc)
             return 0
@@ -1664,6 +1654,9 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             if not self._owns_event(evt, session_key, owns_event, is_async_delegation):
                 requeue.append(evt)
                 continue
+            from tools.process_registry_delivery import legacy_notification_ready, legacy_notification_handoff
+            if not legacy_notification_ready(evt):
+                continue
             # Routing happened first so a foreign session cannot drop the owner's
             # event via its own consumed/observed state.
             _evt_sid = evt.get("session_id", "")
@@ -1681,6 +1674,9 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 if surface_child is None:
                     surface_child = self._surface_child_process_notifications()
                 if not should_surface_notification(evt, surface_child=surface_child):
+                    if evt.get("type") == "completion":
+                        from tools.process_registry_delivery import settle_notification
+                        settle_notification(evt, "terminal", reason="suppressed")
                     logger.debug(
                         "Suppressed subagent-owned process notification "
                         "(delegation.surface_child_process_notifications=false): "
@@ -1688,7 +1684,8 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                         evt.get("type", "completion"), _evt_sid, _evt_task_id)
                     continue
             if text := format_process_notification(evt):
-                results.append((evt, text))
+                if legacy_notification_handoff(evt):
+                    results.append((evt, text))
         for evt in requeue:
             self.completion_queue.put(evt)
         return results
@@ -1859,7 +1856,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             **self._status_head(session), "output": "\n".join(selected),
             "total_lines": total_lines, "showing": f"{len(selected)} lines"}
         if exited and observed_completion_output and not finalizing:
-            self._completion_consumed.add(session_id)
+            mark_completion_consumed(self, session)
         return result
 
     def wait(self, session_id: str, timeout: int | None = None) -> dict:
@@ -1893,7 +1890,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             self._reconcile_local_exit(session)  # orphaned-pipe reader guard
             result = None
             if session.exited and not self._reader_finalizing(session):
-                self._completion_consumed.add(session_id)
+                mark_completion_consumed(self, session)
                 result = self._exit_snapshot(session, "exited")
             elif _is_interrupted():
                 result = {
@@ -1969,7 +1966,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             # Only suppress the autonomous turn after its output is present in
             # the explicit kill result, matching wait/log consumption.
             if consume_output and not finalizing:
-                self._completion_consumed.add(session_id)
+                mark_completion_consumed(self, session)
             return result
         with session._lock:
             session._launch_pending_kills += 1
@@ -2020,7 +2017,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             with session._lock:
                 output = _completion_output(session)
                 if consume_output:
-                    self._completion_consumed.add(session_id)
+                    mark_completion_consumed(self, session)
                 session.exited = True
                 session.exit_code = -15  # SIGTERM
                 session.completion_reason = "killed"
@@ -2083,7 +2080,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 with session._lock:
                     output = _completion_output(session)
                 if consume_output:
-                    self._completion_consumed.add(session_id)
+                    mark_completion_consumed(self, session)
                 # No waitable handle, so this is not a collected exit. Close the
                 # entry without queueing a completion, and do not signal a PID
                 # whose start time does not match.

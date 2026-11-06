@@ -1,7 +1,7 @@
 """Bounded, profile-local receipts for completed terminal processes.
 
-Receipts are read through process_manage, never replayed as notifications or
-adopted as live PIDs. Each producer writes its own file so independent one-shot
+Receipts are read through process_manage, never adopted as live PIDs. New receipts
+also retain explicit completion obligations; legacy ambiguous history is not replayed. Each producer writes its own file so independent one-shot
 parents cannot overwrite each other's results in the running-PID checkpoint.
 """
 
@@ -30,21 +30,33 @@ _RESULT_FIELDS = (
 def _result_paths():
     """Prune by completion time, not start time (jobs can take days)."""
     directory = get_hermes_home() / "logs" / "process-results"
-    cutoff = time.time() - RESULT_RETENTION_SECONDS
+    if not directory.exists():
+        return []
+    from hermes_cli.active_sessions import _FileLock
+    with _FileLock(directory.with_suffix(".lock")):
+        return _retained_paths(directory, time.time() - RESULT_RETENTION_SECONDS)
+
+
+def _retained_paths(directory, cutoff):
     retained = []
+    obligations = []
     for path in directory.glob("proc_*.json"):
         try:
             modified = path.stat().st_mtime
+            notification = json.loads(path.read_text(encoding="utf-8-sig")).get("notification") or {}
+            if notification.get("status") in {"pending", "unknown"}:
+                obligations.append(path)
+                continue
             if modified < cutoff:
                 path.unlink(missing_ok=True)
             else:
                 retained.append((modified, path))
-        except FileNotFoundError:
-            continue  # Another producer pruned it.
+        except (FileNotFoundError, ValueError):
+            continue  # Another producer pruned it, or an unreadable receipt needs inspection.
     retained.sort(key=lambda item: (item[0], item[1].name), reverse=True)
     for _, path in retained[MAX_RETAINED_RESULTS:]:
         path.unlink(missing_ok=True)
-    return [path for _, path in retained[:MAX_RETAINED_RESULTS]]
+    return obligations + [path for _, path in retained[:MAX_RETAINED_RESULTS]]
 
 
 def save_completed_result(session) -> None:
@@ -64,11 +76,22 @@ def save_completed_result(session) -> None:
         from hermes_constants import assert_named_profile_home_live
         assert_named_profile_home_live(directory)
         make_user_dir(directory, mode=0o700, parents=True, exist_ok=True)
-        atomic_json_write(directory / f"{session.id}.json", record, mode=0o600)
+        from hermes_cli.active_sessions import _FileLock
+        from tools.process_registry_delivery import new_notification, result_path
+        path = result_path(session.id)
+        with _FileLock(directory.with_suffix(".lock")):
+            previous = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+            if previous.get("started_at") == session.started_at and "notification" in previous:
+                record["notification"] = previous["notification"]
+            elif session.notify_on_complete:
+                record["notification"] = new_notification(session)
+            atomic_json_write(path, record, mode=0o600)
         _result_paths()
     except OSError:
         # Preserve live delivery on disk failure, but never silently claim durability.
         logger.warning("Could not retain completed process result %s", session.id, exc_info=True)
+        if session.notify_on_complete:
+            raise  # Never discard the running checkpoint before its obligation is durable.
 
 
 def _owns_result(owner: str, parent: str | None) -> bool:

@@ -31,14 +31,19 @@ def completion_admission(runner, event):
         return None
     from gateway.session_detached import route_entry
     entry = route_entry(authority, str(event.get('session_key') or ''))
-    if entry is None:
-        return None
-    from hermes_state_runtime import list_session_admissions
     identity = producer_identity(runner, event)
-    for row in list_session_admissions(authority.db, session_id=_route_owner(authority, entry), pending_only=False):
-        descriptor = row['payload'].get('local_automation_v1') or row['payload'].get('native_text_v1', {}).get('automation', {})
-        if identity in descriptor.get('identities', [descriptor.get('identity')]):
-            return row
+    # A lost ACK still belongs to its original owner after /new moves or removes the route.
+    parent = str(event.get('_process_result_parent') or event.get('parent_session_id') or '')
+    owners = [_route_owner(authority, entry)] if entry is not None else []
+    if parent:
+        owners.extend((parent, authority.logical_owner(parent)))
+    for owner in dict.fromkeys(owners):
+        for row in list_session_admissions(authority.db, session_id=owner, pending_only=False):
+            if row['principal_id'] != 'automation:' + str(event.get('session_key') or ''):
+                continue
+            descriptor = _descriptor(row['payload'])
+            if identity in descriptor.get('identities', [descriptor.get('identity')]):
+                return row
     return None
 
 
@@ -95,7 +100,24 @@ async def admit_process_notice(runner, authority, adapter, event, evt):
     if evt.get('type') != 'completion':
         return await authority.admit_automation(adapter, event, identity)
     async with _heartbeat_lock(runner):
-        receipt = await _admit_folded_completion(authority, adapter, event, evt, identity)
+        from tools.process_registry_delivery import admission_process_events, notification_state, settle_notification
+        from gateway.process_completion_delivery import acknowledge_process_admission, reconcile_process_admission
+        durable = admission_process_events(evt)
+        for member in durable:
+            if notification_state(member)["status"] != "pending":
+                reconcile_process_admission(runner, member)
+                raise RuntimeStoreError("outcome_unknown")
+        for member in durable:
+            if not settle_notification(member, "unknown", reason="admission_in_progress", expected_status="pending"):
+                raise RuntimeStoreError("outcome_unknown")
+        try:
+            receipt = await _admit_folded_completion(authority, adapter, event, evt, identity)
+        except RuntimeStoreError:
+            for member in durable:
+                if reconcile_process_admission(runner, member) is None:
+                    settle_notification(member, "pending", reason="admission_refused")
+            raise
+        acknowledge_process_admission(evt, receipt)
         await withdraw_process_ticks(runner, evt)
         return receipt
 

@@ -91,6 +91,12 @@ class ProcessCheckpointMixin:
         recovered = 0
         unresolved_scope_entries: list[dict[str, Any]] = []
         for entry in entries:
+            from tools.process_registry_delivery import notification_state
+            if notification_state({"type": "completion", "session_id": entry.get("session_id"),
+                                   "started_at": entry.get("started_at"),
+                                   "session_key": entry.get("session_key", ""),
+                                   "parent_session_id": entry.get("parent_session_id", "")}):
+                continue  # The result already committed; never re-adopt its old running checkpoint.
             pid, pid_scope = entry.get("pid"), entry.get("pid_scope", "host")
             if not pid:
                 continue

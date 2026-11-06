@@ -96,6 +96,11 @@ def _session_owns_notification_event(sid: str, session: dict, evt: dict) -> bool
     resolved matches) — the fail-closed gate for addressed notifications, without the orphan-adoption fallback."""
     if session.get("_finalized"):
         return False
+    if evt.get("_process_result_home"):
+        from hermes_constants import get_hermes_home
+        from pathlib import Path
+        if Path(evt["_process_result_home"]).resolve() != get_hermes_home().resolve():
+            return False
     # A completion replayed at process start has no in-process owner. A matching
     # persisted key alone can belong to a detached runtime whose old lease survived;
     # requiring a current client prevents it from spending a full model turn unseen.
@@ -608,6 +613,10 @@ def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None
     if diagnostic_process_event(evt):
         kwargs.setdefault("display_metadata", {})["notification_category"] = "diagnostic"
     try:
+        from tools.process_registry_delivery import legacy_notification_handoff
+        if not legacy_notification_handoff(evt):
+            _notif_release_turn(session)
+            return
         if not _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
                              "notification poller dispatch failed", report_ownership_refusal=False, **kwargs):
             _notif_defer_event(evt, claim)
@@ -638,6 +647,9 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
     if not owned and _notification_event_requires_owner(evt) and not _session_owns_notification_event(sid, session, evt):
         _notif_unowned_event(sid, evt, deferred)
         return True
+    from tools.process_registry_delivery import legacy_notification_ready
+    if not legacy_notification_ready(evt):
+        return True
     if evt_type == "completion" and registry.is_completion_consumed(evt.get("session_id", "")):
         return True
     text = fmt(evt)
@@ -658,6 +670,9 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
     if evt_type != "async_delegation" and _background_notifications_off(session):
         # The user opted out of process-driven agent wakes: the status row above is the whole
         # delivery. Subagent results are not process notifications and still land.
+        if evt_type == "completion":
+            from tools.process_registry_delivery import settle_notification
+            settle_notification(evt, "terminal", reason="suppressed")
         return True
     if evt_type == "completion" and completions is not None:
         completions.append((evt, text))
@@ -702,7 +717,9 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
     try:
         for event, event_text in notifications:
             if (claim := claim_event_delivery(event, "tui-completion-batch")) is not None:
-                claimed.append((event, event_text, claim))
+                from tools.process_registry_delivery import legacy_notification_handoff
+                if legacy_notification_handoff(event):
+                    claimed.append((event, event_text, claim))
         batch = ProcessNotificationBatch(tuple((event, event_text) for event, event_text, _claim in claimed))
         text = batch.render(registry)
     except Exception as exc:
