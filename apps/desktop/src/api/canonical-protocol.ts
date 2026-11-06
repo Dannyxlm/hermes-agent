@@ -3,6 +3,8 @@
 
 import { randomUuid } from '@hermes/shared'
 
+import { canonicalUnknownRecovery } from './canonical-unknown-recovery'
+
 export const CANONICAL_GATEWAY_PROTOCOL = 'hermes-gateway-v1'
 
 /** Dial `/api/ws` or a sibling stream beside it. A local gateway's one-use ticket leaves the URL
@@ -257,7 +259,7 @@ export class CanonicalDesktopProtocol {
   // admission_id → generation of a turn the authority recovered as `unknown`
   // (owner died mid-turn). Only these rows may be acknowledged, and only with
   // the generation the authority stamped on them, never the live one.
-  private unknownAdmissions = new Map<string, { session_id: string; profile: string; generation: number }>()
+  private unknownAdmissions = new Map<string, { admission_id: string; session_id: string; profile: string; generation: number }>()
   // [owner, model payload] → the owner's one-time token from a `confirmation_required` model
   // answer (a guarded target: cost / data policy / large context; nothing was written). The
   // dialog's resend (`confirm_expensive_model: true`, the legacy handshake every Desktop surface
@@ -423,16 +425,21 @@ export class CanonicalDesktopProtocol {
     }
 
     if (method === 'prompt.resolve_unknown') {
-      const lost = this.unknownAdmissions.get(canonicalSessionKey(params.admission_id, params.profile))
-
-      if (!lost || lost.session_id !== params.session_id || lost.profile !== canonicalProfile(params.profile)) { throw new Error('Admission is not an unknown lost turn; reopen the session before acknowledging') }
-
-      return { session_id: params.session_id, admission_id: params.admission_id, execution_generation: lost.generation }
+      return this.prepareUnknownDiscard(params)
     }
 
     if (method === 'approval.respond' || method === 'clarify.respond') { return this.preparePromptResponse(method, params) }
 
     return canonicalProducerFrame(method, params)
+  }
+
+  private prepareUnknownDiscard(params: Record<string, unknown>): Record<string, unknown> {
+    const lost = this.unknownAdmissions.get(canonicalSessionKey(params.admission_id, params.profile))
+
+    if (!lost || lost.session_id !== params.session_id || lost.profile !== canonicalProfile(params.profile) ||
+        (params.execution_generation !== undefined && params.execution_generation !== lost.generation)) { throw new Error('Admission is not an unknown lost turn; reopen the session before acknowledging') }
+
+    return { session_id: params.session_id, admission_id: params.admission_id, execution_generation: lost.generation }
   }
 
   // Metadata, branch and typed slash directives that travel as canonical `session.mutate`; null otherwise.
@@ -574,8 +581,9 @@ export class CanonicalDesktopProtocol {
     }
 
     for (const row of pending) {
-      if (row?.status === 'unknown' && typeof row.admission_id === 'string' && typeof row.execution_generation === 'number') {
-        this.unknownAdmissions.set(canonicalSessionKey(row.admission_id, profile), { session_id: sid, profile, generation: row.execution_generation })
+      if (row?.status === 'unknown' && typeof row.admission_id === 'string' && typeof row.execution_generation === 'number' &&
+          Number.isSafeInteger(row.execution_generation) && row.execution_generation >= 0) {
+        this.unknownAdmissions.set(canonicalSessionKey(row.admission_id, profile), { admission_id: row.admission_id, session_id: sid, profile, generation: row.execution_generation })
       }
     }
   }
@@ -769,6 +777,10 @@ export class CanonicalDesktopProtocol {
   // the compress action repaints only from `messages`, so resume the session
   // through the normal request path (which also re-primes revision/generation).
   async settle(method: string, params: Record<string, unknown>, value: any, request: (method: string, params: Record<string, unknown>) => Promise<any>): Promise<any> {
+    if (['session.resume', 'session.activate', 'session.info'].includes(method)) {
+      return this.recoverUnknownSnapshot(params, value, request, method === 'session.info')
+    }
+
     if (method !== 'session.compress' && !(method === 'slash.exec' && params.operation === 'compress')) { return value }
 
     // `--preview` in the focus argument is a read-only report: no transcript changed.
@@ -776,5 +788,27 @@ export class CanonicalDesktopProtocol {
     const resumed = await request('session.resume', { session_id: params.session_id, ...(params.profile !== undefined ? { profile: params.profile } : {}) })
 
     return { ...value, messages: resumed.messages, info: resumed.info, host_ack: { output: `compressed context: ${value.message_count} messages retained` } }
+  }
+
+  private async recoverUnknownSnapshot(params: Record<string, unknown>, value: any,
+    request: (method: string, params: Record<string, unknown>) => Promise<unknown>, infoOnly: boolean): Promise<any> {
+    const sid = value.session_id ?? params.session_id
+    const profile = canonicalProfile(params.profile)
+    const first = [...this.unknownAdmissions.values()].find(row => row.session_id === sid && row.profile === profile)
+
+    if (!first) { return value }
+
+    const identity = { admission_id: first.admission_id, execution_generation: first.generation,
+      ref: { profile_id: profile, session_id: sid } }
+
+    const receipt = await canonicalUnknownRecovery(identity, request)
+
+    // This is the renderer's existing metadata-receipt projection, not a field served by
+    // canonical resume/info. Only the earliest barrier is read, on this request's owner route.
+    // A failed read revokes the grant, not the admission: absence was not proved.
+    const info = { ...(infoOnly ? value : value.info), stored_session_id: value.stored_session_id ?? sid,
+      blocking_unknown: [receipt ?? { ...identity, status: 'unknown', controls: [] }] }
+
+    return infoOnly ? info : { ...value, info }
   }
 }

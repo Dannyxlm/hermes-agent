@@ -167,7 +167,8 @@ it('Refresh reads the forwarded receipt without resubmitting; the resulting unkn
   expect(request.mock.calls.some(([method]) => method === 'prompt.submit')).toBe(false)
 })
 
-it.each(['runtime-1', null])('Discard on an observed barrier uses the exact owner admission/generation (runtime=%s)', async sessionId => {
+it('Discard on an observed barrier uses the exact owner admission/generation and live UI runtime', async () => {
+  const sessionId = 'runtime-1'
   applyRuntimeInfo({ stored_session_id: 'stored', pending_submissions: [], blocking_unknown: [{
     admission_id: 'other-viewer', ref: { profile_id: 'default', session_id: 'stored' },
     status: 'unknown', execution_generation: 12, controls: ['resolve_unknown']
@@ -180,7 +181,7 @@ it.each(['runtime-1', null])('Discard on an observed barrier uses the exact owne
   const inputs = renderSlot(request, { sessionId })
   fireEvent.click(screen.getByRole('button', { name: en.composer.queueLostDiscard }))
   await vi.waitFor(() => expect(request).toHaveBeenCalledWith('prompt.resolve_unknown', {
-    session_id: sessionId ?? 'stored', admission_id: 'other-viewer', execution_generation: 12
+    session_id: sessionId, admission_id: 'other-viewer', execution_generation: 12
   }))
   await vi.waitFor(() => expect(getQueuedPrompts('stored').map(entry => entry.id)).toEqual(['quiet-local']))
   expect(inputs.sendQueuedNow).not.toHaveBeenCalled()

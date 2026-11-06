@@ -370,7 +370,11 @@ export function reconcilePendingSubmissions(storedId: string, value: unknown, fe
   const before = readPendingSubmissions(key)
   const known = { ...before }
   const ownerKey = sessionControlOwnerKey(scope)
-  const { receipts, admissionByInput } = collectReceipts(value, known, ownerKey)
+  // The owner-verified barrier slice (including revoked grants and terminal acknowledgements)
+  // wins over the same admission's ordinary pending row, even in a stale concurrent resume.
+  const observed = readPendingSubmissions(sessionControlKey(storedId, scope))
+  const pending = value.filter(raw => !observed[raw?.admission_id]?.observedUnknown)
+  const { receipts, admissionByInput } = collectReceipts(pending, known, ownerKey)
 
   const stillPending = new Set(Object.values(known).filter(entry =>
     entry.status && entry.status !== 'retired' && predates(fence, entry.seen) &&
@@ -379,7 +383,7 @@ export function reconcilePendingSubmissions(storedId: string, value: unknown, fe
   const current = getQueuedPrompts(key)
   const next = projectQueue(current, receipts, admissionByInput, stillPending)
 
-  updateKnownReceipts(known, value, ownerKey, fence)
+  updateKnownReceipts(known, pending, ownerKey, fence)
   writeEntries(key, before, known)
 
   if (JSON.stringify(current) !== JSON.stringify(next)) {
@@ -511,8 +515,8 @@ export function observedUnknownMatches(storedId: string, entry: QueuedPromptEntr
 }
 
 /** A successful resolve retires only the exact observed barrier, not a newer generation or local input. */
-export function retireObservedUnknown(storedId: string, entry: QueuedPromptEntry, result: unknown): void {
-  if (!entry.observedUnknown || !result || typeof result !== 'object') { return }
+export function retireObservedUnknown(storedId: string, entry: QueuedPromptEntry, result: unknown): boolean {
+  if (!entry.observedUnknown || !result || typeof result !== 'object') { return false }
   const receipt = result as Record<string, unknown>
   const scope = entry.observedUnknown.scope
   const ownerKey = sessionControlKey(storedId, scope)
@@ -522,12 +526,14 @@ export function retireObservedUnknown(storedId: string, entry: QueuedPromptEntry
 
   if (receipt.admission_id !== entry.id || receipt.status !== 'terminal' ||
       receipt.execution_generation !== entry.serverExecutionGeneration ||
-      ref?.ref.session_id !== entry.observedUnknown.ref.session_id || held?.executionGeneration !== entry.serverExecutionGeneration) { return }
+      ref?.ref.session_id !== entry.observedUnknown.ref.session_id || held?.executionGeneration !== entry.serverExecutionGeneration) { return false }
 
   writeEntries(ownerKey, before, { ...before, [entry.id]: { ...held, status: 'retired', controls: [] } })
   writeSessionQueue(journalKey(storedId), getQueuedPrompts(journalKey(storedId)).filter(current =>
     !current.observedUnknown || current.id !== entry.id || current.serverExecutionGeneration !== entry.serverExecutionGeneration ||
     sessionControlOwnerKey(current.observedUnknown.scope) !== sessionControlOwnerKey(scope)))
+
+  return true
 }
 
 function retireAbsentBlockingUnknown(known: Record<string, PendingSubmission>, receipts: (PendingSubmission | undefined)[] | null, fence?: PendingSnapshotFence): void {

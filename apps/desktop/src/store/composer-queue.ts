@@ -1,6 +1,8 @@
 import { randomUuid, SLASH_COMMAND_RE } from '@hermes/shared'
 import { atom } from 'nanostores'
 
+import type { BlockingUnknownAdmission } from '../../../shared/src/gateway-contract.generated'
+
 import {
   type ComposerAttachment,
   draftHasTerminalChips,
@@ -42,7 +44,7 @@ export interface QueuedPromptEntry {
   serverStatus?: string
   serverExecutionGeneration?: number
   /** Metadata observed on another viewer's barrier, never a submitted input. */
-  observedUnknown?: { ref: { profile_id: string; session_id: string }; scope: SessionControlScope }
+  observedUnknown?: { ref: BlockingUnknownAdmission['ref']; scope: SessionControlScope }
   /** Process-local queue receipt: never a replayable input or a forwarded admission. */
   queueReceipt?: { status: 'queued' | 'terminal' | 'unknown'; outcome: string | null; reason?: string; ownerKey?: string }
   /** The queued-row verbs the owner serves for a server row (`steer`, `replace`); none from an

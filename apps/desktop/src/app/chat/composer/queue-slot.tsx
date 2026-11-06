@@ -128,10 +128,7 @@ export function renderComposerQueueSlot({
       onDiscardLost={
         gateway
           ? id => {
-              // Server-owned row: the authority's pending fanout retires it
-              // from the queue once the acknowledgement commits. Canonical
-              // local sessions key the queue by their own session id, so the
-              // stored key stands in when the runtime id is not bound yet.
+              // An observed barrier requires the live UI runtime, not its canonical ref.
               discardLostPrompt(sessionId, activeQueueSessionKey, id, gateway.request.bind(gateway), queuedPrompts.find(entry => entry.id === id)?.serverExecutionGeneration, queuedPrompts.find(entry => entry.id === id)).catch(
                 (error: unknown) => notifyError(error, t.composer.queueLostDiscard)
               )
