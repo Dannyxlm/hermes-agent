@@ -7,9 +7,10 @@ import { reconcileApprovalModeForProfile } from '@/store/approval-mode'
 import { clearSettledClarifyRequest } from '@/store/clarify'
 import { reconcileSessionCompacting } from '@/store/compaction'
 import { requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
-import { pendingSnapshotFence, reconcilePendingSubmissions } from '@/store/pending-submissions'
+import { pendingSnapshotFence, reconcileBlockingUnknown, reconcileLocalQueueReceipts, reconcilePendingSubmissions } from '@/store/pending-submissions'
 import { followActiveSessionCwd } from '@/store/projects'
 import { clearAllPrompts } from '@/store/prompts'
+import { recordSessionWriteVerdict } from '@/store/read-only-transcript'
 import {
   $activeSessionId,
   $currentCwd,
@@ -32,6 +33,7 @@ import {
   setWorkspaceCwdOwner,
   setYoloActive
 } from '@/store/session'
+import { sessionControlScopeForEvent } from '@/store/session-control-scope'
 import { reportInstallMethodWarning } from '@/store/updates'
 
 import {
@@ -144,12 +146,18 @@ function reconcileSessionInfoPendingSubmissions(ctx: GatewayEventContext): void 
     const storedId =
       payload?.stored_session_id ?? deps.sessionStateByRuntimeIdRef.current.get(sessionId)?.storedSessionId ?? sessionId
 
+    const scope = sessionControlScopeForEvent(event)
+    recordSessionWriteVerdict(storedId, payload?.writable, scope)
+    reconcileLocalQueueReceipts(storedId, payload?.queue_receipts, scope)
+
     // A canonical frame's own place in the session's event order fences absence-based retirement.
     reconcilePendingSubmissions(
       storedId,
       (payload as Record<string, unknown>)?.pending_submissions,
-      pendingSnapshotFence(event.replay_epoch, event.seq)
+      pendingSnapshotFence(event.replay_epoch, event.seq),
+      scope
     )
+    reconcileBlockingUnknown(storedId, payload?.blocking_unknown, scope, pendingSnapshotFence(event.replay_epoch, event.seq), true, payload)
   }
 }
 

@@ -171,6 +171,8 @@ export const zhHantAssistant = {
           title: '無法開始此聊天',
           body: provider => `Hermes 無法為此聊天連線到 ${provider}。請重試；若持續失敗，請在設定中檢查服務商。`
         },
+        SESSION_OWNER_UNAVAILABLE: { title: "對話擁有者無法連線", body: "請重新連線對話擁有者，再恢復以更新狀態。訊息沒有重新傳送。" },
+        SESSION_OUTCOME_UNKNOWN: { title: "先前的回合需要確認", body: "恢復對話以更新待處理回合，再於結果未知的卡片選擇「捨棄」。請勿重送結果不確定的回合。" },
         SESSION_NOT_OWNED: {
           title: '聊天已在別處開啟',
           body: '此聊天已在另一個 Hermes 視窗或終端機中開啟。請在這裡開始新的聊天，或先在那裡關閉它。'
@@ -254,6 +256,7 @@ export const zhHantAssistant = {
       errorOpenBillingSettings: '開啟帳單設定',
       errorRetryScheduled: (time, wait) => `將於 ${time} 重試 — 還剩 ${wait}`,
       errorRetryScheduledCancel: '取消',
+      errorResumeSession: "恢復對話",
       errorStartNewSession: '開始新工作階段',
       errorSwitchProvider: '切換服務商',
       errorSignInAgain: provider => `重新登入 ${provider}`,

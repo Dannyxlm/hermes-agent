@@ -2989,6 +2989,9 @@ export interface Translations extends NoticeTranslations {
     queueSend: string
     queueSteer: string
     queueDelete: string
+    queueUpdates: string
+    queueRestartCancelled: string
+    queueRestartUnknown: string
     queueLostNote: string
     restoreImageDraft: string
     queueCancelFailed: string
@@ -4011,6 +4014,7 @@ export interface Translations extends NoticeTranslations {
       errorRetryScheduled: (time: string, wait: string) => string
       errorRetryScheduledCancel: string
       /** Escape hatch when Retry would only reproduce SESSION_NOT_OWNED (#106217). */
+      errorResumeSession: string
       errorStartNewSession: string
       errorSwitchProvider: string
       errorChooseModel: string

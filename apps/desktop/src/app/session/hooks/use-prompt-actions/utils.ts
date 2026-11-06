@@ -8,6 +8,9 @@ import { type CommandsCatalogLike, filterDesktopCommandsCatalog } from '@/lib/de
 import type { ErrorSurface } from '@/lib/error-surface'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import type { ComposerAttachment } from '@/store/composer'
+import { recordSessionWriteVerdict } from '@/store/read-only-transcript'
+import { captureSessionControlScope } from '@/store/session-control-scope'
+import type { SessionResumeResult } from '@/types/hermes'
 
 import { registerRecoveredRuntime, singleFlightSessionResume, takeRecoveredRuntime } from './single-flight-resume'
 import type { SubmissionDestination } from './submission-destination'
@@ -123,17 +126,21 @@ export async function resumeStoredRuntimeSession(
   // same dead runtime at once, and each independent session.resume mints a new
   // runtime — every loser is an orphan for the reaper. Sharing one in-flight
   // promise makes concurrent recoveries converge on ONE runtime.
+  const verdictScope = captureSessionControlScope(storedSessionId)
+
   const resumed = await singleFlightSessionResume(storedSessionId, async () => {
     const resolveProfile = deps.resolveProfile ?? defaultResolveProfile
     const profile = await resolveProfile(storedSessionId)
 
-    return deps.requestGateway<{ session_id: string }>('session.resume', {
+    return deps.requestGateway<Pick<SessionResumeResult, 'session_id' | 'writable' | 'info'>>('session.resume', {
       session_id: storedSessionId,
       source: 'desktop',
       omit_messages: true,
       ...(profile ? { profile } : {})
     })
   })
+
+  recordSessionWriteVerdict(storedSessionId, resumed?.writable ?? resumed?.info?.writable, verdictScope)
 
   return resumed?.session_id ?? null
 }
@@ -316,9 +323,8 @@ export function isAdmittedSubmissionConflict(error: unknown): boolean {
 
 // prompt.submit refused because another surface (TUI, messaging gateway)
 // holds this session's lease (4090 / SESSION_NOT_OWNED, #106217). The gateway
-// stamps the machine reason in `error.data.reason`; the prose fallback covers
-// backends older than that contract. Deterministic until the owner lets go —
-// Retry reproduces it, so the card offers "Start new session" instead.
+// stamps `error.data.reason`; `ownership_reason` selects the recovery. The prose
+// fallback only identifies the refusal on older backends, not a live foreign owner.
 export function isSessionNotOwnedError(error: unknown): boolean {
   const reason = error instanceof JsonRpcGatewayError ? (error.data as { reason?: unknown } | undefined)?.reason : null
 
@@ -343,13 +349,18 @@ function gatewayReason(error: unknown): unknown {
   return error instanceof JsonRpcGatewayError ? (error.data as { reason?: unknown } | undefined)?.reason : undefined
 }
 
-// The error card's surface for an ownership refusal: another surface owns the session (#106217,
-// deterministic: drop Retry, offer a new session), or the gateway owner is mid-turn and could not
-// queue the send (#140385, transient: Retry once the turn ends), or the chat is stored history
-// nothing can continue (deterministic). Empty for any other error.
+// Ownership is not execution: only an explicit live-elsewhere verdict offers a new chat.
+// Unavailable/unknown owners need a status refresh, never a blind resend. Older refusals
+// cannot prove a live foreign writer, so they take the same conservative refresh path.
 export function ownershipErrorSurface(error: unknown): { errorSurface?: ErrorSurface } {
   if (isSessionNotOwnedError(error)) {
-    return { errorSurface: { layer: 'gateway', code: 'SESSION_NOT_OWNED', retryable: false } }
+    const data = error instanceof JsonRpcGatewayError ? error.data : undefined
+    const reason = data && typeof data === 'object' && 'ownership_reason' in data ? data.ownership_reason : undefined
+
+    const code = reason === 'outcome_unknown' ? 'SESSION_OUTCOME_UNKNOWN'
+      : reason === 'owner_live_elsewhere' ? 'SESSION_NOT_OWNED' : 'SESSION_OWNER_UNAVAILABLE'
+
+    return { errorSurface: { layer: 'gateway', code, retryable: false } }
   }
 
   if (gatewayReason(error) === 'session_read_only') {
@@ -366,14 +377,13 @@ export function ownershipErrorSurface(error: unknown): { errorSurface?: ErrorSur
     : {}
 }
 
-// RT-37: a legacy backend handed this prompt to the gateway that owns the chat, where it waits in
-// the owner's FIFO behind the gateway's turn. The queued-row card (the backend's
-// pending_submissions) stands for it until the owner starts it: no optimistic bubble or spinner.
-export function isForwardedReceipt(
+// A legacy owner-FIFO forward or a durable local queue receipt stands for admitted work.
+// Its authoritative queue card replaces the optimistic bubble/spinner; neither is a new turn yet.
+export function isLegacyQueuedReceipt(
   legacyAccepted: boolean,
-  result: { forwarded?: boolean | null; status?: string } | undefined
+  result: { forwarded?: boolean | null; input_id?: string | null; status?: string } | undefined
 ): boolean {
-  return legacyAccepted && result?.forwarded === true && result.status === 'queued'
+  return legacyAccepted && result?.status === 'queued' && Boolean(result.forwarded === true || result.input_id)
 }
 
 /** TUI-26: the owner ended the session's voice chat on a typed stop phrase and admitted nothing. The
@@ -462,44 +472,29 @@ export function shouldInterruptBeforeRewind(opts: { busy: boolean; sessionId: st
 // through submitPromptText. Without this, a stalled turn (e.g. a context-bloated
 // session whose first call hangs) let the SAME prompt launch several real turns
 // at once (the "message stacked 5×" bug). Keyed by stored/active session id.
-// Entries expire so a hung submit cannot permanently block the session (#83855).
-export const SUBMIT_IN_FLIGHT_TTL_MS = 30_000
+// The RPC owns its hold until acknowledgement or uncertainty is published. A wall-clock
+// expiry cannot prove settlement: prompt.submit may legitimately await its ACK for 30 minutes.
+const submitInFlight = new Map<string, symbol>()
 
-const _submitInFlightAt = new Map<string, number>()
-
-export function isSubmitInFlight(key: string, now = Date.now()): boolean {
-  const acquiredAt = _submitInFlightAt.get(key)
-
-  if (acquiredAt === undefined) {
-    return false
-  }
-
-  if (now - acquiredAt >= SUBMIT_IN_FLIGHT_TTL_MS) {
-    _submitInFlightAt.delete(key)
-
-    return false
-  }
-
-  return true
+export function isSubmitInFlight(key: string): boolean {
+  return submitInFlight.has(key)
 }
 
-/** Returns true when the lock was acquired; false when another fresh hold blocks. */
-export function acquireSubmitInFlight(key: string, now = Date.now()): boolean {
-  if (isSubmitInFlight(key, now)) {
-    return false
-  }
+/** An opaque operation token, or false while another operation owns the submit window. */
+export function acquireSubmitInFlight(key: string): false | symbol {
+  if (isSubmitInFlight(key)) { return false }
+  const token = Symbol(key)
+  submitInFlight.set(key, token)
 
-  _submitInFlightAt.set(key, now)
-
-  return true
+  return token
 }
 
-export function releaseSubmitInFlight(key: string): void {
-  _submitInFlightAt.delete(key)
+export function releaseSubmitInFlight(key: string, token: symbol): void {
+  if (submitInFlight.get(key) === token) { submitInFlight.delete(key) }
 }
 
 export function clearSubmitInFlight(): void {
-  _submitInFlightAt.clear()
+  submitInFlight.clear()
 }
 
 export function base64FromDataUrl(dataUrl: string): string {

@@ -51,7 +51,7 @@ afterEach(() => {
 })
 
 describe('gateway `error` event → error card + toast', () => {
-  it('stamps SESSION_NOT_OWNED on a live-owner refusal so the card drops Retry', () => {
+  it('does not infer a live foreign owner from an untyped legacy refusal', () => {
     const { ctx, failAssistantMessage } = errorContext(OWNED_REFUSAL)
 
     expect(handleStatusEvent(ctx)).toBe(true)
@@ -60,7 +60,7 @@ describe('gateway `error` event → error card + toast', () => {
       'sess-1',
       OWNED_REFUSAL,
       1_700_000_100,
-      expect.objectContaining({ code: 'SESSION_NOT_OWNED', retryable: false })
+      expect.objectContaining({ code: 'SESSION_OWNER_UNAVAILABLE', retryable: false })
     )
   })
 

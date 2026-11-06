@@ -5,6 +5,7 @@ import {
   graftRefreshedTailOntoBackfill,
   olderPageReader
 } from '@/app/chat/transcript-backfill'
+import { applyRuntimeInfo } from '@/app/session/hooks/use-session-actions/utils'
 import {
   fetchStoredTranscriptAcrossBackends,
   getLatestSessionMessages,
@@ -21,9 +22,11 @@ import {
   isReadOnlyRuntimeId,
   isStoredTranscriptReadOnly,
   readOnlyRuntimeIdFor,
+  recordSessionWriteVerdict,
   resumeWithStoredTranscriptFallback
 } from '@/store/read-only-transcript'
 import { knownSessionOwner, ownerLookupSessionRows } from '@/store/session'
+import { captureSessionControlScope } from '@/store/session-control-scope'
 import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
 import {
   profileScopeForSessionOwner,
@@ -420,6 +423,7 @@ export function useSessionTileDelegate({
         // the same cross-profile bleed the recovery resumes had (#67603).
         const owner = await ownerForStoredSession(storedSessionId)
 
+        const verdictScope = captureSessionControlScope(storedSessionId, owner)
         const restScope = tileRestScope(owner)
 
         const prefetchPromise = authoritativeSnapshot
@@ -489,7 +493,8 @@ export function useSessionTileDelegate({
             }
 
             return stored
-          }
+          },
+          verdictScope
         )
 
         const prefetch = await prefetchPromise
@@ -534,6 +539,8 @@ export function useSessionTileDelegate({
         }
 
         const info = resumed?.info
+        recordSessionWriteVerdict(storedSessionId, resumed.writable ?? info?.writable, verdictScope)
+        applyRuntimeInfo(info, { foreground: false, owner, controlScope: verdictScope })
 
         updateSessionState(
           runtimeId,

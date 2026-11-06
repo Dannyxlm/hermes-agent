@@ -3922,6 +3922,9 @@ export const deOverrides = {
     queueDelete: 'Löschen',
     queueResume: 'Fortsetzen',
     queueResumeTip: 'Durch Stopp pausiert — fortsetzen, um die eingereihten Turns zu senden',
+    queueUpdates: "Nachrichtenstatus",
+    queueRestartCancelled: "Nachricht in der Warteschlange abgebrochen oder unterbrochen. Sie wird nicht erneut gesendet.",
+    queueRestartUnknown: "Ergebnis der wartenden Nachricht nach Neustart unbekannt. Prüfe den Chat; nicht automatisch erneut senden.",
     queueLostNote: 'Turn beim Neustart verloren',
     restoreImageDraft: 'Bildentwurf wiederherstellen',
     queueCancelFailed: 'Der wartende Zug konnte nicht entfernt werden',
@@ -5005,6 +5008,8 @@ export const deOverrides = {
           body: provider =>
             `Hermes konnte für diesen Chat keine Verbindung zu ${provider} herstellen. Versuchen Sie es erneut; wenn es weiter fehlschlägt, prüfen Sie den Anbieter in den Einstellungen.`
         },
+        SESSION_OWNER_UNAVAILABLE: { title: "Chat-Besitzer nicht erreichbar", body: "Verbinde dich erneut mit dem Chat-Besitzer und setze den Chat fort, um den Status zu aktualisieren. Die Nachricht wurde nicht erneut gesendet." },
+        SESSION_OUTCOME_UNKNOWN: { title: "Vorherigen Durchlauf prüfen", body: "Setze den Chat fort und wähle Verwerfen auf der Karte mit unbekanntem Ergebnis. Sende den unbestätigten Durchlauf nicht erneut." },
         SESSION_NOT_OWNED: {
           title: 'Chat ist woanders geöffnet',
           body: 'Dieser Chat ist in einem anderen Hermes-Fenster oder Terminal geöffnet. Starten Sie hier einen neuen Chat oder schließen Sie ihn zuerst dort.'
@@ -5081,6 +5086,7 @@ export const deOverrides = {
       errorOpenBillingSettings: 'Abrechnungseinstellungen öffnen',
       errorRetryScheduled: (time: string, wait: string) => `Neuer Versuch um ${time} – in ${wait}`,
       errorRetryScheduledCancel: 'Abbrechen',
+      errorResumeSession: "Chat fortsetzen",
       errorStartNewSession: 'Neue Session starten',
       errorSwitchProvider: 'Anbieter wechseln',
       errorChooseModel: 'Modell wählen',

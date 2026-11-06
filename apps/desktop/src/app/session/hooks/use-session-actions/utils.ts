@@ -18,7 +18,7 @@ import { parseErrorSurface } from '@/lib/error-surface'
 import { isMessagingSource, normalizeSessionSource } from '@/lib/session-source'
 import { isLiveTailReplyId } from '@/lib/spoken-reply'
 import { requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
-import { pendingSnapshotFence, reconcilePendingSubmissions } from '@/store/pending-submissions'
+import { reconcileSessionControlInfo } from '@/store/pending-submissions'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
 import { $projectTree } from '@/store/projects'
 import {
@@ -52,6 +52,7 @@ import {
   setWorkspaceCwdOwner,
   setYoloActive
 } from '@/store/session'
+import type { SessionControlScope } from '@/store/session-control-scope'
 import { isUnlistedResolvedSession, rememberUnlistedSessionRows } from '@/store/session-list-membership'
 import {
   $removedSessionIds,
@@ -2173,6 +2174,8 @@ interface ApplyRuntimeInfoOptions {
   foreground?: boolean
   /** The backend that produced `info` when it is not the ambient gateway. */
   owner?: SessionOwnerScope
+  /** The request's captured control scope, including its connection, across an async resume. */
+  controlScope?: SessionControlScope
 }
 
 /** Mirror a session's runtime state into the composer atoms the MAIN pane
@@ -2229,14 +2232,8 @@ function publishRuntimeToComposer(state: SessionRuntimeStatePatch): void {
 }
 
 /** Session-independent side effects of one runtime info snapshot. */
-function reportRuntimeInfoAppState(info: SessionRuntimeInfo, owner: SessionOwnerScope): void {
-  if (info.stored_session_id) {
-    reconcilePendingSubmissions(
-      info.stored_session_id,
-      info.pending_submissions,
-      pendingSnapshotFence(info.replay_epoch, info.last_sequence)
-    )
-  }
+function reportRuntimeInfoAppState(info: SessionRuntimeInfo, owner: SessionOwnerScope, controlScope?: SessionControlScope): void {
+  reconcileSessionControlInfo(info, owner, controlScope)
 
   // App/profile-level reporting is session-independent — a tile's runtime
   // reports backend skew and credential warnings just as usefully.
@@ -2251,13 +2248,13 @@ function reportRuntimeInfoAppState(info: SessionRuntimeInfo, owner: SessionOwner
 
 export function applyRuntimeInfo(
   info: SessionRuntimeInfo | undefined,
-  { foreground = true, owner }: ApplyRuntimeInfoOptions = {}
+  { foreground = true, owner, controlScope }: ApplyRuntimeInfoOptions = {}
 ): SessionRuntimeStatePatch | null {
   if (!info) {
     return null
   }
 
-  reportRuntimeInfoAppState(info, owner)
+  reportRuntimeInfoAppState(info, owner, controlScope)
 
   const sessionState: SessionRuntimeStatePatch = {}
 

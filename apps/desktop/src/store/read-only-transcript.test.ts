@@ -1,19 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { applyRuntimeInfo } from '@/app/session/hooks/use-session-actions/utils'
+
 import { $connectionsRegistry } from './connections'
 import { $profiles } from './profile'
+import { $activeGatewayProfile } from './profile'
 import {
   $cronRunReadOnlyVerdicts,
-  $readOnlyStoredTranscripts,
+  $readOnlyStoredTranscripts, $sessionWriteVerdicts,
   clearStoredTranscriptReadOnly,
   isCronRunReadOnly,
   isReadOnlyRuntimeId,
   isStoredTranscriptReadOnly,
   markStoredTranscriptReadOnly,
   readOnlyRuntimeIdFor,
-  recordCronRunVerdict,
+  recordCronRunVerdict, recordSessionWriteVerdict,
   resumeWithStoredTranscriptFallback
 } from './read-only-transcript'
+import { $connection, $sessions } from './session'
 import { assertSessionOwnerResolved } from './session-owner-resolution'
 
 const registry = (...ids: string[]) =>
@@ -25,9 +29,12 @@ const registry = (...ids: string[]) =>
   }) as never
 
 beforeEach(() => {
+  $connection.set(null)
+  $sessions.set([])
+  $activeGatewayProfile.set('default')
   $connectionsRegistry.set(null)
   $profiles.set([])
-  $readOnlyStoredTranscripts.set(new Set())
+  $readOnlyStoredTranscripts.set(new Set()); $sessionWriteVerdicts.set(new Map())
   $cronRunReadOnlyVerdicts.set(new Map())
 })
 
@@ -36,6 +43,49 @@ afterEach(() => {
 })
 
 describe('read-only stored-transcript resume (#94724 no-owner recovery)', () => {
+  it('uses the successful runtime snapshot write verdict, not the imported source name', () => {
+    applyRuntimeInfo({ stored_session_id: 'browser-import', writable: false, read_only_reason: 'session_read_only' })
+    expect(isStoredTranscriptReadOnly('browser-import')).toBe(true)
+    applyRuntimeInfo({ stored_session_id: 'cli-import', writable: true, read_only_reason: null })
+    expect(isStoredTranscriptReadOnly('cli-import')).toBe(false)
+    applyRuntimeInfo({ stored_session_id: 'browser-import', writable: true, read_only_reason: null })
+    expect(isStoredTranscriptReadOnly('browser-import')).toBe(false)
+  })
+
+  it('keeps same-id connection/profile verdict twins independent and ignores omitted authority', () => {
+    const a = { connectionId: 'gateway-A', profile: 'default' }
+    const b = { connectionId: 'gateway-B', profile: 'default' }
+    $connection.set({ ...a, mode: 'remote' } as never)
+    applyRuntimeInfo({ stored_session_id: 'same', writable: false }, { owner: a })
+    applyRuntimeInfo({ stored_session_id: 'same', writable: true }, { owner: b, foreground: false })
+    expect(isStoredTranscriptReadOnly('same')).toBe(true)
+    $connection.set({ ...b, mode: 'remote' } as never)
+    expect(isStoredTranscriptReadOnly('same')).toBe(false)
+    $activeGatewayProfile.set('other')
+    recordSessionWriteVerdict('same', false)
+    expect(isStoredTranscriptReadOnly('same')).toBe(true)
+    $activeGatewayProfile.set('default')
+    expect(isStoredTranscriptReadOnly('same')).toBe(false)
+    $connection.set({ ...a, mode: 'remote' } as never)
+    applyRuntimeInfo({ stored_session_id: 'same' }, { owner: a })
+    expect(isStoredTranscriptReadOnly('same')).toBe(true)
+  })
+
+  it('an awaited A grant cannot clear B denial after the ambient owner switches', async () => {
+    let settle!: (value: { session_id: string; writable: boolean }) => void
+    const a = { connectionId: 'gateway-A', profile: 'default' }
+    const b = { connectionId: 'gateway-B', profile: 'default' }
+    $connection.set({ ...a, mode: 'remote' } as never)
+    const pending = resumeWithStoredTranscriptFallback('same', () => new Promise<{ session_id: string; writable: boolean }>(resolve => { settle = resolve }), async () => ({}))
+    $connection.set({ ...b, mode: 'remote' } as never)
+    applyRuntimeInfo({ stored_session_id: 'same', writable: false }, { owner: b })
+    settle({ session_id: 'runtime-A', writable: true })
+    await pending
+    expect(isStoredTranscriptReadOnly('same')).toBe(true)
+    $connection.set({ ...a, mode: 'remote' } as never)
+    expect(isStoredTranscriptReadOnly('same')).toBe(false)
+  })
+
   it('opens the stored transcript read-only when the owner fails closed on a 2-connection topology', async () => {
     // The reporter's shape: registry topology with two registered
     // connections, a legacy NULL-owner row — the production gate throws
@@ -69,6 +119,17 @@ describe('read-only stored-transcript resume (#94724 no-owner recovery)', () => 
     // The whole point of the recovery path: NO gateway routing happened.
     expect(gatewayDispatch).not.toHaveBeenCalled()
     expect(isStoredTranscriptReadOnly('legacy-1')).toBe(true)
+  })
+
+  it('a resume without a new verdict clears only no-owner fallback, not an authority denial', async () => {
+    applyRuntimeInfo({ stored_session_id: 'authority-denied', writable: false })
+    await resumeWithStoredTranscriptFallback('authority-denied', async () => ({ session_id: 'authority-denied' }), async () => ({ messages: [] }))
+    expect(isStoredTranscriptReadOnly('authority-denied')).toBe(true)
+  })
+
+  it('a successful routed resume is still read-only when the authority denies writes', async () => {
+    await resumeWithStoredTranscriptFallback('foreign', async () => ({ session_id: 'foreign', writable: false }), async () => ({ messages: [] }))
+    expect(isStoredTranscriptReadOnly('foreign')).toBe(true)
   })
 
   it('stays live (and clears the latch) when the owner resolves', async () => {

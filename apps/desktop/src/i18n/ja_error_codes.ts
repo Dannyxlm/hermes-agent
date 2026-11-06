@@ -66,6 +66,8 @@ export const jaErrorCodes: Partial<ThreadCopy['errorCodes']> = {
     body: provider =>
       `Hermes はこのチャットで ${provider} に接続できませんでした。再試行してください。失敗が続く場合は、設定でプロバイダーを確認してください。`
   },
+  SESSION_OWNER_UNAVAILABLE: { title: "チャットの所有者に接続できません", body: "所有者に再接続し、チャットを再開して状態を更新してください。メッセージは再送されていません。" },
+  SESSION_OUTCOME_UNKNOWN: { title: "前のターンの確認が必要です", body: "チャットを再開して保留中のターンを更新し、結果不明のカードで「破棄」を選んでください。不確かなターンを再送しないでください。" },
   SESSION_NOT_OWNED: {
     title: 'チャットが別の場所で開かれています',
     body: 'このチャットは別の Hermes ウィンドウまたはターミナルで開かれています。ここで新しいチャットを開始するか、先にそちらで閉じてください。'
