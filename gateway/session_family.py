@@ -119,9 +119,9 @@ def _live_signals(connections, profiles, residents):
             session_signals[(profile, tip)] = dict(session_signals[(profile, target)])
             context = _stop_context(connection, target, live, registry)
             if context:
-                parent, owners = context
+                parent, process_owner = context
                 stop_parents.append(parent)
-                process_owners.append(owners)
+                process_owners.append(process_owner)
     def can_stop_helper(agent):
         return registry is not None and any(registry._is_descendant_of(agent, parent) for parent in stop_parents)
     def can_stop_process(process):
