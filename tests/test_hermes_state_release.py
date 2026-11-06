@@ -428,6 +428,149 @@ def test_queued_identity_can_be_claimed_by_next_owner_without_inventing_a_turn(l
     assert after.complete and after.rows[0].completed_turn
 
 
+def _legacy_receipt(db, **changes):
+    # Metadata-corruption cases use a synthetic receipt; composed tests exercise
+    # the actual PR162 accept/disposition writer in another interpreter.
+    receipt = dict(session_id='lead', input_id='input', runtime_id='runtime',
+                   status='queued', outcome=None, writer_pid=123,
+                   user='PRIVATE QUEUE SENTINEL')
+    receipt.update(changes)
+    key = 'legacy_queue_receipt:' + str(receipt['session_id']) + ':' + str(receipt['input_id'])
+    raw = json.dumps(receipt)
+    db._execute_write(lambda c: c.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (key, raw)))
+    return key
+
+
+@pytest.mark.parametrize('status,outcome', [
+    ('queued', None), ('transferred', 'dispatched'), ('unknown', None),
+    ('unexpected', None), ('terminal', 'dispatched'), ('terminal', 'future-outcome'),
+    ('terminal', None), (None, 'completed'),
+])
+def test_legacy_queue_unresolved_keeps_canonical_keys_without_forging_rows(ledger, status, outcome):
+    path, db, _, _, _, _, _, _ = ledger
+    canonical = release.snapshot_release_evidence(path)
+    _legacy_receipt(db, status=status, outcome=outcome)
+    before = release.snapshot_release_evidence(path)
+    after = release.lookup_release_evidence(path, keys=tuple(r.key for r in canonical.rows))
+    for result in (before, after):
+        assert not result.complete and result.issues == ('legacy_queue_unresolved_unsupported',)
+        assert result.rows == canonical.rows
+        assert not result.missing_keys
+        assert 'PRIVATE QUEUE SENTINEL' not in json.dumps(asdict(result))
+
+
+@pytest.mark.parametrize('outcome', ['completed', 'interrupted', 'failed', 'cancelled'])
+def test_legacy_queue_previously_settled_is_not_active_history(ledger, outcome):
+    path, db, _, _, _, _, _, _ = ledger
+    canonical = release.snapshot_release_evidence(path)
+    _legacy_receipt(db, status='terminal', outcome=outcome)
+    assert release.snapshot_release_evidence(path) == canonical
+    lookup = release.lookup_release_evidence(path, keys=())
+    assert lookup.complete and not lookup.rows
+
+
+@pytest.mark.parametrize('changes', [
+    {'session_id': None}, {'session_id': ''}, {'session_id': []},
+    {'input_id': None}, {'runtime_id': ''}, {'runtime_id': {}},
+    {'writer_pid': True}, {'writer_pid': None}, {'writer_pid': -1},
+    {'writer_start_time': 'bad'}, {'writer_start_time': None},
+])
+def test_legacy_queue_malformed_identity_is_conservative_even_outside_scope(ledger, changes):
+    path, db, _, _, _, _, _, _ = ledger
+    _legacy_receipt(db, status='terminal', outcome='completed', **changes)
+    for scope in (None, _scope()):
+        snapshot = release.snapshot_release_evidence(path, scope=scope)
+        lookup = release.lookup_release_evidence(path, scope=scope, keys=())
+        assert snapshot.issues == lookup.issues == ('legacy_queue_unresolved_unsupported',)
+        assert not snapshot.complete and not lookup.complete
+
+
+@pytest.mark.parametrize('raw', ['not-json PRIVATE QUEUE SENTINEL', 'null', '[]', '42', '{}'])
+def test_legacy_queue_malformed_document_cannot_disappear_from_explicit_scope(ledger, raw):
+    path, db, _, _, _, _, _, _ = ledger
+    db._execute_write(lambda c: c.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
+        ('legacy_queue_receipt:unparseable', raw)))
+    for scope in (None, _scope()):
+        for result in (release.snapshot_release_evidence(path, scope=scope),
+                       release.lookup_release_evidence(path, scope=scope, keys=())):
+            assert result.issues == ('legacy_queue_unresolved_unsupported',)
+            assert not result.complete
+
+
+def test_legacy_queue_scope_uses_exact_metadata_session_and_rejects_mismatched_key(ledger):
+    path, db, epoch, _, _, _, _, _ = ledger
+    key = _legacy_receipt(db)
+    # lead is excluded, but whole-profile and an explicit lead scope include it.
+    assert release.snapshot_release_evidence(path, scope=_scope()).complete
+    assert release.lookup_release_evidence(path, scope=_scope(), keys=()).complete
+    assert not release.snapshot_release_evidence(path).complete
+    assert not release.snapshot_release_evidence(path, scope=release.ReleaseScope(('lead',))).complete
+    unusual = 'id:with:_glob*?[]%'
+    db.create_session(unusual, source='cli')
+    rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id=unusual,
+        request_id='odd', payload={})
+    _legacy_receipt(db, session_id=unusual, input_id='other')
+    assert not release.lookup_release_evidence(path, scope=release.ReleaseScope((unusual,)), keys=()).complete
+    assert release.lookup_release_evidence(path, scope=_scope(), keys=()).complete
+    db._execute_write(lambda c: c.execute('UPDATE state_meta SET key=? WHERE key=?',
+        ('legacy_queue_receipt:wrong-target:input', key)))
+    assert not release.lookup_release_evidence(path, scope=_scope(), keys=()).complete
+
+
+def test_legacy_queue_sql_result_boundary_is_content_free_and_read_only(ledger, monkeypatch):
+    path, db, _, _, _, _, _, _ = ledger
+    _legacy_receipt(db)
+    def metadata():
+        return [tuple(r) for r in db._conn.execute("SELECT key,json_extract(value,'$.status'),"
+            "json_extract(value,'$.outcome'),json_extract(value,'$.session_id'),"
+            "json_extract(value,'$.input_id'),json_extract(value,'$.runtime_id'),"
+            "json_extract(value,'$.writer_pid') FROM state_meta WHERE key GLOB 'legacy_queue_receipt:*'")]
+    before = metadata()
+    returned, denied, writes = [], [], []
+    original = sqlite3.connect
+
+    class GuardedConnection(sqlite3.Connection):
+        def __setattr__(self, name, value):
+            if name == 'row_factory':
+                factory = value
+                def checked(cursor, values):
+                    names = tuple(c[0] for c in cursor.description)
+                    assert not {'value', 'doc', 'user'} & set(names)
+                    assert 'PRIVATE QUEUE SENTINEL' not in repr(values)
+                    returned.append((names, tuple(values)))
+                    return factory(cursor, values)
+                value = checked
+            super().__setattr__(name, value)
+
+    def connect(*args, **kwargs):
+        assert kwargs.get('uri') and '?mode=ro' in args[0]
+        kwargs['factory'] = GuardedConnection
+        conn = original(*args, **kwargs)
+        def authorize(action, table, column, _database, _trigger):
+            if action == sqlite3.SQLITE_READ and (table in ('messages', 'system_prompts', 'worker_receipts')
+                    or column in ('payload_json', 'payload_digest', 'adoption_digest', 'system_prompt',
+                                  'origin_json', 'entry_json', 'result_json')):
+                denied.append((table, column))
+                return sqlite3.SQLITE_DENY
+            if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE,
+                          sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_ALTER_TABLE):
+                writes.append(action)
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        conn.set_authorizer(authorize)
+        return conn
+
+    monkeypatch.setattr(release.sqlite3, 'connect', connect)
+    snapshot = release.snapshot_release_evidence(path)
+    lookup = release.lookup_release_evidence(path, keys=tuple(r.key for r in snapshot.rows))
+    assert snapshot.rows == lookup.rows and snapshot.rows
+    assert snapshot.issues == lookup.issues == ('legacy_queue_unresolved_unsupported',)
+    # json_extract authorizes state_meta.value INSIDE SQLite; the row factory,
+    # not that authorizer, proves the actual result projection is constant-only.
+    assert returned.count((('unsupported',), (1,))) == 2
+    assert not denied and not writes and metadata() == before
+
+
 def test_malformed_or_missing_terminal_metadata_is_not_completion(ledger):
     path, db, epoch, claim, steer, _, _, _ = ledger
     _settle(db, epoch, claim, steer)

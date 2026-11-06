@@ -18,6 +18,9 @@ Only whitelisted metadata columns cross SQLite's result boundary. Tombstones
 share a JSON column with private receipts, so SQL extracts named metadata paths
 at an exact tombstone key; Python never loads the containing document. Retired
 admissions discard lineage upstream: report that loss, never reconstruct it.
+PR162 legacy queue receipts have no supported evidence identity: SQL detects
+unresolved/malformed promises as coarse coverage issues, without reading user
+text or recovering them. Already-settled known outcomes are not active work.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -259,6 +262,46 @@ def _whole_profile_lease_coverage(conn, rows, issues, read_at):
         issues.append('lease_identity_unavailable')
 
 
+def _legacy_queue_coverage(conn, scope, issues):
+    """Notice unsupported PR162 obligations without loading or recovering them.
+
+    The forward-compatible prefix is from hermes_state_common in PR162
+    (c962ee91e3d6755bc9c4de3a86e3d36fa5a95140); older reader bases do not
+    export it. Do not import the writer facade or call local_queue_receipts.snapshot:
+    that API reads private user text and changes receipts. Only a constant leaves
+    this SQL query, including for malformed documents. No queue/admission link or
+    durable EvidenceKey can be inferred from these process-local promises.
+    """
+    if not _has_columns(conn, 'state_meta', ('key', 'value'), issues):
+        return
+    prefix = 'legacy_queue_receipt:'
+    valid = ["json_type(doc)='object'",
+             "key=? || json_extract(doc,'$.session_id') || ':' || json_extract(doc,'$.input_id')",
+             "json_type(doc,'$.writer_pid')='integer' AND json_extract(doc,'$.writer_pid')>0",
+             "(json_type(doc,'$.writer_start_time') IS NULL OR "
+             "(json_type(doc,'$.writer_start_time') IN ('integer','real') "
+             "AND json_extract(doc,'$.writer_start_time')>0))"]
+    for field in ('session_id', 'input_id', 'runtime_id', 'status'):
+        valid.append(f"(json_type(doc,'$.{field}')='text' AND length(json_extract(doc,'$.{field}'))>0)")
+    # Guard JSON functions inside SQLite. The document itself never crosses the
+    # result boundary; malformed/unscopeable metadata remains conservative even
+    # for an explicit allowlist, rather than being silently filtered away.
+    sql = """WITH documents AS (
+        SELECT key, CASE WHEN json_valid(value) THEN value ELSE '{}' END AS doc
+        FROM state_meta WHERE key GLOB ?
+    ), metadata AS (
+        SELECT doc, COALESCE(""" + ' AND '.join(valid) + """,0) AS valid FROM documents
+    ) SELECT 1 AS unsupported FROM metadata WHERE NOT (valid
+        AND json_extract(doc,'$.status')='terminal'
+        AND COALESCE(json_extract(doc,'$.outcome') IN ('completed','interrupted','failed','cancelled'),0))"""
+    params = [prefix + '*', prefix]
+    if scope is not None:
+        sql += " AND (NOT valid OR json_extract(doc,'$.session_id') IN (SELECT value FROM json_each(?)))"
+        params.append(json.dumps(scope.included_session_ids))
+    if conn.execute(sql + ' LIMIT 1', params).fetchone():
+        issues.append('legacy_queue_unresolved_unsupported')
+
+
 def _snapshot_coverage(conn, scope, issues, rows, read_at):
     if not _has_columns(conn, 'sessions', ('id',), issues):
         return
@@ -280,8 +323,9 @@ def snapshot_release_evidence(db_path: str | Path, *, scope: ReleaseScope | None
 
     No payloads, transcript bodies, SessionDB constructors, migrations
     or writes are used. Explicit scopes retain their legacy untracked-session
-    uncertainty. Whole-profile coverage is bounded to the ledger and turn leases
-    at the first read in this transaction, not all OS work or future arrivals.
+    uncertainty. Legacy queue obligations remain visibly unsupported. Coverage
+    is bounded at the first read in this transaction, not all OS work or future
+    arrivals.
     """
     issues = []
     epoch, instance = None, None
@@ -297,6 +341,7 @@ def snapshot_release_evidence(db_path: str | Path, *, scope: ReleaseScope | None
             workers = _read_workers(conn, scope, issues, active_only=True)
             rows = [_project(row, 'admission', issues) for row in admissions]
             rows.extend(_project(row, 'execution', issues) for row in workers)
+            _legacy_queue_coverage(conn, scope, issues)
             _snapshot_coverage(conn, scope, issues, rows, read_at[0] if read_at else 0)
     except (sqlite3.Error, OSError):
         issues.append('database_unavailable')
@@ -372,6 +417,9 @@ def lookup_release_evidence(db_path: str | Path, *, scope: ReleaseScope | None =
     Tombstone retention is upstream-owned; expired/missing rows cannot prove completion.
     None removes the session allowlist, NOT the exact saved-key bounds: only the
     requested IDs are selected, and each target and nullable fence is preserved.
+    Legacy queue coverage is checked even with no keys. An earlier unsupported
+    snapshot must stay incomplete at the controller boundary: later receipt
+    settlement or absence cannot prove continuity for that captured obligation.
     """
     issues = []
     epoch, instance = None, None
@@ -380,6 +428,7 @@ def lookup_release_evidence(db_path: str | Path, *, scope: ReleaseScope | None =
         with _reader(db_path) as conn:
             epoch, instance = _authority(conn, issues)
             rows, missing = _lookup_rows(conn, scope, keys, issues)
+            _legacy_queue_coverage(conn, scope, issues)
     except (sqlite3.Error, OSError):
         issues.append('database_unavailable')
         rows, missing = [], list(keys)
