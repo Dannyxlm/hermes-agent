@@ -13,10 +13,10 @@
  * forever.
  *
  * This module sweeps for dead ids after the sidebar list has spoken. A session
- * is declared dead ONLY when a by-id probe 404s on every known profile — a 404
- * is profile-scoped ("not on this profile's state.db"), so a single miss never
- * prunes anything (a session can legitimately live on a non-active profile).
- * Any non-404 probe failure (gateway mid-restart, network) is inconclusive:
+ * is declared dead ONLY when by-id probes miss every known profile and the
+ * connection inventory is covered (an exact owner, or only one source).
+ * Profile-only misses cannot rule out an unlisted Family worker on another
+ * registry source after restart. Any non-404 probe failure is inconclusive:
  * the id is deferred to a later pass instead of being dropped.
  */
 
@@ -25,9 +25,12 @@ import { mapPool } from '@/lib/pool'
 import { clearSessionDraft, isFreshDraftScope, stashedDraftScopes } from '@/store/composer'
 import { dropInterruptedSends, interruptedSendScopes } from '@/store/composer-outbox'
 import { $queuedPromptsBySession, clearQueuedPrompts } from '@/store/composer-queue'
+import { $connectionsRegistry, hasRegistryTopology } from '@/store/connection-registry-state'
 import { $pinnedSessionIds, unpinSession } from '@/store/layout'
 import { $activeGatewayProfile, $profiles, normalizeProfileKey } from '@/store/profile'
-import { $sessions } from '@/store/session'
+import { $sessions, ownerLookupSessionRows, sessionMatchesStoredId } from '@/store/session'
+import { isSessionOwnerRoute } from '@/store/session-request-router'
+import { knownOwnerForSession } from '@/store/session-states'
 
 import { forgetPinSyncState } from './session-pin-sync'
 
@@ -77,6 +80,10 @@ function isNotFoundError(error: unknown): boolean {
  */
 async function sessionVerdict(id: string): Promise<Verdict> {
   const activeKey = normalizeProfileKey($activeGatewayProfile.get())
+  // getSession follows this same owner ladder. Without an exact connection,
+  // profile-only misses cannot rule out an unlisted worker on another source.
+  const owner = knownOwnerForSession(id)
+  const exactConnection = isSessionOwnerRoute(owner) && Boolean(owner.connectionId.trim())
 
   // No known profiles → another profile we can't rule out might own the id.
   // Skip the probe entirely; there is nothing to gain from a lone unscoped hit.
@@ -116,12 +123,18 @@ async function sessionVerdict(id: string): Promise<Verdict> {
     }
   }
 
+  const registry = $connectionsRegistry.get()
+
+  if (!exactConnection && hasRegistryTopology() && (!registry || registry.connections.length !== 1)) {
+    return 'unknown'
+  }
+
   return 'dead'
 }
 
 /** Stored ids no loaded sidebar row covers — the only ids that can be dead. */
 function collectCandidates(): string[] {
-  const rows = $sessions.get()
+  const rows = ownerLookupSessionRows()
   const covered = new Set<string>()
 
   for (const row of rows) {
@@ -172,7 +185,7 @@ function dropDeadId(id: string): void {
   // Cheap re-verification before destructive drops: if a row for this id
   // appeared while the probe was in flight (a session resurrected or a slow
   // page landed), the id is no longer dead — keep every entry.
-  const covered = $sessions.get().some(row => row.id === id || row._lineage_root_id === id)
+  const covered = ownerLookupSessionRows().some(row => sessionMatchesStoredId(row, id))
 
   if (covered) {
     return

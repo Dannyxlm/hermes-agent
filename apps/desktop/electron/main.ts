@@ -466,6 +466,7 @@ import {
   fetchAllProfilesAggregatePerProfile,
   fetchAllProfilesSessionsPerProfile,
   fetchPrimaryProfileSessions,
+  fetchRemoteOwnerSessionRead,
   fetchRemoteProfileSessions,
   findRemoteOwnerProfileForSession,
   hasPinnedRegistrySessionSource,
@@ -16086,11 +16087,8 @@ async function interceptSessionRequestForRemote(request, registryConnectionId = 
     passthroughParams.delete('profile')
 
     if (profileHasRemoteOverride(profile)) {
-      // #64999: the override's remote can be a multi-profile backend — an
-      // unscoped read opens its launch-profile state.db, so a resume 4007s
-      // even though the row exists under its real owner. Scope the read the
-      // same way the list fetch does; a legacy single-profile scope ('')
-      // keeps the path bare.
+      // A multi-profile override must name its backend-facing owner, exactly
+      // as its list does; the Desktop label may be an alias for another store.
       const ownerScope =
         remoteProfileQueryScope(profile, profileSshOverride(readDesktopConnectionConfig(), profile)?.remoteProfile) ||
         profile
@@ -16098,7 +16096,7 @@ async function interceptSessionRequestForRemote(request, registryConnectionId = 
       const ownerPath = remoteOwnerRoutePath(pathname, searchParams, ownerScope)
 
       if (method === 'GET') {
-        return fetchJsonForProfile(profile, ownerPath)
+        return fetchRemoteOwnerSessionRead(profile, ownerPath, fetchJsonForProfile)
       }
 
       const body = request.body && typeof request.body === 'object' ? { ...request.body } : request.body

@@ -936,6 +936,29 @@ export function remoteOwnerRoutePath(pathname: string, searchParams: URLSearchPa
   return pathWithRemoteOwnerScope(query ? `${pathname}?${query}` : pathname, ownerScope)
 }
 
+/** Read through the already resolved legacy per-profile owner route. */
+export async function fetchRemoteOwnerSessionRead(
+  profile: string,
+  path: string,
+  fetchJsonForProfile: FetchJsonForProfile
+): Promise<unknown> {
+  const data = await fetchJsonForProfile(profile, path)
+  const url = new URL(path, 'http://hermes.local')
+
+  // Membership echoes the remote store's name. Translate only the exact
+  // routed echo; a foreign/malformed response must still fail renderer validation.
+  if (url.pathname === '/api/sessions/list-membership') {
+    if (!data || typeof data !== 'object' || !('profile' in data) ||
+      typeof data.profile !== 'string' || data.profile !== url.searchParams.get('profile')) {
+      throw new Error('Session list membership owner mismatch')
+    }
+
+    return { ...data, profile }
+  }
+
+  return data
+}
+
 export async function fetchRemoteProfileSessions(
   profile: string,
   searchParams: URLSearchParams,

@@ -1,7 +1,7 @@
 import type { ConnectionState } from '@hermes/shared'
 import { atom, computed } from 'nanostores'
 
-import { setApiRequestLocalMode } from '@/api/client'
+import { ambientOwnerConnectionId, setApiRequestLocalMode } from '@/api/client'
 import { lastVisibleMessageIsUser } from '@/app/chat/thread-loading'
 import type { ContextSuggestion } from '@/app/types'
 import type { HermesConnection } from '@/global'
@@ -678,10 +678,13 @@ export function mergeSessionPage(
       // of two same-profile connection twins just because it came first.
       const untaggedMatches = session.connection_id ? [] : previous.filter(row =>
         profileKeyOf(row) === profileKeyOf(session) && (row.id === session.id ||
-          (row._lineage_root_id ?? row.id) === (session._lineage_root_id ?? session.id)))
+          (row._lineage_root_id ?? row.id) === (session._lineage_root_id ?? session.id) ||
+          session._lineage_ids?.includes(row.id)))
+
+      const matchedConnections = new Set(untaggedMatches.map(row => row.connection_id ?? null))
 
       const prev = prevById.get(identity(session)) ?? prevByLineage.get(lineageIdentity(session)) ??
-        (untaggedMatches.length === 1 ? untaggedMatches[0] : undefined)
+        (matchedConnections.size === 1 ? untaggedMatches[0] : undefined)
 
       // User-send stamps last_active before the DB flushes the user row
       // (last_active = MAX(messages.timestamp)). Keep the fresher of the two.
@@ -1093,13 +1096,9 @@ function withUnlistedOwnerStubs(rows: SessionInfo[], stubs: readonly SessionInfo
     return rows
   }
 
-  const listed = new Set<string>()
-
-  for (const row of rows) {
-    listed.add(sessionListRowKey(row))
-  }
-
-  const visible = stubs.filter(stub => !listed.has(sessionListRowKey(stub)))
+  const ambientConnection = ambientOwnerConnectionId() ?? null
+  const listed = new Set(rows.map(row => sessionListRowKey(row, ambientConnection)))
+  const visible = stubs.filter(stub => !listed.has(sessionListRowKey(stub, ambientConnection)))
 
   return visible.length ? [...rows, ...visible] : rows
 }

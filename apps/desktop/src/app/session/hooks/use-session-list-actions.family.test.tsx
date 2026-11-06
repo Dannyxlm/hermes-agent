@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { setApiRequestLocalMode } from '@/api/client'
 import { setApiRequestConnection } from '@/hermes'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { $pinnedSessionIds } from '@/store/layout'
@@ -48,6 +49,7 @@ beforeEach(() => {
   transport.epoch = 0
   transport.settled = []
   vi.stubGlobal('hermesDesktop', { api: transport.api })
+  setApiRequestLocalMode(false)
   setApiRequestConnection('rig')
 })
 afterEach(() => {
@@ -58,6 +60,7 @@ afterEach(() => {
   $selectedStoredSessionId.set(null)
   $sessionTiles.set([])
   setApiRequestConnection(null)
+  setApiRequestLocalMode(false)
   vi.unstubAllGlobals()
 })
 
@@ -205,17 +208,22 @@ it('discards membership from an obsolete refresh generation', async () => {
   expect($unlistedSessionOwnerRows.get()).toEqual([])
 })
 
-it('does not reinsert an older unmarked detail reply after membership proved the worker off-list', async () => {
+it.each([{ routed: true, connection: 'rig' }, { routed: false, connection: 'rig' }, { routed: false, connection: 'local' }])('does not reinsert an older unmarked detail reply after membership proved the worker off-list (%j)', async ({ routed, connection }) => {
+  if (connection === 'local') {
+    setApiRequestLocalMode(true)
+    setApiRequestConnection(null)
+  }
+
   const pending = deferred<SessionInfo>()
   transport.detail.mockReturnValueOnce(pending.promise)
-  const resolved = resolveStoredSession('worker', { connectionId: 'rig', profile: 'worker' })
-  const worker = row('worker')
+  const resolved = resolveStoredSession('worker', routed ? { connectionId: 'rig', profile: 'worker' } : undefined)
+  const worker = row('worker', { connection_id: connection })
   $sessions.set([worker])
   $pinnedSessionIds.set(['worker'])
   transport.api.mockResolvedValue({ profile: 'worker', thread_session_ids: ['worker'] })
   const { result } = renderHook(() => useSessionListActions({ profileScope: 'worker' }))
   await act(() => result.current.refreshSessions())
-  pending.resolve(worker)
+  pending.resolve(routed ? worker : { ...worker, connection_id: undefined })
   await expect(resolved).resolves.toMatchObject({ id: 'worker' })
   expect($sessions.get()).toEqual([])
   expect($unlistedSessionOwnerRows.get()).toHaveLength(1)

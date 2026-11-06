@@ -446,6 +446,27 @@ describe('shouldMigrateComposerScope', () => {
 })
 
 describe('mergeSessionPage', () => {
+  it.each([1, 2])('absorbs %s tagged old segments into an untagged repaired lineage without losing foreign twins', count => {
+    const old = session({ connection_id: 'local', id: 'segment', profile: 'work', title: 'My work' })
+    const foreignProfile = session({ connection_id: 'local', id: 'segment', profile: 'other' })
+    const incoming = session({ id: 'tip', profile: 'work', _lineage_root_id: 'fresh-root', _lineage_ids: ['segment', 'fresh-root', 'tip'] })
+    const segments = count === 1 ? [old] : [old, { ...old, id: 'segment-2' }]
+    const merged = mergeSessionPage([...segments, foreignProfile], [{ ...incoming, _lineage_ids: ['segment', 'segment-2', 'fresh-root', 'tip'] }], ['segment', 'segment-2'])
+
+    expect(merged).toHaveLength(2)
+    expect(merged).toContain(foreignProfile)
+    expect(merged.find(row => row.id === 'tip')).toMatchObject({ connection_id: 'local', title: 'My work' })
+  })
+
+  it('does not guess which connection twin an untagged repaired lineage absorbed', () => {
+    const twins = ['local', 'rig'].map(connection_id => session({ connection_id, id: 'segment', profile: 'work' }))
+    const incoming = session({ id: 'tip', profile: 'work', _lineage_root_id: 'fresh-root', _lineage_ids: ['segment', 'tip'] })
+    const merged = mergeSessionPage(twins, [incoming], ['segment'])
+
+    expect(merged).toEqual([...twins, incoming])
+    expect(merged.find(row => row.id === 'tip')?.connection_id).toBeUndefined()
+  })
+
   it('carries the owning connection onto a row that comes back untagged (local registry source)', () => {
     // A `local` registry source's rows are served by the primary aggregate as
     // plain local rows: the unified-list splice tags only non-local sources.

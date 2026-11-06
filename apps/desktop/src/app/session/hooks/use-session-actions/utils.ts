@@ -1,4 +1,5 @@
 
+import { ambientOwnerConnectionId } from '@/api/client'
 import { resolveSessionRpcOwner } from '@/app/contrib/wiring-routing'
 import { textWithoutReferenceLines } from '@/components/assistant-ui/reference-kinds'
 import { getSession } from '@/hermes'
@@ -1887,13 +1888,13 @@ function upsertResolvedSession(
 
   const lineage = session._lineage_root_id ?? session.id
 
-  // A hidden row (canonical Bot Chat, room plumbing) is unlisted by design:
-  // inserting it into $sessions paints a sidebar row until the next refresh,
-  // and the keep-list then holds it there (#113273). Park it on the off-list
-  // owner atom the draft stubs ride — owner resolution still finds it via
-  // ownerLookupSessionRows, the sidebar never does.
-  if (isUnlistedResolvedSession(session)) {
-    rememberUnlistedSessionRows([session])
+  // Hidden and Family-only rows stay readable through the off-list owner
+  // cache. Inserting them into $sessions would promote a direct open into
+  // a retained sidebar row (#113273).
+  const ambientConnection = ambientOwnerConnectionId() ?? null
+
+  if (isUnlistedResolvedSession(session, ambientConnection)) {
+    rememberUnlistedSessionRows([session], ambientConnection)
 
     return
   }
@@ -1948,7 +1949,7 @@ export function cachedSessionRow(storedSessionId: string, ownerRoute?: SessionPr
     ...ownerLookupSessionRows(),
     ...projectTreeSessions()
   ].filter(session => sessionMatchesStoredId(session, storedSessionId) && (!ownerRoute ||
-    (session.connection_id === ownerRoute.connectionId &&
+    ((session.connection_id ?? ambientOwnerConnectionId()) === ownerRoute.connectionId &&
       normalizeProfileKey(session.profile) === normalizeProfileKey(ownerRoute.profile))))
 
   return (

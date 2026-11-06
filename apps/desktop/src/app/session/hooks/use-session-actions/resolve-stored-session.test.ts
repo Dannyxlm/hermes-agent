@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setApiRequestConnection, setApiRequestLocalMode } from '@/api/client'
 import type * as HermesModule from '@/hermes'
 import { getSession } from '@/hermes'
 import { $activeGatewayProfile, $profiles } from '@/store/profile'
 import { $projectTree } from '@/store/projects'
 import { $cronSessions, $messagingSessions, $sessions, $unlistedSessionOwnerRows } from '@/store/session'
+import { rememberUnlistedSessionRows } from '@/store/session-list-membership'
 import { $removedSessionIds, tombstoneSessions, untombstoneSessions } from '@/store/session-removal'
 import type { SessionInfo } from '@/types/hermes'
 
+import { captureDisplayHydration } from './display-hydration'
 import { cachedSessionRow, resolveStoredSession } from './utils'
 
 vi.mock('@/hermes', async importActual => ({
@@ -334,14 +337,71 @@ describe('cachedSessionRow owner preference', () => {
     $messagingSessions.set([])
     $sessions.set([])
     $projectTree.set([])
+    $unlistedSessionOwnerRows.set([])
+    setApiRequestConnection('rig')
     mockGetSession.mockReset()
   })
 
   afterEach(() => {
+    $unlistedSessionOwnerRows.set([])
+    setApiRequestConnection(null)
+    setApiRequestLocalMode(false)
     $cronSessions.set([])
     $messagingSessions.set([])
     $sessions.set([])
     $projectTree.set([])
+  })
+
+  it.each(['rig', 'local'])('returns the real listed row instead of its ambient-connection tagged draft stub (%s)', connectionId => {
+    setApiRequestLocalMode(connectionId === 'local')
+    setApiRequestConnection(connectionId === 'local' ? null : connectionId)
+    const real = session({ id: 's1', profile: 'work', title: 'Real conversation', preview: 'Latest answer' })
+    $sessions.set([real])
+    $unlistedSessionOwnerRows.set([session({ id: 's1', profile: 'work', connection_id: connectionId, title: null })])
+
+    expect(cachedSessionRow('s1')).toBe(real)
+    expect(cachedSessionRow('s1', { connectionId, profile: 'work' })).toBe(real)
+  })
+
+  it('never shadows a tagged off-list twin on a different connection or profile', () => {
+    const real = session({ id: 's1', profile: 'work', title: 'Real conversation' })
+    const foreign = session({ id: 's1', profile: 'work', connection_id: 'elsewhere', title: 'Foreign twin' })
+    const otherProfile = session({ id: 's1', profile: 'other', connection_id: 'rig', title: 'Other profile' })
+    $sessions.set([real])
+    $unlistedSessionOwnerRows.set([foreign, otherProfile])
+
+    expect(cachedSessionRow('s1', { connectionId: 'elsewhere', profile: 'work' })).toBe(foreign)
+    expect(cachedSessionRow('s1', { connectionId: 'rig', profile: 'other' })).toBe(otherProfile)
+  })
+
+  it.each(['rig', 'elsewhere'])('keeps display hydration only when off-list parking preserves the ambient owner (%s)', connection => {
+    const stored = session({ id: 's1', profile: 'work' })
+    $sessions.set([stored])
+
+    const hydration = captureDisplayHydration({
+      flights: new Map(), key: 's1', runtimeIdByStoredSessionIdRef: { current: new Map() },
+      sessionStateByRuntimeIdRef: { current: new Map() }, stored, storedSessionId: 's1'
+    })
+
+    expect(hydration.owns()).toBe(true)
+    rememberUnlistedSessionRows([{ ...stored, _thread_list_excluded: true }], connection)
+    $sessions.set([])
+
+    expect(hydration.owns()).toBe(connection === 'rig')
+  })
+
+  it('revokes an untagged display hydration when the actual ambient connection changes', () => {
+    const stored = session({ id: 's1', profile: 'work' })
+    $sessions.set([stored])
+
+    const hydration = captureDisplayHydration({
+      flights: new Map(), key: 's1', runtimeIdByStoredSessionIdRef: { current: new Map() },
+      sessionStateByRuntimeIdRef: { current: new Map() }, stored, storedSessionId: 's1'
+    })
+
+    setApiRequestConnection('elsewhere')
+
+    expect(hydration.owns()).toBe(false)
   })
 
   it('prefers a self-describing project-tree row over an ownerless Recents duplicate', () => {
