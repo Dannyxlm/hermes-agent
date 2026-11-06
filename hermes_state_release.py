@@ -9,8 +9,8 @@ Snapshot captures all unresolved admissions/workers without an age cutoff. Save
 its EvidenceKeys for lookup after settlement/restart: lookup keeps terminal rows
 and tombstones, rather than re-running an active-only query. An unclaimed
 admission's null generation has no execution fence yet; once bound, its saved
-epoch/generation must match exactly. A changed execution identity is incomplete
-evidence, not completion.
+generation must match exactly. Adoption may change its owner epoch: keep the
+current row visible but mark that drift incomplete, never proof of continuity.
 
 Only whitelisted metadata columns cross SQLite's result boundary. Tombstones
 share a JSON column with private receipts, so SQL extracts named metadata paths
@@ -23,6 +23,9 @@ import json
 from pathlib import Path
 import sqlite3
 from typing import Literal
+
+from hermes_cli.sqlite_safe_read import connect_tracked
+from hermes_state_holders import read_only_db_uri
 
 
 _ADMISSION_COLUMNS = ('admission_id', 'target_session_id', 'lineage_json', 'intent',
@@ -117,7 +120,7 @@ class ReleaseEvidenceBatch:
 @contextmanager
 def _reader(db_path: str | Path):
     # mode=ro refuses a missing file; immutable=1 would incorrectly ignore a live WAL.
-    conn = sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True)
+    conn = connect_tracked(read_only_db_uri(db_path), uri=True, tracking_path=db_path)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute('PRAGMA query_only=ON')
@@ -264,7 +267,7 @@ def _matches(expected, actual):
     # Queued work has an admission epoch, but no execution identity until claimed.
     if expected.kind == 'admission' and expected.generation is None:
         return True
-    return (expected.owner_epoch, expected.generation) == (actual.owner_epoch, actual.generation)
+    return expected.generation == actual.generation
 
 
 def _lookup_rows(conn, scope, keys, issues):
@@ -293,6 +296,8 @@ def _lookup_rows(conn, scope, keys, issues):
             issues.append('identity_mismatch')
             missing.append(key)
             continue
+        if key.generation is not None and key.owner_epoch != row.key.owner_epoch:
+            row_issues.append('owner_epoch_changed')
         issues.extend(row_issues)
         rows.append(row)
     return rows, missing
@@ -305,6 +310,8 @@ def lookup_release_evidence(db_path: str | Path, *, scope: ReleaseScope,
     No status filter is applied. Missing, excluded/cross-scope, replaced identities
     and unavailable legacy evidence remain incomplete. The current authority epoch
     is reported separately and never substituted into a saved execution identity.
+    Epoch drift on a bound identity keeps its current status visible but marks the
+    batch incomplete: this reader cannot certify the intervening adoption proof.
     Tombstone retention is upstream-owned; expired/missing rows cannot prove completion.
     """
     issues = []

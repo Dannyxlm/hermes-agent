@@ -136,9 +136,10 @@ def test_cross_scope_missing_and_wrong_execution_identity_are_incomplete(ledger)
         release.EvidenceKey('execution', worker, 'work', epoch, claim['generation'] + 1),
     )
     result = release.lookup_release_evidence(path, scope=_scope(), keys=keys)
-    assert not result.complete and not result.rows
-    assert result.missing_keys == keys
-    assert {'outside_scope', 'missing_identity', 'identity_mismatch'} <= set(result.issues)
+    assert not result.complete
+    assert len(result.rows) == 1 and result.rows[0].key.owner_epoch == epoch
+    assert result.missing_keys == keys[:3] + keys[4:]
+    assert {'outside_scope', 'missing_identity', 'identity_mismatch', 'owner_epoch_changed'} <= set(result.issues)
     assert 'SECRET' not in json.dumps(asdict(result))
 
 
@@ -207,6 +208,51 @@ def test_explicit_nonempty_scope_required():
         release.ReleaseScope(())
     with pytest.raises(ValueError):
         release.ReleaseScope(('',))
+
+
+def test_reader_holds_the_existing_raw_file_access_guard(tmp_path):
+    from hermes_cli.sqlite_safe_read import has_live_connection
+    path = tmp_path / 'state.db'
+    with SessionDB(path):
+        pass
+    assert not has_live_connection(path)
+    with release._reader(path):
+        assert has_live_connection(path)
+    assert not has_live_connection(path)
+
+
+def test_adopted_long_running_work_remains_visible_but_epoch_drift_is_incomplete(tmp_path):
+    path = tmp_path / 'state.db'
+    scope = release.ReleaseScope(('work',))
+    with SessionDB(path) as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='before-release')
+        db.create_session('work', source='api_server')
+        rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
+            request_id='long-running', payload={'text': 'PRIVATE INPUT'})
+        claimed = rt.claim_session_input(db, epoch=epoch, session_id='work')
+        assert isinstance(claimed, dict)
+        rt.register_worker_execution(db, epoch=epoch, execution_id='child-work',
+            session_id='work', generation=claimed['generation'], kind='cron',
+            adoption_secret='synthetic-adoption')
+        rt.adopt_worker_execution(db, epoch=epoch, execution_id='child-work',
+            session_id='work', generation=claimed['generation'], adoption_secret='synthetic-adoption')
+        before = release.snapshot_release_evidence(path, scope=scope)
+        assert before.complete
+        keys = tuple(row.key for row in before.rows)
+        next_epoch = rt.begin_runtime_epoch(db, instance_id='after-release')
+        rt.recover_session_inputs(db, epoch=next_epoch)
+        rt.adopt_worker_execution(db, epoch=next_epoch, execution_id='child-work',
+            session_id='work', generation=claimed['generation'], adoption_secret='synthetic-adoption')
+        during = release.lookup_release_evidence(path, scope=scope, keys=keys)
+        assert not during.complete and not during.missing_keys
+        assert during.issues == ('owner_epoch_changed',)
+        assert {row.status for row in during.rows} == {'started', 'running'}
+        rt.settle_session_input(db, epoch=next_epoch, admission_id=claimed['admission_id'],
+            generation=claimed['generation'], outcome='completed')
+        after = release.lookup_release_evidence(path, scope=scope, keys=keys)
+        assert not after.complete and not after.missing_keys
+        assert all(row.terminal and row.key.owner_epoch == next_epoch for row in after.rows)
+        assert sum(row.completed_turn for row in after.rows) == 1
 
 
 def test_queued_identity_can_be_claimed_by_next_owner_without_inventing_a_turn(ledger):
