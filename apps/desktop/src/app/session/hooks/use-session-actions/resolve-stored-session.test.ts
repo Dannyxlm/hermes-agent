@@ -147,6 +147,32 @@ describe('resolveStoredSession profile ownership', () => {
     expect($unlistedSessionOwnerRows.get().find(s => s.id === 's1')?.hidden).toBe(true)
   })
 
+  it('keeps a Family thread directly resolvable off-list without promoting or mutating it', async () => {
+    const worker = { ...session({ id: 'thread-tip', _lineage_root_id: 'thread-root', _lineage_ids: ['thread-root', 'thread-tip'], source: 'tui' }), thread_parent_id: 'lead' }
+    mockGetSession.mockResolvedValueOnce(worker)
+
+    const resolved = await resolveStoredSession('thread-root', {
+      connectionId: 'rig', profile: 'meta', targetProfile: 'meta'
+    } as never)
+
+    expect(resolved).toMatchObject({ id: 'thread-tip', thread_parent_id: 'lead', profile: 'meta', connection_id: 'rig' })
+    expect($sessions.get()).toEqual([])
+    expect($unlistedSessionOwnerRows.get()).toEqual([resolved])
+    expect(await resolveStoredSession('thread-root', { connectionId: 'rig', profile: 'meta', targetProfile: 'meta' } as never)).toBe(resolved)
+    expect(mockGetSession).toHaveBeenCalledTimes(1)
+    expect(resolved?.hidden).toBeUndefined()
+    expect(resolved?.archived).toBeUndefined()
+  })
+
+  it('keeps off-list Family twins separate across profiles and connections', async () => {
+    const twin = session({ id: 's1', profile: 'default', connection_id: 'other', hidden: true })
+    $unlistedSessionOwnerRows.set([twin])
+    mockGetSession.mockResolvedValueOnce({ ...session({ id: 's1', source: 'tui' }), thread_parent_id: 'lead' })
+    const resolved = await resolveStoredSession('s1', { connectionId: 'rig', profile: 'meta', targetProfile: 'meta' } as never)
+    expect($sessions.get()).toEqual([])
+    expect($unlistedSessionOwnerRows.get()).toEqual([resolved, twin])
+  })
+
   it('returns an internal delegate child without promoting it into regular sessions', async () => {
     mockGetSession.mockResolvedValueOnce(session({ id: 'child', is_internal_child: true }))
 

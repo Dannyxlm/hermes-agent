@@ -19,6 +19,8 @@ def seed(home, profile):
             db.record_launch(launch_id=launch, kind='teammate', launcher_profile='default',
                              launcher_session_id='parent', child_profile=child_profile)
             db.bind_launch(launch, child_session_id=sid)
+        db.record_launch(launch_id='thread:pending', kind='lane', launcher_profile='default',
+                         launcher_session_id='parent', child_profile=profile)
         db.set_session_pinned('child', True)
         db._write_sql("UPDATE sessions SET end_reason='compression' WHERE id='child'")
         db.create_session('child-tip', 'desktop', parent_session_id='child')

@@ -641,6 +641,22 @@ async def get_session_stats(profile: Optional[str] = None):
     return await asyncio.to_thread(_with_db, profile, _stats, read_only=True)
 
 
+@manage_router.get("/api/sessions/list-membership")
+async def get_session_list_membership(profile: str = Query(..., min_length=1), ids: str = Query(...)):
+    """Close a bounded client cache using exact, profile-local launch provenance."""
+    from hermes_cli.profiles import normalize_profile_name, validate_profile_name
+    from hermes_cli.session_list_membership import read_membership, requested_ids
+
+    stored_ids = requested_ids(ids)
+    try:
+        validate_profile_name(profile)
+        if normalize_profile_name(profile) != profile:
+            raise ValueError('profile must be an exact profile name')
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await asyncio.to_thread(read_membership, _session_db_path_for_profile(profile), stored_ids)
+
+
 @manage_router.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str, profile: Optional[str] = None, compact: bool = False):
     def _detail(db):
@@ -652,6 +668,8 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None, com
         # clients resolve them to whichever gateway happened to be active.
         session["profile"] = _serving_profile(profile)
         session["is_default_profile"] = session["profile"] == "default"
+        from hermes_cli.session_list_membership import trusted_thread_parents
+        session["thread_parent_id"] = trusted_thread_parents(db, [sid]).get(sid)
         # A cron run's liveness is scheduler ownership, not the 300s activity
         # window (#88443): a run inside a long tool call is still owned. A
         # unified-runtime run's local id names no job, so stamp its identity first.
@@ -663,7 +681,7 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None, com
         if owned is not None:
             session["scheduler_owned"] = owned
         if compact:
-            # Opt-in phone metadata; Desktop's rich detail stays byte-for-byte unchanged.
+            # Opt-in phone metadata omits blobs; rich detail retains them.
             for key in ("system_prompt", "model_config", "tool_names"):
                 session.pop(key, None)
         return session

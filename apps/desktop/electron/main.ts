@@ -472,7 +472,7 @@ import {
   isAllProfilesAggregateRequest,
   isAllProfilesSessionListRequest,
   isNotFoundApiError,
-  isRemoteSessionRequestPath,
+  isRemoteSessionOwnerRequest,
   mergeRegistrySessionRows,
   type RegistrySessionSource,
   remoteOwnerRoutePath,
@@ -16061,7 +16061,7 @@ async function interceptSessionRequestForRemote(request, registryConnectionId = 
   //    param (it serves its own state.db natively).
   //  - global remote mode: ONE backend serves every profile via ?profile=, so
   //    route there and KEEP the profile param so it opens the right state.db.
-  if (isRemoteSessionRequestPath(pathname)) {
+  if (isRemoteSessionOwnerRequest(method, parsed)) {
     let profile = (searchParams.get('profile') || request.profile || '').trim()
 
     if (!profile) {

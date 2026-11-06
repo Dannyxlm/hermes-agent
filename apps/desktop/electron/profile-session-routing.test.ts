@@ -16,6 +16,7 @@ import {
   hasPinnedRegistrySessionSource,
   isAllProfilesAggregateRequest,
   isAllProfilesSessionListRequest,
+  isRemoteSessionOwnerRequest,
   isRemoteSessionRequestPath,
   mergeProfileSessionWindow,
   mergeRegistrySessionRows,
@@ -54,6 +55,18 @@ test('legacy remote owner route keeps the mutation identity query for the paired
   const snapshot = new URL('/api/sessions/s1/mutation-snapshot?profile=alpha', 'http://x')
   assert.equal(remoteOwnerRoutePath(snapshot.pathname, snapshot.searchParams, 'alpha'), '/api/sessions/s1/mutation-snapshot?profile=alpha')
   assert.equal(remoteOwnerRoutePath(snapshot.pathname, snapshot.searchParams, ''), '/api/sessions/s1/mutation-snapshot')
+})
+
+test('static membership follows only its explicit owner and preserves exact ids', () => {
+  const url = new URL('/api/sessions/list-membership?profile=worker&ids=%5B%22stored%22%5D', 'http://test')
+  assert.equal(isRemoteSessionRequestPath(url.pathname), false)
+  assert.equal(isRemoteSessionOwnerRequest('GET', url), true)
+  assert.equal(isRemoteSessionOwnerRequest('PATCH', url), false)
+  assert.equal(isRemoteSessionOwnerRequest('GET', new URL('/api/sessions/list-membership', url)), false)
+  const routed = new URL(remoteOwnerRoutePath(url.pathname, url.searchParams, 'worker'), url)
+  assert.equal(routed.pathname, '/api/sessions/list-membership')
+  assert.equal(routed.searchParams.get('profile'), 'worker')
+  assert.deepEqual(JSON.parse(routed.searchParams.get('ids') || '[]'), ['stored'])
 })
 
 test('all-profiles session routing is limited to read-only list endpoints', () => {
@@ -771,6 +784,7 @@ test('archived merged pages reach every archived row from older and current back
       )
 
       const merged = [...base.sessions].sort((a: any, b: any) => b.last_active - a.last_active)
+
       const response = composeUnifiedSessionResponse(base, merged, offset, 200, base.total, base.profile_totals, [], {
         archivedOnly: true
       })

@@ -55,7 +55,15 @@ export function isAllProfilesSessionListRequest(method: string | undefined, path
  *  edit reads `/mutation-snapshot` before its PATCH; both must reach the backend that
  *  owns the row, or the revision fence compares against the wrong store (#138905). */
 export function isRemoteSessionRequestPath(pathname: string): boolean {
-  return /^\/api\/sessions\/[^/]+(?:\/(?:messages|messages\/around|mutation-snapshot|timeline))?$/.test(pathname)
+  return pathname !== '/api/sessions/list-membership' &&
+    /^\/api\/sessions\/[^/]+(?:\/(?:messages|messages\/around|mutation-snapshot|timeline))?$/.test(pathname)
+}
+
+/** Membership is a static exact-profile read, never a stored id to discover
+ *  by scanning remote session lists. */
+export function isRemoteSessionOwnerRequest(method: string, url: URL): boolean {
+  return isRemoteSessionRequestPath(url.pathname) ||
+    (method === 'GET' && url.pathname === '/api/sessions/list-membership' && Boolean(url.searchParams.get('profile')))
 }
 
 function rowsOf(data: unknown): unknown[] {

@@ -81,7 +81,7 @@ def test_rest_page_and_default_detail(lineage, monkeypatch, tmp_path):
     assert [(row['id'], row['content']) for row in page['messages']] == expected[-200:-100]
     detail = asyncio.run(sessions.get_session_detail('tip'))
     original = db.get_session('tip')
-    original.update(profile='default', is_default_profile=True)
+    original.update(profile='default', is_default_profile=True, thread_parent_id=None)
     assert json.dumps(detail) == json.dumps(original)
 
 
