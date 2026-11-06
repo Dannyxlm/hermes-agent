@@ -43,7 +43,12 @@ def _retained_paths(directory, cutoff):
     for path in directory.glob("proc_*.json"):
         try:
             modified = path.stat().st_mtime
-            notification = json.loads(path.read_text(encoding="utf-8-sig")).get("notification") or {}
+            record = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(record, dict):
+                continue
+            notification = record.get("notification") or {}
+            if not isinstance(notification, dict):
+                continue
             from tools.process_registry_delivery import uncertain_legacy_notification
             if (notification.get("status") in {"pending", "unknown"}
                     and not uncertain_legacy_notification(notification)):
