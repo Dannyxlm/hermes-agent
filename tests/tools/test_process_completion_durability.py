@@ -113,8 +113,13 @@ def test_legacy_handoff_stays_unknown_instead_of_replaying_on_restart(tmp_path, 
     assert len(registry.drain_notifications(session_key='owner')) == 1
     assert notification_state(event)['status'] == 'unknown'
     recovered = pr.ProcessRegistry()
+    recovered.restore_completions()
+    assert recovered.completion_queue.empty(), 'no FIFO can ever reconcile a legacy handoff'
     assert recovered.drain_notifications(session_key='owner') == []
     assert notification_state(event)['status'] == 'unknown'
+    from tools import process_registry_results as results
+    monkeypatch.setattr(results, 'RESULT_RETENTION_SECONDS', -1)
+    assert results._result_paths() == [], 'uncertain legacy history must have bounded retention'
 
 
 def test_foreign_profile_and_owner_cannot_consume_recovered_result(tmp_path, monkeypatch):

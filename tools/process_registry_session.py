@@ -81,6 +81,7 @@ class ProcessSession:
     # publishes the completion, so a duplicate finisher must not release waiters early.
     _finish_claimed: bool = field(default=False, repr=False)
     _notification_consumed: bool = field(default=False, repr=False)
+    _result_persistence_error: str = field(default='', repr=False)
     # The last stop of ``systemd_unit`` failed, so its descendants may still be alive; bulk
     # cleanup retries the stop even after the session finished.
     _scope_stop_pending: bool = field(default=False, repr=False)

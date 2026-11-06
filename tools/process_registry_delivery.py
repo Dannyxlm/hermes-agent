@@ -16,6 +16,12 @@ from utils import atomic_json_write
 UNSETTLED = frozenset({'pending', 'unknown'})
 
 
+def uncertain_legacy_notification(state):
+    """No durable FIFO was involved, so there is nothing a later scan can reconcile."""
+    return state.get('status') == 'unknown' and state.get('reason') in {
+        'legacy_consumer_handoff', 'volatile_delivery_after_persistence_failure'}
+
+
 def result_path(session_id):
     if not re.fullmatch(r'proc_[\w]+', session_id):
         raise ValueError('invalid process result id')
@@ -40,6 +46,8 @@ def completion_event(session, *, durable=False):
     }
     if session.handoff_note:
         event['handoff_note'] = session.handoff_note
+    if session._result_persistence_error and not durable:
+        event['_process_result_durability_error'] = session._result_persistence_error
     if durable:
         from agent.redact import redact_sensitive_text, redact_terminal_output
         event["output"] = redact_terminal_output(event["output"], event["command"], force=True)
@@ -52,9 +60,11 @@ def completion_event(session, *, durable=False):
 def new_notification(session):
     event = completion_event(session, durable=True)
     consumed = session._notification_consumed
+    uncertain = bool(session._result_persistence_error) and not consumed
     return {'identity': ['completion', session.id, session.started_at],
-            'status': 'terminal' if consumed else 'pending', 'event': event,
-            'admission_id': None, 'reason': 'consumed' if consumed else None}
+            'status': 'terminal' if consumed else 'unknown' if uncertain else 'pending', 'event': event,
+            'admission_id': None, 'reason': 'consumed' if consumed else (
+                'volatile_delivery_after_persistence_failure' if uncertain else None)}
 
 
 def _matches(notification, event):
@@ -72,6 +82,8 @@ def notification_state(event):
     home = event.get('_process_result_home')
     if home and Path(home).resolve() != get_hermes_home().resolve():
         raise ValueError('process notification profile mismatch')
+    if event.get('_process_result_durability_error'):
+        return None  # Live-only fallback: do not pretend there is a valid producer receipt.
     try:
         record = json.loads(result_path(str(event.get('session_id') or '')).read_text(encoding="utf-8-sig"))
     except (FileNotFoundError, ValueError):
@@ -143,9 +155,23 @@ def legacy_notification_handoff(event):
     return settle_notification(event, 'unknown', reason='legacy_consumer_handoff', expected_status='pending')
 
 
+def legacy_notification_submitted(event, accepted):
+    """A positive volatile handoff is terminal, not a durable FIFO admission or consumption.
+
+    An explicit refusal proves no turn was accepted and permits retry. An exception
+    does not: the pre-handoff unknown must survive without blind replay.
+    """
+    if notification_state(event) is not None:
+        settle_notification(event, 'terminal' if accepted else 'pending',
+                            reason='legacy_submit_accepted' if accepted else 'legacy_submit_refused',
+                            expected_status='unknown')
+
+
 def mark_completion_consumed(registry, session):
     registry._completion_consumed.add(session.id)
     session._notification_consumed = True
+    if session._result_persistence_error:
+        return  # The live wait/log succeeded; there is no durable receipt to acknowledge.
     event = {'type': 'completion', 'session_id': session.id, 'started_at': session.started_at,
              'parent_session_id': session.parent_session_id, 'session_key': session.session_key}
     settle_notification(event, 'terminal', reason='consumed', expected_status='pending')
@@ -165,7 +191,7 @@ def restore_process_completions(target_queue):
         except FileNotFoundError:
             continue  # A now-settled history receipt was pruned by another writer.
         notification = record.get('notification') or {}
-        if notification.get('status') not in UNSETTLED:
+        if notification.get('status') not in UNSETTLED or uncertain_legacy_notification(notification):
             continue
         event = notification['event']
         identity = (str(get_hermes_home().resolve()), *notification['identity'])

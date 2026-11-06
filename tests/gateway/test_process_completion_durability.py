@@ -161,7 +161,7 @@ async def test_secondary_profile_recovery_never_enters_launch_fifo(gateway):
 
 
 @pytest.mark.asyncio
-async def test_transient_admission_refusal_remains_pending_then_delivers(gateway):
+async def test_transient_admission_refusal_remains_pending_then_delivers(gateway, monkeypatch):
     from gateway.drain_control import open_restart_wait
     sid = gateway.launch.session_id
     await gateway.watch(gateway.primary, sid)
@@ -174,6 +174,10 @@ async def test_transient_admission_refusal_remains_pending_then_delivers(gateway
     assert offered.qsize() == 1
     assert gateway.rows(gateway.primary, sid) == []
     gateway.runner._draining = False
+    import gateway.process_completion_delivery as delivery
+    from types import SimpleNamespace
+    next_due = offered.queue[0]['_process_next_retry_at']
+    monkeypatch.setattr(delivery, 'time', SimpleNamespace(monotonic=lambda: next_due + 1))
     await gateway.runner._drain_watch_notifications(offered)
     await gateway.settled(gateway.primary, sid, 1)
     assert state(gateway.primary, event)['status'] == 'admitted'

@@ -44,7 +44,9 @@ def _retained_paths(directory, cutoff):
         try:
             modified = path.stat().st_mtime
             notification = json.loads(path.read_text(encoding="utf-8-sig")).get("notification") or {}
-            if notification.get("status") in {"pending", "unknown"}:
+            from tools.process_registry_delivery import uncertain_legacy_notification
+            if (notification.get("status") in {"pending", "unknown"}
+                    and not uncertain_legacy_notification(notification)):
                 obligations.append(path)
                 continue
             if modified < cutoff:
@@ -59,39 +61,70 @@ def _retained_paths(directory, cutoff):
     return obligations + [path for _, path in retained[:MAX_RETAINED_RESULTS]]
 
 
-def save_completed_result(session) -> None:
+def completed_result_record(session):
     from agent.redact import redact_sensitive_text, redact_terminal_output
     from tools.process_registry import MAX_OUTPUT_CHARS
 
-    from tools.process_launches import finish_process_launch
-    finish_process_launch(session)
     with session._lock:
         record = {key: getattr(session, key) for key in _RESULT_FIELDS}
         record["output"] = session.output_buffer[-MAX_OUTPUT_CHARS:]
     # Live-output opt-out must not persist raw credentials in durable receipts.
     record["output"] = redact_terminal_output(record["output"], record["command"], force=True)
     record["command"] = redact_sensitive_text(record["command"], code_file=True, force=True)
+    if session.notify_on_complete:
+        from tools.process_registry_delivery import new_notification
+        record['notification'] = new_notification(session)
+    return record
+
+
+def save_completed_result(session) -> None:
+    from tools.process_launches import finish_process_launch
+    finish_process_launch(session)
+    save_completed_record(completed_result_record(session))
+    session._result_persistence_error = ''
+
+
+def retain_completed_result(session):
+    """Storage failure is not process liveness; the existing checkpoint keeps its snapshot."""
+    from tools.process_registry import save_completed_result
+    try:
+        save_completed_result(session)
+    except (OSError, ValueError, RuntimeError) as exc:
+        session._result_persistence_error = type(exc).__name__
+        logger.warning('Completed process %s has no durable result (%s)',
+                       session.id, type(exc).__name__, exc_info=True)
+
+
+def save_completed_record(record):
+    """Commit either a live result or the exact failed-write snapshot from the checkpoint."""
     directory = get_hermes_home() / "logs" / "process-results"
     try:
         from hermes_constants import assert_named_profile_home_live
         assert_named_profile_home_live(directory)
         make_user_dir(directory, mode=0o700, parents=True, exist_ok=True)
         from hermes_cli.active_sessions import _FileLock
-        from tools.process_registry_delivery import new_notification, result_path
-        path = result_path(session.id)
+        from tools.process_registry_delivery import result_path
+        path = result_path(record['id'])
         with _FileLock(directory.with_suffix(".lock")):
             previous = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
-            if previous.get("started_at") == session.started_at and "notification" in previous:
+            if previous.get("started_at") == record['started_at'] and "notification" in previous:
                 record["notification"] = previous["notification"]
-            elif session.notify_on_complete:
-                record["notification"] = new_notification(session)
             atomic_json_write(path, record, mode=0o600)
-        _result_paths()
+        try:
+            _result_paths()
+        except (OSError, ValueError, RuntimeError):
+            logger.warning('Could not prune completed process history', exc_info=True)
     except OSError:
         # Preserve live delivery on disk failure, but never silently claim durability.
-        logger.warning("Could not retain completed process result %s", session.id, exc_info=True)
-        if session.notify_on_complete:
-            raise  # Never discard the running checkpoint before its obligation is durable.
+        logger.warning("Could not retain completed process result %s", record['id'], exc_info=True)
+        raise
+
+
+def failed_result_checkpoint(session):
+    """Once live delivery is possible, a restart cannot prove that it did not happen."""
+    record = completed_result_record(session)
+    return {'session_id': session.id, 'completed_result': record,
+            'completion_persistence_error': session._result_persistence_error}
 
 
 def _owns_result(owner: str, parent: str | None) -> bool:

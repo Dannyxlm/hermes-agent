@@ -612,17 +612,25 @@ def _notif_dispatch_event(sid: str, session: dict, evt: dict, text: str) -> None
     from agent.notification_presentation import diagnostic_process_event
     if diagnostic_process_event(evt):
         kwargs.setdefault("display_metadata", {})["notification_category"] = "diagnostic"
+    accepted = False
     try:
         from tools.process_registry_delivery import legacy_notification_handoff
         if not legacy_notification_handoff(evt):
             _notif_release_turn(session)
             return
-        if not _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
-                             "notification poller dispatch failed", report_ownership_refusal=False, **kwargs):
+        accepted = _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
+                                 "notification poller dispatch failed", report_ownership_refusal=False, **kwargs)
+        if not accepted:
+            from tools.process_registry_delivery import legacy_notification_submitted
+            legacy_notification_submitted(evt, False)
             _notif_defer_event(evt, claim)
             _notif_refusal_backoff(session)  # requeued: queue.get(timeout=...) would never wait
             return
+        from tools.process_registry_delivery import legacy_notification_submitted
+        legacy_notification_submitted(evt, True)
     except Exception:
+        if not accepted:
+            _notif_release_turn(session)
         release_event_delivery(evt, claim)
         return
     complete_event_delivery(evt, claim)
@@ -730,19 +738,28 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
         return
     if text is None:
         _notif_release_turn(session)
+    accepted = False
     try:
         if text is not None:
-            if not _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
-                                 "completion batch dispatch failed", display_kind=PROCESS_COMPLETE_DISPLAY_KIND,
-                                 report_ownership_refusal=False,
-                                 display_metadata=_process_completion_display_metadata(batch, registry)):
+            accepted = _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
+                                     "completion batch dispatch failed", display_kind=PROCESS_COMPLETE_DISPLAY_KIND,
+                                     report_ownership_refusal=False,
+                                     display_metadata=_process_completion_display_metadata(batch, registry))
+            if not accepted:
                 for event, _text, claim in claimed:
+                    from tools.process_registry_delivery import legacy_notification_submitted
+                    legacy_notification_submitted(event, False)
                     _notif_defer_event(event, claim,
                         deferred.append if deferred is not None else registry.completion_queue.put)
                 if deferred is None:  # requeued onto the live queue (a shutdown drain hands them back)
                     _notif_refusal_backoff(session)
                 return
+            for event, _text, _claim in claimed:
+                from tools.process_registry_delivery import legacy_notification_submitted
+                legacy_notification_submitted(event, True)
     except Exception:
+        if not accepted:
+            _notif_release_turn(session)
         for event, _text, claim in claimed:
             release_event_delivery(event, claim)
         return

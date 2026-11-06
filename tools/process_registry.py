@@ -37,7 +37,7 @@ from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
 from tools.process_registry_ownership import ProcessOwnershipMixin
 from tools.process_registry_termination import ProcessTerminationMixin
-from tools.process_registry_results import load_completed_results, save_completed_result
+from tools.process_registry_results import load_completed_results, save_completed_result, retain_completed_result
 from tools.process_registry_delivery import mark_completion_consumed
 from tools.process_registry_activity import new_process_session
 from tools.process_registry_launch import ProcessLaunchMixin
@@ -1367,15 +1367,15 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         """Move a session from running to finished.
         Idempotent: kill_process() and the reader thread can both call this; only
         the FIRST move enqueues the completion notification, so no duplicates.
-        Returns True when this call is the one that persisted the session."""
+        Returns True when this call owns finalization, not a durability guarantee."""
         with self._lock:
             was_running = session.id in self._running
             if was_running:
                 session._finish_claimed = True
                 session.exited_at = time.time()
-                # Keep the session tracked until its result is durable. A finite
-                # parent must not observe completion and exit during this write.
-                save_completed_result(session)
+                # Attempt durability before exposing finality. Storage failures keep
+                # a checkpoint snapshot but must not wedge a finite parent's wait.
+                retain_completed_result(session)
                 self._running.pop(session.id)
             self._finished[session.id] = session
         self._release_job_group(session)
