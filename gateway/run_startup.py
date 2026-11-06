@@ -1228,6 +1228,8 @@ class GatewayStartupMixin:
         # process never delivered. Explicit here, never at tools import (clients).
         with _log_suppressed(logging.WARNING, "Could not restore async delegation completions: %s"):
             from tools.async_delegation import restore_undelivered_completions
+            from tools.process_registry_delivery import restore_process_completions
+            restore_process_completions(process_registry.completion_queue)
             restore_undelivered_completions(process_registry.completion_queue)
         # Recover the turns the last process left marked (in flight, or reply not yet ledgered).
         # SKIP after a clean exit — the previous process already drained.

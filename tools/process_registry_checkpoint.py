@@ -42,6 +42,9 @@ class ProcessCheckpointMixin:
                 if extra_entries:
                     tracked_ids = {item.get("session_id") for item in entries}
                     entries.extend(item for item in extra_entries if item.get("session_id") not in tracked_ids)
+                from tools.process_registry_results import failed_result_checkpoint
+                entries.extend(failed_result_checkpoint(s) for s in self._finished.values()
+                               if s._result_persistence_error)
                 known = {*self._running, *self._finished}
             from hermes_cli.active_sessions import _FileLock
             from utils import atomic_json_write
@@ -65,9 +68,10 @@ class ProcessCheckpointMixin:
         except (OSError, ValueError):
             return []
         return [entry for entry in on_disk if isinstance(entry, dict) and entry.get("session_id") not in known
-                and (log := adoptable_log(entry.get("output_log"))) and Path(log).exists()
-                and (_exit_path(log).exists() or self._detached_host_fate(
-                    entry.get("pid"), entry.get("host_start_time")) == "running")]
+                and ('completed_result' in entry or (
+                    (log := adoptable_log(entry.get("output_log"))) and Path(log).exists()
+                    and (_exit_path(log).exists() or self._detached_host_fate(
+                        entry.get("pid"), entry.get("host_start_time")) == "running")))]
 
     def recover_from_checkpoint(self) -> int:
         """On gateway startup, probe PIDs from the checkpoint file; returns how many
@@ -91,6 +95,27 @@ class ProcessCheckpointMixin:
         recovered = 0
         unresolved_scope_entries: list[dict[str, Any]] = []
         for entry in entries:
+            if 'completed_result' in entry:
+                from tools.process_registry_results import save_completed_record, _RESULT_FIELDS
+                try:
+                    record = entry['completed_result']
+                    save_completed_record(record)
+                except (OSError, ValueError, RuntimeError):
+                    logger.warning('Could not recover completed result %s', entry.get('session_id'), exc_info=True)
+                    unresolved_scope_entries.append(entry)
+                else:
+                    session = ProcessSession(**{k: record[k] for k in _RESULT_FIELDS if k in record},
+                                             exited=True, output_buffer=record['output'])
+                    session._completion_event.set()
+                    with self._lock:
+                        self._finished[session.id] = session
+                continue  # Never probe or re-adopt a positively finished process's PID.
+            from tools.process_registry_delivery import notification_state
+            if notification_state({"type": "completion", "session_id": entry.get("session_id"),
+                                   "started_at": entry.get("started_at"),
+                                   "session_key": entry.get("session_key", ""),
+                                   "parent_session_id": entry.get("parent_session_id", "")}):
+                continue  # The result already committed; never re-adopt its old running checkpoint.
             pid, pid_scope = entry.get("pid"), entry.get("pid_scope", "host")
             if not pid:
                 continue

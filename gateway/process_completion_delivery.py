@@ -1,0 +1,116 @@
+"""Ordinary-process obligations use the existing session automation FIFO and receipts."""
+import asyncio
+import logging
+import time
+
+from tools.process_registry_delivery import admission_process_events, notification_state, settle_notification
+
+logger = logging.getLogger(__name__)
+
+
+def acknowledge_process_admission(event, receipt):
+    for member in admission_process_events(event):
+        settle_notification(member, 'admitted', admission_id=receipt.admission_id, reason='fifo_accepted')
+
+
+def claim_process_notifications(events):
+    """Refund only this attempt's claims when preparation fails before FIFO admission."""
+    from hermes_state_runtime import RuntimeStoreError
+    from tools.process_registry_delivery import settle_notification
+    claimed = []
+    try:
+        for member in events:
+            if not settle_notification(member, 'unknown', reason='admission_in_progress', expected_status='pending'):
+                raise RuntimeStoreError('outcome_unknown')
+            claimed.append(member)
+    except (OSError, ValueError, RuntimeError):
+        for member in claimed:
+            try:
+                settle_notification(member, 'pending', reason='admission_not_attempted', expected_status='unknown')
+            except (OSError, ValueError, RuntimeError):
+                logger.warning('Could not refund unattempted process admission for %s',
+                               member.get('session_id'), exc_info=True)
+        raise
+
+
+def reconcile_process_admission(runner, event):
+    from gateway.session_automation import completion_admission
+    row = completion_admission(runner, event)
+    if row is not None:
+        settle_notification(event, 'admitted', admission_id=row['admission_id'], reason='fifo_receipt')
+    return row
+
+
+async def deliver_process_completion(runner, text, event, *, sibling_claims=()):
+    """Reconcile before target classification: even /new cannot undo an accepted FIFO input.
+
+    An unknown request with no receipt stays unknown. No timeout, empty lookup, retry
+    budget or in-memory dedup marker authorizes repeating its side effects.
+    """
+    state = notification_state(event)
+    if state is None:
+        return await runner._deliver_completion_notification_scoped(text, event, sibling_claims=sibling_claims)
+    if state['status'] in {'admitted', 'terminal'}:
+        return None
+    from tools.process_registry_delivery import uncertain_legacy_notification
+    if uncertain_legacy_notification(state):
+        return None  # No FIFO was attempted; a missing receipt cannot justify replay.
+    from gateway.session_local_recovery import restore_completion_route
+    restore_completion_route(runner, str(event.get('session_key') or ''))
+    from gateway.session_detached import follow_detached_pin
+    event = await follow_detached_pin(runner, event)
+    if reconcile_process_admission(runner, event) is not None:
+        return True
+    if state['status'] == 'unknown':
+        return False
+    from tools.process_registry import process_registry
+    from tools.process_registry_notifications import should_surface_notification
+    if (not should_surface_notification(event)
+            or process_registry.is_completion_consumed(event['session_id'])):
+        settle_notification(event, 'terminal', reason='suppressed_or_consumed')
+        return None
+    parent = str(event.get('parent_session_id') or '')
+    if parent:
+        verdict = await runner._classify_completion_target(parent, str(event.get('session_key') or ''))
+        if verdict == 'terminal':
+            settle_notification(event, 'terminal', reason='target_gone')
+            return None
+        if verdict == 'retry':
+            return False
+    # A legacy adapter has no queryable FIFO receipt. Keep the obligation pending,
+    # rather than declare a volatile callback a durable acceptance.
+    from gateway.session_authorities import active_authority
+    if active_authority(runner) is None:
+        return False
+    return await runner._deliver_completion_notification_scoped(text, event, sibling_claims=sibling_claims)
+
+
+async def drain_recovered_process_completions(runner, target_queue):
+    """Recovered processes no longer have polling watchers. The existing idle drain owns them."""
+    events, keep = [], []
+    while not target_queue.empty():
+        event = target_queue.get_nowait()
+        (events if event.get('_process_completion_recovery') else keep).append(event)
+    for event in keep:
+        target_queue.put(event)
+    from tools.process_registry_notifications import format_process_notification
+    retry = []
+    for index, event in enumerate(events):
+        if event.get('_process_next_retry_at', 0) > time.monotonic():
+            retry.append(event)
+            continue
+        try:
+            result = await runner._deliver_completion_notification(format_process_notification(event), event)
+        except asyncio.CancelledError:
+            for waiting in [*retry, *events[index:]]:
+                target_queue.put(waiting)
+            raise
+        except Exception:
+            logger.warning('Recovered process notification failed for %s', event.get('session_id'), exc_info=True)
+            result = False
+        if result is False:
+            step = min(int(event.get('_process_retry_step') or 0) + 1, 8)
+            event['_process_retry_step'] = step
+            event['_process_next_retry_at'] = time.monotonic() + min(2 ** step, 300)
+            retry.append(event)
+    return retry

@@ -1,7 +1,7 @@
 """Bounded, profile-local receipts for completed terminal processes.
 
-Receipts are read through process_manage, never replayed as notifications or
-adopted as live PIDs. Each producer writes its own file so independent one-shot
+Receipts are read through process_manage, never adopted as live PIDs. New receipts
+also retain explicit completion obligations; legacy ambiguous history is not replayed. Each producer writes its own file so independent one-shot
 parents cannot overwrite each other's results in the running-PID checkpoint.
 """
 
@@ -30,45 +30,101 @@ _RESULT_FIELDS = (
 def _result_paths():
     """Prune by completion time, not start time (jobs can take days)."""
     directory = get_hermes_home() / "logs" / "process-results"
-    cutoff = time.time() - RESULT_RETENTION_SECONDS
+    if not directory.exists():
+        return []
+    from hermes_cli.active_sessions import _FileLock
+    with _FileLock(directory.with_suffix(".lock")):
+        return _retained_paths(directory, time.time() - RESULT_RETENTION_SECONDS)
+
+
+def _retained_paths(directory, cutoff):
     retained = []
+    obligations = []
     for path in directory.glob("proc_*.json"):
         try:
             modified = path.stat().st_mtime
+            notification = json.loads(path.read_text(encoding="utf-8-sig")).get("notification") or {}
+            from tools.process_registry_delivery import uncertain_legacy_notification
+            if (notification.get("status") in {"pending", "unknown"}
+                    and not uncertain_legacy_notification(notification)):
+                obligations.append(path)
+                continue
             if modified < cutoff:
                 path.unlink(missing_ok=True)
             else:
                 retained.append((modified, path))
-        except FileNotFoundError:
-            continue  # Another producer pruned it.
+        except (FileNotFoundError, ValueError):
+            continue  # Another producer pruned it, or an unreadable receipt needs inspection.
     retained.sort(key=lambda item: (item[0], item[1].name), reverse=True)
     for _, path in retained[MAX_RETAINED_RESULTS:]:
         path.unlink(missing_ok=True)
-    return [path for _, path in retained[:MAX_RETAINED_RESULTS]]
+    return obligations + [path for _, path in retained[:MAX_RETAINED_RESULTS]]
 
 
-def save_completed_result(session) -> None:
+def completed_result_record(session):
     from agent.redact import redact_sensitive_text, redact_terminal_output
     from tools.process_registry import MAX_OUTPUT_CHARS
 
-    from tools.process_launches import finish_process_launch
-    finish_process_launch(session)
     with session._lock:
         record = {key: getattr(session, key) for key in _RESULT_FIELDS}
         record["output"] = session.output_buffer[-MAX_OUTPUT_CHARS:]
     # Live-output opt-out must not persist raw credentials in durable receipts.
     record["output"] = redact_terminal_output(record["output"], record["command"], force=True)
     record["command"] = redact_sensitive_text(record["command"], code_file=True, force=True)
+    if session.notify_on_complete:
+        from tools.process_registry_delivery import new_notification
+        record['notification'] = new_notification(session)
+    return record
+
+
+def save_completed_result(session) -> None:
+    from tools.process_launches import finish_process_launch
+    finish_process_launch(session)
+    save_completed_record(completed_result_record(session))
+    session._result_persistence_error = ''
+
+
+def retain_completed_result(session):
+    """Storage failure is not process liveness; the existing checkpoint keeps its snapshot."""
+    from tools.process_registry import save_completed_result
+    try:
+        save_completed_result(session)
+    except (OSError, ValueError, RuntimeError) as exc:
+        session._result_persistence_error = type(exc).__name__
+        logger.warning('Completed process %s has no durable result (%s)',
+                       session.id, type(exc).__name__, exc_info=True)
+
+
+def save_completed_record(record):
+    """Commit either a live result or the exact failed-write snapshot from the checkpoint."""
     directory = get_hermes_home() / "logs" / "process-results"
     try:
         from hermes_constants import assert_named_profile_home_live
         assert_named_profile_home_live(directory)
         make_user_dir(directory, mode=0o700, parents=True, exist_ok=True)
-        atomic_json_write(directory / f"{session.id}.json", record, mode=0o600)
-        _result_paths()
+        from hermes_cli.active_sessions import _FileLock
+        from tools.process_registry_delivery import result_path
+        path = result_path(record['id'])
+        with _FileLock(directory.with_suffix(".lock")):
+            previous = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+            if previous.get("started_at") == record['started_at'] and "notification" in previous:
+                record["notification"] = previous["notification"]
+            atomic_json_write(path, record, mode=0o600)
+        try:
+            _result_paths()
+        except (OSError, ValueError, RuntimeError):
+            logger.warning('Could not prune completed process history', exc_info=True)
     except OSError:
         # Preserve live delivery on disk failure, but never silently claim durability.
-        logger.warning("Could not retain completed process result %s", session.id, exc_info=True)
+        logger.warning("Could not retain completed process result %s", record['id'], exc_info=True)
+        raise
+
+
+def failed_result_checkpoint(session):
+    """Once live delivery is possible, a restart cannot prove that it did not happen."""
+    record = completed_result_record(session)
+    return {'session_id': session.id, 'completed_result': record,
+            'completion_persistence_error': session._result_persistence_error}
 
 
 def _owns_result(owner: str, parent: str | None) -> bool:

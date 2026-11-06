@@ -743,7 +743,11 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         See #9290.
         """
         from gateway.run import _drain_gateway_watch_events, _format_gateway_process_notification
+        from gateway.process_completion_delivery import drain_recovered_process_completions
+        retry = await drain_recovered_process_completions(self, completion_queue)
         watch_events = _drain_gateway_watch_events(completion_queue)
+        for evt in retry:
+            completion_queue.put(evt)
         for evt in watch_events:
             next_retry_at = evt.get("_watch_next_retry_at")
             if next_retry_at is not None and next_retry_at > time.monotonic():
@@ -1294,8 +1298,8 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         terminal. False remains retryable. Claims are settled together for every sibling.
         """
         async with self._completion_event_scope(evt):
-            return await self._deliver_completion_notification_scoped(
-                synth_text, evt, sibling_claims=sibling_claims)
+            from gateway.process_completion_delivery import deliver_process_completion
+            return await deliver_process_completion(self, synth_text, evt, sibling_claims=sibling_claims)
 
     async def _deliver_completion_notification_scoped(
         self, synth_text: str, evt: dict, *, sibling_claims=(),
@@ -1623,8 +1627,10 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         secondary's rows would otherwise never be replayed after a restart."""
         from tools.async_delegation import restore_undelivered_completions
         from tools.process_registry import process_registry as _pr
-        self._each_secondary_ledger(profile_homes, lambda: restore_undelivered_completions(_pr.completion_queue),
-                                    "Restored")
+        from tools.process_registry_delivery import restore_process_completions
+        self._each_secondary_ledger(profile_homes, lambda: (
+            restore_process_completions(_pr.completion_queue)
+            + restore_undelivered_completions(_pr.completion_queue)), "Restored")
 
     def _sweep_orphaned_completion_ledgers(self) -> None:
         """Offer completions whose owner process died while this gateway runs (#97202): the launch
@@ -1632,7 +1638,9 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
         owners that were already gone when the gateway started."""
         from tools.async_delegation import sweep_orphaned_completions
         from tools.process_registry import process_registry as _pr
-        sweep = lambda: sweep_orphaned_completions(_pr.completion_queue)
+        from tools.process_registry_delivery import restore_process_completions
+        sweep = lambda: (restore_process_completions(_pr.completion_queue)
+                         + sweep_orphaned_completions(_pr.completion_queue))
         with _log_suppressed(logging.DEBUG, "Orphaned async completion sweep failed: %s"):
             if count := sweep():
                 logger.info("Re-offered %d orphaned async completion(s)", count)
@@ -1940,6 +1948,12 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                             committed = False
                         if committed:
                             break  # The last refusal was a lost ACK: the turn is committed.
+                    from tools.process_registry_delivery import notification_state
+                    if notification_state(completion_evt) is not None:
+                        # Its durable obligation is recovered by the idle drain; never replace an
+                        # uncertain admission with an untracked plain send.
+                        process_registry.completion_queue.put({**completion_evt, "_process_completion_recovery": True})
+                        break
                     logger.warning(
                         "Process watcher: completion for %s was refused %d times; falling back to the "
                         "notify_mode=%s notice", session_id, completion_attempts, notify_mode,
