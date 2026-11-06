@@ -105,3 +105,28 @@ def test_other_authors_and_missing_budget_are_not_governed(home):
     assert _call(action="patch", name="mine", **grow)["success"] is True  # no budget file: no law
     _budget(home)
     assert _call(action="patch", name="vendor", **grow)["success"] is True
+
+
+def test_write_file_skill_md_is_held_to_the_cap(home):
+    _budget(home)
+    d = _put(home, "small", 1_000)
+    r = _call(action="write_file", name="small", file_path="SKILL.md", file_content=_content("small", 2_400))
+    assert r["success"] is False and (d / "SKILL.md").stat().st_size == 1_000
+
+
+def test_a_specialist_profile_editing_the_shared_library_is_governed_but_its_own_skills_are_not(
+        tmp_path, monkeypatch):
+    root, profile = tmp_path / "root", tmp_path / "root" / "profiles" / "vox"
+    (root / "laws").mkdir(parents=True)
+    (root / "config.yaml").write_text("{}\n")  # marks root as a Hermes home
+    (profile / "skills").mkdir(parents=True)
+    (root / "skills").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    _budget(root)
+    shared, own = _put(root, "shared", 1_000), _put(profile, "own", 1_000)
+    grow = dict(old_string="# T\n", new_string="# T\n" + "u" * 3_000)
+    with patch("tools.skill_manager_tool.SKILLS_DIR", profile / "skills"), \
+         patch("agent.skill_utils.get_all_skills_dirs", return_value=[profile / "skills", root / "skills"]):
+        assert _call(action="patch", name="shared", **grow)["success"] is False
+        assert _call(action="patch", name="own", **grow)["success"] is True
+    assert shared.joinpath("SKILL.md").stat().st_size == 1_000 and own.joinpath("SKILL.md").stat().st_size > 2_000

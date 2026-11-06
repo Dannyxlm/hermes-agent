@@ -335,8 +335,9 @@ def _main_size_budget_error(skill_dir: Path, content: str, before: Optional[str]
     """Refusal message when this SKILL.md write grows a governed skill past its cap, else None.
 
     A write that does not grow the file (``before_bytes``, the on-disk size; 0 for a create) is
-    always allowed, so slimming an over-cap skill never gets stuck. Fails open on any lookup error:
-    the daily law check stays the backstop."""
+    always allowed, so slimming an over-cap skill never gets stuck. A skill is governed when either
+    its old or new frontmatter names the budget's author, so a rewrite can't drop the author line to
+    grow past the cap. Fails open on any lookup error: the daily law check stays the backstop."""
     new_bytes = len(content.encode("utf-8"))
     if new_bytes <= before_bytes:
         return None
