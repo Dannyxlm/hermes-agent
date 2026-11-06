@@ -14,11 +14,13 @@ import { pickPlaceholder, shouldDisableComposerInput } from '../composer-utils'
 export function useComposerAvailability(disabledProp: boolean, storedId: string | null, sessionId: string | null | undefined) {
   const { t } = useI18n()
   const gatewayState = useStore($gatewayState)
+
   // Subscribe to the verdict itself; the compiler can memoize an imperative store read.
   const readOnly = useStoresSelector(
     [$readOnlyStoredTranscripts, $sessionWriteVerdicts, $cronRunReadOnlyVerdicts, $sessions, $connection, $activeGatewayProfile],
     () => isStoredTranscriptReadOnly(storedId)
   )
+
   const disabled = disabledProp || readOnly
   const ordinary = useComposerPlaceholder({ disabled, reconnecting: gatewayState !== 'open', sessionId })
 
