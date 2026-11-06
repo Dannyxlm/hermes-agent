@@ -125,7 +125,7 @@ def _root(conn, lineage) -> str:
 
 
 def _record_path(home: Path, root: str) -> Path:
-    # In the marker directory, so ``ts.prune_markers`` retires one stuck for a week (its claims are long stale).
+    # Pending delivery is durable; age-based pruning cannot discard an unconsumed notice.
     return ts._marker_dir(home) / f"update-{hashlib.sha256(root.encode()).hexdigest()[:24]}.json"
 
 
@@ -238,6 +238,9 @@ def _finish(home: Path, root: str, record: dict, *, delivered: bool) -> None:
 def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admission, busy: bool) -> bool:
     """Carry a pending update one step. True when this step had the owner admit it."""
     if record.get("exhausted"):
+        if record.get("cut"):
+            _clear(home, tip, record["cut"])
+            _save(home, root, {k: v for k, v in record.items() if k != "cut"})
         return False  # A newer writer needs explicit recovery, not an invented consumption ACK.
     if admission is None:
         if record.get("cut"):  # the resend's intent is saved; clear the turn it replaces first
@@ -253,6 +256,12 @@ def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admiss
         # Cut off by a restart (nobody but this sweeper sent it), or cancelled before it ran: send it again.
         resends = record.get("resends", 0) + 1
         cut = {"admission_id": admission["admission_id"], "generation": admission["generation"]}
+        if resends > MAX_RESENDS and record.get("lead"):
+            # Newer writers identify their durable pending records by lead. Keep those
+            # unacknowledged even if rollback caught the transition before exhausted was saved.
+            if status == "unknown":
+                _clear(home, tip, cut)
+            return False
         if resends > MAX_RESENDS:
             logger.warning("thread update %s dropped after %d resends", record["key"], MAX_RESENDS)
             if status == "unknown":

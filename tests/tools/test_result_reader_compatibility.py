@@ -99,7 +99,8 @@ def test_durable_thread_records_survive_age_but_claims_expire():
     ts.prune_markers(home)
     assert ts.delivered(home, 'seen', 'done')
     assert needs_lead.exists()
-    assert wake._load(home, 'owner')['key'] == 'notice'
+    pending = wake._load(home, 'owner')
+    assert pending is not None and pending['key'] == 'notice'
     assert not list(directory.glob('*.claim'))
 
 
@@ -114,6 +115,53 @@ def test_exhausted_notice_never_acknowledges_unconsumed_result():
     assert not ts.delivered(home, 'unseen', 'done')
     assert (wake._load(home, 'owner') is not None
             or marker_exists(home, 'unseen'))
+
+
+@pytest.mark.parametrize('record', [[], {'notification': ['invalid']}])
+def test_unreadable_result_neighbor_does_not_wedge_completion(record):
+    directory = get_hermes_home() / 'logs/process-results'
+    directory.mkdir(parents=True)
+    malformed = directory / 'proc_malformed.json'
+    atomic_json_write(malformed, record)
+    session = pr.ProcessSession(id='proc_valid', command='printf synthetic', started_at=1.0)
+    registry = pr.ProcessRegistry()
+    registry._running[session.id] = session
+    registry._finish_exited(session, 0)
+    assert session.exited and session._completion_event.is_set()
+    assert session.id not in registry._running
+    assert malformed.exists()
+
+
+def test_retention_lock_failure_does_not_wedge_completion(monkeypatch):
+    def refuse():
+        raise RuntimeError('file lock unavailable')
+
+    monkeypatch.setattr(results, '_result_paths', refuse)
+    session = pr.ProcessSession(id='proc_valid', command='printf synthetic', started_at=1.0)
+    registry = pr.ProcessRegistry()
+    registry._running[session.id] = session
+    registry._finish_exited(session, 0)
+    assert session.exited and session._completion_event.is_set()
+    assert session.id not in registry._running
+
+
+@pytest.mark.parametrize('exhausted', [False, True])
+def test_newer_exhausted_notice_clears_own_unknown_barrier_without_ack(monkeypatch, exhausted):
+    home = get_hermes_home()
+    cut = {'admission_id': 'unknown-notice', 'generation': 1}
+    record = {'key': 'notice', 'items': [['unseen', 'done']], 'text': 'result',
+              'resends': wake.MAX_RESENDS, 'lead': 'owner', **({'exhausted': True, 'cut': cut} if exhausted else {})}
+    wake._save(home, 'owner', record)
+    cleared = []
+    monkeypatch.setattr(wake, '_clear', lambda h, tip, identity: cleared.append(identity))
+    admission = {**cut, 'status': 'unknown', 'outcome': None}
+    assert not wake._advance(home, 'default', 'owner', 'owner', record, admission, False)
+    if not cleared:
+        pending = wake._load(home, 'owner')
+        assert pending is not None and pending.get('exhausted')
+        assert not wake._advance(home, 'default', 'owner', 'owner', pending, admission, False)
+    assert cleared == [cut]
+    assert not ts.delivered(home, 'unseen', 'done')
 
 
 def marker_exists(home, admission_id):

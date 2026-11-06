@@ -43,7 +43,12 @@ def _retained_paths(directory, cutoff):
     for path in directory.glob("proc_*.json"):
         try:
             modified = path.stat().st_mtime
-            notification = json.loads(path.read_text(encoding="utf-8-sig")).get("notification") or {}
+            record = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(record, dict):
+                continue
+            notification = record.get("notification") or {}
+            if not isinstance(notification, dict):
+                continue
             if notification.get("status") in {"pending", "unknown"}:
                 obligations.append(path)
                 continue
@@ -77,7 +82,10 @@ def save_completed_result(session) -> None:
         assert_named_profile_home_live(directory)
         make_user_dir(directory, mode=0o700, parents=True, exist_ok=True)
         atomic_json_write(directory / f"{session.id}.json", record, mode=0o600)
-        _result_paths()
+        try:
+            _result_paths()
+        except (OSError, ValueError, RuntimeError):
+            logger.warning('Could not prune completed process history', exc_info=True)
     except OSError:
         # Preserve live delivery on disk failure, but never silently claim durability.
         logger.warning("Could not retain completed process result %s", session.id, exc_info=True)
@@ -97,7 +105,7 @@ def recover_completed_record(record):
     with _FileLock(directory.with_suffix('.lock')):
         if path.exists():
             previous = json.loads(path.read_text(encoding='utf-8-sig'))
-            if (previous.get('started_at') != record['started_at']
+            if (not isinstance(previous, dict) or previous.get('started_at') != record['started_at']
                     or previous.get('id') != session_id or not isinstance(previous.get('output'), str)):
                 raise ValueError('completed result identity or payload mismatch')
             return  # The committed result may have a newer disposition than the checkpoint.
