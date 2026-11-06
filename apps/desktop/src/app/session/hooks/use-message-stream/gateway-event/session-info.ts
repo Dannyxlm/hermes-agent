@@ -149,7 +149,6 @@ function reconcileSessionInfoPendingSubmissions(ctx: GatewayEventContext): void 
     const scope = sessionControlScopeForEvent(event)
     recordSessionWriteVerdict(storedId, payload?.writable, scope)
     reconcileLocalQueueReceipts(storedId, payload?.queue_receipts, scope)
-    reconcileBlockingUnknown(storedId, payload?.blocking_unknown, scope, pendingSnapshotFence(event.replay_epoch, event.seq))
 
     // A canonical frame's own place in the session's event order fences absence-based retirement.
     reconcilePendingSubmissions(
@@ -158,6 +157,7 @@ function reconcileSessionInfoPendingSubmissions(ctx: GatewayEventContext): void 
       pendingSnapshotFence(event.replay_epoch, event.seq),
       scope
     )
+    reconcileBlockingUnknown(storedId, payload?.blocking_unknown, scope, pendingSnapshotFence(event.replay_epoch, event.seq), true, payload)
   }
 }
 

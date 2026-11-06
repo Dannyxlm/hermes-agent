@@ -41,10 +41,11 @@ async function fixture(patch: Record<string, unknown> = {}, refusal?: string, pr
   await new Promise<void>(resolve => server.once('listening', resolve))
   const frames: Array<{ method: string; params: Record<string, unknown> }> = []
 
-  const receipt = { admission_id: 'lost', ref: { profile_id: profile, session_id: 'chat' }, sequence: 1,
+  const receipt = { admission_id: 'lost', ref: { profile_id: '/opaque/tenants/home-73', session_id: 'chat' }, sequence: 1,
     status: 'unknown', outcome: null, authority_epoch: 1, execution_generation: 4, controls: ['resolve_unknown'], ...patch }
 
   let discarded = false
+  let terminalElsewhere = false
   let receiptRefusal = refusal
   server.on('connection', (socket: any) => {
     socket.on('message', (bytes: Buffer) => {
@@ -59,14 +60,15 @@ async function fixture(patch: Record<string, unknown> = {}, refusal?: string, pr
 
       const result = frame.method === 'session.resume'
         ? { session_id: 'chat', stored_session_id: 'chat', execution_generation: 9, revision: 1, replay_epoch: 'epoch', last_sequence: 3,
-            info: { writable: true }, messages: [], pending: [
-              { ...receipt, admission_id: 'lost', ref: { profile_id: profile, session_id: 'chat' }, status: 'unknown', execution_generation: 4, controls: [], input_id: 'prior-input', text: 'prior input' },
+            info: { writable: true, profile_id: '/opaque/tenants/home-73', profile_name: profile }, messages: [], pending: [
+              { ...receipt, admission_id: 'lost', ref: { profile_id: '/opaque/tenants/home-73', session_id: 'chat' }, status: 'unknown', execution_generation: 4, controls: [], input_id: 'prior-input', text: 'prior input' },
               { ...receipt, admission_id: 'later', sequence: 2, execution_generation: 5, controls: [], input_id: 'later-input', text: 'later input' }
             ].filter(row => !discarded || row.admission_id !== 'lost') }
         : frame.method === 'session.info' ? { stored_session_id: 'chat', writable: true }
         : frame.method === 'prompt.resolve_unknown' ? { ...receipt, status: 'terminal', outcome: 'interrupted' }
         : frame.method === 'prompt.receipt' ? (frame.params.admission_id === 'later'
-            ? { ...receipt, admission_id: 'later', sequence: 2, execution_generation: 5 } : receipt) : {}
+            ? { ...receipt, admission_id: 'later', sequence: 2, execution_generation: 5 }
+            : terminalElsewhere ? { ...receipt, status: 'terminal', controls: [], outcome: 'interrupted' } : receipt) : {}
 
       if (frame.method === 'prompt.resolve_unknown') { discarded = true }
       socket.send(JSON.stringify({ jsonrpc: '2.0', id: frame.id, result }))
@@ -76,7 +78,7 @@ async function fixture(patch: Record<string, unknown> = {}, refusal?: string, pr
   const client = new HermesGateway()
   await client.connect(`ws://127.0.0.1:${port}/api/ws?native_dial=fixture&ticket=fixture`)
 
-  return { client, frames, setReceiptRefusal(value?: string) { receiptRefusal = value }, async close() {
+  return { client, frames, discardElsewhere() { terminalElsewhere = true }, setReceiptRefusal(value?: string) { receiptRefusal = value }, async close() {
     client.close()
 
     for (const socket of server.clients) { socket.terminate() }
@@ -98,6 +100,7 @@ test.each(['session.resume', 'session.activate'])('%s automatically reads only t
     render(createElement(I18nProvider, { configClient: { getConfig: async () => ({}), saveConfig: async () => ({ ok: true }) },
       children: createElement(RecoveryQueue, { client: f.client }) }))
     expect(screen.getAllByRole('button', { name: en.composer.queueLostDiscard })).toHaveLength(1)
+    expect(screen.getByText('prior input')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: en.composer.queueLostDiscard }))
     await vi.waitFor(() => expect(getQueuedPrompts('chat').find(entry => entry.id === 'later')).toMatchObject({ serverControls: ['resolve_unknown'] }))
     expect(f.frames.filter(frame => frame.method === 'prompt.resolve_unknown')).toEqual([
@@ -110,8 +113,8 @@ test.each(['session.resume', 'session.activate'])('%s automatically reads only t
 })
 
 test.each([
-  { ref: { profile_id: 'foreign', session_id: 'chat' } },
-  { ref: { profile_id: 'default', session_id: 'wrong-target' } },
+  { ref: { profile_id: '/opaque/homes/foreign', session_id: 'chat' } },
+  { ref: { profile_id: '/opaque/homes/default', session_id: 'wrong-target' } },
   { admission_id: 'wrong-admission' }, { execution_generation: 3 }, { execution_generation: 5 },
   { controls: [] }, { controls: undefined }, { controls: ['interrupt'] }, { status: 'started' }
 ])('canonical metadata recovery cannot grant Discard from mismatched/unserved evidence %j', async patch => {
@@ -135,6 +138,37 @@ test.each(['permission_denied', 'wrong_user', 'not_found', 'method_not_found', '
     expect(f.frames.filter(frame => frame.method === 'prompt.receipt')).toHaveLength(1)
     expect(getQueuedPrompts('chat').every(entry => !entry.serverControls?.includes('resolve_unknown'))).toBe(true)
     expect(f.frames.some(frame => frame.method === 'prompt.submit' || frame.method === 'prompt.resolve_unknown')).toBe(false)
+  } finally { await f.close() }
+})
+
+test('terminal metadata from another viewer advances info to the next barrier without Discard or replay', async () => {
+  const f = await fixture()
+
+  try {
+    applyRuntimeInfo((await f.client.request<any>('session.resume', { session_id: 'chat' })).info)
+    f.discardElsewhere()
+    f.frames.length = 0
+    applyRuntimeInfo(await f.client.request<any>('session.info', { session_id: 'chat' }))
+    expect(f.frames.filter(frame => frame.method === 'prompt.receipt').map(frame => frame.params.admission_id)).toEqual(['lost', 'later'])
+    expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'later', serverControls: ['resolve_unknown'] }])
+    f.frames.length = 0
+    await f.client.request('session.info', { session_id: 'chat' })
+    expect(f.frames.filter(frame => frame.method === 'prompt.receipt').map(frame => frame.params.admission_id)).toEqual(['later'])
+    expect(f.frames.some(frame => frame.method === 'prompt.resolve_unknown' || frame.method === 'prompt.submit')).toBe(false)
+  } finally { await f.close() }
+})
+
+test.each([undefined, 'default'])('a named-launch route (%s) uses the learned owner for receipt and Discard', async route => {
+  const f = await fixture({}, undefined, 'background')
+  $activeGatewayProfile.set('background')
+
+  try {
+    const resumed = await f.client.request<any>('session.resume', { session_id: 'chat', ...(route ? { profile: route } : {}) })
+    applyRuntimeInfo(resumed.info)
+    expect(getQueuedPrompts('chat').find(row => row.id === 'lost')).toMatchObject({ serverControls: ['resolve_unknown'] })
+    await discardLostPrompt('chat', 'chat', 'lost', f.client.request.bind(f.client), 4)
+    expect(f.frames.filter(frame => frame.method === 'prompt.receipt')[0].params.profile).toBe('background')
+    expect(f.frames.filter(frame => frame.method === 'prompt.resolve_unknown')[0].params.profile).toBe('background')
   } finally { await f.close() }
 })
 
@@ -168,15 +202,17 @@ test('a named-profile canonical owner recovers and discards only on its own rout
 })
 
 test('metadata recovery never reads user/input_id/result content, even when supplied by a receipt', async () => {
-  const identity = { admission_id: 'lost', ref: { profile_id: 'default', session_id: 'chat' }, execution_generation: 4 }
-  const receipt = { ...identity, status: 'unknown', controls: ['resolve_unknown'] }
+  const identity = { admission_id: 'lost', session_id: 'chat', execution_generation: 4 }
+
+  const receipt = { admission_id: identity.admission_id, execution_generation: identity.execution_generation,
+    ref: { profile_id: '/opaque/owner-home', session_id: 'chat' }, status: 'unknown', controls: ['resolve_unknown'] }
 
   for (const name of ['user', 'input_id', 'result']) {
     Object.defineProperty(receipt, name, { get: () => { throw new Error('private content read') } })
   }
 
   const request = vi.fn(async () => receipt)
-  await expect(canonicalUnknownRecovery(identity, request)).resolves.toEqual(receipt)
+  await expect(canonicalUnknownRecovery(identity, request, { profile: 'default' }, raw => raw === '/opaque/owner-home')).resolves.toEqual(receipt)
   expect(request).toHaveBeenCalledWith('prompt.receipt', { session_id: 'chat', profile: 'default', admission_id: 'lost' })
 })
 

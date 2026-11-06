@@ -48,7 +48,7 @@ it.each([
     execution_generation: 4, controls: ['resolve_unknown'], ...patch }])
 ])('unverified blocking metadata never acquires a card or blocks the quiet queue: %j', value => {
   enqueueQueuedPrompt('chat', { id: 'quiet', text: 'quiet local', attachments: [] })
-  applyRuntimeInfo({ stored_session_id: 'chat', blocking_unknown: value })
+  applyRuntimeInfo({ stored_session_id: 'chat', profile_id: 'default', blocking_unknown: value })
   expect(getQueuedPrompts('chat').map(entry => [entry.id, entry.serverStatus])).toEqual([['quiet', undefined]])
 })
 
@@ -69,6 +69,9 @@ it('older fences/generations and foreign sources cannot retire or replace the co
   expect(getQueuedPrompts('chat')).toEqual([])
   applyRuntimeInfo(info(10, value(9)))
   expect(getQueuedPrompts('chat')).toEqual([])
+  // Empty discovery is unavailable, not proof of terminal absence.
+  applyRuntimeInfo(info(14, value(9)))
+  expect(getQueuedPrompts('chat')).toMatchObject([{ id: 'observed', serverExecutionGeneration: 9 }])
 })
 
 it('a fresh owner receipt with no served control revokes the observed Discard without making a replayable input', () => {

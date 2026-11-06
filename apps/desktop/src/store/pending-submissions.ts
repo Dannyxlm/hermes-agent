@@ -29,6 +29,8 @@ interface PendingSubmission {
   controlsOwnerKey?: string
   executionGeneration?: number
   observedUnknown?: QueuedPromptEntry['observedUnknown']
+  /** This bridge's already-rendered input, not content read from observed-only metadata. */
+  submittedInput?: Pick<QueuedPromptEntry, 'text' | 'displayText' | 'displayKind' | 'attachments' | 'submissionId' | 'queuedAt'>
   /** Presentation acknowledgement only, under the exact owner/lineage journal identity. */
   localReceiptAcknowledgement?: QueuedPromptEntry['queueReceipt']
 }
@@ -278,7 +280,7 @@ function projectQueue(
 
     if (receipt) {
       if (receipt.status !== 'started' || receipt.controls?.includes('interrupt')) {
-        next.push({ ...entry, id: receipt.id, serverStatus: receipt.status, serverControls: receipt.controls, serverExecutionGeneration: receipt.executionGeneration })
+        next.push({ ...entry, id: receipt.id, submissionId, serverStatus: receipt.status, serverControls: receipt.controls, serverExecutionGeneration: receipt.executionGeneration })
       }
 
       receipts.delete(receipt.id)
@@ -406,9 +408,9 @@ export function reconcileSessionControlInfo(info: SessionRuntimeInfo, owner?: Se
   const scope = capturedScope ?? captureSessionControlScope(info.stored_session_id, owner)
   recordSessionWriteVerdict(info.stored_session_id, info.writable, scope)
   reconcileLocalQueueReceipts(info.stored_session_id, info.queue_receipts, scope)
-  reconcileBlockingUnknown(info.stored_session_id, info.blocking_unknown, scope, pendingSnapshotFence(info.replay_epoch, info.last_sequence))
   reconcilePendingSubmissions(info.stored_session_id, info.pending_submissions,
     pendingSnapshotFence(info.replay_epoch, info.last_sequence), scope)
+  reconcileBlockingUnknown(info.stored_session_id, info.blocking_unknown, scope, pendingSnapshotFence(info.replay_epoch, info.last_sequence), true, info)
 }
 
 /** Reuse the bounded retired journal, not a new profile-keyed persistence family or server verb. */
@@ -475,10 +477,10 @@ export function reconcileLocalQueueReceipts(storedId: string, value: unknown, sc
 /** Validate the exact owner reference independently of the admission's scalar metadata. */
 function blockingUnknownRef(ref: unknown, storedId: string, scope: SessionControlScope): NonNullable<QueuedPromptEntry['observedUnknown']> | undefined {
   if (!ref || typeof ref !== 'object' || !('profile_id' in ref) || !('session_id' in ref) ||
-      ref.profile_id !== scope.profile || typeof ref.session_id !== 'string' ||
+      typeof ref.profile_id !== 'string' || !ref.profile_id || typeof ref.session_id !== 'string' ||
       sessionControlKey(ref.session_id, scope) !== sessionControlKey(storedId, scope)) { return undefined }
 
-  return { ref: { profile_id: scope.profile, session_id: ref.session_id }, scope }
+  return { ref: { profile_id: ref.profile_id, session_id: ref.session_id }, scope }
 }
 
 /** Parse the owner's metadata-only contract; no input_id or user body is read. */
@@ -488,11 +490,11 @@ function blockingUnknownReceipt(value: unknown, storedId: string, scope: Session
   const { admission_id: id, status, execution_generation: generation, controls } = raw
   const observedUnknown = blockingUnknownRef(raw.ref, storedId, scope)
 
-  if (!observedUnknown || typeof id !== 'string' || !id || status !== 'unknown' || typeof generation !== 'number' ||
+  if (!observedUnknown || typeof id !== 'string' || !id || (status !== 'unknown' && status !== 'terminal') || typeof generation !== 'number' ||
       !Number.isSafeInteger(generation) || generation < 0 || !Array.isArray(controls) ||
       controls.some(control => control !== 'resolve_unknown')) { return undefined }
 
-  return { id, text: '', status: controls.length ? 'unknown' : 'unavailable', executionGeneration: generation, controls: controls.length ? ['resolve_unknown'] : [],
+  return { id, text: '', status: status === 'terminal' ? 'retired' : controls.length ? 'unknown' : 'unavailable', executionGeneration: generation, controls: status === 'unknown' && controls.length ? ['resolve_unknown'] : [],
     controlsOwnerKey: sessionControlOwnerKey(scope), observedUnknown }
 }
 
@@ -526,9 +528,10 @@ export function retireObservedUnknown(storedId: string, entry: QueuedPromptEntry
 
   if (receipt.admission_id !== entry.id || receipt.status !== 'terminal' ||
       receipt.execution_generation !== entry.serverExecutionGeneration ||
-      ref?.ref.session_id !== entry.observedUnknown.ref.session_id || held?.executionGeneration !== entry.serverExecutionGeneration) { return false }
+      ref?.ref.session_id !== entry.observedUnknown.ref.session_id || ref.ref.profile_id !== entry.observedUnknown.ref.profile_id ||
+      held?.observedUnknown?.ref.profile_id !== ref.ref.profile_id || held.executionGeneration !== entry.serverExecutionGeneration) { return false }
 
-  writeEntries(ownerKey, before, { ...before, [entry.id]: { ...held, status: 'retired', controls: [] } })
+  writeEntries(ownerKey, before, { ...before, [entry.id]: { ...held, status: 'retired', controls: [], submittedInput: undefined } })
   writeSessionQueue(journalKey(storedId), getQueuedPrompts(journalKey(storedId)).filter(current =>
     !current.observedUnknown || current.id !== entry.id || current.serverExecutionGeneration !== entry.serverExecutionGeneration ||
     sessionControlOwnerKey(current.observedUnknown.scope) !== sessionControlOwnerKey(scope)))
@@ -536,12 +539,13 @@ export function retireObservedUnknown(storedId: string, entry: QueuedPromptEntry
   return true
 }
 
-function retireAbsentBlockingUnknown(known: Record<string, PendingSubmission>, receipts: (PendingSubmission | undefined)[] | null, fence?: PendingSnapshotFence): void {
+function revokeUnlistedBlockingUnknown(known: Record<string, PendingSubmission>, receipts: (PendingSubmission | undefined)[] | null, fence?: PendingSnapshotFence): void {
   if (!receipts) { return }
 
   for (const [id, held] of Object.entries(known)) {
-    if (held.observedUnknown && !receipts.some(receipt => receipt?.id === id) && !predates(fence, held.seen)) {
-      known[id] = { ...held, status: 'retired', controls: [] }
+    if (held.observedUnknown && held.status !== 'retired' && !receipts.some(receipt => receipt?.id === id) && !predates(fence, held.seen)) {
+      // A listing can be unavailable or show only the earliest barrier. Neither proves terminal.
+      known[id] = { ...held, status: 'unavailable', controls: [], ...(fence ? { seen: fence } : {}) }
     }
   }
 
@@ -550,41 +554,61 @@ function retireAbsentBlockingUnknown(known: Record<string, PendingSubmission>, r
   for (const id of retired.slice(0, Math.max(0, retired.length - RETIRED_MEMORY))) { delete known[id] }
 }
 
-/** Observed barriers use the existing journal, in a route-owned slice separate from submitted inputs. */
-export function reconcileBlockingUnknown(storedId: string, value: unknown, scope = captureSessionControlScope(storedId), fence?: PendingSnapshotFence, complete = true): void {
-  if (!Array.isArray(value) || sessionControlOwnerKey(scope) !== sessionControlOwnerKey(captureSessionControlScope(storedId))) { return }
-  const key = journalKey(storedId)
-  const ownerKey = sessionControlKey(storedId, scope)
-  const before = readPendingSubmissions(ownerKey)
-  const after = { ...before }
-  const receipts = value.map(raw => blockingUnknownReceipt(raw, storedId, scope))
+function mergeBlockingUnknownReceipt(held: PendingSubmission | undefined, receipt: PendingSubmission,
+  current: QueuedPromptEntry[], fence?: PendingSnapshotFence): PendingSubmission {
+  if (held && (predates(fence, held.seen) || (held.executionGeneration ?? -1) > (receipt.executionGeneration ?? -1) ||
+      held.observedUnknown?.ref.profile_id !== receipt.observedUnknown?.ref.profile_id ||
+      (receipt.status === 'retired' && held.executionGeneration !== receipt.executionGeneration) ||
+      (held.status === 'retired' && held.executionGeneration === receipt.executionGeneration))) { return held }
 
-  // A malformed listing cannot prove absence, nor acquire controls.
-  if (receipts.some(receipt => !receipt)) { return }
+  const own = current.find(entry => entry.id === receipt.id && !entry.observedUnknown && entry.serverStatus)
 
-  retireAbsentBlockingUnknown(after, complete ? receipts : null, fence)
+  const submittedInput = receipt.status === 'retired' ? undefined : held?.submittedInput ?? (own ? {
+    text: own.text, displayText: own.displayText, displayKind: own.displayKind, attachments: own.attachments,
+    submissionId: own.submissionId, queuedAt: own.queuedAt
+  } : undefined)
 
-  for (const receipt of receipts) {
-    if (!receipt) { continue }
-    const held = before[receipt.id]
+  return { ...receipt, submittedInput, ...(fence ? { seen: fence } : {}) }
+}
 
-    if (predates(fence, held?.seen) || (held?.executionGeneration ?? -1) > (receipt.executionGeneration ?? -1) ||
-        (held?.status === 'retired' && held.executionGeneration === receipt.executionGeneration)) { continue }
-
-    after[receipt.id] = { ...receipt, ...(fence ? { seen: fence } : {}) }
-  }
-
-  writeEntries(ownerKey, before, after)
-  const current = getQueuedPrompts(key)
-
+function projectBlockingUnknownQueue(current: QueuedPromptEntry[], after: Record<string, PendingSubmission>, scope: SessionControlScope): QueuedPromptEntry[] {
   const next = current.filter(entry => !after[entry.id]?.observedUnknown &&
     (!entry.observedUnknown || sessionControlOwnerKey(entry.observedUnknown.scope) !== sessionControlOwnerKey(scope)))
 
   for (const receipt of Object.values(after)) {
     if (!receipt.observedUnknown || receipt.status !== 'unknown') { continue }
-    next.push({ id: receipt.id, text: '', attachments: [], queuedAt: Date.now(), serverStatus: 'unknown',
+    next.push({ text: '', attachments: [], queuedAt: Date.now(), ...receipt.submittedInput, id: receipt.id, serverStatus: 'unknown',
       serverControls: receipt.controls, serverExecutionGeneration: receipt.executionGeneration, observedUnknown: receipt.observedUnknown })
   }
+
+  return next
+}
+
+/** Observed barriers use the existing journal, in a route-owned slice separate from submitted inputs. */
+export function reconcileBlockingUnknown(storedId: string, value: unknown, scope = captureSessionControlScope(storedId), fence?: PendingSnapshotFence, complete = true, ownerInfo?: Pick<SessionRuntimeInfo, 'profile_id' | 'profile_name'>): void {
+  if (!Array.isArray(value) || sessionControlOwnerKey(scope) !== sessionControlOwnerKey(captureSessionControlScope(storedId))) { return }
+  const key = journalKey(storedId)
+  const ownerKey = sessionControlKey(storedId, scope)
+  const before = readPendingSubmissions(ownerKey)
+  const after = { ...before }
+
+  if (typeof ownerInfo?.profile_name === 'string' && ownerInfo.profile_name !== scope.profile) { return }
+  const receipts = value.map(raw => blockingUnknownReceipt(raw, storedId, scope))
+
+  // A malformed listing cannot prove absence, nor acquire controls.
+  if (receipts.some(receipt => !receipt || (typeof ownerInfo?.profile_id === 'string' &&
+      receipt.observedUnknown?.ref.profile_id !== ownerInfo.profile_id))) { return }
+
+  revokeUnlistedBlockingUnknown(after, complete ? receipts : null, fence)
+  const current = getQueuedPrompts(key)
+
+  for (const receipt of receipts) {
+    if (!receipt) { continue }
+    after[receipt.id] = mergeBlockingUnknownReceipt(before[receipt.id], receipt, current, fence)
+  }
+
+  writeEntries(ownerKey, before, after)
+  const next = projectBlockingUnknownQueue(current, after, scope)
 
   if (JSON.stringify(current) !== JSON.stringify(next)) { writeSessionQueue(key, next) }
 }

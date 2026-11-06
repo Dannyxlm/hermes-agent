@@ -459,7 +459,10 @@ export class HermesGateway extends JsonRpcGatewayClient {
         return this.request(m, p, remainingRequestBudget(deadline, signal), signal)
       }
 
-      const settled = await this.protocol.settle(method, prepared, this.protocol.result(method, prepared, result), followUp) as T
+      const settled = await this.protocol.settle(method, prepared, this.protocol.result(method, prepared, result), followUp, profileId =>
+        this.profileAliases.get(canonicalSessionKey(prepared.session_id, profileId)) === canonicalProfile(prepared.profile) &&
+        (typeof (result as any)?.info?.profile_id !== 'string' || (result as any).info.profile_id === profileId)) as T
+
       this.requireConnectionGeneration(generation)
 
       if (method === 'session.resume' || method === 'session.create' || method === 'session.activate') {

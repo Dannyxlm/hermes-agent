@@ -3,7 +3,7 @@
 
 import { randomUuid } from '@hermes/shared'
 
-import { canonicalUnknownRecovery } from './canonical-unknown-recovery'
+import { canonicalUnknownRecovery, type UnknownRecovery } from './canonical-unknown-recovery'
 
 export const CANONICAL_GATEWAY_PROTOCOL = 'hermes-gateway-v1'
 
@@ -776,9 +776,9 @@ export class CanonicalDesktopProtocol {
   // The canonical compress receipt carries counts, not the retained transcript;
   // the compress action repaints only from `messages`, so resume the session
   // through the normal request path (which also re-primes revision/generation).
-  async settle(method: string, params: Record<string, unknown>, value: any, request: (method: string, params: Record<string, unknown>) => Promise<any>): Promise<any> {
+  async settle(method: string, params: Record<string, unknown>, value: any, request: (method: string, params: Record<string, unknown>) => Promise<any>, profileMatches: (profileId: string) => boolean = () => false): Promise<any> {
     if (['session.resume', 'session.activate', 'session.info'].includes(method)) {
-      return this.recoverUnknownSnapshot(params, value, request, method === 'session.info')
+      return this.recoverUnknownSnapshot(params, value, request, method === 'session.info', profileMatches)
     }
 
     if (method !== 'session.compress' && !(method === 'slash.exec' && params.operation === 'compress')) { return value }
@@ -791,23 +791,31 @@ export class CanonicalDesktopProtocol {
   }
 
   private async recoverUnknownSnapshot(params: Record<string, unknown>, value: any,
-    request: (method: string, params: Record<string, unknown>) => Promise<unknown>, infoOnly: boolean): Promise<any> {
+    request: (method: string, params: Record<string, unknown>) => Promise<unknown>, infoOnly: boolean,
+    profileMatches: (profileId: string) => boolean): Promise<any> {
     const sid = value.session_id ?? params.session_id
     const profile = canonicalProfile(params.profile)
-    const first = [...this.unknownAdmissions.values()].find(row => row.session_id === sid && row.profile === profile)
+    const rows = [...this.unknownAdmissions.values()].filter(row => row.session_id === sid && row.profile === profile)
 
-    if (!first) { return value }
+    if (!rows.length) { return value }
+    const receipts: UnknownRecovery[] = []
 
-    const identity = { admission_id: first.admission_id, execution_generation: first.generation,
-      ref: { profile_id: profile, session_id: sid } }
+    for (const row of rows) {
+      const identity = { admission_id: row.admission_id, execution_generation: row.generation, session_id: sid }
+      const receipt = await canonicalUnknownRecovery(identity, request, params, profileMatches)
 
-    const receipt = await canonicalUnknownRecovery(identity, request)
+      if (!receipt) { break }
+      receipts.push(receipt)
 
-    // This is the renderer's existing metadata-receipt projection, not a field served by
-    // canonical resume/info. Only the earliest barrier is read, on this request's owner route.
-    // A failed read revokes the grant, not the admission: absence was not proved.
+      if (receipt.status !== 'terminal') { break }
+
+      this.unknownAdmissions.delete(canonicalSessionKey(row.admission_id, profile))
+    }
+
+    // Local metadata projection only. A verified terminal receipt can advance to the next
+    // barrier; an unavailable read projects [] to revoke permission, never fake an identity.
     const info = { ...(infoOnly ? value : value.info), stored_session_id: value.stored_session_id ?? sid,
-      blocking_unknown: [receipt ?? { ...identity, status: 'unknown', controls: [] }] }
+      blocking_unknown: receipts }
 
     return infoOnly ? info : { ...value, info }
   }

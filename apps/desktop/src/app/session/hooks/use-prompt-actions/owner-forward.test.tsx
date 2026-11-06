@@ -175,12 +175,12 @@ describe('usePromptActions gateway-owner queue (#140385)', () => {
     const requestGateway = vi.fn(async (method: string) => {
       if (method === 'prompt.submit') { throw new JsonRpcGatewayError('Unknown owner turn', { code: 4090, data: {
         reason: 'SESSION_NOT_OWNED', ownership_reason: 'outcome_unknown', blocking_unknown: [{
-          admission_id: 'other-viewer', ref: { profile_id: 'default', session_id: 'rt-abc123' },
+          admission_id: 'other-viewer', ref: { profile_id: '/opaque/owner-home', session_id: 'rt-abc123' },
           status: 'unknown', execution_generation: 11, controls: ['resolve_unknown']
         }]
       } }) }
 
-      if (method === 'prompt.resolve_unknown') { return { admission_id: 'other-viewer', ref: { profile_id: 'default', session_id: 'rt-abc123' },
+      if (method === 'prompt.resolve_unknown') { return { admission_id: 'other-viewer', ref: { profile_id: '/opaque/owner-home', session_id: 'rt-abc123' },
         status: 'terminal', outcome: 'discarded', execution_generation: 11, authority_epoch: 2, sequence: 1 } as never }
 
       return {} as never
@@ -216,7 +216,7 @@ describe('usePromptActions gateway-owner queue (#140385)', () => {
     await actRender(<Harness onReady={h => { handle = h }} refreshSessions={async () => undefined} requestGateway={async () => ({} as never)} />)
     handle!.handleEvent({ type: 'session.info', session_id: 'rt-abc123', payload: {
       stored_session_id: 'rt-abc123', pending_submissions: [], blocking_unknown: [{ admission_id: 'observed',
-        ref: { profile_id: 'default', session_id: 'rt-abc123' }, status: 'unknown', execution_generation: 9, controls: ['resolve_unknown'] }]
+        ref: { profile_id: '/opaque/owner-home', session_id: 'rt-abc123' }, status: 'unknown', execution_generation: 9, controls: ['resolve_unknown'] }]
     } })
     expect(getQueuedPrompts('rt-abc123')).toMatchObject([{ id: 'observed', text: '', serverExecutionGeneration: 9 }])
   })
@@ -242,7 +242,7 @@ describe('usePromptActions gateway-owner queue (#140385)', () => {
     await started
     active.current = 'B-runtime'; selected.current = 'B-stored'
     rejectSubmit(new JsonRpcGatewayError('Unknown owner turn', { code: 4090, data: { reason: 'SESSION_NOT_OWNED', ownership_reason: 'outcome_unknown',
-      blocking_unknown: [{ admission_id: 'A-barrier', ref: { profile_id: 'default', session_id: 'rt-abc123' }, status: 'unknown', execution_generation: 11, controls: ['resolve_unknown'] }] } }))
+      blocking_unknown: [{ admission_id: 'A-barrier', ref: { profile_id: '/opaque/owner-home', session_id: 'rt-abc123' }, status: 'unknown', execution_generation: 11, controls: ['resolve_unknown'] }] } }))
     expect(await send).toBe(false)
     expect(getQueuedPrompts('B-stored')).toEqual([])
     expect(getQueuedPrompts('rt-abc123')).toMatchObject([{ id: 'A-barrier', serverExecutionGeneration: 11 }])

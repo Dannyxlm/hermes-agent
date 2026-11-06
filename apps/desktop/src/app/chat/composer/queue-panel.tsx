@@ -31,7 +31,7 @@ interface QueuePanelProps {
 }
 
 const entryPreview = (entry: QueuedPromptEntry, c: Translations['composer']) =>
-  entry.observedUnknown ? c.queueUpdates : entry.displayKind === 'hidden'
+  entry.observedUnknown && !entry.text && !entry.attachments.length ? c.queueUpdates : entry.displayKind === 'hidden'
     ? c.hiddenQueued
     : (entry.displayText ?? entry.text).trim() || (entry.attachments.length > 0 ? c.attachmentOnly : c.emptyTurn)
 
