@@ -110,3 +110,70 @@ def test_positive_wait_returns_output_even_while_receipt_lock_is_unavailable(mon
     assert result['exit_code'] == 7 and result['output'] == 'wait final output'
     assert registry.is_completion_consumed(process.id)
     assert process._result_persistence_error == 'RuntimeError'
+
+
+def test_sqlite_launch_write_failure_does_not_block_completion_or_recovery(monkeypatch, tmp_path, caplog):
+    import sqlite3
+    from hermes_state_registry import acquire, release_or_close
+    from tools.process_registry_delivery import notification_state
+
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setattr(pr, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    db = acquire(tmp_path / 'state.db')
+    try:
+        db.record_launch('process:sqlite', kind='process', launcher_profile='default',
+                         launcher_session_id='owner', child_profile='default')
+        db._execute_write(lambda conn: conn.execute(
+            "CREATE TRIGGER refuse_process_finish BEFORE UPDATE ON work_launches "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic SQLite write failure'); END"))
+        with pytest.raises(sqlite3.IntegrityError, match='synthetic SQLite write failure'):
+            db.finish_launch('process:sqlite', 'success')
+        registry = pr.ProcessRegistry()
+        pipe = io.StringIO()
+        process = pr.ProcessSession(id='proc_sqlite', command='build', started_at=1,
+            launch_id='process:sqlite', owner_profile_home=str(tmp_path),
+            notify_on_complete=True, parent_session_id='owner', session_key='owner',
+            output_buffer='SQLite failure final output',
+            process=SimpleNamespace(stdout=pipe, stderr=None, stdin=None))
+        registry._running[process.id] = process
+        registry._finish_exited(process, 0)
+        assert process.id not in registry._running and registry._finished[process.id] is process
+        assert process._completion_event.is_set() and pipe.closed
+        assert not process._result_persistence_error
+        assert 'Optional launch metadata skipped' in caplog.text
+        event = registry.completion_queue.get_nowait()
+        assert notification_state(event)['status'] == 'pending'
+        recovered = pr.ProcessRegistry()
+        assert recovered.restore_completions() == 1
+        [(notice, text)] = recovered.drain_notifications(session_key='owner')
+        assert notice['session_id'] == process.id and 'SQLite failure final output' in text
+    finally:
+        release_or_close(db)
+
+
+@pytest.mark.parametrize('operation', ['wait', 'read_log'])
+def test_positive_result_survives_failure_to_settle_existing_receipt(monkeypatch, tmp_path, operation):
+    from tools import process_registry_delivery as delivery
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    registry = pr.ProcessRegistry()
+    process = pr.ProcessSession(id='proc_settle', command='build', started_at=1,
+        notify_on_complete=True, output_buffer='already finished output')
+    registry._running[process.id] = process
+    registry._finish_exited(process, 7)
+    event = registry.completion_queue.get_nowait()
+
+    def unavailable(*a, **k):
+        raise OSError(errno.ENOSPC, 'synthetic settlement disk full')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(delivery, 'atomic_json_write', unavailable)
+        result = getattr(registry, operation)(process.id)
+    assert result['status'] == 'exited'
+    assert result['output'] == 'already finished output'
+    if operation == 'wait':
+        assert result['exit_code'] == 7
+    assert registry.is_completion_consumed(process.id)
+    assert delivery.notification_state(event)['status'] == 'pending', 'failed settlement is not a durable ACK'
+    # A subsequent successful observation can persist consumption; no live duplicate is emitted.
+    registry.read_log(process.id)
+    assert delivery.notification_state(event)['status'] == 'terminal'

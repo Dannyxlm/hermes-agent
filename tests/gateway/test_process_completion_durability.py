@@ -42,7 +42,9 @@ def recover(authority):
 
 def state(authority, event):
     with owner_scope(authority):
-        return notification_state(event)
+        notification = notification_state(event)
+        assert notification is not None
+        return notification
 
 
 @pytest.mark.asyncio
@@ -205,3 +207,118 @@ async def test_coalesced_members_reconcile_one_fifo_receipt_after_ack_crash(gate
     assert [state(gateway.primary, e)['status'] for e in events] == ['admitted', 'admitted']
     assert len({state(gateway.primary, e)['admission_id'] for e in events}) == 1
     assert len(gateway.rows(gateway.primary, sid)) == len(gateway.turns) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['write_error', 'cas_refusal'])
+async def test_partial_batch_claim_is_refunded_before_any_admission(gateway, monkeypatch, failure):
+    import errno
+    from tools import process_registry_delivery as delivery
+    from gateway.session_automation import producer_identity
+    sid = gateway.launch.session_id
+    await gateway.watch(gateway.primary, sid)
+    events = [finish(gateway, process=process) for process in ('proc_claim_a', 'proc_claim_b')]
+    primary = {**events[0], '_automation_identities': [producer_identity(gateway.runner, e) for e in events]}
+    write = delivery.atomic_json_write
+    settle = delivery.settle_notification
+
+    def fail_write(path, record, **kwargs):
+        if path.stem == 'proc_claim_b' and record['notification']['status'] == 'unknown':
+            raise OSError(errno.ENOSPC, 'synthetic second claim disk full')
+        return write(path, record, **kwargs)
+
+    def refuse(event, status, **kwargs):
+        if event['session_id'] == 'proc_claim_b' and status == 'unknown':
+            return False
+        return settle(event, status, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(delivery, 'atomic_json_write', fail_write)
+        if failure == 'cas_refusal':
+            patch.setattr(delivery, 'settle_notification', refuse)
+        assert await gateway.runner._deliver_completion_notification('[two processes finished]', primary) is False
+    assert gateway.rows(gateway.primary, sid) == []
+    assert [state(gateway.primary, event)['status'] for event in events] == ['pending', 'pending']
+    assert await gateway.runner._deliver_completion_notification('[two processes finished]', primary) is True
+    await gateway.settled(gateway.primary, sid, 1)
+    assert [state(gateway.primary, event)['status'] for event in events] == ['admitted', 'admitted']
+    assert recover(gateway.primary).empty()
+    assert len(gateway.turns) == 1
+
+
+@pytest.mark.asyncio
+async def test_sweep_overlapping_live_delivery_admits_once(gateway, monkeypatch):
+    import gateway.session_automation as automation
+    sid, authority = gateway.launch.session_id, gateway.primary
+    await gateway.watch(authority, sid)
+    event = finish(gateway)
+    entered, release = asyncio.Event(), asyncio.Event()
+    admit = automation._admit_folded_completion
+
+    async def held(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await admit(*args, **kwargs)
+
+    monkeypatch.setattr(automation, '_admit_folded_completion', held)
+    live = asyncio.create_task(gateway.runner._deliver_completion_notification('[finished]', event))
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        assert state(authority, event)['status'] == 'unknown'
+        waiting = recover(authority)
+        assert waiting.qsize() == 1
+        await gateway.runner._drain_watch_notifications(waiting)
+        assert waiting.qsize() == 1 and gateway.rows(authority, sid) == []
+    finally:
+        release.set()
+        await asyncio.wait_for(live, 30)
+    await gateway.settled(authority, sid, 1)
+    for queued in waiting.queue:
+        queued['_process_next_retry_at'] = 0
+    await gateway.runner._drain_watch_notifications(waiting)
+    assert waiting.empty() and recover(authority).empty()
+    assert len(gateway.rows(authority, sid)) == len(gateway.turns) == 1
+
+
+@pytest.mark.asyncio
+async def test_lost_ack_reconciles_after_live_route_moves_back_to_chat(monkeypatch):
+    from tests.gateway import test_authority_lane_moves_on as lanes
+    import gateway.process_completion_delivery as delivery
+    from hermes_state_runtime import list_session_admissions
+    runner, adapter, authority, source, sent, ran, _gates = await lanes._gateway(monkeypatch)
+    await lanes._chat(adapter, source, sent, 'hello')
+    ref = authority.register(source)
+    authority.db.set_session_title(ref.session_id, 'Process owner')
+    route = authority.sessions[ref.session_id].route
+    process = ProcessSession(id='proc_moved', command='build', started_at=1,
+        notify_on_complete=True, parent_session_id=ref.session_id, session_key=route,
+        output_buffer='detached final output')
+    registry = ProcessRegistry()
+    registry._running[process.id] = process
+    registry._finish_exited(process, 0)
+    event = registry.completion_queue.get_nowait()
+    await lanes._chat(adapter, source, sent, '/new')
+    await lanes._chat(adapter, source, sent, 'new conversation')
+    assert await lanes._app_turn(authority, ref, 'keep old conversation open') == ('terminal', 'completed')
+    detached_route = authority.sessions[ref.session_id].route
+    assert detached_route != route
+
+    def crash(*args):
+        raise Crash()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(delivery, 'acknowledge_process_admission', crash)
+        with pytest.raises(Crash):
+            await runner._deliver_completion_notification('[finished]', event)
+    rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
+    matching = [row for row in rows if row['request_id'] == '["completion","proc_moved",1]']
+    assert len(matching) == 1 and matching[0]['principal_id'] == 'automation:' + detached_route
+    assert state(authority, event)['status'] == 'unknown'
+    await lanes._chat(adapter, source, sent, '/resume Process owner')
+    assert authority.sessions[ref.session_id].route == route
+    before = len(ran)
+    await runner._drain_watch_notifications(recover(authority))
+    assert state(authority, event)['status'] == 'admitted'
+    rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
+    matching = [row for row in rows if row['request_id'] == '["completion","proc_moved",1]']
+    assert len(matching) == 1 and len(ran) == before

@@ -169,3 +169,38 @@ def test_saved_result_fences_leftover_running_checkpoint_before_pid_probe(tmp_pa
     recovered.restore_completions()
     assert recovered.completion_queue.qsize() == 1
     assert json.loads((tmp_path / 'processes.json').read_text()) == []
+
+
+@pytest.mark.parametrize('receipt', ['missing', 'pruned', 'pruned_during_handoff'])
+def test_unavailable_legacy_receipt_does_not_drop_other_drained_events(tmp_path, monkeypatch, receipt):
+    from tools.process_registry_delivery import result_path, settle_notification
+    from tools import process_registry_delivery as delivery
+    from tools import process_registry_results as results
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    registry = pr.ProcessRegistry()
+    _, ready = _finished(registry, 'proc_ready')
+    _, stale = _finished(registry, 'proc_stale')
+    if receipt == 'missing':
+        result_path(stale['session_id']).unlink()
+    elif receipt == 'pruned':
+        settle_notification(stale, 'terminal', reason='consumed')
+        monkeypatch.setattr(results, 'RESULT_RETENTION_SECONDS', -1)
+        results._result_paths()
+    else:
+        handoff = delivery.legacy_notification_handoff
+
+        def prune_before_handoff(event):
+            if event['session_id'] == stale['session_id']:
+                settle_notification(event, 'terminal', reason='consumed')
+                monkeypatch.setattr(results, 'RESULT_RETENTION_SECONDS', -1)
+                results._result_paths()
+            return handoff(event)
+
+        monkeypatch.setattr(delivery, 'legacy_notification_handoff', prune_before_handoff)
+    foreign = {'type': 'watch_match', 'session_id': 'proc_foreign', 'session_key': 'foreign'}
+    for event in (ready, foreign, stale):
+        registry.completion_queue.put(event)
+    notices = registry.drain_notifications(session_key='owner')
+    assert [event['session_id'] for event, text in notices] == ['proc_ready']
+    assert registry.completion_queue.get_nowait() == foreign
+    assert registry.completion_queue.empty()

@@ -5,6 +5,7 @@ that boundary: only an exact FIFO receipt can settle it, never age or a missing 
 Old result files have no such proof and are deliberately not replayed.
 """
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from utils import atomic_json_write
 
 
 UNSETTLED = frozenset({'pending', 'unknown'})
+logger = logging.getLogger(__name__)
 
 
 def uncertain_legacy_notification(state):
@@ -145,14 +147,25 @@ def admission_process_events(event):
 
 def legacy_notification_ready(event):
     """Volatile legacy consumers cannot reconcile an uncertain prior handoff."""
-    state = notification_state(event)
+    try:
+        state = notification_state(event)
+    except ValueError:
+        # Missing/pruned or mismatched receipts are not permission to replay. One stale
+        # event must not abort the drain and discard other already-popped notices.
+        logger.warning('Skipping unavailable process notification %s', event.get('session_id'), exc_info=True)
+        return False
     return state is None or state['status'] == 'pending'
 
 
 def legacy_notification_handoff(event):
-    if notification_state(event) is None:
-        return True
-    return settle_notification(event, 'unknown', reason='legacy_consumer_handoff', expected_status='pending')
+    try:
+        if notification_state(event) is None:
+            return True
+        return settle_notification(event, 'unknown', reason='legacy_consumer_handoff', expected_status='pending')
+    except ValueError:
+        # Another consumer may settle and prune between readiness and the CAS.
+        logger.warning('Skipping unavailable process handoff %s', event.get('session_id'), exc_info=True)
+        return False
 
 
 def legacy_notification_submitted(event, accepted):
@@ -174,7 +187,12 @@ def mark_completion_consumed(registry, session):
         return  # The live wait/log succeeded; there is no durable receipt to acknowledge.
     event = {'type': 'completion', 'session_id': session.id, 'started_at': session.started_at,
              'parent_session_id': session.parent_session_id, 'session_key': session.session_key}
-    settle_notification(event, 'terminal', reason='consumed', expected_status='pending')
+    try:
+        settle_notification(event, 'terminal', reason='consumed', expected_status='pending')
+    except (OSError, ValueError, RuntimeError):
+        # The output read succeeded. Keep volatile consumption, but do not claim that
+        # the receipt was settled; another successful observation can persist it later.
+        logger.warning('Could not persist process result consumption for %s', session.id, exc_info=True)
 
 
 def restore_process_completions(target_queue):

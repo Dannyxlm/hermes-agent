@@ -13,6 +13,26 @@ def acknowledge_process_admission(event, receipt):
         settle_notification(member, 'admitted', admission_id=receipt.admission_id, reason='fifo_accepted')
 
 
+def claim_process_notifications(events):
+    """Refund only this attempt's claims when preparation fails before FIFO admission."""
+    from hermes_state_runtime import RuntimeStoreError
+    from tools.process_registry_delivery import settle_notification
+    claimed = []
+    try:
+        for member in events:
+            if not settle_notification(member, 'unknown', reason='admission_in_progress', expected_status='pending'):
+                raise RuntimeStoreError('outcome_unknown')
+            claimed.append(member)
+    except (OSError, ValueError, RuntimeError):
+        for member in claimed:
+            try:
+                settle_notification(member, 'pending', reason='admission_not_attempted', expected_status='unknown')
+            except (OSError, ValueError, RuntimeError):
+                logger.warning('Could not refund unattempted process admission for %s',
+                               member.get('session_id'), exc_info=True)
+        raise
+
+
 def reconcile_process_admission(runner, event):
     from gateway.session_automation import completion_admission
     row = completion_admission(runner, event)

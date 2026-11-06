@@ -37,9 +37,14 @@ def completion_admission(runner, event):
     owners = [_route_owner(authority, entry)] if entry is not None else []
     if parent:
         owners.extend((parent, authority.logical_owner(parent)))
+    from gateway.session_detached import detached_key
+    routes = {str(event.get('session_key') or ''), str(event.get('_process_result_route') or '')} - {''}
     for owner in dict.fromkeys(owners):
+        # /new detaches a conversation; /resume can move it back before a lost ACK
+        # reconciles. The producer identity is unchanged on either of its own routes.
+        principals = {'automation:' + route for route in routes | {detached_key(route, owner) for route in routes}}
         for row in list_session_admissions(authority.db, session_id=owner, pending_only=False):
-            if row['principal_id'] != 'automation:' + str(event.get('session_key') or ''):
+            if row['principal_id'] not in principals:
                 continue
             descriptor = _descriptor(row['payload'])
             if identity in descriptor.get('identities', [descriptor.get('identity')]):
@@ -101,15 +106,14 @@ async def admit_process_notice(runner, authority, adapter, event, evt):
         return await authority.admit_automation(adapter, event, identity)
     async with _heartbeat_lock(runner):
         from tools.process_registry_delivery import admission_process_events, notification_state, settle_notification
-        from gateway.process_completion_delivery import acknowledge_process_admission, reconcile_process_admission
+        from gateway.process_completion_delivery import (
+            acknowledge_process_admission, claim_process_notifications, reconcile_process_admission)
         durable = admission_process_events(evt)
         for member in durable:
             if notification_state(member)["status"] != "pending":
                 reconcile_process_admission(runner, member)
                 raise RuntimeStoreError("outcome_unknown")
-        for member in durable:
-            if not settle_notification(member, "unknown", reason="admission_in_progress", expected_status="pending"):
-                raise RuntimeStoreError("outcome_unknown")
+        claim_process_notifications(durable)
         try:
             receipt = await _admit_folded_completion(authority, adapter, event, evt, identity)
         except RuntimeStoreError:
