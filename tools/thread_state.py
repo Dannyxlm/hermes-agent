@@ -12,10 +12,11 @@ Ava's work in a thread from the user's own turns there.
 
 Delivery markers are the one piece of state this feature owns, under the launching profile's
 ``cache/threads/delivered``, one per (admission, transition): a turn that paused is reported paused
-once, and again once it settles. ``wait`` and ``read`` mark a result delivered when they hand it to
-the parent. The wake claims first (``<key>.claim``, ``O_EXCL``), submits, and only then marks the
-result delivered; a refused submit releases the claim, and a claim left by a crash goes stale and is
-retaken, so a result reaches its parent at least once and normally exactly once.
+once, and again once it settles. ``wait`` and explicit admission-result ``read`` calls acknowledge
+only the result they return. Receipts and exhausted-notice flags are durable; only ephemeral
+claims and temporary files age out. The wake claims first (``<key>.claim``, ``O_EXCL``), then tracks
+its notice until the lead's turn settles. Exhausted notices stay unacknowledged and visible for
+explicit recovery; bounded retries cannot guarantee at-least-once consumption.
 """
 from __future__ import annotations
 
@@ -28,8 +29,8 @@ from pathlib import Path
 LAUNCH_PREFIX = "thread:"
 REQUEST_PREFIX = "thread-"
 MARK = "\u21b3"  # ↳
-#: Admissions the wake still looks at: a thread active within this window. Shorter than the marker
-#: lifetime, so a pruned marker can never make an old result fire again.
+#: Threads with recent activity are discovered automatically. Acknowledgements do not expire:
+#: reactivation can make any of the thread's older admissions visible again.
 WAKE_WINDOW_S = 6 * 24 * 3600
 #: The wake reads threads opened in this window: a long-lived lead chat doesn't rescan every thread it ever opened.
 WAKE_LAUNCH_WINDOW_S = 30 * 24 * 3600
@@ -192,8 +193,8 @@ def outcome(conn, admission: dict, ids) -> dict:
     usage = {k: result[k] for k in ("api_calls", "estimated_cost_usd", "model") if result.get(k) is not None}
     if usage:
         out["usage"] = usage
-    if not out["final_response"] and admission_status(admission) == "done":
-        out["final_response"] = last_reply(conn, ids)
+    if not result:
+        out["error"] = "The committed result for this admission is unavailable; read the transcript for context."
     return out
 
 
@@ -222,14 +223,30 @@ def _create(path: Path) -> bool:
 
 
 def mark_delivered(home: Path, admission_id: str, status: str) -> None:
-    """The parent has this result (a ``wait`` or ``read`` handed it over, or the wake's turn was admitted)."""
+    """An explicit result read/wait returned it, or the wake's lead turn ran to settlement."""
     _create(_marker(home, admission_id, status))
+    Path(str(_marker(home, admission_id, status)) + '.needs-lead').unlink(missing_ok=True)
+
+
+def needs_lead(home: Path, admission_id: str, status: str) -> bool:
+    return (not delivered(home, admission_id, status)
+            and Path(str(_marker(home, admission_id, status)) + '.needs-lead').exists())
+
+
+def mark_needs_lead(home: Path, admission_id: str, status: str) -> None:
+    """Retries exhausted without consumption; a read/wait can still acknowledge the result."""
+    _create(Path(str(_marker(home, admission_id, status)) + '.needs-lead'))
+
+
+def unacknowledged(home: Path, rows: list[dict]) -> list[str]:
+    return [row['admission_id'] for row in rows
+            if tool_sent(row) and needs_lead(home, row['admission_id'], admission_status(row))]
 
 
 def claim(home: Path, admission_id: str, status: str, now: float | None = None) -> bool:
     """Take the wake's delivery of one result: False when it was delivered or another wake holds a
     live claim. A claim older than ``CLAIM_STALE_S`` is retaken."""
-    if delivered(home, admission_id, status):
+    if delivered(home, admission_id, status) or needs_lead(home, admission_id, status):
         return False
     path = _marker(home, admission_id, status).with_name(_marker(home, admission_id, status).name + ".claim")
     if _create(path):
@@ -242,7 +259,7 @@ def claim(home: Path, admission_id: str, status: str, now: float | None = None) 
 
 
 def finish_claim(home: Path, admission_id: str, status: str, accepted: bool) -> None:
-    """After the submit: delivered when it was admitted; otherwise free for the next poll."""
+    """Finish notice tracking: acknowledge consumption, or just release its claim."""
     if accepted:
         mark_delivered(home, admission_id, status)
     with contextlib.suppress(FileNotFoundError):
@@ -255,7 +272,7 @@ def prune_markers(home: Path, now: float | None = None) -> None:
     with contextlib.suppress(FileNotFoundError):
         for path in _marker_dir(home).iterdir():
             with contextlib.suppress(OSError):
-                if now - path.stat().st_mtime > MARKER_TTL_S:
+                if path.suffix in {'.claim', '.tmp'} and now - path.stat().st_mtime > MARKER_TTL_S:
                     path.unlink()
 
 

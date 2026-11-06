@@ -11,7 +11,9 @@ text and its key) and submits it through the owner as that chat's own login prin
 ``cron.session_delivery`` lane), to whichever id the owner attaches for the conversation. The ledger then
 decides: once the update's turn is done, its results are delivered. If a restart cut that turn off
 (``unknown``), nobody but this sweeper sent it, so the sweeper discards it and sends it again; a cancelled
-one is sent again too, at most ``MAX_RESENDS`` times. If the owner never admitted it (refused, or the receipt
+one is sent again too, at most ``MAX_RESENDS`` times. Exhausted results remain unacknowledged,
+visible as ``needs_lead`` in thread list/read, and recoverable with an explicit admission read/wait.
+If the owner never admitted it (refused, or the receipt
 was lost), it resubmits the identical payload under the same key, which the owner replays rather than running
 twice. A failing lead backs off.
 
@@ -55,7 +57,7 @@ def render(items: list[dict], still: list[str], profile: str) -> str:
                          "thread action=stop clears it, then send to carry on.")
             continue
         lines.append(f"\n{name} finished: {item['status']}.")
-        if item.get("error") and item["status"] != "done":
+        if item.get("error"):
             lines.append(f"Error: {str(item['error'])[:300]}")
         final = (item.get("final_response") or "").replace("```", "'''")
         if final:
@@ -109,7 +111,42 @@ def leads(profile: str, now: float | None = None) -> list[str]:
                 continue
             found |= {row[0] for row in conn.execute(_LEADS_SQL, (
                 ts.LAUNCH_PREFIX, profile, now - ts.WAKE_LAUNCH_WINDOW_S, now - ts.WAKE_WINDOW_S))}
+    home = ts.homes().get(profile)
+    if home is not None:
+        found.update(_pending_leads(home, profile))
     return sorted(found)
+
+
+def _pending_leads(home: Path, profile: str) -> set[str]:
+    """Unfinished delivery is not subject to the discovery window, even after a restart."""
+    found, legacy = set(), set()
+    for path in ts._marker_dir(home).glob("update-*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            continue
+        if record.get("lead"):
+            found.add(record["lead"])
+        else:
+            legacy.add(path.name)
+    if legacy:
+        # Older pending records have only a hashed filename. Resolve those against the
+        # launch ledger once; the next saved transition adds the stable conversation id.
+        candidates = set()
+        for child_home in ts.homes().values():
+            with ts.reader(child_home) as conn:
+                if conn is not None:
+                    candidates.update(row[0] for row in conn.execute(
+                        "SELECT DISTINCT launcher_session_id FROM work_launches "
+                        "WHERE launcher_profile=? AND substr(launch_id,1,?)=?",
+                        (profile, len(ts.LAUNCH_PREFIX), ts.LAUNCH_PREFIX)))
+        with ts.reader(home) as conn:
+            if conn is not None:
+                for lead in candidates:
+                    root = _root(conn, ts.lineage(conn, lead))
+                    if _record_path(home, root).name in legacy:
+                        found.add(lead)
+    return found
 
 
 # ── the pending update: one per lead conversation, on disk until its admission is terminal ──────────────
@@ -125,7 +162,7 @@ def _root(conn, lineage) -> str:
 
 
 def _record_path(home: Path, root: str) -> Path:
-    # In the marker directory, so ``ts.prune_markers`` retires one stuck for a week (its claims are long stale).
+    # Pending delivery is durable; age-based pruning must never discard an unconsumed notice.
     return ts._marker_dir(home) / f"update-{hashlib.sha256(root.encode()).hexdigest()[:24]}.json"
 
 
@@ -139,7 +176,7 @@ def _save(home: Path, root: str, record: dict) -> None:
     path = _record_path(home, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(record), encoding="utf-8")
+    tmp.write_text(json.dumps({**record, "lead": root}), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -237,6 +274,13 @@ def _finish(home: Path, root: str, record: dict, *, delivered: bool) -> None:
 
 def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admission, busy: bool) -> bool:
     """Carry a pending update one step. True when this step had the owner admit it."""
+    if record.get("exhausted"):
+        if record.get("cut"):
+            _clear(home, tip, record["cut"])
+        for admission_id, item_status in record["items"]:
+            ts.mark_needs_lead(home, admission_id, item_status)
+        _finish(home, root, record, delivered=False)
+        return False
     if admission is None:
         if record.get("cut"):  # the resend's intent is saved; clear the turn it replaces first
             _clear(home, tip, record["cut"])
@@ -252,10 +296,11 @@ def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admiss
         resends = record.get("resends", 0) + 1
         cut = {"admission_id": admission["admission_id"], "generation": admission["generation"]}
         if resends > MAX_RESENDS:
-            logger.warning("thread update %s dropped after %d resends", record["key"], MAX_RESENDS)
-            if status == "unknown":
-                _clear(home, tip, cut)  # don't leave the lead parked on our own cut-off turn
-            _finish(home, root, record, delivered=True)
+            logger.warning("thread update %s needs lead attention after %d resends", record["key"], MAX_RESENDS)
+            # Save before clearing: a lost clear receipt must not reinterpret this as a
+            # consumed, interrupted notice on the next sweep.
+            _save(home, root, {**record, "exhausted": True,
+                               **({"cut": cut} if status == "unknown" else {})})
             return False
         text = record["text"] if record["text"].endswith(RESENT) else record["text"] + RESENT
         _save(home, root, {**record, "key": _key(record["items"], admission["admission_id"]), "text": text,

@@ -6780,10 +6780,18 @@ export interface CanonicalSessionListRow {
   resolved_id?: string | null
   root_title?: string | null
 }
-export interface CanonicalControlParams {
+export interface CanonicalInterruptParams {
   profile?: string | null
   session_id: string
   execution_generation: number
+  thread_control?: CanonicalThreadControl | null
+}
+export interface CanonicalThreadControl {
+  admission_id: string
+  launch_id: string
+  launcher_profile: string
+  launcher_session_id: string
+  force: boolean
 }
 export interface CanonicalSessionHandle {
   ref: CanonicalSessionRef
@@ -8901,7 +8909,7 @@ export interface CanonicalRpcMethods {
   'session.family': { params: FamilySessionParams; result: FamilySessionResult }
   /** Frozen launch policy projection of one local session. */
   'session.info': { params: CanonicalSessionInfoParams; result: CanonicalSessionInfo }
-  'session.interrupt': { params: CanonicalControlParams; result: CanonicalSessionHandle }
+  'session.interrupt': { params: CanonicalInterruptParams; result: CanonicalSessionHandle }
   'session.list': { params: CanonicalListParams; result: CanonicalListResult }
   /** Revision-fenced, retry-idempotent session edit (rename, archive, sidebar, branch, delete, rewind, reset, model, reasoning, workspace, edit_policy, compress, import). */
   'session.mutate': { params: SessionMutateParams; result: SessionMutateResult }

@@ -10864,37 +10864,6 @@
         "title": "CanonicalConfigSetParams",
         "type": "object"
       },
-      "CanonicalControlParams": {
-        "additionalProperties": false,
-        "properties": {
-          "profile": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Profile"
-          },
-          "session_id": {
-            "title": "Session Id",
-            "type": "string"
-          },
-          "execution_generation": {
-            "title": "Execution Generation",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "session_id",
-          "execution_generation"
-        ],
-        "title": "CanonicalControlParams",
-        "type": "object"
-      },
       "CanonicalCorrectionAck": {
         "additionalProperties": false,
         "properties": {
@@ -11481,6 +11450,48 @@
           "count"
         ],
         "title": "CanonicalEventsResult",
+        "type": "object"
+      },
+      "CanonicalInterruptParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          },
+          "thread_control": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanonicalThreadControl"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "session_id",
+          "execution_generation"
+        ],
+        "title": "CanonicalInterruptParams",
         "type": "object"
       },
       "CanonicalListParams": {
@@ -14026,6 +14037,40 @@
         ],
         "description": "``prompt.submit``: the admission receipt, or ``{voice_stopped: true}``.",
         "title": "CanonicalSubmitResult"
+      },
+      "CanonicalThreadControl": {
+        "additionalProperties": false,
+        "properties": {
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "launch_id": {
+            "title": "Launch Id",
+            "type": "string"
+          },
+          "launcher_profile": {
+            "title": "Launcher Profile",
+            "type": "string"
+          },
+          "launcher_session_id": {
+            "title": "Launcher Session Id",
+            "type": "string"
+          },
+          "force": {
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "admission_id",
+          "launch_id",
+          "launcher_profile",
+          "launcher_session_id",
+          "force"
+        ],
+        "title": "CanonicalThreadControl",
+        "type": "object"
       },
       "CanonicalTurnAuthor": {
         "additionalProperties": false,
@@ -63293,7 +63338,7 @@
         {
           "name": "params",
           "schema": {
-            "$ref": "#/components/schemas/CanonicalControlParams"
+            "$ref": "#/components/schemas/CanonicalInterruptParams"
           }
         }
       ],

@@ -279,6 +279,18 @@ class CanonicalControlParams(CanonicalSessionParams):
     execution_generation: int
 
 
+class CanonicalThreadControl(Params):
+    admission_id: str
+    launch_id: str
+    launcher_profile: str
+    launcher_session_id: str
+    force: bool
+
+
+class CanonicalInterruptParams(CanonicalControlParams):
+    thread_control: CanonicalThreadControl | None = None
+
+
 class CanonicalCorrectionParams(CanonicalControlParams):
     text: str
 
@@ -338,7 +350,7 @@ for _name, _params, _result in (
     ('session.create', CanonicalCreateParams, CanonicalSnapshot),
     ('session.resume', CanonicalResumeParams, CanonicalSnapshot),
     ('session.list', CanonicalListParams, CanonicalListResult),
-    ('session.interrupt', CanonicalControlParams, CanonicalSessionHandle),
+    ('session.interrupt', CanonicalInterruptParams, CanonicalSessionHandle),
     ('session.steer', CanonicalCorrectionParams, CanonicalCorrectionResult),
     ('session.redirect', CanonicalCorrectionParams, CanonicalCorrectionResult),
     ('session.events.since', CanonicalEventsParams, CanonicalEventsResult),

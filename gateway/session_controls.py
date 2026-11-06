@@ -915,6 +915,10 @@ class AuthorityConnection:
             self.actor, ref, params['admission_id'], params['execution_generation']))
 
     async def interrupt(self, ref, params):
+        if params.get('thread_control') is not None:
+            from gateway.session_thread_controls import interrupt_thread
+            return await interrupt_thread(self.authority, self.actor, ref, params.get('execution_generation'),
+                                          params['thread_control'])
         from gateway.session_managed_worker import interrupt_managed
         if interrupt_managed(self.authority, self.actor, ref, params.get('execution_generation')):
             return asdict(self.authority._handle(ref))

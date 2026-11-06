@@ -72,7 +72,7 @@ _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #: attachments, replies). A user row read as automatic only asks for a check-in sooner; the unsafe miss is an
 #: automatic row read as the user, so every new automatic template must keep a bracketed header.
 HUMAN_BRACKETED = ("[OUT-OF-BAND USER MESSAGE", "[The user attached", "[The user sent", "[Replying to your previous message")
-# Parallel tool calls in one turn run on worker threads of this process: one cap check + create at a time.
+# Parallel tool calls share the cap: one check + create/reactivation admission at a time.
 _CREATE_LOCK = threading.Lock()
 
 
@@ -387,11 +387,11 @@ def _active(conn, launch_rows) -> int:
                if ts.thread_status(ts.admissions(conn, ts.lineage(conn, row["child_session_id"]))) in ACTIVE)
 
 
-def _check_caps(caller: Caller) -> None:
+def _check_caps(caller: Caller, *, creating: bool = True) -> None:
     now = time.time()
     own = ts.threads_of(caller.profile, caller.lineage)
     recent = sum(1 for row in own if (row["created_at"] or 0) >= now - 3600)
-    if recent >= MAX_CREATES_PER_HOUR:
+    if creating and recent >= MAX_CREATES_PER_HOUR:
         raise ThreadError("rate_limit", f"This chat opened {recent} threads in the last hour (max {MAX_CREATES_PER_HOUR}).")
     mine = box = 0
     for profile, home in ts.homes().items():
@@ -402,7 +402,7 @@ def _check_caps(caller: Caller) -> None:
                 rows = [dict(r) for r in conn.execute(
                     "SELECT child_session_id, launcher_profile, launcher_session_id FROM work_launches "
                     f"WHERE substr(launch_id,1,{len(ts.LAUNCH_PREFIX)})=? AND child_profile=? "
-                    "AND child_session_id IS NOT NULL AND created_at>=?", (ts.LAUNCH_PREFIX, profile, now - 2 * 86400))]
+                    "AND child_session_id IS NOT NULL", (ts.LAUNCH_PREFIX, profile))]
                 box += _active(conn, rows)
                 mine += _active(conn, [r for r in rows if r["launcher_profile"] == caller.profile
                                        and r["launcher_session_id"] in caller.lineage])
@@ -431,9 +431,11 @@ def _toolset_ceiling(caller: Caller, profile: str):
 
 @contextlib.contextmanager
 def _create_lock():
-    """Box-wide: chats in the dashboard, the gateway and ``hermes chat`` all create threads. Held across
-    the cap check and the owner calls on purpose, so two creates can't both pass the same cap; parallel
-    creates serialize (each is a few seconds), and the owner's own timeouts bound the wait."""
+    """Serialize cap check + admission for creates AND sends that reactivate idle threads.
+
+    Held through the owner calls, never through a result wait: another process must see the
+    admitted work before it can take the last slot. The owner's timeouts bound the wait.
+    """
     path = ts.homes()["default"] / "cache" / "threads" / "create.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     with _CREATE_LOCK, open(path, "ab") as fh:
@@ -514,6 +516,25 @@ async def _clear_paused(client, thread: Thread, rows: list[dict], force: bool) -
                          execution_generation=row["generation"])
         cleared.append(row["admission_id"])
     return cleared
+
+
+async def _interrupt_turn(client, thread: Thread, running: dict, force: bool) -> bool:
+    """Stop the observed admission, never a successor from a fresher resume snapshot."""
+    from hermes_cli.gateway_client import GatewayRPCError
+    launch = thread.launch
+    if launch is None:
+        raise ThreadError("not_your_thread", "Only a thread this chat opened can be interrupted.")
+    try:
+        await client.rpc("session.interrupt", session_id=thread.session_id,
+                         execution_generation=running["generation"], thread_control={
+                             "admission_id": running["admission_id"], "launch_id": launch["launch_id"],
+                             "launcher_profile": launch["launcher_profile"],
+                             "launcher_session_id": launch["launcher_session_id"], "force": force})
+    except GatewayRPCError as exc:
+        if str(exc) not in {"stale_admission", "stale_generation"}:
+            raise
+        return False
+    return True
 
 
 # ── actions ────────────────────────────────────────────────────────────────────────────────────
@@ -630,6 +651,15 @@ async def _rename(client, sid, titles, request_id):
 
 
 def _send(caller: Caller, args: dict) -> dict:
+    with _create_lock():
+        out = _send_locked(caller, args)
+    if args.get("wait_s"):
+        out["wait"] = _wait(caller, {"thread_id": out["thread_id"], "admission_id": out["admission_id"],
+                                     "timeout_s": args["wait_s"]})
+    return out
+
+
+def _send_locked(caller: Caller, args: dict) -> dict:
     message = _clean(args.get("message"), "message", TEXT_MAX)
     mode = args.get("mode") or "queue"
     if mode not in {"queue", "interrupt"}:
@@ -648,6 +678,8 @@ def _send(caller: Caller, args: dict) -> dict:
                 "admission_id": earlier["admission_id"], "request_id": key, "reused": True,
                 "note": "Already sent (same message in this turn): returned that send."}
     _check_unattended(caller)
+    if ts.thread_status(rows) not in ACTIVE:
+        _check_caps(caller, creating=False)
     text = f"{_header(caller)}\n\n{message}"
     running = next((row for row in rows if row["status"] == "started"), None)
     queued = [row for row in rows if row["status"] == "queued" and ts.tool_sent(row)]
@@ -662,11 +694,12 @@ def _send(caller: Caller, args: dict) -> dict:
             if ts.tool_sent(running) or force:
                 for row in queued:
                     await client.rpc("prompt.cancel", session_id=at.session_id, admission_id=row["admission_id"])
-                await client.rpc("session.interrupt", session_id=at.session_id,
-                                 execution_generation=snap["execution_generation"])
-                _handed_back(caller, [row["admission_id"] for row in [*queued, running] if ts.tool_sent(row)])
+                interrupted = await _interrupt_turn(client, at, running, force)
+                _handed_back(caller, [row["admission_id"] for row in [*queued, *([running] if interrupted else [])]
+                                     if ts.tool_sent(row)])
                 notes.append("Interrupted the turn you sent (and dropped what you had queued); this message runs "
-                             "next, with the thread's history intact.")
+                             "next, with the thread's history intact." if interrupted else
+                             "The running turn changed, so it was left alone; this message was queued.")
             else:
                 notes.append("The user's own turn is running there, so this was queued after it (force=true "
                              "interrupts the user's turn).")
@@ -680,12 +713,8 @@ def _send(caller: Caller, args: dict) -> dict:
             out["note"] = " ".join(notes)
         return out
 
-    out = {"thread_id": thread.handle(caller), "title": thread.title, **_run(_with_owner(thread.home, caller.subject, go)),
-           "request_id": key}
-    if args.get("wait_s"):
-        out["wait"] = _wait(caller, {"thread_id": out["thread_id"], "admission_id": out["admission_id"],
-                                     "timeout_s": args["wait_s"]})
-    return out
+    return {"thread_id": thread.handle(caller), "title": thread.title,
+            **_run(_with_owner(thread.home, caller.subject, go)), "request_id": key}
 
 
 def _report(caller: Caller, thread: Thread, admission: dict | None, cap: int) -> dict:
@@ -706,7 +735,7 @@ def _report(caller: Caller, thread: Thread, admission: dict | None, cap: int) ->
             out["final_response"], truncated = _cap(result["final_response"], cap)
             if truncated:
                 out["truncated"] = "use read with full=true for the whole message"
-            if result.get("error") and status != "done":
+            if result.get("error"):
                 out["error"] = str(result["error"])[:500]
             if result.get("usage"):
                 out["usage"] = result["usage"]
@@ -808,11 +837,17 @@ def _read(caller: Caller, args: dict) -> dict:
            "messages": messages}
     if messages:
         out["next_after"] = messages[-1]["id"]
-    if after is None:  # the tail is in hand: its settled results needn't wake this chat again
-        for admission in history:
-            if ts.tool_sent(admission):
-                _mark_delivered(caller, thread, {"admission_id": admission["admission_id"],
-                                                 "status": ts.admission_status(admission)})
+    # Transcript rows have no admission identity. A small tail (or identical reply text)
+    # cannot prove which results it consumed; only an explicit admission read acknowledges.
+    if args.get("admission_id"):
+        admission = ts.pinned(history, args["admission_id"])
+        if admission is None:
+            raise ThreadError("invalid_request", "That admission isn't a turn of this thread.")
+        out["result"] = _report(caller, thread, admission, cap)
+        _mark_delivered(caller, thread, out["result"])
+    attention = ts.unacknowledged(caller.home, history)
+    if attention:
+        out["needs_lead"] = attention
     return out
 
 
@@ -842,6 +877,9 @@ def _list(caller: Caller, args: dict) -> dict:
                         "title": info["title"], "status": ts.thread_status(ts.admissions(conn, ids)),
                         "profile": profile, "model": info["model"], "settled": bool(info["archived"]),
                         "last_activity_at": info["last_activity_at"], "preview": preview})
+            attention = ts.unacknowledged(caller.home, ts.admissions(conn, ids))
+            if attention:
+                out[-1]["needs_lead"] = attention
     return {"threads": out}
 
 
@@ -868,11 +906,12 @@ def _stop(caller: Caller, args: dict) -> dict:
             out["cleared_paused"] = cleared
         if snap.get("running") and running is not None:
             if ts.tool_sent(running) or force:
-                await client.rpc("session.interrupt", session_id=at.session_id,
-                                 execution_generation=snap["execution_generation"])
-                if ts.tool_sent(running):
+                interrupted = await _interrupt_turn(client, at, running, force)
+                if interrupted and ts.tool_sent(running):
                     cancelled_running = [running["admission_id"]]
-                out["status"] = "stopping"
+                out["status"] = "stopping" if interrupted else "running"
+                if not interrupted:
+                    out["note"] = "The running turn changed, so it was left alone."
             else:
                 out["status"] = "running"
                 out["note"] = "The user's own turn is running there, so it was left alone (force=true stops it)."
@@ -984,7 +1023,9 @@ THREAD_SCHEMA = {
             "mode": _p("string", "send: queue (default) or interrupt.", enum=["queue", "interrupt"]),
             "force": _p("boolean", "send, stop: also act on the user's own turn there (interrupt it, or discard it "
                         "when a restart cut it off)."),
-            "admission_id": _p("string", "wait: the turn to wait on (default: the newest one you sent)."),
+            "admission_id": _p("string", "wait: the turn to wait on (default: newest you sent). read: return and "
+                               "acknowledge this exact admission result; transcript pages alone do not acknowledge. "
+                               "Use an id from needs_lead to recover an exhausted notice."),
             "wait_s": _p("integer", f"create, send: also wait up to this many seconds (max {WAIT_MAX_S})."),
             "timeout_s": _p("integer", f"wait: max seconds (default {WAIT_DEFAULT_S}, max {WAIT_MAX_S})."),
             "return_when": _p("string", "wait: all (default) or first.", enum=["all", "first"]),
