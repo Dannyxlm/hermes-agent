@@ -120,7 +120,14 @@ def test_genuine_crash_still_reclaims(conn):
 def _sweep(conn, path):
     if path == "pid":
         return kbd.detect_crashed_workers(conn)
+    if path == "runtime":
+        return kbd.enforce_max_runtime(conn, signal_fn=_signal_absent_worker)
     return kb.release_stale_claims(conn, signal_fn=_unexpected_signal, failure_limit=2)
+
+
+def _signal_absent_worker(pid, sig):
+    assert not psutil.pid_exists(pid)
+    raise ProcessLookupError(pid)
 
 
 def _unexpected_signal(*args):
@@ -131,20 +138,24 @@ def _prepare_attempt(conn, tid, path, claim):
     task = claim(conn, tid)
     assert task is not None
     assert task.current_run_id is not None
-    if path == "pid":
+    if path in ("pid", "runtime"):
         # Prove this PID absent rather than touching a running host process.
         pid = 3_800_000
         while psutil.pid_exists(pid):
             pid += 1
         kbd._set_worker_pid(conn, tid, pid)
         kbd._record_worker_exit(pid, 1 << 8)
+        if path == "runtime":
+            with kb.write_txn(conn):
+                conn.execute("UPDATE tasks SET max_runtime_seconds = 1 WHERE id = ?", (tid,))
+                conn.execute("UPDATE task_runs SET started_at = 1 WHERE id = ?", (task.current_run_id,))
     else:
         conn.execute("UPDATE tasks SET claim_expires = 1 WHERE id = ?", (tid,))
         conn.commit()
     return task.current_run_id
 
 
-@pytest.mark.parametrize("path", ["pid", "ttl"])
+@pytest.mark.parametrize("path", ["pid", "ttl", "runtime"])
 @pytest.mark.parametrize("phase", ["ready", "review"])
 def test_reclaim_commit_cannot_lose_or_duplicate_failure_accounting(conn, monkeypatch, path, phase):
     """Death immediately after the reclaim COMMIT must leave the entire failure durable.
@@ -157,7 +168,7 @@ def test_reclaim_commit_cannot_lose_or_duplicate_failure_accounting(conn, monkey
     conn.commit()
     claim = kb.claim_review_task if phase == "review" else kb.claim_task
     real_boundary = kbc._execute_boundary_with_retry
-    outcome = "crashed" if path == "pid" else "reclaimed"
+    outcome = {"pid": "crashed", "ttl": "reclaimed", "runtime": "timed_out"}[path]
     path_to_db = kb.kanban_db_path()
 
     for expected_failures in (1, 2):
@@ -204,7 +215,7 @@ def test_reclaim_commit_cannot_lose_or_duplicate_failure_accounting(conn, monkey
                 assert claim(recovered, tid) is None
 
 
-@pytest.mark.parametrize("path", ["pid", "ttl"])
+@pytest.mark.parametrize("path", ["pid", "ttl", "runtime"])
 def test_reclaim_accounting_failure_rolls_back_run_release_and_breaker(conn, monkeypatch, path):
     tid = kb.create_task(conn, title="atomic reclaim", assignee="worker", max_retries=1)
     run_id = _prepare_attempt(conn, tid, path, kb.claim_task)
@@ -232,7 +243,7 @@ def test_reclaim_accounting_failure_rolls_back_run_release_and_breaker(conn, mon
     assert not _sweep(conn, path)
 
 
-@pytest.mark.parametrize("path", ["pid", "ttl"])
+@pytest.mark.parametrize("path", ["pid", "ttl", "runtime"])
 def test_reclaim_entrypoint_does_not_account_against_a_replacement_claim(conn, monkeypatch, path):
     from hermes_cli import kanban_owner_recovery
 
@@ -242,20 +253,25 @@ def test_reclaim_entrypoint_does_not_account_against_a_replacement_claim(conn, m
 
     def replace_after_snapshot(store, task_id, **kwargs):
         # Interleave replacement after the sweep's SELECT, before its claim CAS.
-        # This fixture writes on the sweep connection because the PID sweep already
-        # holds SQLite's writer lock; no other writer can interleave at that point.
+        # PID/TTL already hold the writer lock, so interleave on the sweep connection.
+        # Runtime snapshots outside its txn: a separate writer can replace the claim.
         if replacements:
             return False
-        lock = kb._host_prefix() + "replacement"
-        run_id = store.execute(
-            "INSERT INTO task_runs (task_id, profile, status, claim_lock, started_at) "
-            "VALUES (?, 'worker', 'running', ?, 1)", (task_id, lock),
-        ).lastrowid
-        store.execute(
-            "UPDATE tasks SET current_run_id = ?, claim_lock = ?, claim_expires = 4000000000, "
-            "worker_pid = NULL, worker_started_at = NULL WHERE id = ?", (run_id, lock, task_id),
-        )
-        replacements.append((kb.get_task(store, task_id), kb.get_run(store, run_id)))
+        with contextlib.ExitStack() as stack:
+            if path == "runtime":
+                store = stack.enter_context(contextlib.closing(kbc.connect(kb.kanban_db_path())))
+                stack.enter_context(kb.write_txn(store))
+            lock = kb._host_prefix() + "replacement"
+            run_id = store.execute(
+                "INSERT INTO task_runs (task_id, profile, status, claim_lock, started_at) "
+                "VALUES (?, 'worker', 'running', ?, 1)", (task_id, lock),
+            ).lastrowid
+            assert run_id is not None
+            store.execute(
+                "UPDATE tasks SET current_run_id = ?, claim_lock = ?, claim_expires = 4000000000, "
+                "worker_pid = NULL, worker_started_at = NULL WHERE id = ?", (run_id, lock, task_id),
+            )
+            replacements.append((kb.get_task(store, task_id), kb.get_run(store, run_id)))
         return False
 
     monkeypatch.setattr(kanban_owner_recovery, "owner_reclaim_blocked", replace_after_snapshot)
@@ -268,7 +284,8 @@ def test_reclaim_entrypoint_does_not_account_against_a_replacement_claim(conn, m
     old = kb.get_run(conn, old_run)
     assert old is not None and old.outcome is None
     assert task.status == "running" and task.consecutive_failures == 0
-    assert not [e for e in kb.list_events(conn, tid) if e.kind in ("crashed", "reclaimed", "gave_up")]
+    assert not [e for e in kb.list_events(conn, tid)
+                if e.kind in ("crashed", "reclaimed", "timed_out", "gave_up")]
 
 
 @pytest.mark.parametrize("path", ["pid", "ttl"])

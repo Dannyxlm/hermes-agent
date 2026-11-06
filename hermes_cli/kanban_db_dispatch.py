@@ -754,19 +754,17 @@ def enforce_max_runtime(conn: sqlite3.Connection, *, signal_fn=None) -> list[str
                     error=error, metadata=payload,
                 )
                 _kb._append_event(conn, tid, "timed_out", payload, run_id=run_id)
+                # A released claim cannot be rediscovered after a crash. Commit its
+                # failure counter and breaker decision with the run and timeout event.
+                _record_task_failure(
+                    conn, tid,
+                    error=error,
+                    outcome="timed_out",
+                    release_claim=False,
+                    end_run=False,
+                    event_payload_extra={"pid": pid, "sigkill": killed, "retry_status": retry_status},
+                )
                 timed_out.append(tid)
-        # Outside the write_txn above because ``_record_task_failure`` opens its
-        # own. If the breaker trips this flips the task to ``blocked`` and emits
-        # ``gave_up`` on top of the ``timed_out`` already emitted.
-        if cur.rowcount == 1:
-            _record_task_failure(
-                conn, tid,
-                error=error,
-                outcome="timed_out",
-                release_claim=False,
-                end_run=False,
-                event_payload_extra={"pid": pid, "sigkill": killed, "retry_status": retry_status},
-            )
     return timed_out
 
 
