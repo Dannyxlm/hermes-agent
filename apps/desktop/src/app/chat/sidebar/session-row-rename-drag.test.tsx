@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { startSessionDrag } from '@/app/chat/session-drag'
 import type * as SessionDrag from '@/app/chat/session-drag'
 import type { SessionInfo } from '@/hermes'
+import { familyTranslations } from '@/i18n/family'
 import type * as ChatRuntime from '@/lib/chat-runtime'
 import type * as GatewayStore from '@/store/gateway'
 import type * as ProjectsStore from '@/store/projects'
@@ -64,6 +65,7 @@ vi.mock('@/hermes', async importOriginal => {
 vi.mock('@/i18n', () => ({
   useI18n: () => ({
     t: {
+      family: familyTranslations.en,
       assistant: {
         thread: {
           today: (time: string) => `Today at ${time}`,
