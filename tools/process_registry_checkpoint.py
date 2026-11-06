@@ -45,7 +45,8 @@ class ProcessCheckpointMixin:
                 from tools.process_registry_results import failed_result_checkpoint
                 entries.extend(failed_result_checkpoint(s) for s in self._finished.values()
                                if s._result_persistence_error)
-                known = {*self._running, *self._finished}
+                known = {*self._running, *self._finished,
+                         *(item.get("session_id") for item in entries)}
             from hermes_cli.active_sessions import _FileLock
             from utils import atomic_json_write
             path = _checkpoint_path()
