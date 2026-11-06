@@ -23,6 +23,45 @@ ROWS = {
 }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source', ['cli', 'desktop'])
+async def test_owned_local_and_cli_imports_are_writable_and_permissions_refresh(tmp_path, monkeypatch, source):
+    from dataclasses import replace
+    # CLI import deliberately uses an ordinary cli row, not browser-import origin_json.
+    monkeypatch.setitem(ROWS, 'owned-import', (source, {}))
+    conn, ref = await _connect(tmp_path, monkeypatch, 'owned-import')
+    opened = await conn.resume(ref, {})
+    assert opened['writable'] is True and opened['read_only_reason'] is None
+    ref = SessionRef(ref.profile_id, opened['session_id'])
+    original = conn.actor
+    conn.actor = replace(original, capabilities=original.capabilities - {'session:submit', 'session:control'})
+    restricted = await conn.resume(ref, {})
+    assert restricted['writable'] is False and restricted['read_only_reason'] == 'permission_denied'
+    with pytest.raises(RuntimeStoreError, match='permission_denied'):
+        await conn.submit(ref, {'text': 'not allowed', 'submission_id': 'refused'})
+    conn.actor = original
+    assert (await conn.resume(ref, {}))['writable'] is True
+    info = await conn.info(ref, {'session_id': ref.session_id})
+    assert info['writable'] is True and info['read_only_reason'] is None
+    # Exercise the positive admission path, not merely a displayed capability.
+    monkeypatch.setattr(conn.authority, '_schedule', lambda _ref: None)
+    receipt = await conn.submit(ref, {'text': 'allowed again', 'submission_id': 'accepted'})
+    assert receipt['status'] == 'queued'
+    from hermes_state_runtime import list_session_admissions
+    admitted = list_session_admissions(conn.authority.db, session_id=ref.session_id)
+    assert [(row['admission_id'], row['payload']['text']) for row in admitted] == [
+        (receipt['admission_id'], 'allowed again')]
+
+
+@pytest.mark.asyncio
+async def test_a_mount_binding_change_refreshes_the_actual_submit_verdict(tmp_path, monkeypatch):
+    from gateway.session_api import bind_api_session
+    conn, ref = await _connect(tmp_path, monkeypatch, 'api-1')
+    assert (await conn.resume(ref, {}))['writable'] is False
+    bind_api_session(conn.authority, 'api-1', caller_key='agent:main:api_server:dm:api-1')
+    assert (await conn.resume(ref, {}))['writable'] is True
+
+
 async def _connect(tmp_path, monkeypatch, sid, **identity):
     """A fresh gateway over a state.db holding *sid*, and a native Desktop connection to it."""
     from gateway import run
@@ -56,6 +95,10 @@ async def test_old_stored_history_opens_read_only_for_its_owner(tmp_path, monkey
     opened = await conn.resume(ref, {})
 
     assert [m['content'] for m in opened['messages']] == ['q', 'a']
+    assert opened['writable'] is False
+    assert opened['read_only_reason'] == 'session_read_only'
+    info = await conn.info(ref, {'session_id': sid})
+    assert info['writable'] is False and info['read_only_reason'] == 'session_read_only'
     with pytest.raises(RuntimeStoreError, match='session_read_only'):
         await conn.submit(ref, {'text': 'more', 'submission_id': 's1'})
     assert conn.authority.db.get_session(sid)['message_count'] == 2

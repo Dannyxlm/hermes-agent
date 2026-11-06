@@ -10,6 +10,7 @@ publication). Replaced: only the owner's discovery and socket dial (``owner_forw
 ``connect_owner``), by an in-process client speaking to the same ``AuthorityConnection``."""
 import asyncio
 import contextlib
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -23,13 +24,243 @@ from tui_gateway import server
 from tests.waiting import wait_until
 
 
+@pytest.mark.parametrize("action", ["cancel", "stop", "discard", "foreign", "claim_race"])
+def test_forwarded_controls_reach_only_the_exact_owner_admission(monkeypatch, tmp_path, action):
+    from gateway.session_contract import SessionRef
+    from tui_gateway import owner_forward
+    db = SessionDB(db_path=tmp_path / "state.db")
+    sid, key, turns, emitted = _legacy(monkeypatch, db)
+    monkeypatch.setattr(server, "_tts_stream_stop", lambda: None)
+    monkeypatch.setattr(server, "_resume_wake_after_interrupt", lambda: None)
+    try:
+        db.create_session(key, "test")
+        epoch = begin_runtime_epoch(db, instance_id="gateway")
+        bot = admit_session_input(db, epoch=epoch, principal_id="bot", session_id=key,
+                                  request_id="dm", payload={"text": "DM"})
+        claimed = claim_session_input(db, epoch=epoch, session_id=key)
+        authority = _owner(monkeypatch, db, key, epoch)
+        reply = server.handle_request({"id": "p", "method": "prompt.submit",
+                                       "params": {"session_id": sid, "text": "my question"}})
+        aid = reply["result"]["admission_id"]
+        session = server._sessions[sid]
+        wait_until(lambda: any(e == "session.info" for e, *_ in emitted), timeout=10)
+        if action in ("stop", "discard"):
+            settle_session_input(db, epoch=epoch, admission_id=bot["admission_id"],
+                                 generation=claimed["generation"], outcome="completed")
+            row = claim_session_input(db, epoch=epoch, session_id=key)
+            ref = SessionRef("owned", key)
+            authority._stamp_claim(ref, authority.sessions[key], row)
+            wait_until(lambda: owner_forward.pending_submissions(session)[0]["status"] == "started", timeout=10)
+        method, params = "prompt.cancel", {"session_id": sid, "admission_id": aid}
+        if action == "stop":
+            method = "session.interrupt"
+            params["execution_generation"] = row["generation"]
+        elif action == "discard":
+            authority.epoch = begin_runtime_epoch(db, instance_id="gateway-2")
+            recover_session_inputs(db, epoch=authority.epoch)
+            receipt = server.handle_request({"id": "r", "method": "prompt.receipt", "params": params})
+            assert receipt["result"]["status"] == "unknown", receipt
+            assert owner_forward.pending_submissions(session)[0]["controls"] == ["resolve_unknown"]
+            method = "prompt.resolve_unknown"
+            params["execution_generation"] = row["generation"]
+            stale_discard = server.handle_request({'id': 'stale-discard', 'method': method,
+                'params': {**params, 'execution_generation': row['generation'] - 1}})
+            assert stale_discard['error']['data']['reason'] == 'stale_generation'
+            assert owner_forward.pending_submissions(session)[0]['status'] == 'unknown'
+        elif action == "foreign":
+            session["profile_home"] = str(tmp_path / "foreign")
+        raced = []
+        if action == "claim_race":
+            cancel = authority.cancel_or_claimed
+
+            async def claim_after_the_owner_read_queued(actor, ref, admission_id):
+                settle_session_input(db, epoch=epoch, admission_id=bot["admission_id"],
+                                     generation=claimed["generation"], outcome="completed")
+                running = claim_session_input(db, epoch=epoch, session_id=key)
+                authority._stamp_claim(ref, authority.sessions[key], running)
+                raced.append(running)
+                return await cancel(actor, ref, admission_id)
+            monkeypatch.setattr(authority, "cancel_or_claimed", claim_after_the_owner_read_queued)
+        result = server.handle_request({"id": "control", "method": method, "params": params})
+        if raced:
+            row = raced[0]
+        current = {r["admission_id"]: r for r in list_session_admissions(db, session_id=key, pending_only=False)}
+        if action == "foreign":
+            assert result["error"]["data"]["reason"] == "profile_mismatch"
+            assert current[aid]["status"] == "queued"
+        elif action in ("stop", "claim_race"):
+            assert "error" not in result, result
+            assert authority.pending_stops[key] == row["generation"]
+            # A stale Stop cannot cancel the successor generation.
+            stale = server.handle_request({"id": "stale", "method": "session.interrupt",
+                "params": {"session_id": sid, "admission_id": aid, "execution_generation": row["generation"] - 1}})
+            assert stale["error"]["data"]["reason"] == "stale_generation"
+        else:
+            assert "error" not in result, result
+            assert current[aid]["status"] == "terminal"
+            assert current[aid]["outcome"] == ("interrupted" if action == "discard" else "cancelled")
+        assert turns == []
+        assert len(current) == 2
+    finally:
+        server._sessions[sid]["_finalized"] = True
+        server._sessions.pop(sid, None)
+        db.close()
+
+
+def test_relay_loss_is_not_an_owner_completion():
+    from tui_gateway import owner_forward
+    session, emitted = {"history_lock": threading.RLock()}, []
+    relay = owner_forward._Relay("ui", session, "key", None, None, "hi", lambda *a: emitted.append(a))
+
+    async def scenario():
+        events = asyncio.Queue()
+        await events.put(ConnectionError("owner lost"))
+        await relay._relay(SimpleNamespace(events=events), "a1")
+    asyncio.run(scenario())
+    assert not any(e == "message.complete" for e, *_ in emitted)
+    assert emitted[-1][2]["owner_connected"] is False
+
+
+@pytest.mark.parametrize('compute', [False, True])
+def test_plain_stop_after_relay_loss_reaches_the_running_local_turn(monkeypatch, tmp_path, compute):
+    from pathlib import Path
+    from tui_gateway import owner_forward
+    from tests.tui_gateway.test_queued_prompt_persistence import _busy
+
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key, _turns, _emitted = _legacy(monkeypatch, db)
+        session, stopped = server._sessions[sid], []
+        try:
+            session['_forwarded_admissions'] = {'old': {
+                'receipt': {'status': 'queued'}, 'home': Path(session.get('profile_home') or server._hermes_home),
+                'target': key, 'user': 'old', 'input_id': 'old'}}
+            relay = owner_forward._Relay(sid, session, key, None, None, 'old', lambda *a: None)
+
+            async def lost():
+                events = asyncio.Queue()
+                await events.put(ConnectionError('relay lost'))
+                await relay._relay(SimpleNamespace(events=events), 'old')
+            asyncio.run(lost())
+            session['agent'] = SimpleNamespace(interrupt=lambda *a, **k: stopped.append('inline'))
+            _busy(session, 'new local turn')
+            monkeypatch.setattr(server, '_session_uses_compute_host', lambda _s: compute)
+            monkeypatch.setattr(server, '_get_compute_host_supervisor', lambda: SimpleNamespace(
+                interrupt=lambda *a, **k: stopped.append('compute')))
+            monkeypatch.setattr(server, '_tts_stream_stop', lambda: None)
+            monkeypatch.setattr(server, '_resume_wake_after_interrupt', lambda: None)
+            reply = server.handle_request({'id': 'stop', 'method': 'session.interrupt',
+                                           'params': {'session_id': sid}})
+            assert 'error' not in reply, reply
+            assert stopped == ['compute' if compute else 'inline']
+        finally:
+            server._sessions.pop(sid, None)
+
+
+@pytest.mark.parametrize('first', ['unknown', 'missing', 'stale_started', 'missing_then_started', 'terminal'])
+def test_plain_stop_refreshes_each_receipt_and_does_not_starve_later_inputs(monkeypatch, tmp_path, first):
+    from pathlib import Path
+    from tui_gateway import owner_forward
+
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key, _turns, _emitted = _legacy(monkeypatch, db)
+        session = server._sessions[sid]
+        try:
+            db.create_session(key, 'test')
+            epoch = begin_runtime_epoch(db, instance_id='gateway')
+            authority = _owner(monkeypatch, db, key, epoch)
+
+            async def admit():
+                client = _OwnerClient(authority)
+                await client.rpc('session.resume', session_id=key)
+                return [await client.rpc('prompt.submit', session_id=key, text=text, submission_id=text)
+                        for text in ('first', 'later')]
+            receipts = asyncio.run(admit())
+            records = {}
+            for receipt in receipts:
+                records[receipt['admission_id']] = {
+                    'receipt': receipt, 'home': Path(session.get('profile_home') or server._hermes_home).resolve(),
+                    'target': key, 'user': receipt['admission_id'], 'input_id': receipt['admission_id']}
+            session['_forwarded_admissions'] = records
+            if first in ('missing', 'missing_then_started'):
+                record = records.pop(receipts[0]['admission_id'])
+                session['_forwarded_admissions'] = {'missing': record, **records}
+            if first in ('missing_then_started', 'terminal'):
+                claimed = claim_session_input(db, epoch=epoch, session_id=key)
+                settle_session_input(db, epoch=epoch, admission_id=claimed['admission_id'],
+                                     generation=claimed['generation'], outcome='completed')
+                if first == 'terminal':
+                    records[receipts[0]['admission_id']]['receipt'] = {
+                        **receipts[0], 'status': 'started', 'execution_generation': claimed['generation']}
+                else:
+                    from gateway.session_contract import SessionRef
+                    running = claim_session_input(db, epoch=epoch, session_id=key)
+                    authority._stamp_claim(SessionRef('owned', key), authority.sessions[key], running)
+            elif first == 'unknown':
+                claim_session_input(db, epoch=epoch, session_id=key)
+                authority.epoch = begin_runtime_epoch(db, instance_id='replacement')
+                recover_session_inputs(db, epoch=authority.epoch)
+            elif first == 'stale_started':
+                # The cached receipt says started, but the exact admission has returned to queued.
+                records[receipts[0]['admission_id']]['receipt'] = {
+                    **receipts[0], 'status': 'started', 'execution_generation': 99}
+            monkeypatch.setattr(server, '_tts_stream_stop', lambda: None)
+            monkeypatch.setattr(server, '_resume_wake_after_interrupt', lambda: None)
+            reply = server.handle_request({'id': 'stop', 'method': 'session.interrupt',
+                                           'params': {'session_id': sid}})
+            rows = {r['admission_id']: r for r in list_session_admissions(db, session_id=key, pending_only=False)}
+            if first == 'missing_then_started':
+                assert authority.pending_stops[key] == running['generation'], reply
+                assert rows[receipts[1]['admission_id']]['status'] == 'started'
+            else:
+                assert rows[receipts[1]['admission_id']]['outcome'] == 'cancelled', reply
+            if first == 'unknown':
+                assert rows[receipts[0]['admission_id']]['status'] == 'unknown'  # only explicit Discard resolves it
+                assert authority.pending_stops == {}
+                assert owner_forward.pending_submissions(session)[0]['controls'] == ['resolve_unknown']
+            elif first == 'stale_started':
+                assert 'error' not in reply, reply
+                assert rows[receipts[0]['admission_id']]['outcome'] == 'cancelled'
+            elif first == 'terminal':
+                assert 'error' not in reply, reply
+                assert rows[receipts[0]['admission_id']]['outcome'] == 'completed'
+        finally:
+            server._sessions.pop(sid, None)
+
+
+def test_forwarded_websocket_failure_is_a_typed_uncertain_control_error(monkeypatch, tmp_path):
+    from pathlib import Path
+    from websockets.exceptions import ConnectionClosedError
+    from tui_gateway import owner_forward
+
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key, _turns, _emitted = _legacy(monkeypatch, db)
+        session = server._sessions[sid]
+        try:
+            session['_forwarded_admissions'] = {'a': {
+                'receipt': {'status': 'queued'}, 'home': Path(session.get('profile_home') or server._hermes_home).resolve(),
+                'target': key, 'user': 'question', 'input_id': 'a'}}
+            monkeypatch.setattr(owner_forward, 'discover_owner', lambda _h: 'owner')
+
+            @contextlib.asynccontextmanager
+            async def closed(*a, **k):
+                raise ConnectionClosedError(None, None)
+                yield
+            monkeypatch.setattr(owner_forward, 'connect_owner', closed)
+            reply = server.handle_request({'id': 'receipt', 'method': 'prompt.receipt',
+                'params': {'session_id': sid, 'admission_id': 'a'}})
+            assert reply['error']['data']['reason'] == 'SESSION_OWNER_UNCONFIRMED', reply
+            assert session['_forwarded_admissions']['a']['receipt']['status'] == 'queued'
+        finally:
+            server._sessions.pop(sid, None)
+
+
 class _OwnerClient:
     """``GatewayClient``'s surface (``rpc`` + ``events``) over a real ``AuthorityConnection``."""
 
-    def __init__(self, authority):
+    def __init__(self, authority, identity=None):
         from gateway.session_controls import AuthorityConnection
         self.loop, self.events = asyncio.get_running_loop(), asyncio.Queue()
-        self.conn = AuthorityConnection(authority, self, {"user_id": "desktop"})
+        self.conn = AuthorityConnection(authority, self, identity or {"user_id": "desktop"})
 
     def write(self, frame):  # the owner's fanout to this socket
         self.loop.call_soon_threadsafe(self.events.put_nowait, frame)
@@ -53,7 +284,7 @@ def _legacy(monkeypatch, db):
         monkeypatch.setattr(server, name, lambda *_a, **_k: None)
     monkeypatch.setattr(server, "_restart_completed_failed_agent_build", lambda *_a: False)
     turns, emitted = [], []
-    monkeypatch.setattr(server, "_run_after_agent_ready", lambda *a: turns.append(a[1]))
+    monkeypatch.setattr(server, "_run_after_agent_ready", lambda *a, **kw: turns.append(a[1]))
     monkeypatch.setattr(server, "_emit", lambda event, sid, payload=None: emitted.append((event, sid, payload)) or True)
     created = server.handle_request({"id": "c", "method": "session.create", "params": {"source": "desktop"}})
     return created["result"]["session_id"], created["result"]["stored_session_id"], turns, emitted
@@ -61,7 +292,8 @@ def _legacy(monkeypatch, db):
 
 def _owner(monkeypatch, db, key, epoch):
     from gateway.session_authority import LiveSession, SessionAuthority
-    authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id="owned", instance_id="gateway",
+    authority = SessionAuthority(SimpleNamespace(_draining=False, _cached_agent_for=lambda _route: None),
+                                 profile_id="owned", instance_id="gateway",
                                  db=db, epoch=epoch)
     authority.sessions[key] = LiveSession(SimpleNamespace(platform=None, user_id="desktop"), "route")
     monkeypatch.setattr(authority, "_schedule", lambda ref: None)  # the test drives the FIFO
@@ -70,11 +302,13 @@ def _owner(monkeypatch, db, key, epoch):
     except ImportError:  # main: no forwarder; the submit is refused and the assertions below fail
         return authority
 
+    endpoint = SimpleNamespace(profile_id=authority.profile_id)
+
     @contextlib.asynccontextmanager
-    async def connect(_home, endpoint):
-        assert endpoint == "ready-owner"
+    async def connect(_home, selected):
+        assert selected is endpoint
         yield _OwnerClient(authority)
-    monkeypatch.setattr(owner_forward, "discover_owner", lambda _home: "ready-owner")
+    monkeypatch.setattr(owner_forward, "discover_owner", lambda _home: endpoint)
     monkeypatch.setattr(owner_forward, "connect_owner", connect)
     return authority
 
@@ -106,7 +340,7 @@ def test_desktop_prompt_during_a_gateway_turn_runs_after_it_in_the_owner_fifo(mo
         wait_until(lambda: any(e == "session.info" for e, *_ in emitted), timeout=10)
         pending = next(p for e, _s, p in emitted if e == "session.info")["pending_submissions"]
         assert pending == [{"admission_id": mine["admission_id"], "status": "queued", "user": "my own question",
-                            "input_id": mine["request_id"]}]
+                            "input_id": mine["request_id"], "execution_generation": None, "controls": ["cancel"]}]
         assert not any(e == "error" for e, *_ in emitted)
 
         # The gateway turn ends; the owner's FIFO runs the prompt next, exactly once.
@@ -143,16 +377,24 @@ def test_outcome_unknown_work_is_still_refused_and_never_forwarded(monkeypatch, 
     try:
         db.create_session(key, "test")
         first = begin_runtime_epoch(db, instance_id="gateway-1")
-        admit_session_input(db, epoch=first, principal_id="bot", session_id=key, request_id="dm-1",
-                            payload={"text": "lost?"})
-        claim_session_input(db, epoch=first, session_id=key)
+        lost = admit_session_input(db, epoch=first, principal_id="bot", session_id=key, request_id="dm-1",
+                                   payload={"text": "lost?"})
+        claimed = claim_session_input(db, epoch=first, session_id=key)
         epoch = begin_runtime_epoch(db, instance_id="gateway-2")
         recover_session_inputs(db, epoch=epoch)
         _owner(monkeypatch, db, key, epoch)
         reply = server.handle_request({"id": "p", "method": "prompt.submit",
                                        "params": {"session_id": sid, "text": "hi"}})
-        assert reply["error"]["code"] == 4090 and reply["error"]["data"] == {
-            "reason": "SESSION_NOT_OWNED", "ownership_reason": "outcome_unknown"}
+        assert reply["error"]["code"] == 4090
+        data = reply['error']['data']
+        assert data['reason'] == 'SESSION_NOT_OWNED' and data['ownership_reason'] == 'outcome_unknown'
+        assert data['blocking_unknown'] == [{
+            'admission_id': lost['admission_id'], 'ref': {'profile_id': 'owned', 'session_id': key},
+            'status': 'unknown', 'execution_generation': claimed['generation'], 'controls': ['resolve_unknown']}]
+        assert 'lost?' not in str(data)  # metadata only, not the blocked turn's private input
+        receipt = server.handle_request({'id': 'refresh', 'method': 'prompt.receipt',
+            'params': {'session_id': sid, 'admission_id': lost['admission_id']}})
+        assert receipt['result']['status'] == 'unknown' and receipt['result']['controls'] == ['resolve_unknown']
         assert len(list_session_admissions(db, session_id=key)) == 1 and turns == []
     finally:
         server._sessions.pop(sid, None)

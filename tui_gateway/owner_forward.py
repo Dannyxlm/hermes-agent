@@ -11,9 +11,9 @@ owner instead: this backend dials the ready gateway serving the session's profil
 the session and admits the prompt into its durable FIFO (``prompt.submit`` with a fresh submission
 id). The owner runs it after the current turn, exactly once; nothing runs here. The owner's frames
 for THAT admission are relayed onto the Desktop's live session, so the client sees an ordinary
-queued send that later streams and completes. If the relay loses the owner, an empty
-``message.complete`` settles the bubble and the client re-reads the stored transcript the owner
-writes. An ``unknown`` admission is never forwarded: only Discard resolves it.
+queued send that later streams and completes. Relay loss is an observation failure, never proof
+of completion. Control identity remains on the live session after the relay exits; recovery reads
+the owner's receipt and never resubmits an unknown input.
 """
 
 from __future__ import annotations
@@ -148,6 +148,10 @@ class _Relay:
             admission_id = receipt.get("admission_id")
             if not isinstance(admission_id, str) or receipt.get("status") not in ("queued", "started", "terminal"):
                 raise OwnerUnavailable("the gateway did not admit it")
+            with self.session["history_lock"]:
+                self.session.setdefault("_forwarded_admissions", {})[admission_id] = {
+                    "home": self.home, "endpoint": self.endpoint, "target": target,
+                    "receipt": receipt, "user": self.text, "input_id": self.request_id}
             self.admitted.set_result(receipt)
             logger.info("forwarded Desktop prompt for %s to the owner FIFO: admission=%s",
                         self.key, admission_id)
@@ -171,14 +175,16 @@ class _Relay:
             raise OwnerUnconfirmed("the gateway did not confirm it") from exc
 
     def _pending(self, params: dict, admission_id: str) -> None:
-        """The owner's pending list as this wire's ``pending_submissions``, this admission only: the
-        Desktop's queued-row card while it waits, retired once the owner starts it."""
+        """Preserve pending execution state; expose only controls this bridge actually serves."""
         rows = (params.get("payload") or {}).get("pending")
         if not isinstance(rows, list):
             return
-        listed = [{"admission_id": admission_id, "status": "queued", "user": self.text, "input_id": self.request_id}
-                  for row in rows if isinstance(row, dict) and row.get("admission_id") == admission_id
-                  and row.get("status") == "queued"]
+        with self.session["history_lock"]:
+            record = self.session.get("_forwarded_admissions", {}).get(admission_id)
+            for row in rows:
+                if isinstance(row, dict) and row.get("admission_id") == admission_id and record is not None:
+                    record["receipt"] = row
+        listed = pending_submissions(self.session)
         if listed != self.listed:
             self.listed = listed
             self.emit("session.info", self.sid, {"stored_session_id": self.key, "pending_submissions": listed})
@@ -211,11 +217,153 @@ class _Relay:
                         continue
                     self.emit(event_type, self.sid, payload)
                     settled = event_type == "message.complete"
+                    if settled:
+                        with self.session["history_lock"]:
+                            record = self.session.get("_forwarded_admissions", {}).get(admission_id)
+                            if record is not None:
+                                record["receipt"] = {**record["receipt"], "status": "terminal"}
+                        self.emit("session.info", self.sid, {"stored_session_id": self.key,
+                            "pending_submissions": pending_submissions(self.session)})
         finally:
             if not settled and not self.session.get("_finalized"):
-                # Lost the owner mid-relay: the work is durable and still runs there. An empty
-                # completion settles the bubble; the client re-reads the stored transcript.
-                self.emit("message.complete", self.sid, {"text": ""})
+                self.emit("session.info", self.sid, {"stored_session_id": self.key,
+                    "pending_submissions": pending_submissions(self.session), "owner_connected": False})
+
+
+def blocking_unknown(session: dict, refusal=None) -> list[dict]:
+    """Refresh the ledger's exact barrier through the profile-bound owner's receipt RPC.
+
+    A local ledger ID is only a lookup hint, never control authority. No attach (which would
+    read pending bodies), submit, or recovery write occurs. Offline/old/unentitled owners
+    cannot advertise Discard. Observed barriers share the existing receipt/control cache,
+    but are not this window's submitted prompts and ordinary Stop must not touch them.
+    """
+    from tui_gateway import server
+    from tui_gateway.contracts.common import BlockingUnknownAdmission
+    from hermes_cli.gateway_client import GatewayRPCError
+    from hermes_state_runtime import RuntimeStoreError
+    from pydantic import ValidationError
+    from websockets.exceptions import WebSocketException
+
+    refusal = refusal if refusal is not None else server._canonical_ledger_refusal(session)
+    aid = getattr(refusal, 'ledger_admission_id', None)
+    with session['history_lock']:
+        records = session.get('_forwarded_admissions', {})
+        for old in [key for key, row in records.items() if row.get('observed_only')]:
+            del records[old]
+    if getattr(refusal, 'ledger_status', None) != 'unknown' or not aid:
+        return []  # A worker-only barrier has no admission control on this bridge.
+    home = Path(session.get('profile_home') or server._hermes_home).resolve()
+    target = str(session['session_key'])
+
+    async def refresh():
+        endpoint = discover_owner(home)
+        async with connect_owner(home, endpoint) as client:
+            receipt = await client.rpc('prompt.receipt', session_id=target, admission_id=aid)
+        if (receipt.get('admission_id') != aid or receipt.get('ref') != {
+                'session_id': target, 'profile_id': endpoint.profile_id}):
+            raise RuntimeStoreError('profile_mismatch')
+        shaped = BlockingUnknownAdmission.model_validate({
+            key: receipt.get(key, [] if key == 'controls' else None) for key in (
+                'admission_id', 'ref', 'status', 'execution_generation', 'controls')}).model_dump()
+        with session['history_lock']:
+            records = session.setdefault('_forwarded_admissions', {})
+            if aid not in records:
+                records[aid] = {'home': home, 'endpoint': endpoint, 'target': target,
+                                'receipt': receipt, 'observed_only': True}
+            else:
+                records[aid]['receipt'] = receipt
+        return [shaped]
+    async def refresh_bounded():
+        async with asyncio.timeout(ADMIT_TIMEOUT_S):
+            return await refresh()
+    try:
+        return asyncio.run(refresh_bounded())
+    except (GatewayRPCError, RuntimeStoreError, ValidationError, OSError, RuntimeError,
+            TimeoutError, WebSocketException):
+        logger.debug('Owner could not verify unknown admission for %s', target, exc_info=True)
+        return []
+
+
+def cached_blocking_unknown(session: dict) -> list[dict]:
+    """Project only verified receipts retained by the existing owner control path."""
+    from tui_gateway import server
+    home = Path(session.get('profile_home') or server._hermes_home).resolve()
+    with session['history_lock']:
+        return [{key: row['receipt'][key] for key in (
+                    'admission_id', 'ref', 'status', 'execution_generation')}
+                | {'controls': row['receipt'].get('controls') or []}
+                for row in session.get('_forwarded_admissions', {}).values()
+                if row.get('observed_only') and row['home'] == home
+                and row['target'] == session.get('session_key') and row['receipt'].get('status') == 'unknown']
+
+
+def pending_submissions(session: dict) -> list[dict]:
+    """Session-owned identity, not relay-owned state: safe to read after socket loss."""
+    controls = {"queued": ["cancel"], "started": ["interrupt"], "unknown": ["resolve_unknown"]}
+    with session["history_lock"]:
+        return [{"admission_id": aid, "status": r["receipt"]["status"], "user": r["user"],
+                 "input_id": r["input_id"], "execution_generation": r["receipt"].get("execution_generation"),
+                 "controls": controls[r["receipt"]["status"]]}
+                for aid, r in session.get("_forwarded_admissions", {}).items()
+                if not r.get('observed_only') and r["receipt"].get("status") in controls]
+
+
+def control_forwarded(session: dict, method: str, admission_id: str, generation=None, *, stop=False) -> dict:
+    """Reattach to the same profile and read the exact admission before controlling it.
+
+    Discovery may find a replacement gateway, but cannot select another home or another admission.
+    The owner's cancel handles queued→claimed races; Stop/Discard always carry the observed generation.
+    """
+    from tui_gateway import server
+    from hermes_state_runtime import RuntimeStoreError
+    with session["history_lock"]:
+        record = session.get("_forwarded_admissions", {}).get(admission_id)
+        if record is None:
+            raise RuntimeStoreError("not_found")
+        home = Path(session.get("profile_home") or server._hermes_home).resolve()
+        if home != record["home"]:
+            raise RuntimeStoreError("profile_mismatch")
+        target, expected_ref = record["target"], record["receipt"].get("ref")
+        if record.get('observed_only') and target != session.get('session_key'):
+            raise RuntimeStoreError('not_found')
+
+    async def call():
+        endpoint = discover_owner(home)
+        async with connect_owner(home, endpoint) as client:
+            receipt = await client.rpc("prompt.receipt", session_id=target, admission_id=admission_id)
+            if receipt.get("ref") != expected_ref:
+                raise RuntimeStoreError("profile_mismatch")
+            with session["history_lock"]:
+                record["endpoint"], record["receipt"] = endpoint, receipt
+            if method == "prompt.receipt":
+                return receipt
+            if record.get('observed_only') and (stop or method != 'prompt.resolve_unknown'
+                    or 'resolve_unknown' not in (receipt.get('controls') or [])):
+                raise RuntimeStoreError('permission_denied')
+            verb = method
+            if stop:
+                if receipt["status"] == "terminal":
+                    return receipt
+                if receipt["status"] == "unknown":
+                    raise RuntimeStoreError("unknown_execution")  # Stop is never human Discard.
+                verb = "session.interrupt" if receipt["status"] == "started" else "prompt.cancel"
+            params = {"session_id": target}
+            if verb != "session.interrupt":
+                params["admission_id"] = admission_id
+            if verb in ("session.interrupt", "prompt.resolve_unknown"):
+                observed = receipt.get("execution_generation")
+                if generation is not None and generation != observed:
+                    raise RuntimeStoreError("stale_generation")
+                if observed is None or receipt["status"] not in ("started", "unknown"):
+                    raise RuntimeStoreError("stale_generation")
+                params["execution_generation"] = observed
+            result = await client.rpc(verb, **params)
+            refreshed = await client.rpc("prompt.receipt", session_id=target, admission_id=admission_id)
+            with session["history_lock"]:
+                record["receipt"] = refreshed
+            return result
+    return asyncio.run(call())
 
 
 def forward_rpc(home: Path, endpoint, method: str, params: dict) -> Any:

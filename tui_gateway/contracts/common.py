@@ -70,6 +70,39 @@ class McpServerStatus(OpenModel):
     error: str | None = None
 
 
+class LocalQueueReceipt(Result):
+    input_id: str
+    session_id: str
+    status: Literal['queued', 'transferred', 'terminal', 'unknown']
+    outcome: str | None
+    reason: str | None = None
+    user: JsonValue
+
+
+class ForwardedPendingSubmission(Result):
+    admission_id: str
+    input_id: str
+    status: Literal['queued', 'started', 'unknown']
+    user: str
+    execution_generation: int | None = None
+    controls: list[Literal['cancel', 'interrupt', 'resolve_unknown']]
+
+
+class BlockingUnknownRef(Result):
+    profile_id: str
+    session_id: str
+
+
+class BlockingUnknownAdmission(Result):
+    """Owner-verified barrier metadata, never input text or client-inferred identity."""
+
+    admission_id: str
+    ref: BlockingUnknownRef
+    status: Literal['unknown']
+    execution_generation: int
+    controls: list[Literal['resolve_unknown']]
+
+
 class SessionLiveInfo(OpenModel):
     """``tui_gateway/server.py::_session_info`` — the ``session.info`` event and the ``info`` field of
     ``session.create`` / ``session.resume`` / ``session.activate`` results."""
@@ -106,6 +139,10 @@ class SessionLiveInfo(OpenModel):
     system_prompt: str | None = None
     credential_warning: str | None = None
     lazy: bool | None = None
+    pending_submissions: list[ForwardedPendingSubmission] | None = None
+    blocking_unknown: list[BlockingUnknownAdmission] | None = None
+    queue_receipts: list[LocalQueueReceipt] | None = None
+    owner_connected: bool | None = None
 
 
 class StoredSessionRow(OpenModel):

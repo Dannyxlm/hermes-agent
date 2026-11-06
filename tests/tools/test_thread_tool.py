@@ -775,7 +775,9 @@ def test_a_cancelled_update_is_sent_again_a_bounded_number_of_times(home, owner)
     owner.update_outcome = "cancelled"  # cancelled before it ran: nobody has read it
     for _ in range(4 * (MAX_RESENDS + 2)):
         deliver(home, "default", "parent")
-    assert len(owner.submits()) == 1 + MAX_RESENDS and ts.delivered(home, "a1", "done")
+    assert len(owner.submits()) == 1 + MAX_RESENDS
+    assert not ts.delivered(home, "a1", "done")
+    assert call(action="list")["threads"][0]["needs_lead"] == ["a1"]
 
 
 def test_giving_up_on_a_cut_off_update_leaves_the_lead_unparked(home, owner):
@@ -787,7 +789,9 @@ def test_giving_up_on_a_cut_off_update_leaves_the_lead_unparked(home, owner):
     owner.update_outcome = "unknown"  # every copy is cut off by a restart
     for _ in range(6 * (MAX_RESENDS + 2)):
         deliver(home, "default", "parent")
-    assert len(owner.submits()) == 1 + MAX_RESENDS and ts.delivered(home, "a1", "done")
+    assert len(owner.submits()) == 1 + MAX_RESENDS
+    assert not ts.delivered(home, "a1", "done")
+    assert call(action="list")["threads"][0]["needs_lead"] == ["a1"]
     with ts_reader(home) as conn:
         assert not conn.execute("SELECT 1 FROM session_admissions WHERE target_session_id='parent' "
                                 "AND status='unknown'").fetchone()

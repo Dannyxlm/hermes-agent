@@ -218,6 +218,10 @@ def retire_local_receipts(conn, session_ids):
     gone += [key for key, value in conn.execute('SELECT key,value FROM state_meta WHERE key GLOB ?',
                                                 (API_DECLARED_PREFIX + '*',)) if value in targets]
     gone += [API_BINDING_PREFIX + sid for sid in targets]
+    from hermes_state_common import LEGACY_QUEUE_RECEIPT_PREFIX
+    gone += [key for key, target in conn.execute(
+        "SELECT key, CASE WHEN json_valid(value) THEN json_extract(value, '$.session_id') END "
+        'FROM state_meta WHERE key GLOB ?', (LEGACY_QUEUE_RECEIPT_PREFIX + '*',)) if target in targets]
     conn.executemany('DELETE FROM state_meta WHERE key=?', [(key,) for key in gone])
 
 

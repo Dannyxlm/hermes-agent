@@ -305,11 +305,15 @@ class ComputeHost:
                 hermes_undo.on_user_message_appended(session["session_key"])
             with contextlib.suppress(Exception):
                 server._persist_branch_seed(session)
-            server._run_prompt_submit(
+            # Handled provider failures also return through turn.end. Carry the runner's
+            # actual disposition, not transcript text, back to the parent-owned queue receipt.
+            terminal = {}
+            accepted = server._run_prompt_submit(
                 request_id, sid, session, text, display_kind=frame.get("display_kind") or None,
                 auto_continue=frame.get("auto_continue", True),
                 display_metadata=(frame.get("display_metadata")
-                                  if isinstance(frame.get("display_metadata"), dict) else None))
+                                  if isinstance(frame.get("display_metadata"), dict) else None),
+                **({"terminal_callback": terminal.update} if frame.get("queue_input_id") else {}))
             run_thread = session.get("_run_thread")
             if run_thread is not None and hasattr(run_thread, "join"):
                 while run_thread.is_alive():
@@ -324,6 +328,8 @@ class ComputeHost:
                 self._progress_counter += 1
             self._reply(
                 "turn.end", sid, request_id, **meta, interrupted=interrupted, ended_ns=now_ns(),
+                **({"terminal_status": terminal.get("status", "failed"), "dispatch_refused": accepted is False}
+                   if frame.get("queue_input_id") else {}),
                 session_info=session_info, session_info_emitted=True)
         except (Exception, ConfigBackendUnavailable) as exc:  # health: allow BLE001 -- the turn's one reply (the outage is a SystemExit)
             with contextlib.suppress(Exception):

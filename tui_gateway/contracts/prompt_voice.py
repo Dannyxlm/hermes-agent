@@ -92,10 +92,20 @@ class PromptSubmitResult(Result):
     # the OWNER's FIFO (``status: queued``) and runs there after the current turn; nothing runs here.
     admission_id: str | None = None
     forwarded: bool | None = None
+    input_id: str | None = None  # durable legacy queue restart-cancellation receipt
 
 
 method("prompt.submit", params=PromptSubmitParams, result=PromptSubmitResult,
        doc="Send a user turn to a live session; busy sessions queue / steer / redirect instead of refusing.")
+
+
+class ForwardedAdmissionParams(SessionParams):
+    admission_id: str
+
+
+class ForwardedResolveParams(ForwardedAdmissionParams):
+    execution_generation: int
+
 
 
 # ── attachments ───────────────────────────────────────────────────────────────────────────────

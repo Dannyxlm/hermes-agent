@@ -79,6 +79,7 @@ def _sql_literal(text: str) -> str:
 # is exactly what distinguishes a never-drained accept row from a dispatched-then-interrupted
 # turn's row (which #123532 deliberately keeps active).
 QUEUED_PROMPT_METADATA_KEY = "_queued_prompt"
+LEGACY_QUEUE_RECEIPT_PREFIX = "legacy_queue_receipt:"
 
 
 def _sql_json_extract(expression: str, path: str) -> str:

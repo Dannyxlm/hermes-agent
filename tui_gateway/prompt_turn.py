@@ -1180,7 +1180,7 @@ def _run_prompt_submit(
         try:
             st.marker_key = _record_turn_marker(
                 session, text, auto_continue=auto_continue and terminal_callback is None,
-                strict=not auto_continue and terminal_callback is None,
+                strict=not auto_continue,
                 notification_category=(display_metadata or {}).get("notification_category"))
             prepared = _prepare_turn_input(sid, session, st, text, images)
             if prepared is None:

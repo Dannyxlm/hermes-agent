@@ -73,6 +73,19 @@ def read_only():
                              detail='this stored conversation can be read but not continued; start a new chat')
 
 
+def write_verdict(authority, actor, ref):
+    """Project the same per-session authorization submit enforces, never a source-name guess.
+
+    Re-evaluate on every read: a cached actor-wide capability cannot describe a history mount,
+    and neither a previous denial nor a previous grant survives a permissions/binding change.
+    """
+    try:
+        authority.authorize(actor, ref, 'session:submit')
+    except RuntimeStoreError as exc:
+        return {'writable': False, 'read_only_reason': exc.reason}
+    return {'writable': True, 'read_only_reason': None}
+
+
 def require_history_access(authority, actor, sid, capability):
     if not _reader(authority, actor, sid):
         raise RuntimeStoreError('not_found')

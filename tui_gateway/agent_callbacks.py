@@ -620,11 +620,15 @@ def _reset_session_agent(sid: str, session: dict) -> dict:
             context_cwd_is_launch_artifact=_context_cwd_is_launch_artifact(session))
     finally:
         _clear_session_context(tokens)
-    session.update(updates)
-    session.pop("queued_prompts", None)
     with session["history_lock"]:
+        cancelled = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
+        _dispose_local_queue(session, cancelled, "cancelled")
+        session.update(updates)
+        session.pop("queued_prompts", None)
         session["history"] = []
         session["history_version"] = int(session.get("history_version", 0)) + 1
+    for envelope in cancelled:
+        _restore_refused_queued_attachments(envelope, sid)
     info = _session_info(new_agent, session)
     _emit("session.info", sid, info)
     _restart_slash_worker(sid, session)
