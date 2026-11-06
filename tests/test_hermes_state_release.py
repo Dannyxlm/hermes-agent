@@ -1,0 +1,241 @@
+"""Release evidence is metadata-only, scope-bound and pinned to durable identities."""
+from dataclasses import asdict
+import json
+import sqlite3
+
+import pytest
+
+from hermes_state import SessionDB
+import hermes_state_runtime as rt
+import hermes_state_release as release
+
+
+@pytest.fixture
+def ledger(tmp_path):
+    path = tmp_path / 'state.db'
+    with SessionDB(path) as db:
+        epoch = rt.begin_runtime_epoch(db, instance_id='synthetic-owner')
+        for sid in ('work', 'lead', 'foreign', 'legacy'):
+            db.create_session(sid, source='api_server')
+        # Age cannot remove a long-running obligation from a restart snapshot.
+        db._execute_write(lambda c: c.execute('UPDATE sessions SET started_at=1'))
+        admitted = {}
+        for sid in ('work', 'lead', 'foreign'):
+            admitted[sid] = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+                session_id=sid, request_id='request-' + sid,
+                payload={'text': 'SECRET INPUT', 'messages': ['SECRET HISTORY']})
+        claim = rt.claim_session_input(db, epoch=epoch, session_id='work')
+        execution_id = 'admission-worker:' + claim['admission_id']
+        rt.register_worker_execution(db, epoch=epoch, execution_id=execution_id,
+            session_id='work', generation=claim['generation'], kind='compute',
+            adoption_secret='SECRET ADOPTION')
+        steer = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+            session_id='work', request_id='steer', payload={'text': 'SECRET STEER'}, intent='steer')
+        rt.steer_session_input(db, epoch=epoch, admission_id=steer['admission_id'],
+            generation=claim['generation'])
+        queued = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+            session_id='work', request_id='queue', payload={'text': 'SECRET QUEUED'})
+        yield path, db, epoch, claim, steer, queued, execution_id, admitted
+
+
+def _scope():
+    return release.ReleaseScope(session_ids=('work', 'lead'), excluded_session_ids=('lead',))
+
+
+def _settle(db, epoch, claim, steer):
+    rt.settle_session_input(db, epoch=epoch, admission_id=claim['admission_id'],
+        generation=claim['generation'], outcome='completed',
+        _transfers={steer['admission_id']: True})
+
+
+def test_snapshot_then_terminal_exact_readback_and_retirement(ledger):
+    path, db, epoch, claim, steer, queued, worker, _ = ledger
+    before = release.snapshot_release_evidence(path, scope=_scope())
+    assert before.complete and before.authority_epoch == epoch
+    assert before.authority_instance_id == 'synthetic-owner'
+    rows = {row.key.id: row for row in before.rows}
+    assert set(rows) == {claim['admission_id'], steer['admission_id'], queued['admission_id'], worker}
+    assert rows[worker].worker_kind == 'compute'
+    assert rows[worker].key.owner_epoch == epoch
+    assert rows[worker].key.generation == claim['generation']
+    assert rows[claim['admission_id']].lineage == ('work',)
+    assert rows[steer['admission_id']].status == 'terminal'
+    assert rows[steer['admission_id']].outcome == 'steering'
+    assert not rows[steer['admission_id']].terminal
+    assert not any(row.completed_turn for row in before.rows)
+    _settle(db, epoch, claim, steer)
+    rt.cancel_session_input(db, epoch=epoch, admission_id=queued['admission_id'])
+    keys = tuple(row.key for row in before.rows)
+    after = release.lookup_release_evidence(path, scope=_scope(), keys=keys)
+    assert after.complete and not after.missing_keys
+    assert all(row.terminal for row in after.rows)
+    completed = [row.key.id for row in after.rows if row.completed_turn]
+    assert completed == [claim['admission_id']]
+    assert not release.snapshot_release_evidence(path, scope=_scope()).rows
+    # The real retirement path deletes live rows and writes metadata-bearing tombstones.
+    from hermes_state_mutation_retirement import retire_terminal_receipts
+    db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+    retired = release.lookup_release_evidence(path, scope=_scope(), keys=keys)
+    assert {row.key.id for row in retired.rows} == set(rows)
+    assert all(row.storage == 'tombstone' and row.terminal for row in retired.rows)
+    assert not retired.complete  # retirement deliberately discards admission lineage
+    assert 'lineage_unavailable' in retired.issues
+    assert 'SECRET' not in json.dumps(asdict(retired))
+
+
+def test_sql_authorizer_denies_content_before_it_can_be_redacted(ledger, monkeypatch):
+    path, db, epoch, claim, steer, _, _, _ = ledger
+    before = release.snapshot_release_evidence(path, scope=_scope())
+    _settle(db, epoch, claim, steer)
+    from hermes_state_mutation_retirement import retire_terminal_receipts
+    # The still queued row must be cancelled before retirement.
+    queued = rt.list_session_admissions(db, session_id='work')
+    for row in queued:
+        rt.cancel_session_input(db, epoch=epoch, admission_id=row['admission_id'])
+    db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+    original_connect = sqlite3.connect
+    reads = []
+    denied = []
+
+    def guarded_connect(*args, **kwargs):
+        assert kwargs.get('uri') and '?mode=ro' in args[0]
+        conn = original_connect(*args, **kwargs)
+
+        def authorize(action, table, column, _database, _trigger):
+            if action == sqlite3.SQLITE_READ:
+                reads.append((table, column))
+                if table in ('messages', 'system_prompts', 'worker_receipts') or column in (
+                        'payload_json', 'payload_digest', 'adoption_digest', 'system_prompt',
+                        'origin_json', 'entry_json', 'result_json'):
+                    denied.append((table, column))
+                    return sqlite3.SQLITE_DENY
+            if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE,
+                          sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_ALTER_TABLE):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(authorize)
+        return conn
+
+    monkeypatch.setattr(release.sqlite3, 'connect', guarded_connect)
+    result = release.lookup_release_evidence(path, scope=_scope(), keys=tuple(row.key for row in before.rows))
+    assert {row.key for row in result.rows} == {row.key for row in before.rows}
+    assert [row.key.id for row in result.rows if row.completed_turn] == [claim['admission_id']]
+    assert reads and not denied
+    assert 'SECRET' not in json.dumps(asdict(result))
+    assert not release.snapshot_release_evidence(path, scope=_scope()).rows
+
+
+def test_cross_scope_missing_and_wrong_execution_identity_are_incomplete(ledger):
+    path, _, epoch, claim, _, _, worker, admitted = ledger
+    keys = (
+        release.EvidenceKey('admission', admitted['foreign']['admission_id'], 'foreign', epoch, None),
+        release.EvidenceKey('admission', admitted['lead']['admission_id'], 'lead', epoch, None),
+        release.EvidenceKey('execution', 'missing-worker', 'work', epoch, 1),
+        release.EvidenceKey('execution', worker, 'work', epoch + 1, claim['generation']),
+        release.EvidenceKey('execution', worker, 'work', epoch, claim['generation'] + 1),
+    )
+    result = release.lookup_release_evidence(path, scope=_scope(), keys=keys)
+    assert not result.complete and not result.rows
+    assert result.missing_keys == keys
+    assert {'outside_scope', 'missing_identity', 'identity_mismatch'} <= set(result.issues)
+    assert 'SECRET' not in json.dumps(asdict(result))
+
+
+def test_restarted_authority_does_not_replace_execution_identity(ledger):
+    path, db, epoch, _, _, _, _, _ = ledger
+    before = release.snapshot_release_evidence(path, scope=_scope())
+    restarted_epoch = rt.begin_runtime_epoch(db, instance_id='synthetic-restart')
+    rt.recover_session_inputs(db, epoch=restarted_epoch)
+    result = release.lookup_release_evidence(path, scope=_scope(), keys=tuple(row.key for row in before.rows))
+    assert result.complete and result.authority_epoch == restarted_epoch
+    assert result.authority_instance_id == 'synthetic-restart'
+    assert all(row.key.owner_epoch == epoch for row in result.rows)
+    assert not any(row.completed_turn for row in result.rows)
+    assert 'unknown' in {row.status for row in result.rows}
+
+
+def test_snapshot_is_one_sqlite_transaction_during_concurrent_settlement(ledger, monkeypatch):
+    path, db, epoch, claim, steer, _, worker, _ = ledger
+    original = release._read_admissions
+
+    def interleaved(*args, **kwargs):
+        rows = original(*args, **kwargs)
+        _settle(db, epoch, claim, steer)
+        return rows
+
+    monkeypatch.setattr(release, '_read_admissions', interleaved)
+    before = release.snapshot_release_evidence(path, scope=_scope())
+    assert before.complete
+    rows = {row.key.id: row for row in before.rows}
+    assert rows[claim['admission_id']].status == 'started'
+    assert rows[worker].status == 'registered'
+    monkeypatch.setattr(release, '_read_admissions', original)
+    after = release.lookup_release_evidence(path, scope=_scope(), keys=(rows[worker].key,))
+    assert after.complete and after.rows[0].terminal
+
+
+def test_legacy_missing_schema_and_missing_file_never_mean_completed(tmp_path, ledger):
+    path, _, _, _, _, _, _, _ = ledger
+    legacy = release.snapshot_release_evidence(path, scope=release.ReleaseScope(('legacy',)))
+    assert not legacy.complete and not legacy.rows
+    assert 'untracked_session' in legacy.issues
+    old = tmp_path / 'old.db'
+    with sqlite3.connect(old) as conn:
+        conn.execute('CREATE TABLE sessions(id TEXT PRIMARY KEY)')
+        conn.execute("INSERT INTO sessions VALUES('legacy')")
+    result = release.snapshot_release_evidence(old, scope=release.ReleaseScope(('legacy',)))
+    assert not result.complete and not result.rows
+    assert 'schema_incomplete' in result.issues
+    missing = tmp_path / 'does-not-exist.db'
+    result = release.snapshot_release_evidence(missing, scope=release.ReleaseScope(('work',)))
+    assert not result.complete and 'database_unavailable' in result.issues
+    assert not missing.exists()
+
+
+def test_readonly_connection_cannot_write_or_create(ledger):
+    path, _, _, _, _, _, _, _ = ledger
+    with release._reader(path) as conn:
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("UPDATE runtime_epoch SET epoch=999")
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute('CREATE TABLE forbidden_write(id TEXT)')
+
+
+def test_explicit_nonempty_scope_required():
+    with pytest.raises(ValueError):
+        release.ReleaseScope(())
+    with pytest.raises(ValueError):
+        release.ReleaseScope(('',))
+
+
+def test_queued_identity_can_be_claimed_by_next_owner_without_inventing_a_turn(ledger):
+    path, db, epoch, claim, steer, queued, _, _ = ledger
+    before = release.snapshot_release_evidence(path, scope=_scope())
+    key = next(row.key for row in before.rows if row.key.id == queued['admission_id'])
+    assert key.generation is None
+    _settle(db, epoch, claim, steer)
+    next_epoch = rt.begin_runtime_epoch(db, instance_id='next-queue-owner')
+    started = rt.claim_session_input(db, epoch=next_epoch, session_id='work')
+    assert isinstance(started, dict)
+    during = release.lookup_release_evidence(path, scope=_scope(), keys=(key,))
+    assert during.complete and not during.rows[0].completed_turn
+    assert during.rows[0].key.owner_epoch == next_epoch
+    rt.settle_session_input(db, epoch=next_epoch, admission_id=started['admission_id'],
+        generation=started['generation'], outcome='completed')
+    after = release.lookup_release_evidence(path, scope=_scope(), keys=(key,))
+    assert after.complete and after.rows[0].completed_turn
+
+
+def test_malformed_or_missing_terminal_metadata_is_not_completion(ledger):
+    path, db, epoch, claim, steer, _, _, _ = ledger
+    _settle(db, epoch, claim, steer)
+    key = release.EvidenceKey('admission', claim['admission_id'], 'work', epoch, claim['generation'])
+    db._execute_write(lambda c: c.execute('UPDATE session_admissions SET outcome=NULL WHERE admission_id=?', (key.id,)))
+    result = release.lookup_release_evidence(path, scope=_scope(), keys=(key,))
+    assert not result.complete and not result.rows[0].completed_turn
+    assert 'outcome_unavailable' in result.issues
+    db._execute_write(lambda c: c.execute('UPDATE session_admissions SET lineage_json=? WHERE admission_id=?', ('invalid', key.id)))
+    result = release.lookup_release_evidence(path, scope=_scope(), keys=(key,))
+    assert not result.complete and result.rows[0].lineage is None
+    assert 'lineage_unavailable' in result.issues
