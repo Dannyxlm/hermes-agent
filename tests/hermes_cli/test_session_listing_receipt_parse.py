@@ -49,6 +49,8 @@ def seed(path, receipts=200):
                 local.POLICY_PREFIX + f"filler-{i}",
                 json.dumps({"session_id": f"filler-{i}", "lineage": [f"filler-{i}"], "policy": "x" * 2000})))
         reset(db, "owner", "next", ["owner", "next"])
+    from hermes_state_listing_indexes import install_listing_indexes
+    install_listing_indexes(path.parent)
     return path
 
 

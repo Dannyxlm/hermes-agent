@@ -21,7 +21,10 @@ def store(tmp_path):
         db._write_sql("UPDATE sessions SET end_reason='session_reset' WHERE id='owner'")
         db._write_sql('INSERT INTO state_meta VALUES(?,?)', (
             POLICY_PREFIX + 'owner', receipt('owner', ['owner', 'first'])))
+        from hermes_state_listing_indexes import LISTING_INDEX_SQL
         with db._conn:
+            for statement in LISTING_INDEX_SQL:
+                db._conn.execute(statement)
             db._conn.executemany('INSERT INTO state_meta VALUES(?,?)', [
                 (POLICY_PREFIX + f'filler-{i:04}', receipt(f'filler-{i}', [f'filler-{i}'], 'x' * 43000))
                 for i in range(300)])

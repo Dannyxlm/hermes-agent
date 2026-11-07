@@ -364,8 +364,8 @@ def _lineage_receipts(conn):
     """``[(owner, lineage)]`` for every receipt holding more than one segment."""
     indexed = conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' "
                            "AND name='idx_state_meta_local_lineage'").fetchone() is not None
-    # A literal predicate lets SQLite prove partial-index membership. Older readonly
-    # stores keep the exact scan until their next writable schema initialization.
+    # A literal predicate lets SQLite prove partial-index membership. Stores without
+    # the optional offline accelerator keep the exact scan, including writable stores.
     index = ' INDEXED BY idx_state_meta_local_lineage' if indexed else ''
     rows = conn.execute(
         f"SELECT value FROM state_meta{index} WHERE key GLOB 'gateway.local_policy.v1:*' "

@@ -285,14 +285,17 @@ def _hydrate_profile_windows(windows, targets, errors, now, *, compact_rows=True
             failed.add(name)
         by_root = {row.get('_lineage_root_id') or row['id']: row for row in hydrated or []}
         for window in windows:
-            result = []
+            result, owned = [], []
             for row in window:
                 if row['profile'] != name:
                     result.append(row)
                     continue
                 full = by_root.get(row.get('_lineage_root_id') or row['id'])
                 if full is not None:
-                    result.extend(_tag_rows([dict(full)], name, now))
+                    hydrated_row = dict(full)
+                    result.append(hydrated_row)
+                    owned.append(hydrated_row)
+            _tag_rows(owned, name, now)
             window[:] = result
     return failed
 
@@ -529,7 +532,7 @@ def get_profiles_sessions(
                 # Same SQL-level blob skip as /api/sessions.
                 compact_rows=not full, include_pinned=True, selection_only=True, **scoped)
             totals[name] = db.session_count(exclude_children=True, **scoped)
-            merged.extend(_tag_rows(rows, name, now))
+            merged.extend(dict(row, profile=name) for row in rows)
         _read_profile_db(name, home, errors, _read)
 
     sort_key = "last_active" if order == "recent" else "started_at"
@@ -632,7 +635,7 @@ def get_profiles_sessions_sidebar(
         recents_truncated[name] = len(slices["recents"]) >= cap["recents"]
         profile_totals[name] = slices["usage"]
         for key in slice_scope:
-            rows[key].extend(_tag_rows(slices[key], name, now))
+            rows[key].extend(dict(row, profile=name) for row in slices[key])
 
     def _window(key: str) -> list[dict[str, Any]]:
         rows[key].sort(key=_recency, reverse=True)
