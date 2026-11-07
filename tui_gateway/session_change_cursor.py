@@ -1,8 +1,9 @@
 """Per-scope session change journal behind the ``sessions.changed`` cursor (Hermex R9 KTD5).
 
-The change watcher already reads every ``sessions`` row of a profile store whenever the store
-moves (``change_watcher._session_db_content_sig``). It hands those rows here, and this module
-diffs them against the last observation to keep, per scope (one profile ``state.db``):
+The change watcher seeds a full ``sessions`` snapshot, then consumes the store's bounded
+projection journal (``change_watcher._session_db_content_sig``). Legacy stores and retention
+gaps still use full snapshots. This module diffs those observations to keep, per scope
+(one profile ``state.db``):
 
 * an opaque cursor ``sc1.<epoch>.<scope tag>.<seq>``. The epoch is minted per process and per
   store file identity, so a restart or a replaced store invalidates every cursor;
@@ -212,12 +213,25 @@ def _notify(change: Change) -> None:
 
 # ── observation ───────────────────────────────────────────────────────────────────────────────
 
+def _merge_observation(previous, rows, removed_ids):
+    if removed_ids is None:
+        return rows
+    if previous is None:
+        raise ValueError("incremental observation requires a full snapshot baseline")
+    merged = previous.copy()
+    merged.update(rows)
+    for sid in removed_ids:
+        merged.pop(sid, None)
+    return merged
+
+
 def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[list], set] | None = None,
-            now: float | None = None) -> Change | None:
-    """Diff one full read of a store's ``sessions`` rows against the last one.
+            now: float | None = None, removed_ids: set | None = None) -> Change | None:
+    """Diff a full snapshot, or an indexed delta with explicit ``removed_ids``.
 
     ``observed`` maps session id → (row digest, row values in ``fields`` order). The first
-    observation of a scope seeds silently. ``delegate_ids(ids)`` classifies NEW child rows as
+    observation of a scope seeds silently. ``removed_ids=None`` means a complete snapshot;
+    a set (even empty) means only these rows were read. ``delegate_ids(ids)`` classifies NEW child rows as
     delegated runs (their ``_delegate_from`` marker is not a signature field); a row's class
     never changes, so it is asked once per row."""
     if "id" not in fields:
@@ -268,7 +282,7 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
         if scope.rows is not previous:
             # A concurrent observation landed first; diff against it so nothing is lost.
             previous = scope.rows
-        scope.rows = rows
+        scope.rows = _merge_observation(previous, rows, removed_ids)
         if previous is None:
             if scope.replaced:
                 # Tell subscribers at once: their cursors belong to the old epoch and must repair.
@@ -287,17 +301,19 @@ def observe(db_path, fields: tuple, observed: dict, *, delegate_ids: Callable[[l
             loud = loud or not row.quiet
             if row.inbox_eligible:
                 (activity if old is None or old.inbox == row.inbox else inbox_changed).add(sid)
-        for sid, old in previous.items():
-            if sid not in rows and old.tracked:
+        deleted = previous.keys() - rows.keys() if removed_ids is None else removed_ids
+        for sid in deleted:
+            old = previous.get(sid)
+            if old is not None and old.tracked:
                 removed.add(sid)
                 loud = loud or not old.quiet
                 if old.inbox_eligible:
                     inbox_changed.add(sid)
                 # Deleting a compression tip makes its untouched root a list row again.
                 root = _root_in(previous, sid)
-                if root != sid and root in rows and rows[root].tracked:
+                if root != sid and root in scope.rows and scope.rows[root].tracked:
                     changed.add(root)
-                    loud = loud or not rows[root].quiet
+                    loud = loud or not scope.rows[root].quiet
         if not changed and not removed:
             return None
         scope.append(frozenset(changed), frozenset(removed), now, loud)
