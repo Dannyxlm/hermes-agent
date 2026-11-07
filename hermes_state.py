@@ -534,7 +534,13 @@ class SessionDB(
 
     @staticmethod
     def _session_row_dict(row: sqlite3.Row) -> dict[str, Any]:
-        data = dict(row)
+        if isinstance(row, sqlite3.Row):
+            columns = row.keys()
+            # sqlite3.Row resolves names case-insensitively, taking the first match.
+            data = (dict(zip(columns, row)) if len({name.lower() for name in columns}) == len(columns)
+                    else dict(row))
+        else:
+            data = dict(row)
         for column in ("system_prompt", "tool_names"):
             if f"_{column}_resolved" in data:
                 resolved = data.pop(f"_{column}_resolved")
