@@ -305,7 +305,6 @@ def _apply_compute_host_metadata_mirror(
 
 
 def _apply_compute_host_metadata_mirror_locked(session, frame, *, between_turns_publication=False):
-    import time
     if not _compute_host_adopt_frame_meta(session, frame, between_turns_publication=between_turns_publication):
         return
     if isinstance(frame.get('history'), list):
@@ -321,7 +320,6 @@ def _apply_compute_host_metadata_mirror_locked(session, frame, *, between_turns_
 
 def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict, *, turn_id=None) -> None:
     import sqlite3
-    import time
     with session["history_lock"]:
         if turn_id is not None:
             if session.get('_compute_host_turn_id') != turn_id:
