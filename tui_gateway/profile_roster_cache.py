@@ -12,7 +12,8 @@ Both are pure functions of the files they read, so while those files have not mo
 nothing to recompute: an idle fleet re-derived identical rows every five seconds for every bot.
 
 Signatures carry each file's ``(mtime_ns, size, inode)`` so atomic DB replacement invalidates
-alongside ordinary commits; a fresh/racy timestamp is never retained after its in-flight read.
+alongside ordinary commits. Fresh/racy files are neither memoized nor coalesced: another
+commit can hide behind the same timestamp while an earlier read is still in flight.
 
 Only DERIVED values live here. The raw readers keep their uncached contract: ``_read_profile_yaml``
 is also used by the ui_meta CAS writer, which reads that document, mutates it and writes it back, and
@@ -57,17 +58,20 @@ def _file_parts(path: Path, *, with_inode: bool = False) -> Optional[tuple]:
 
 def _cached(cache: dict, key: str, signature: Optional[tuple], compute: Callable[[], dict],
             copier: Callable[[dict], dict]) -> dict[str, Any]:
-    """Coalesce overlapping reads, including fresh/racy stores without retaining those answers."""
+    """Coalesce settled reads. Fresh/racy stores cannot prove two polls saw the same commit."""
+    if signature is None:
+        return compute()
     with _LOCK:
         hit = cache.get(key)
-        if signature is not None and hit is not None and hit[0] == signature:
-            return copier(hit[1])
+        valid_hit = hit is not None and hit[0] == signature
         generation = _GENERATION
         flight_key = (id(cache), key, signature, generation)
         future = _FLIGHTS.get(flight_key)
-        leader = future is None
+        leader = future is None and not valid_hit
         if leader:
             future = _FLIGHTS[flight_key] = Future()
+    if valid_hit:
+        return copier(hit[1])
     if not leader:
         return copier(future.result())
     try:

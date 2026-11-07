@@ -38,3 +38,25 @@ def test_cold_picker_discovery_is_singleflight(options, monkeypatch):
             release.set()
         assert [f.result(5) for f in futures] == ["fixture"] * 3
     assert builds == [1]
+
+
+def test_a_slow_picker_does_not_serialize_other_picker_keys(options, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+
+    def build(ctx, **kwargs):
+        if not kwargs.get('include_unconfigured'):
+            started.set()
+            assert release.wait(5)
+        return {"providers": [{"slug": "fixture"}]}
+
+    monkeypatch.setattr("hermes_cli.inventory.build_model_options_payload", build)
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(options)
+        assert started.wait(5)
+        second = pool.submit(options, include_unconfigured=True)
+        try:
+            assert second.result(5) == 'fixture'
+        finally:
+            release.set()
+        assert first.result(5) == 'fixture'
+    assert not server._MODEL_OPTIONS_LOCKS

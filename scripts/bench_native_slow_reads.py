@@ -76,8 +76,9 @@ def prepare_lookups(args, paths):
     with closing(sqlite3.connect(':memory:')) as schema:
         schema.executescript(SCHEMA_SQL)
         ddl = schema.execute("SELECT sql FROM sqlite_master WHERE name='idx_state_meta_local_target'").fetchone()[0]
-    args.lookups.mkdir(parents=True, exist_ok=True)
+    args.lookups.mkdir(parents=True, exist_ok=False)
     args.lookups.chmod(0o700)
+    (args.lookups / ".read-probe-lookups").touch()
     for source in paths:
         target = args.lookups / (source.parent.name + '.db')
         if target.exists():
@@ -237,6 +238,11 @@ def main():
     args = arguments()
     args.source = args.source.resolve()
     sys.path.insert(0, str(args.source))
+    if args.output.exists():
+        raise ValueError("refusing to overwrite an existing output")
+    if args.lookups is not None and not args.prepare_lookups:
+        if not (args.lookups / ".read-probe-lookups").is_file():
+            raise ValueError("lookup directory was not created by this probe")
     home, paths = sandbox(args)
     offline()
     if args.prepare_lookups:

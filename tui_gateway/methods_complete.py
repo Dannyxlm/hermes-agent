@@ -5,6 +5,7 @@ bodies reference server globals bare (``_ok``, ``_err``, ``_sessions``, ...).
 """
 
 import threading
+import weakref
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -323,8 +324,17 @@ def _model_skew_err(rid) -> dict | None:
 # config and credential files is the same answer. ``refresh`` always rebuilds, and stores the result.
 _MODEL_OPTIONS_CACHE: dict = {}
 _MODEL_OPTIONS_TTL_S = 60.0
-# Bounded stripes coalesce cold opens without a process-wide provider-discovery lock.
-_MODEL_OPTIONS_LOCKS = tuple(threading.Lock() for _ in range(16))
+# Locks live only while discovery/requesters hold them; unrelated pickers never queue together.
+_MODEL_OPTIONS_LOCKS = weakref.WeakValueDictionary()
+_MODEL_OPTIONS_LOCKS_GUARD = threading.Lock()
+
+
+def _model_options_lock(key):
+    with _MODEL_OPTIONS_LOCKS_GUARD:
+        lock = _MODEL_OPTIONS_LOCKS.get(key)
+        if lock is None:
+            lock = _MODEL_OPTIONS_LOCKS[key] = threading.Lock()
+        return lock
 
 
 def _credential_stamp(path: Path):
@@ -363,7 +373,7 @@ def _(rid, params: dict) -> dict:
     cached = _model_options_hit(key, refresh)
     if cached is not None:
         return _ok(rid, cached)
-    with _MODEL_OPTIONS_LOCKS[hash(key) % len(_MODEL_OPTIONS_LOCKS)]:
+    with _model_options_lock(key):
         cached = _model_options_hit(key, refresh)
         if cached is not None:
             return _ok(rid, cached)
