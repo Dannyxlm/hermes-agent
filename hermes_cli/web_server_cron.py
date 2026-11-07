@@ -163,6 +163,9 @@ def _call_cron_for_profile(target_profile: Optional[str], func_name: str, *args,
         if func_name == "create_job":
             from cron.scheduler import create_job_with_scheduler_registration
             result = create_job_with_scheduler_registration(*args, **kwargs)
+        elif func_name == "list_jobs":
+            from hermes_cli.web_server_cron_cache import list_dashboard_jobs
+            result = list_dashboard_jobs(cron_jobs, *args, **kwargs)
         else:
             result = getattr(cron_jobs, func_name)(*args, **kwargs)
         heartbeat_age = cron_jobs.get_ticker_heartbeat_age()

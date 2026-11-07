@@ -115,7 +115,7 @@ def _found(job):
     return job
 
 
-def _list_cron_jobs_sync(profile: str = "all"):
+def _list_cron_jobs_sync(profile: str = "all", *, failures: list | None = None):
     requested = (profile or "all").strip()
     if requested.lower() != "all":
         return _call_cron_for_profile(requested, "list_jobs", True)
@@ -134,6 +134,8 @@ def _list_cron_jobs_sync(profile: str = "all"):
         try:
             all_jobs.extend(_call_cron_for_profile(name, "list_jobs", True))
         except Exception:
+            if failures is not None:
+                failures.append(name)
             _log.exception("Failed to list cron jobs for profile %s", name)
 
     by_id: dict[str, dict[str, Any]] = {}
@@ -733,58 +735,16 @@ def _delete_cron_job_sync(job_id: str, profile: Optional[str] = None):
 _CRON_FIRE_RETRY_AFTER_SECONDS = 60
 
 
-def _cron_list_revision(profile: str) -> str | None:
-    """Weak validator for job files and a bounded, 30-second heartbeat observation.
-
-    Never memoize a stopped ticker's age indefinitely, or reuse a racy file stamp.
-    """
-    from utils import mtime_is_racy
-
-    requested = (profile or "all").strip()
-    names = ([str(item["name"]) for item in _cron_profile_dicts() if item.get("name")]
-             if requested.lower() == "all" else [requested])
-    stamps = []
-    for name in sorted(names):
-        canonical, home = _cron_profile_home(name)
-        files = []
-        for filename in ("jobs.json", "ticker_heartbeat", "executions.db", "executions.db-wal"):
-            try:
-                stat = (home / "cron" / filename).stat()
-            except FileNotFoundError:
-                files.append(None)
-                continue
-            except OSError:
-                return None  # unreadable is not an unchanged empty list
-            if mtime_is_racy(stat.st_mtime_ns):
-                return None
-            files.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
-        stamps.append((canonical, str(home.resolve()), files))
-    digest = hashlib.blake2b(
-        repr((requested.lower() == "all", int(time.time() // 30), stamps)).encode(), digest_size=16).hexdigest()
-    return f'W/"{digest}"'
-
-
-# One immutable payload, at most 4 MiB. The revision includes the resolved profile
-# homes, so neither concurrent requests nor profile switches can cross scopes.
-_cron_list_body_cache: tuple[str, bytes] | None = None
-
-
 def _conditional_cron_jobs_sync(profile: str, if_none_match: str):
-    global _cron_list_body_cache
-    revision = _cron_list_revision(profile)
-    if revision and any(tag.strip() == "*" or tag.strip().removeprefix("W/") == revision[2:]
-                        for tag in if_none_match.split(",")):
+    # Heartbeat age and process-owner liveness can change without a file write.
+    # Definitions are reusable, but the validator must describe this observation.
+    from hermes_cli.web_cron_wire import cron_jobs_body
+    body = cron_jobs_body(profile, _list_cron_jobs_sync)
+    revision = 'W/"' + hashlib.blake2b(body, digest_size=16).hexdigest() + '"'
+    if any(tag.strip() == "*" or tag.strip().removeprefix("W/") == revision[2:]
+           for tag in if_none_match.split(",")):
         return None, revision
-    cached = _cron_list_body_cache
-    if revision and cached is not None and cached[0] == revision:
-        return cached[1], revision
-    body = bytes(JSONResponse(content=jsonable_encoder(_list_cron_jobs_sync(profile))).body)
-    # A writer during the list must not label mixed rows as a stable cut.
-    if revision and revision == _cron_list_revision(profile):
-        if len(body) <= 4 * 1024 * 1024:
-            _cron_list_body_cache = revision, body
-        return body, revision
-    return body, None
+    return body, revision
 
 
 @router.get("/api/cron/jobs")

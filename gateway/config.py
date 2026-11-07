@@ -11,6 +11,7 @@ from pathlib import Path
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Dict, List, Optional, Any, Callable
 from enum import Enum
+from functools import lru_cache
 
 from hermes_cli.config import get_hermes_home
 from agent.secret_scope import current_secret_scope, get_secret as _get_secret
@@ -200,6 +201,13 @@ _Platform__bundled_plugin_names: Optional[set] = None  # cached outside the enum
 _Platform__bundled_plugin_aliases: Optional[dict] = None  # manifest ``name:`` (lower) -> directory name
 
 
+@lru_cache(maxsize=64)
+def _bundled_manifest_name_from_text(text: str) -> Optional[str]:
+    data = fast_safe_load(text) or {}
+    name = data.get("name") if isinstance(data, dict) else None
+    return str(name).strip().lower() or None
+
+
 def _bundled_platform_manifest_name(plugin_dir: Path) -> Optional[str]:
     """Lowercased ``name:`` from a bundled platform's plugin manifest (None when absent/unreadable)."""
     try:
@@ -207,9 +215,10 @@ def _bundled_platform_manifest_name(plugin_dir: Path) -> Optional[str]:
             (plugin_dir / m for m in ("plugin.yaml", "plugin.yml") if (plugin_dir / m).exists()), None)
         if manifest_file is None:
             return None
-        data = fast_safe_load(manifest_file.read_text(encoding="utf-8-sig")) or {}
-        name = data.get("name") if isinstance(data, dict) else None
-        return str(name).strip().lower() or None
+        text = manifest_file.read_text(encoding="utf-8-sig")
+        # Content is the validity key. Even equal-size, same-mtime edits are fresh.
+        parse = _bundled_manifest_name_from_text
+        return parse(text) if len(text) <= 65536 else parse.__wrapped__(text)
     except Exception:
         return None
 

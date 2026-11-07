@@ -83,12 +83,14 @@ def _count_status_active_sessions() -> int:
     # /api/status polls would otherwise create state.db before the user's first session.
     if not Path(_default_db_path()).exists():
         return 0
+    from hermes_cli.web_status_activity import activity_signature, status_activity_times
+    path = Path(_default_db_path())
+    before = activity_signature(path)
     db = _open_session_db_for_profile(None, read_only=True)
     try:
-        sessions = db.list_sessions_rich(limit=50, compact_rows=True)
+        activity = status_activity_times(db, path, before)
         now = time.time()
-        return sum(1 for s in sessions if s.get("ended_at") is None
-                   and (now - s.get("last_active", s.get("started_at", 0))) < 300)
+        return sum(1 for last_active in activity if now - last_active < 300)
     finally:
         db.close()
 
