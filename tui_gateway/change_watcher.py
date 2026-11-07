@@ -188,15 +188,8 @@ def _pet_changed_payload() -> dict:
     return {"enabled": False}
 
 
-# last_activity_at / _description are left out on purpose: the session activity heartbeat restamps
-# them mid-turn and on idle ticks, so hashing them re-fired sessions.changed every heartbeat window
-# (#98005). Liveness comes from session.active_list, and a real turn still moves message_count.
-_SESSION_SIGNATURE_FIELDS = (
-    "id", "source", "session_key", "display_name", "model", "parent_session_id",
-    "started_at", "ended_at", "end_reason", "message_count", "tool_call_count",
-    "cwd", "git_branch", "git_repo_root", "title", "title_source", "profile_name",
-    "archived", "pinned", "hidden", "last_read_at", "handoff_state",
-)
+# path -> last snapshot/watermark; dropped with its kept connection on recovery or replacement.
+_session_projection_cache: dict[str, Any] = {}
 # path -> (store version, session-table digest). The version is the file identity plus
 # ``PRAGMA data_version`` of the store's kept probe connection: it moves on every commit (and WAL
 # restart) another connection makes, so the normal watch pass is one stat and one PRAGMA, and a quiet
@@ -268,6 +261,7 @@ def _open_store(key: str):
 
 def _drop_store(key: str) -> None:
     _sessions_db_sig_cache.pop(key, None)
+    _session_projection_cache.pop(key, None)
     held = _store_probes.pop(key, None)
     if held is not None:
         held[0].close()
@@ -298,9 +292,8 @@ def _read_session_db_content_sig(db_path: Path):
 
     ``gateway_heartbeats`` shares state.db and writes every minute. Using the
     database mtime directly therefore emits sessions.changed while no session
-    changed (#98005). Cache behind the store version, then inspect only the
-    sessions columns that drive Desktop projections. Legacy stores safely use
-    the subset of columns they have.
+    changed (#98005). Cache behind the store version, then consume the bounded
+    projection journal. Legacy stores and retention gaps safely use full rows.
     """
     # One entry per real file: the watcher, list reads and the push worker spell homes differently.
     cache_key = os.path.realpath(db_path)
@@ -318,34 +311,21 @@ def _read_session_db_content_sig(db_path: Path):
         if version is not None and cached is not None and cached[0] == version:
             _note_observed(cache_key)
             return cached[1]
-        available = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
-        fields = tuple(field for field in _SESSION_SIGNATURE_FIELDS if field in available)
-        if not fields:
-            # A state.db without a readable sessions table (foreign schema, legacy
-            # or transient file): keep the old mtime contract so any move still
-            # wakes the sidebar instead of silently never broadcasting.
-            signature = ("mtime-fallback", _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
-        else:
-            order = " ORDER BY id" if "id" in available else ""
-            rows = conn.execute(f"SELECT {', '.join(fields)} FROM sessions{order}")
-            # The same read feeds the per-scope change journal behind the sessions.changed cursor.
-            observed, id_at = {}, fields.index("id") if "id" in fields else None
-            row_hashes = []
-            for row in rows:
-                values = tuple(row)
-                row_hash = hash(values)  # in-process only: never persisted or compared across restarts
-                row_hashes.append(row_hash)
-                if id_at is not None:
-                    observed[values[id_at]] = (row_hash, values)
-            signature = (fields, hash(tuple(row_hashes)))
-            if id_at is not None:
-                from tui_gateway import session_change_cursor
-                try:
+        from tui_gateway.session_observation import projection_snapshot
+        with projection_snapshot(conn, _session_projection_cache.get(cache_key) if cached is not None else None) as snapshot:
+            observation, observed, removed, available = snapshot
+            if observation is None:
+                # Foreign/transient schema: retain the wake-up signal rather than silently freeze.
+                signature = ("mtime-fallback", _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
+            else:
+                signature = observation.signature
+                if "id" in observation.fields and (removed is None or observed or removed):
+                    from tui_gateway import session_change_cursor
                     session_change_cursor.observe(
-                        db_path, fields, observed,
+                        db_path, observation.fields, observed, removed_ids=removed,
                         delegate_ids=lambda ids: _delegate_session_ids(conn, ids, available))
-                except Exception:
-                    logger.debug("session change journal update failed", exc_info=True)
+        if version is not None and observation is not None:
+            _session_projection_cache[cache_key] = observation
     except Exception:
         _drop_store(cache_key)  # never keep a connection that failed mid-read
         # A busy/locked read after a good one keeps the last digest and leaves the cached version
