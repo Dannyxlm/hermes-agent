@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from hermes_cli.web_server_sessions import _open_session_db_at_path
 from hermes_state import SessionDB
 from hermes_state_common import SCHEMA_VERSION
+from hermes_state_session_changes import TRIGGERS
 
 _ADDED_TABLES = ("runtime_epoch", "session_admissions", "worker_executions", "worker_receipts")
 _ADDED_COLUMNS = (("sessions", "runtime_revision"), ("sessions", "runtime_generation"),
@@ -32,6 +33,8 @@ def _pre_merge_store(path, *, version=31):
         db.append_message("kept", role="user", content="history survives")
     with closing(sqlite3.connect(path)) as conn:
         conn.execute("DROP TRIGGER IF EXISTS sessions_runtime_ledger_delete_guard")
+        for trigger in TRIGGERS:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
         for table in reversed(_ADDED_TABLES):
             conn.execute(f"DROP TABLE {table}")
         conn.execute("DROP INDEX IF EXISTS idx_sessions_local_created_started")
@@ -198,7 +201,9 @@ def own_store_client(monkeypatch, _isolate_hermes_home):
 
 def _drop_session_column(path, column):
     with closing(sqlite3.connect(path)) as conn:
-        # SQLite refuses DROP COLUMN while an index references it; a pre-column store has neither.
+        # A pre-column store has neither modern projection triggers nor dependent indexes.
+        for trigger in TRIGGERS:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
         conn.execute("DROP INDEX IF EXISTS idx_sessions_effective_activity")
         conn.execute(f"ALTER TABLE sessions DROP COLUMN {column}")
         conn.commit()
@@ -272,6 +277,8 @@ def _lagging_store_with_history(home, rows=400):
             db.append_message("kept", role="user", content=f"history {i} " * 40)
     with closing(sqlite3.connect(path)) as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        for trigger in TRIGGERS:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
         conn.execute("DROP INDEX IF EXISTS idx_sessions_effective_activity")
         conn.execute("ALTER TABLE sessions DROP COLUMN last_read_at")
         conn.commit()

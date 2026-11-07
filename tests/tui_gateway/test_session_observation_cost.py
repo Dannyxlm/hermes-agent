@@ -1,8 +1,8 @@
 """How much work the session change journal costs, and what it must never skip.
 
-The watcher and every list read observe a store by reading all of its ``sessions`` rows. Counted
-through the real entrypoints (``_session_db_content_sig``, ``GET /api/sessions``) by the ``sessions``
-scans SQLite executes: no timing.
+The watcher and list reads share version-guarded session observations. Count projection
+queries through the real entrypoints (``_session_db_content_sig``, ``GET /api/sessions``),
+including indexed delta reads: no timing.
 """
 
 import os
@@ -59,7 +59,7 @@ def scans(monkeypatch):
 
     def tracked(*args, **kwargs):
         conn = real(*args, **kwargs)
-        conn.set_trace_callback(lambda sql: seen.append(sql) if "FROM sessions ORDER BY id" in sql else None)
+        conn.set_trace_callback(lambda sql: seen.append(sql) if sql.startswith("SELECT id, source,") else None)
         return conn
 
     monkeypatch.setattr(hermes_state, "_connect_tracked_db", tracked)
@@ -193,7 +193,7 @@ def test_a_reopened_probe_never_serves_a_stale_version(tmp_path, flaky):
     with SessionDB(db_path=path) as db:
         db.set_session_title("a", "Renamed")
 
-    flaky.fail_on = "FROM sessions ORDER BY id"  # the row read fails and the probe is dropped
+    flaky.fail_on = "FROM sessions"  # the indexed row read fails and the probe is dropped
     assert server._session_db_content_sig(path) == before  # a failed read keeps the last digest
     assert server._session_db_content_sig(path) != before  # the reopened probe must read the rename
     touched, _ = session_change_cursor.changes_since(path, cursor)
