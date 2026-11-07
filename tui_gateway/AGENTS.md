@@ -56,6 +56,12 @@ New question for the user = `_ask("<method>", sid, params, timeout)` in the emit
 and a `server_request(...)` in `contracts/server_requests.py`.
 New event = `event("<type>", Payload)` in `contracts/events.py`; the emitter is checked against it.
 
+**One WebSocket, two lanes** (`ws.py`, `ws_read_lane.py`): a socket's frames dispatch in arrival
+order, except `ws_read_lane.READ_METHODS`, which run beside that serial lane once every earlier frame
+was dispatched (bounded per socket, per cost class, per method). Admit a method there only after
+reading every handler a socket reaches for it (authority, legacy, legacy fallback): no write, no
+attach/subscribe, no connection or cursor state a later request depends on.
+
 ## Profile scope in RPC methods
 
 One `serve` process may host sessions from several profile homes (Desktop pooled backends launch

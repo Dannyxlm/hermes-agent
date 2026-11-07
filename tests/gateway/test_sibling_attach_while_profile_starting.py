@@ -240,7 +240,7 @@ async def test_a_frame_read_after_the_start_ends_still_queues_behind_the_held_fr
     ran, first_held_running, first_held_may_finish = [], asyncio.Event(), asyncio.Event()
     gate_expired = []  # held-0's gate ran out: its reply is then an internal error, not the hold
 
-    async def recording_dispatch(connection, req, method, transport):
+    async def recording_dispatch(connection, req, method, transport, **kw):
         ran.append(req.get('id'))
         if req.get('id') == 'held-0':
             first_held_running.set()
@@ -249,7 +249,7 @@ async def test_a_frame_read_after_the_start_ends_still_queues_behind_the_held_fr
             except TimeoutError:
                 gate_expired.append(req.get('id'))
                 raise
-        return await real_dispatch(connection, req, method, transport)
+        return await real_dispatch(connection, req, method, transport, **kw)
 
     monkeypatch.setattr(ws_mod, '_dispatch_request', recording_dispatch)
     sock = await rig.connect()
@@ -294,9 +294,9 @@ def _record_dispatch(monkeypatch):
     real_dispatch = ws_mod._dispatch_request
     ran = []
 
-    async def recording_dispatch(connection, req, method, transport):
+    async def recording_dispatch(connection, req, method, transport, **kw):
         ran.append(req.get('id'))
-        return await real_dispatch(connection, req, method, transport)
+        return await real_dispatch(connection, req, method, transport, **kw)
 
     monkeypatch.setattr(ws_mod, '_dispatch_request', recording_dispatch)
     return ran
@@ -382,7 +382,7 @@ async def test_frames_held_for_a_start_that_ended_before_the_disconnect_still_ru
     ran, first_held_running, first_held_may_finish = [], asyncio.Event(), asyncio.Event()
     gate_expired = []  # held-0's gate ran out: its reply is then an internal error
 
-    async def gated_dispatch(connection, req, method, transport):
+    async def gated_dispatch(connection, req, method, transport, **kw):
         ran.append(req.get('id'))
         if req.get('id') == 'held-0':
             first_held_running.set()
@@ -391,7 +391,7 @@ async def test_frames_held_for_a_start_that_ended_before_the_disconnect_still_ru
             except TimeoutError:
                 gate_expired.append(req.get('id'))
                 raise
-        return await real_dispatch(connection, req, method, transport)
+        return await real_dispatch(connection, req, method, transport, **kw)
 
     monkeypatch.setattr(ws_mod, '_dispatch_request', gated_dispatch)
     sock = await rig.connect()
