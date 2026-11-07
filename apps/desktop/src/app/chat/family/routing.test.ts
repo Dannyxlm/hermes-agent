@@ -26,7 +26,7 @@ vi.mock('@/hermes', async original => ({
 }))
 
 const descriptor = (connectionId: string, mode: 'local' | 'remote', profile: string): HermesConnection => ({
-  connectionId, mode, profile, baseUrl: 'https://fixture.invalid', wsUrl: 'wss://fixture.invalid', token: '',
+  connectionId, mode, profile, backendProfile: profile, baseUrl: 'https://fixture.invalid', wsUrl: 'wss://fixture.invalid', token: '',
   logs: [], isFullscreen: false, nativeOverlayWidth: 0, windowButtonPosition: null
 })
 

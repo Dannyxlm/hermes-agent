@@ -38,7 +38,7 @@ import {
   $messagingSessions,
   $selectedStoredSessionId,
   $sessions,
-  getSessionOwnerHint,
+  knownSessionOwner,
   ownerLookupSessionRows,
   sessionMatchesStoredId,
   setCurrentCwd
@@ -117,15 +117,10 @@ export function resolveActiveTranscriptSession(
     return { ownerRoute: verifiedOwner, profile: verifiedOwner.profile }
   }
 
-  const visible = ownerLookupSessionRows().find(session => sessionMatchesStoredId(session, storedSessionId))
+  const owner = knownSessionOwner(ownerLookupSessionRows(), storedSessionId)
 
-  if (visible) {
-    return { profile: visible.profile }
-  }
-
-  const ownerRoute = getSessionOwnerHint(storedSessionId)
-
-  return ownerRoute ? { ownerRoute, profile: ownerRoute.profile } : undefined
+  return owner && typeof owner === 'object' ? { ownerRoute: owner, profile: owner.targetProfile || owner.profile } :
+    owner ? { profile: owner } : undefined
 }
 
 export interface ActiveTranscriptRefreshDeps {

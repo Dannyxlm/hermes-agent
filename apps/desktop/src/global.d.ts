@@ -1170,6 +1170,8 @@ export interface DesktopPluginProfileRoute {
 }
 
 export interface HermesConnection {
+  /** Resolver-proven backend namespace, independent of the Desktop `profile` dial alias. */
+  backendProfile?: string
   baseUrl: string
   customWindowControls?: boolean
   darwinMajor?: number

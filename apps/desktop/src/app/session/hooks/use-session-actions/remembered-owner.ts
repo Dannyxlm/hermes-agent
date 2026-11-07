@@ -1,4 +1,5 @@
-import { forgetSessionOwnerHintsForSession, getSessionOwnerHint } from '@/store/session'
+import { forgetSessionOwnerHint, getSessionOwnerHint, sessionOwnerAmbiguous } from '@/store/session'
+import { SessionOwnerResolutionError } from '@/store/session-owner-resolution'
 import { type SessionOwnerRoute, sessionOwnerRouteFromRow } from '@/store/session-request-router'
 
 import { cachedSessionRow } from './utils'
@@ -17,20 +18,24 @@ import { cachedSessionRow } from './utils'
  * bot's resume to the local primary.
  */
 export function rememberedOwnerForResume(storedSessionId: string): SessionOwnerRoute | undefined {
-  const hint = getSessionOwnerHint(storedSessionId)
+  if (sessionOwnerAmbiguous(storedSessionId)) { throw new SessionOwnerResolutionError(storedSessionId, 'session.resume') }
+  const row = cachedSessionRow(storedSessionId)
+  const rowRoute = sessionOwnerRouteFromRow(row)
+
+  const hint = getSessionOwnerHint(storedSessionId, rowRoute ? {
+    connectionId: rowRoute.connectionId, targetProfile: rowRoute.targetProfile || rowRoute.profile
+  } : undefined)
 
   if (!hint) {
     return undefined
   }
 
-  const row = cachedSessionRow(storedSessionId)
-  const rowRoute = sessionOwnerRouteFromRow(row)
-
-  if (!row || (rowRoute && hint.connectionId === rowRoute.connectionId)) {
+  if (!row || (rowRoute && hint.connectionId === rowRoute.connectionId &&
+    (hint.targetProfile || hint.profile) === (rowRoute.targetProfile || rowRoute.profile))) {
     return hint
   }
 
-  forgetSessionOwnerHintsForSession(storedSessionId)
+  if (!hint.targetProfile) { forgetSessionOwnerHint(storedSessionId, hint) }
 
   return undefined
 }

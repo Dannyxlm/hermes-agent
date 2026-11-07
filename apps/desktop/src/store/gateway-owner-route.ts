@@ -29,11 +29,12 @@ export function captureGatewayOwner(
   const source = onPrimary ? primary : secondary
   const mode = source?.mode
   const connectionId = source?.connectionId || (mode === 'local' ? 'local' : null)
+  const backendProfile = onPrimary ? (profile === primaryProfile ? primary.targetProfile : profile) : secondary?.backendProfile
 
-  if (!connectionId || !mode) { return null }
+  if (!connectionId || !mode || !backendProfile) { return null }
 
   return {
     connectionId, mode, profile,
-    targetProfile: onPrimary ? (profile === primaryProfile ? primary.targetProfile ?? profile : profile) : secondary?.profile ?? profile
+    targetProfile: backendProfile
   }
 }

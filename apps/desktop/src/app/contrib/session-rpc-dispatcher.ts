@@ -36,9 +36,9 @@ import type { MutableRefObject } from 'react'
 import { resolveSessionOwner } from '@/app/session/hooks/use-session-actions/utils'
 import type { ClientSessionState } from '@/app/types'
 import { isSessionGoneForBackgroundPolling } from '@/store/runtime-gone'
-import { getSessionOwnerHint, knownSessionOwner, ownerLookupSessionRows, requestSessionResume } from '@/store/session'
+import { knownSessionOwner, ownerLookupSessionRows, requestSessionResume, sessionOwnerAmbiguous } from '@/store/session'
 import { $focusedStoredSessionId } from '@/store/session-focus'
-import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
+import { assertSessionOwnerResolved, SessionOwnerResolutionError } from '@/store/session-owner-resolution'
 import { requestForSessionProfile, type SessionOwnerScope } from '@/store/session-request-router'
 import { runtimeSessionOwner, sessionTileOwnerRoute, storedSessionIdForRuntimeId } from '@/store/session-states'
 
@@ -85,12 +85,17 @@ export function createSessionRpcDispatcher(deps: SessionRpcDispatcherDeps): Ambi
         runtimeSessionOwner(storedSessionId) ??
         (paramSessionId && paramSessionId !== storedSessionId ? runtimeSessionOwner(paramSessionId) : undefined),
       routingSessionId,
-      sessionOwnerHint: storedSessionId => getSessionOwnerHint(storedSessionId),
+      sessionOwnerHint: storedSessionId => {
+        const resolved = knownSessionOwner(ownerLookupSessionRows(), storedSessionId)
+
+        return resolved && typeof resolved === 'object' ? resolved : undefined
+      },
       sessionRowOwner: storedSessionId => knownSessionOwner(ownerLookupSessionRows(), storedSessionId),
       tileOwnerRoute: sessionTileOwnerRoute
     })
 
     if (!owner && routingSessionId) {
+      if (sessionOwnerAmbiguous(routingSessionId)) { throw new SessionOwnerResolutionError(routingSessionId, method) }
       // Unknown owner for a REAL session: probe across profiles (REST, not the
       // gateway socket, so no recursion) rather than defaulting to active. A
       // hit stamps ownership on the row (exact when the row came back

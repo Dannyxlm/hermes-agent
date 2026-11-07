@@ -30,6 +30,7 @@ import {
   SOURCE_SWITCH_DIAL_TIMEOUT_MS,
   withTimeout
 } from '@/lib/with-timeout'
+import { familySocketScope, type FamilySocketScope, requestWithFamilyCompatibility } from '@/store/family-overview-compat'
 import { $gatewayActivationEpoch } from '@/store/gateway-activation-epoch'
 import { isMissingConnectionError, isMissingProfileError } from '@/store/gateway-dial-failures'
 import { isKeptRoute, keptRouteOpened } from '@/store/gateway-kept-routes'
@@ -297,7 +298,8 @@ export function setPrimaryGatewayConnectionId(
   connectionId: null | string | undefined,
   mode: 'local' | 'remote' | null | undefined = undefined,
   profile?: string,
-  targetProfile?: string
+  targetProfile?: string,
+  shared = false
 ): void {
   // Every caller publishes the window's OWN primary socket (boot, reconnect,
   // connection apply, HMR survivor), so record it even while a secondary is
@@ -308,7 +310,7 @@ export function setPrimaryGatewayConnectionId(
   // the primary is in front.
   const id = (connectionId ?? '').trim() || null
   const primaryMode = mode === 'local' || mode === 'remote' ? mode : null
-  $primaryGatewayRoute.set({ connectionId: id, mode: primaryMode, ...(targetProfile ? { targetProfile } : {}) })
+  $primaryGatewayRoute.set({ connectionId: id, mode: primaryMode, ...(targetProfile ? { targetProfile } : {}), ...(shared ? { shared } : {}) })
 
   // A re-home names the profile the primary will serve on its new machine;
   // pairing the new connection with the OLD machine's primary profile let a
@@ -326,10 +328,10 @@ export function dialedGatewayModeFor(connectionId: null | string, profile: strin
 
 /** Publish the registry source owned by the window primary socket. */
 export function setPrimaryGatewayConnection(
-  connection: Pick<HermesConnection, 'connectionId' | 'mode' | 'profile'> | null,
+  connection: Pick<HermesConnection, 'connectionId' | 'mode' | 'backendProfile' | 'sharedPrimary' | 'sharedRemote'> | null,
   profile?: string
 ): void {
-  setPrimaryGatewayConnectionId(connection?.connectionId, connection?.mode, profile, connection?.profile)
+  setPrimaryGatewayConnectionId(connection?.connectionId, connection?.mode, profile, connection?.backendProfile, familySocketScope(connection).shared)
 }
 
 /** Pin a known legacy profile door before any asynchronous Family navigation. */
@@ -420,9 +422,7 @@ async function requestOnPrimaryGateway<T>(
     throw new Error('Hermes gateway unavailable')
   }
 
-  return timeoutMs === undefined && signal === undefined
-    ? gateway.request<T>(method, params)
-    : gateway.request<T>(method, params, timeoutMs, signal)
+  return requestWithFamilyCompatibility<T>(gateway, $primaryGatewayRoute.get(), method, params, timeoutMs, signal)
 }
 
 export function isActivePrimary(): boolean {
@@ -1031,12 +1031,12 @@ async function gatewayForProfile(
   profile: string,
   leaseRequest = false,
   spawnPriority: SpawnPriority = 'background'
-): Promise<{ gateway: HermesGateway | null; key: string; release: () => void; scopeProfile: boolean }> {
+): Promise<{ gateway: HermesGateway | null; key: string; release: () => void; scopeProfile: boolean; socketScope: FamilySocketScope }> {
   const key = normKey(profile)
   const noRelease = () => undefined
 
   if (key === g.primaryProfile) {
-    return { gateway: g.primaryGateway, key, release: noRelease, scopeProfile: false }
+    return { gateway: g.primaryGateway, key, release: noRelease, scopeProfile: false, socketScope: $primaryGatewayRoute.get() }
   }
 
   // sharedPrimaryRoute is itself a dial into main (it can start the profile's spawn), so a
@@ -1048,7 +1048,7 @@ async function gatewayForProfile(
   }
 
   if (notePrimaryRider(primaryIdentity(), key, await sharedPrimaryRoute(key))) {
-    return { gateway: g.primaryGateway, key, release: noRelease, scopeProfile: true }
+    return { gateway: g.primaryGateway, key, release: noRelease, scopeProfile: true, socketScope: $primaryGatewayRoute.get() }
   }
 
   const entry = g.secondaries.get(key) ?? createSecondary(key)
@@ -1102,7 +1102,7 @@ async function gatewayForProfile(
     throw error
   }
 
-  return { gateway: entry.gateway, key, release, scopeProfile: false }
+  return { gateway: entry.gateway, key, release, scopeProfile: false, socketScope: familySocketScope(entry.connection) }
 }
 
 /**
@@ -1127,12 +1127,7 @@ export async function requestGatewayForProfile<T>(
 
     const routedParams = route.scopeProfile ? { ...params, profile: targetProfile ?? route.key } : params
 
-    // Same arity contract as the ambient path in session-request-router: only
-    // pass the deadline args through when the caller set them, so a plain
-    // profile-routed RPC keeps its two-argument call shape.
-    const result = await (timeoutMs === undefined && signal === undefined
-      ? route.gateway.request<T>(method, routedParams)
-      : route.gateway.request<T>(method, routedParams, timeoutMs, signal))
+    const result = await requestWithFamilyCompatibility<T>(route.gateway, route.socketScope, method, routedParams, timeoutMs, signal)
 
     // A served RPC proves the backend answers, not just accepts, so it clears the dial history.
     // Lease requests dispose their entry right after, before a close could prove the socket stable.
@@ -1214,9 +1209,7 @@ export async function requestGatewayForAgent<T>(
   try {
     await openSecondaryForRequest(entry, spawnPriority)
 
-    const result = await (timeoutMs === undefined && signal === undefined
-      ? entry.gateway.request<T>(method, params)
-      : entry.gateway.request<T>(method, params, timeoutMs, signal))
+    const result = await requestWithFamilyCompatibility<T>(entry.gateway, familySocketScope(entry.connection), method, params, timeoutMs, signal)
 
     g.dialFailures.delete(entry.scope)
 
@@ -1811,7 +1804,7 @@ export async function ensureGatewayForProfile(profile: string): Promise<void> {
   // primary instead of dialing a doomed duplicate socket at the same
   // descriptor — $activeGatewayProfile still moves to `key`, so request
   // scoping and profile-aware surfaces behave identically.
-  if (await sharedPrimaryRoute(key)) {
+  if (notePrimaryRider(primaryIdentity(), key, await sharedPrimaryRoute(key))) {
     applyActive(g.primaryProfile, activationEpoch)
 
     return

@@ -1,4 +1,5 @@
 import { captureGatewayOwnerForProfile } from '@/store/gateway'
+import { getSessionOwnerHints, knownSessionOwner, ownerLookupSessionRows, sessionOwnerAmbiguous } from '@/store/session'
 import { requestForSessionProfile, type SessionOwnerRoute } from '@/store/session-request-router'
 import { knownOwnerForSession, ownerConnectionMode, storedSessionIdForRuntimeId } from '@/store/session-states'
 
@@ -54,6 +55,19 @@ export function familyChatTarget(target: FamilyTarget, node: FamilyDisplayNode, 
 
 /** No mutation of visibility. Hydration, authority, approvals and steering stay on the existing chat surface. */
 export async function openFamilyChat(target: FamilyTarget): Promise<void> {
+  // Tile/runtime bindings are stored-id keyed. Refuse a second owner rather than
+  // silently re-homing an existing same-id conversation on another backend.
+  const existing = knownSessionOwner(ownerLookupSessionRows(), target.sessionId)
+  const owners = [...getSessionOwnerHints(target.sessionId), ...(existing ? [existing] : [])]
+
+  if (sessionOwnerAmbiguous(target.sessionId) || owners.some(known => {
+    const owner = typeof known === 'string' ? captureGatewayOwnerForProfile(known) : known
+
+    return !owner || owner.connectionId !== target.owner.connectionId || (owner.targetProfile || owner.profile) !== familyProfile(target)
+  })) {
+    throw new Error('This session ID also belongs to another backend profile. Desktop cannot safely open both under the same stored ID.')
+  }
+
   const { host } = await import('@/sdk')
   await host.openSession(target.sessionId, {
     route: { ...target.owner, targetProfile: familyProfile(target) }, intent: 'tab', forceResume: true, awaitHydration: true

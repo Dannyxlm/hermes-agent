@@ -269,13 +269,19 @@ export function knownSessionOwner(sessions: readonly SessionInfo[], sessionId: n
     return undefined
   }
 
-  const session = sessions.find(candidate => sessionMatchesStoredId(candidate, sessionId))
+  const matches = sessions.filter(candidate => sessionMatchesStoredId(candidate, sessionId))
+
+  if (new Set(matches.map(row => JSON.stringify([row.connection_id || '', row.profile || '']))).size > 1) { return undefined }
+  const session = matches[0]
   const profile = session?.profile?.trim()
   const connectionId = session?.connection_id?.trim()
-  const hint = getSessionOwnerHint(sessionId)
+
+  const hint = getSessionOwnerHint(sessionId, session ? {
+    ...(connectionId ? { connectionId } : {}), ...(profile ? { targetProfile: profile } : {})
+  } : undefined)
 
   if (connectionId) {
-    return { connectionId, profile: profile || 'default' }
+    return hint ?? { connectionId, profile: profile || 'default' }
   }
 
   const hintProfiles = new Set([hint?.profile.trim() || 'default', hint?.targetProfile?.trim() || 'default'])
@@ -295,6 +301,12 @@ export function knownSessionOwner(sessions: readonly SessionInfo[], sessionId: n
   }
 
   return hint
+}
+
+/** A known collision is not a missing owner that an ambient/first-hit probe may repair. */
+export function sessionOwnerAmbiguous(sessionId: string, rows = ownerLookupSessionRows()): boolean {
+  return !knownSessionOwner(rows, sessionId) && (getSessionOwnerHints(sessionId).length > 1 ||
+    rows.filter(row => sessionMatchesStoredId(row, sessionId)).length > 1)
 }
 
 /**
@@ -1223,8 +1235,8 @@ const SESSION_OWNER_HINT_LIMIT = 256
 const SESSION_OWNER_HINTS_KEY = 'hermes.desktop.sessionOwnerHints.v1'
 const sessionOwnerHints = new Map<string, { id: string; route: SessionOwnerRoute }>()
 
-function sessionOwnerHintKey(sessionId: string, route: Pick<SessionOwnerRoute, 'connectionId' | 'profile'>): string {
-  return JSON.stringify([route.connectionId.trim(), route.profile.trim() || 'default', sessionId])
+function sessionOwnerHintKey(sessionId: string, route: SessionOwnerRoute): string {
+  return JSON.stringify([route.connectionId.trim(), route.profile.trim() || 'default', route.targetProfile?.trim() || route.profile.trim() || 'default', sessionId])
 }
 
 function normalizeOwnerRoute(route: SessionOwnerRoute): SessionOwnerRoute {
@@ -1313,6 +1325,13 @@ export function setSessionOwnerHint(sessionId: string, route: SessionOwnerRoute)
   }
 }
 
+/** Reject one obsolete hint, not a same-id session's other backend targets. */
+export function forgetSessionOwnerHint(sessionId: string, route: SessionOwnerRoute): void {
+  if (sessionOwnerHints.delete(sessionOwnerHintKey(sessionId.trim(), normalizeOwnerRoute(route)))) {
+    persistSessionOwnerHints()
+  }
+}
+
 /** Drop every hint naming `connectionId` — the registry no longer has it, so
  *  nothing can dial that route again (fail-closed would otherwise pin those
  *  sessions to a dead source forever). */
@@ -1394,17 +1413,14 @@ export function getSessionOwnerHints(sessionId: string): SessionOwnerRoute[] {
 
 export function getSessionOwnerHint(
   sessionId: string,
-  scope?: Pick<SessionOwnerRoute, 'connectionId' | 'profile'>
+  scope?: Partial<Pick<SessionOwnerRoute, 'connectionId' | 'profile' | 'targetProfile'>>
 ): SessionOwnerRoute | undefined {
   const id = sessionId.trim()
 
-  if (scope) {
-    const entry = sessionOwnerHints.get(sessionOwnerHintKey(id, scope))
-
-    return entry ? { ...entry.route } : undefined
-  }
-
-  const matches = [...sessionOwnerHints.values()].filter(entry => entry.id === id)
+  const matches = [...sessionOwnerHints.values()].filter(({ id: candidate, route }) => candidate === id &&
+    (scope?.connectionId === undefined || route.connectionId === scope.connectionId.trim()) &&
+    (scope?.profile === undefined || route.profile === (scope.profile.trim() || 'default')) &&
+    (scope?.targetProfile === undefined || (route.targetProfile || route.profile) === (scope.targetProfile.trim() || 'default')))
 
   return matches.length === 1 ? { ...matches[0].route } : undefined
 }

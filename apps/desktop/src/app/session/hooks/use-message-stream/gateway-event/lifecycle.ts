@@ -18,7 +18,7 @@ import {
 } from '@/store/live-sync'
 import { clearAllPrompts, clearApprovalRequest } from '@/store/prompts'
 import { markRuntimeGone } from '@/store/runtime-gone'
-import { getSessionOwnerHint, knownSessionOwner, ownerLookupSessionRows, requestSessionResume } from '@/store/session'
+import { knownSessionOwner, ownerLookupSessionRows, requestSessionResume } from '@/store/session'
 import type { SessionOwnerScope } from '@/store/session-request-router'
 import { $sessionTiles, dropSessionState, sessionTileDelegate, unbindTileRuntime } from '@/store/session-states'
 // Leaf import (not the `@/themes` barrel) to avoid pulling the ThemeProvider
@@ -194,7 +194,7 @@ function handleReplayGapEvent(ctx: GatewayEventContext): boolean {
   const source = gatewayEventSource(event)
 
   const ownerForStoredSession = (id: string): SessionOwnerScope =>
-    getSessionOwnerHint(id, source) ?? knownSessionOwner(ownerLookupSessionRows(), id)
+    knownSessionOwner(ownerLookupSessionRows(), id)
 
   if (storedSessionId && runtimeId === deps.activeSessionIdRef.current) {
     const ownerRoute = ownerForStoredSession(storedSessionId)

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { familyChatTarget, type FamilyTarget, openFamilyChat } from '@/app/chat/family/actions'
 import type { ProfileInfo } from '@/types/hermes'
 
 vi.mock('@/app/chat/session-view', async () => {
@@ -792,33 +791,6 @@ describe('profile-aware plugin session opens', () => {
     expect(setResumeExhaustedSessionId).not.toHaveBeenCalled()
   })
 
-  it.each(['clarify', 'approval'] as const)('Family %s opens a compressed warm child through the real SDK with its captured source', async kind => {
-    const target: FamilyTarget = { sessionId: 'lead', owner: {
-      connectionId: 'owning-box', mode: 'remote', profile: 'desktop-alias', targetProfile: 'default'
-    } }
-
-    const destination = familyChatTarget(target, { node_id: 'worker', parent_node_id: 'lead', profile: 'reviewer',
-      session_id: 'compressed-child', title: 'Worker', full_title: null, kind: 'thread', status: 'needs_you',
-      activity_text: null, actions: ['answer'], needs_you: { kind, session_id: 'logical-control', profile: 'reviewer' } }, true)
-
-    if (!destination) { throw new Error('Expected an answer destination') }
-    vi.mocked(activeGatewayConnectionId).mockReturnValue('foreground-other-box')
-    const resumeTile = vi.fn(async () => 'runtime-child')
-    vi.mocked(sessionTileDelegate).mockReturnValue({ resumeTile } as never)
-    setMockAtom($sessionTiles, [{ storedSessionId: 'compressed-child' }] as never)
-    setMockAtom($focusedStoredSessionId, 'compressed-child')
-    setMockAtom($focusedRuntimeId, 'runtime-child')
-    setMockAtom($focusedSessionState, { storedSessionId: 'compressed-child', messages: [] } as never)
-    await openFamilyChat(destination)
-    expect(setSessionOwnerHint).toHaveBeenCalledWith('compressed-child', {
-      connectionId: 'owning-box', mode: 'remote', profile: 'desktop-alias', targetProfile: 'reviewer'
-    })
-    expect(openGatewayForAgent).toHaveBeenCalledWith('owning-box', 'desktop-alias', { spawnPriority: 'foreground' })
-    expect(resumeTile).toHaveBeenCalledWith('compressed-child', { refreshTranscript: true })
-    expect(requestGatewayForAgent).not.toHaveBeenCalled()
-    expect(requestGatewayForProfile).not.toHaveBeenCalled()
-    expect(openGatewayForProfile).not.toHaveBeenCalled()
-  })
 
   it('waits until the target Bot Chat runtime and history are on the focused surface', async () => {
     vi.mocked(openGatewayForProfile).mockImplementationOnce(async () => undefined)

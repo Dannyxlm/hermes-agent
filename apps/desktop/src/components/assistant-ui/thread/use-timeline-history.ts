@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { sessionHistoryOwner } from '@/app/chat/session-history-owner'
 import { useSessionView } from '@/app/chat/session-view'
 import { sessionCreatedThisRun } from '@/app/session/hooks/use-session-actions/created-this-run'
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { $activeGatewayProfile } from '@/store/profile'
-import { $connection, getSessionOwnerHint } from '@/store/session'
+import { $connection } from '@/store/session'
 import { transcriptTailState } from '@/store/transcript-tail'
 
 import { cachedTimelineIndex, fetchTimelineIndex, type TimelineIndex, timelineIndexKey } from './timeline-index'
@@ -22,9 +23,7 @@ export function useTimelineHistory() {
 
   const activeProfile = useStoreSelector($activeGatewayProfile, profile => profile)
 
-  const owner = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
+  const { ownerRoute: owner, ambiguous } = sessionHistoryOwner(storedId, runtimeId)
 
   const scope = owner
     ? { connectionId: owner.connectionId, profile: owner.targetProfile || owner.profile }
@@ -36,7 +35,7 @@ export function useTimelineHistory() {
 
   const loadMore = useCallback(
     async (beyondRowId?: number) => {
-      if (!storedId) {
+      if (!storedId || ambiguous) {
         return
       }
 
@@ -60,7 +59,7 @@ export function useTimelineHistory() {
       }
       // Owner is represented by key; do not restart on object identity alone.
     },
-    [key, storedId, runtimeId, view]
+    [ambiguous, key, storedId, runtimeId, view]
   )
 
   useEffect(() => {
@@ -108,5 +107,5 @@ export function useTimelineHistory() {
     void loadMore(newestPromptRowId)
   }, [stale, failed, key, loadMore, newestPromptRowId])
 
-  return { ...value, failed: failed === key, loadMore }
+  return { ...value, failed: ambiguous || failed === key, loadMore }
 }
