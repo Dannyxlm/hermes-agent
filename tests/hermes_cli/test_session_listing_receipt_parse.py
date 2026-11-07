@@ -27,7 +27,13 @@ def parses(monkeypatch):
 
     def tracked(*args, **kwargs):
         conn = real(*args, **kwargs)
-        conn.set_trace_callback(lambda sql: seen.append(sql) if "json_array_length" in sql else None)
+        def trace(sql):
+            if not sql.lstrip().upper().startswith('SELECT') or 'json_array_length' not in sql:
+                return
+            plan = conn.execute('EXPLAIN ' + sql).fetchall()
+            if any(row[1] == 'Function' and 'json_array_length' in str(row[5]) for row in plan):
+                seen.append(sql)
+        conn.set_trace_callback(trace)
         return conn
 
     monkeypatch.setattr(hermes_state, "_connect_tracked_db", tracked)

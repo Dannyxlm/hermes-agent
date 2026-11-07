@@ -1,8 +1,33 @@
 """Session-list page projection for ``SessionDB.list_sessions_rich``."""
+import json
 from typing import Any
 
+from hermes_state_common import _sql_session_last_active
 
-def project_compression_tips(db, sessions: list[dict[str, Any]], compact_rows: bool) -> list[dict[str, Any]]:
+SELECTION_COLUMNS = 's.id, s.started_at, s.ended_at, s.end_reason, s.archived, s.pinned'
+
+
+def hydrate_listing_rows(db, selected, compact_rows):
+    """Hydrate the selected roots only, retaining the original root/tip field merge."""
+    roots = list(dict.fromkeys(row.get('_lineage_root_id') or row['id'] for row in selected))
+    rows = db._get_session_rich_rows_batch(roots, compact_rows=compact_rows)
+    projected = project_compression_tips(db, list(rows.values()), compact_rows)
+    by_root = {row.get('_lineage_root_id') or row['id']: row for row in projected}
+    result = []
+    for selection in selected:
+        root = selection.get('_lineage_root_id') or selection['id']
+        if root not in by_root:
+            continue
+        row = dict(by_root[root])
+        if '_lineage_ids' in selection:
+            row['_lineage_ids'] = list(selection['_lineage_ids'])
+        row['unread'] = db.session_unread(row)
+        result.append(row)
+    return result
+
+
+def project_compression_tips(db, sessions: list[dict[str, Any]], compact_rows: bool,
+                             selection_only: bool = False) -> list[dict[str, Any]]:
     """Replace each compression root's surfaced fields with its live tip's (root ``started_at`` kept
     for stable ordering), one batched query. ``_lineage_ids`` carries every chain id (a tile may
     hold a MIDDLE segment's id)."""
@@ -12,11 +37,17 @@ def project_compression_tips(db, sessions: list[dict[str, Any]], compact_rows: b
             chain = db.get_compression_chain(s["id"])
             if chain and chain[-1] != s["id"]:
                 chain_by_root[s["id"]] = chain
-    tip_rows = (
-        db._get_session_rich_rows_batch(
-            {chain[-1] for chain in chain_by_root.values()}, compact_rows=compact_rows,
-        ) if chain_by_root else {}
-    )
+    if selection_only:
+        ids = list(dict.fromkeys(chain[-1] for chain in chain_by_root.values()))
+        tip_rows = {row['id']: dict(row) for row in db._read_all(
+            f"SELECT {SELECTION_COLUMNS}, {_sql_session_last_active('s')} AS last_active "
+            "FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?))", [json.dumps(ids)])} if ids else {}
+    else:
+        tip_rows = (
+            db._get_session_rich_rows_batch(
+                {chain[-1] for chain in chain_by_root.values()}, compact_rows=compact_rows,
+            ) if chain_by_root else {}
+        )
     projected = []
     for s in sessions:
         chain = chain_by_root.get(s["id"])

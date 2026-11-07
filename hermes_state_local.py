@@ -1,6 +1,5 @@
 """Private local creation receipts in the canonical runtime transaction owner."""
 import json
-import sqlite3
 import threading
 import time
 from collections import OrderedDict
@@ -361,40 +360,22 @@ def local_conversation_ids(conn, session_id):
     return list(dict.fromkeys([owner, *(sid for sid in lineage if isinstance(sid, str))]))
 
 
-# store path -> (receipt stamp, the receipts with a lineage of more than one segment, parsed). Receipts are
-# inserted, deleted, or grow by one segment id (a reset or compression) via UPDATE, so their count, newest
-# rowid and total size name every such change without reading their ~43 KB values (parsing them is the
-# cost). Not exact: a lineage/session_id rewrite of unchanged length would not be seen, and no writer does
-# one; a new writer that could must bump something in this stamp.
-_LINEAGE_RECEIPTS: dict[str, tuple[tuple, list]] = {}
-
-
 def _lineage_receipts(conn):
     """``[(owner, lineage)]`` for every receipt holding more than one segment."""
-    glob = POLICY_PREFIX + '*'
-    scope = _LISTING_LINEAGES.get()
-    # Long-lived readers already have the exact connection/version cache below. Only
-    # disposable readonly listing requests need the fork's cross-request parse cache;
-    # never let its aggregate stamp publish an uncommitted transaction's receipts.
-    use_parse_cache = scope is not None and getattr(scope[0], "read_only", False) and not conn.in_transaction
-    try:
-        stamp = tuple(conn.execute("SELECT COUNT(*), MAX(rowid), TOTAL(octet_length(value)) "
-                                   "FROM state_meta WHERE key GLOB ?", (glob,)).fetchone()) if use_parse_cache else None
-    except sqlite3.OperationalError:  # SQLite before 3.43 has no octet_length: parse every time
-        stamp = None
-    path = conn.execute('PRAGMA database_list').fetchone()[2]
-    cached = _LINEAGE_RECEIPTS.get(path) if stamp is not None and path else None
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
+    indexed = conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' "
+                           "AND name='idx_state_meta_local_lineage'").fetchone() is not None
+    # A literal predicate lets SQLite prove partial-index membership. Older readonly
+    # stores keep the exact scan until their next writable schema initialization.
+    index = ' INDEXED BY idx_state_meta_local_lineage' if indexed else ''
+    rows = conn.execute(
+        f"SELECT value FROM state_meta{index} WHERE key GLOB 'gateway.local_policy.v1:*' "
+        "AND json_valid(value) AND json_array_length(value, '$.lineage') > 1 ORDER BY key")
     receipts = []
-    for (raw,) in conn.execute("SELECT value FROM state_meta WHERE key GLOB ? AND json_valid(value) "
-                               "AND json_array_length(value, '$.lineage') > 1", (glob,)).fetchall():
+    for (raw,) in rows:
         receipt = json.loads(raw)
         owner, lineage = receipt.get('session_id'), receipt.get('lineage')
         if isinstance(owner, str) and all(isinstance(sid, str) for sid in lineage):
             receipts.append((owner, lineage))
-    if stamp is not None and path:
-        _LINEAGE_RECEIPTS[path] = (stamp, receipts)
     return receipts
 
 

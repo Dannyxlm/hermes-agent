@@ -272,6 +272,31 @@ def _recency(s: dict[str, Any]) -> Any:
     return s.get("last_active") or s.get("started_at") or 0
 
 
+def _hydrate_profile_windows(windows, targets, errors, now, *, compact_rows=True):
+    from hermes_state_session_list import hydrate_listing_rows
+    failed = set()
+    for name, home in targets:
+        selected = [row for window in windows for row in window if row['profile'] == name]
+        if not selected:
+            continue
+        hydrated = _read_profile_db(name, home, errors,
+            lambda db: hydrate_listing_rows(db, selected, compact_rows))
+        if hydrated is None:
+            failed.add(name)
+        by_root = {row.get('_lineage_root_id') or row['id']: row for row in hydrated or []}
+        for window in windows:
+            result = []
+            for row in window:
+                if row['profile'] != name:
+                    result.append(row)
+                    continue
+                full = by_root.get(row.get('_lineage_root_id') or row['id'])
+                if full is not None:
+                    result.extend(_tag_rows([dict(full)], name, now))
+            window[:] = result
+    return failed
+
+
 def _read_profile_db(name: str, home, errors: Optional[list[dict[str, str]]],
                      fn: Callable[[Any], Any]) -> Any:
     """``fn(db)`` against the profile's read-only state.db; None when the file is missing,
@@ -502,7 +527,7 @@ def get_profiles_sessions(
             rows = db.list_sessions_rich(
                 limit=per_profile, offset=0, order_by_last_active=order == "recent",
                 # Same SQL-level blob skip as /api/sessions.
-                compact_rows=not full, include_pinned=True, **scoped)
+                compact_rows=not full, include_pinned=True, selection_only=True, **scoped)
             totals[name] = db.session_count(exclude_children=True, **scoped)
             merged.extend(_tag_rows(rows, name, now))
         _read_profile_db(name, home, errors, _read)
@@ -517,6 +542,8 @@ def get_profiles_sessions(
         window.extend(s for s in merged if s.get("pinned") and not s.get("archived"))
     else:
         window = _pinned_window(merged, offset, limit)
+    for name in _hydrate_profile_windows([window], targets, errors, now, compact_rows=not full):
+        totals.pop(name, None)
     if not full:
         _strip_session_list_rows(window)
     return {"sessions": window, "total": sum(totals.values()), "profile_totals": totals,
@@ -566,7 +593,7 @@ def get_profiles_sessions_sidebar(
             source=source, exclude_sources=exclude or None, limit=cap[key], offset=0,
             min_message_count=1, include_archived=False, archived_only=False,
             order_by_last_active=True, compact_rows=True, include_pinned=True,
-            include_subagents=include_subagents, exclude_threads=True)
+            include_subagents=include_subagents, exclude_threads=True, selection_only=True)
 
     def _build_slices(db, cache_key, recents_subagents):
         # ``usage`` is aggregated in SQL rather than over the recents window: the window is a
@@ -609,10 +636,19 @@ def get_profiles_sessions_sidebar(
 
     def _window(key: str) -> list[dict[str, Any]]:
         rows[key].sort(key=_recency, reverse=True)
-        win = _pinned_window(rows[key], 0, cap[key])
-        _strip_session_list_rows(win)
-        return win
+        return _pinned_window(rows[key], 0, cap[key])
 
+    windows = {key: _window(key) for key in slice_scope}
+    failed_hydration = _hydrate_profile_windows(list(windows.values()), scanned, errors, now)
+    contributed.difference_update(failed_hydration)
+    for name in failed_hydration:
+        recents_truncated.pop(name, None)
+        profile_totals.pop(name, None)
+    if failed_hydration:
+        rows = {key: [row for row in value if row['profile'] not in failed_hydration]
+                for key, value in rows.items()}
+    for window in windows.values():
+        _strip_session_list_rows(window)
     storage = _corrupt_profile_stores(scanned)
     retryable = _retryable_profile_errors(errors, scanned)
     failed_names = {err["profile"] for err in retryable if err.get("profile")}
@@ -640,10 +676,10 @@ def get_profiles_sessions_sidebar(
             "errors": errors, "storage": storage}
 
     body = {
-        "recents": {"sessions": _window("recents"), "profiles_truncated": recents_truncated,
+        "recents": {"sessions": windows["recents"], "profiles_truncated": recents_truncated,
                     "profiles_usage": profile_totals},
-        "cron": {"sessions": _window("cron")},
-        "messaging": {"sessions": _window("messaging"), "total": len(rows["messaging"])},
+        "cron": {"sessions": windows["cron"]},
+        "messaging": {"sessions": windows["messaging"], "total": len(rows["messaging"])},
         "errors": errors, "storage": storage}
     # A sibling profile still listed does not make the failed profile's absence
     # a successful empty slice. Stamp that profile as a failed load with Retry.
