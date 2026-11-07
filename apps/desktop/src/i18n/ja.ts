@@ -1,7 +1,8 @@
-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
 import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import { defineLocale, type TranslationOverrides } from './define-locale'
+// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+import { familyTranslations } from './family'
 import { introJa } from './intro-ja'
 import { jaBoot } from './ja_boot'
 import { jaCatalog, jaSkillDeepLink } from './ja_catalog'
@@ -28,6 +29,7 @@ import { jaThemePicker } from './ja_theme_picker'
 import { jaUpdateChannel } from './ja_update_channel'
 
 export const jaOverrides = {
+  family: familyTranslations.ja,
   catalog: jaCatalog,
   connectors: jaConnectors.connectors,
   externalOpenFailed: {

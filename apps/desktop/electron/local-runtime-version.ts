@@ -129,8 +129,9 @@ async function probeLocalRuntimeVersion(
 }
 
 /**
- * This machine's install, whatever connection the window is on: the stamp for
- * packaged artifacts, the install launcher's `--version` for source installs.
+ * This machine's client, whatever connection the window is on: the stamp for
+ * every packaged artifact (including bootstrap shells), the install launcher's
+ * `--version` only for unstamped source installs.
  * The About page shows it beside the active connection's backend version.
  */
 export async function resolveDesktopClientVersion(
@@ -139,7 +140,7 @@ export async function resolveDesktopClientVersion(
   hermesHome: string,
   packageVersion: string
 ): Promise<string> {
-  if (stamp?.payload && stamp.payload !== 'bootstrap') {
+  if (stamp) {
     return appVersionInfo(stamp, '', packageVersion).appVersion
   }
 

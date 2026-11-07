@@ -1,4 +1,5 @@
 interface ResolvedPrimaryRemote {
+  backendProfile?: string
   authMode?: 'oauth' | 'token'
   baseUrl: string
   connectionId?: string
@@ -39,6 +40,7 @@ export function createPrimaryRemoteConnection<State extends object>(
     remoteKind: remote.remoteKind,
     remoteHermesVersion: remote.remoteHermesVersion,
     ...(remote.connectionId ? { connectionId: remote.connectionId } : {}),
+    ...(remote.backendProfile ? { backendProfile: remote.backendProfile } : {}),
     ...(remote.ssh ? { ssh: remote.ssh } : {}),
     // fetchJsonForBackend reads descriptor.headers for every REST call; the
     // WebSocket header store is keyed by exact URL and cannot stand in for it.
@@ -193,6 +195,6 @@ export async function connectPrimaryRemote<State extends object>(
 
   return {
     ...createPrimaryRemoteConnection(remote, options.logs(), options.windowState()),
-    ...(restoredProfile ? { profile: restoredProfile } : {})
+    ...(restoredProfile ? { profile: restoredProfile, backendProfile: restoredProfile } : {})
   }
 }

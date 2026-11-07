@@ -1,3 +1,4 @@
+import { primaryRouteDescriptor } from './backend-profile-descriptor'
 import { profileHasRemoteConnection } from './connection-config'
 
 /**
@@ -40,26 +41,6 @@ export async function joinPrimaryBoot<Connection extends object, Route extends {
   const settled = key === request.key ? route : deps.resolveRoute(key)
 
   return { connection, descriptor: primaryRouteDescriptor(connection, key, settled), key, route: settled }
-}
-
-/**
- * The descriptor a primary-route caller gets. A shared backend still owes the
- * caller its profile scope, so renderer-side WebSocket, filesystem and cache
- * routing target the selected profile. `sharedPrimary` marks the
- * shared-primary route: pooled backends also carry `profile`, so only this
- * descriptor gets the flag. The unshared primary carries its own key too: a
- * profile-less descriptor reads as "default" downstream, which breaks
- * per-source profile memory (the primary IS "default" only when it actually
- * booted as default).
- */
-function primaryRouteDescriptor<Connection extends object>(
-  connection: Connection,
-  key: string,
-  route: { descriptorProfile: null | string }
-) {
-  return route.descriptorProfile
-    ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
-    : { ...connection, profile: key }
 }
 
 /** Inherited and explicit dials of one name answer different profiles once a

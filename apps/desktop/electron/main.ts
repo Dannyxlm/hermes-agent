@@ -266,7 +266,7 @@ import {
 } from './find-in-page'
 import { createFirstRunSetupGate } from './first-run-setup-gate'
 import { registerFsIpc } from './fs-ipc'
-import { directoryExists, fileExists, isGitCheckout } from './fs-probes'
+import { directoryExists, fileExists } from './fs-probes'
 import { downloadViaTokenToFile as downloadViaNativeGatewayToFile } from './gateway-download-transport'
 import type {
   GatewayFileSaveContext,
@@ -515,6 +515,7 @@ import {
 } from './registry-backend-identity'
 import { collectRegistrySessionSources } from './registry-session-sources'
 import { releaseHolderRetry } from './release-holder-consent'
+import { resolvedRemoteDescriptor } from './remote-backend-profile'
 import * as remoteLifecycle from './remote-lifecycle'
 import {
   attachPowerResumeRemoteRevalidation,
@@ -600,11 +601,11 @@ import {
 } from './translucency'
 import { registerMachineUiPreferences } from './ui-preferences-ipc'
 import {
+  firstLine,
   inspectOfficialUpstream,
   OFFICIAL_UPSTREAM_BRANCH,
   OFFICIAL_UPSTREAM_REF,
   OFFICIAL_UPSTREAM_REPOSITORY,
-  firstLine,
   probeCheckoutIdentity,
   resolveIdentityHistorySource,
   resolveInstalledIdentity,
@@ -10344,7 +10345,7 @@ async function resolveRemoteBackend(
       }
     )
 
-    return { ...connection, connectionId: source.id }
+    return { ...connection, connectionId: source.id, backendProfile: sshConfig.remoteProfile || profileKey }
   }
 
   const config = readDesktopConnectionConfig()
@@ -10402,7 +10403,7 @@ async function resolveRemoteBackend(
     )
   }
 
-  return route.connectionId ? { ...connection, connectionId: route.connectionId } : connection
+  return resolvedRemoteDescriptor(connection, route, config, profileKey)
 }
 
 // A remote profile's sessions live on its remote host's state.db, not on a local
@@ -10812,9 +10813,7 @@ function profileRouteOptions(
   const key = connectionScopeKey(profile) || primaryProfileKey()
 
   return {
-    // A desktop profile can be only a client-side routing alias. Keep backend
-    // endpoint filters in the target's namespace (e.g. mara → default for a
-    // managed SSH, gris → main-gris for a URL-remote/cloud per-profile host).
+    // Desktop aliases and backend profile names are different namespaces.
     backendProfile: sshOverride?.remoteProfile || urlOverride?.remoteProfile,
     globalRemote: globalRemoteActive(),
     primaryProfile: primaryProfileKey(),
@@ -11208,6 +11207,7 @@ async function connectRegistryBackend(
       // is only the routing label. hermes:api uses it to translate explicit
       // self-profile query filters into the backend's namespace.
       remoteProfile: sshConfig.remoteProfile || '',
+      backendProfile: sshConfig.remoteProfile || profileKey,
       logs: hermesLog.slice(-80),
       ...getWindowState()
     }
@@ -11239,9 +11239,9 @@ async function connectRegistryBackend(
   return {
     ...connection,
     profile: profileKey,
+    backendProfile: profileKey,
     connectionId: source.id,
-    // One host, many profiles: REST paths must carry ?profile= (same contract
-    // as the global-remote shared-primary route).
+    // One host, many profiles: requests must still carry their scope.
     sharedRemote: true,
     logs: hermesLog.slice(-80),
     ...getWindowState()
@@ -11836,7 +11836,7 @@ async function dialPoolBackend(profile, entry, opts: { forceLocal?: boolean; poo
 
   assertPoolEntryStillOwned(poolKey, entry)
 
-  return { ...connection, profile, logs: hermesLog.slice(-80), ...getWindowState() }
+  return { ...connection, backendProfile: profile, profile, logs: hermesLog.slice(-80), ...getWindowState() }
 }
 
 // `hermes gateway restart` drains in-flight turns before the owner exits; the CLI client is

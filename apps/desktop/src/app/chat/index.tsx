@@ -43,7 +43,7 @@ import {
   $introSeed,
   $resumeExhaustedSessionId,
   $sessions,
-  getSessionOwnerHint,
+
   resolveComposerSessionKey,
   sessionMatchesStoredId,
   sessionPinId,
@@ -70,6 +70,7 @@ import {
   useComposerScope,
   useComposerSurfaceId
 } from './composer/scope'
+import { FamilyButton } from './family/button'
 import { useHistoryWindow } from './history-window'
 import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
 import { useFileDropZone } from './hooks/use-file-drop-zone'
@@ -79,6 +80,7 @@ import { ResumeExhaustedOverlay } from './resume-exhausted-overlay'
 import { isRouteSessionMismatch } from './route-session-state'
 import { useRuntimeMessageRepository } from './runtime-repository'
 import { ScrollToBottomButton } from './scroll-to-bottom-button'
+import { sessionHistoryOwner } from './session-history-owner'
 import { useSessionView } from './session-view'
 import { SessionActionsMenu } from './sidebar/session-actions-menu'
 import { routedSessionIsLoading, threadLoadingState } from './thread-loading'
@@ -195,6 +197,7 @@ function ChatHeader({
           <TitleMenuTrigger>{title}</TitleMenuTrigger>
         </SessionActionsMenu>
       </div>
+      <FamilyButton sessionId={selectedSessionId || activeSessionId || ''} />
     </header>
   )
 }
@@ -263,9 +266,7 @@ export function ChatRuntimeBoundary({
   const activeProfile = useStore($activeGatewayProfile)
   const connectionId = connection?.connectionId || (connection?.mode === 'local' ? 'local' : '')
 
-  const ownerRoute = storedId
-    ? getSessionOwnerHint(storedId, connectionId ? { connectionId, profile: activeProfile } : undefined)
-    : undefined
+  const { ownerRoute, ambiguous: ambiguousOwner } = sessionHistoryOwner(storedId, runtimeId)
 
   const ownerConnection = ownerRoute?.connectionId
   const ownerProfile = ownerRoute?.targetProfile || ownerRoute?.profile
@@ -291,7 +292,7 @@ export function ChatRuntimeBoundary({
 
   const history = useHistoryWindow({
     scopeKey: JSON.stringify([runtimeId, storedId, tailProfile, connectionId, activeProfile, suppressMessages]),
-    storedId,
+    storedId: ambiguousOwner ? null : storedId,
     scope: tailProfile ?? { connectionId: connectionId || undefined, profile: activeProfile },
     isCurrent: () => !suppressMessages && view.$storedId.get() === storedId && view.$runtimeId.get() === runtimeId
   })

@@ -138,6 +138,13 @@ def _family_overview_rpc(rid, params):
         return _err(rid, 4000, "invalid family parameters")
     if current_transport() is None:
         return _err(rid, 4001, "session not found or not owned by this transport")
+    profile = params.get("profile")
+    if profile is not None:
+        from hermes_cli.profiles import get_profile_dir, profile_exists
+        from tui_gateway.ws_legacy_fallback import connection_profile_home
+        own = connection_profile_home()
+        if not profile_exists(profile) or (own and get_profile_dir(profile).resolve() != Path(own).resolve()):
+            return _err(rid, 4001, "session not found or not owned by this transport")
     import time
     since = params.get("since")
     since = time.time() - 43200 if since is None else since

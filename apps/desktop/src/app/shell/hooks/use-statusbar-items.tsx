@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { Codicon } from '@/components/ui/codicon'
 import { GlyphSpinner } from '@/components/ui/glyph-spinner'
 import { useI18n } from '@/i18n'
+import { desktopClientIdentity } from '@/lib/desktop-client-identity'
 import { displayPath, pathLeaf } from '@/lib/display-path'
 import { statusBarGatewayHealth } from '@/lib/gateway-health-pill'
 import {
@@ -437,9 +438,10 @@ export function useStatusbarItems({
   const rollbackBody = t.settings.about.channel.rollbackBody
 
   const clientVersionItem = useMemo<StatusbarItem>(() => {
-    const appVersion = desktopVersion?.appVersion
+    // The runtime checkout can advance without replacing the running client.
+    const client = desktopClientIdentity(desktopVersion)
     const upstream = updateStatus?.upstreamTracking
-    const sha = upstream?.installedSha?.slice(0, 7) ?? updateStatus?.currentSha?.slice(0, 7) ?? null
+
     const behind = upstream?.behind ?? 0
     const trackingProblem = upstream?.state === 'error' || upstream?.state === 'stale'
     const applying = updateApply.applying || updateApply.stage === 'restart'
@@ -460,10 +462,10 @@ export function useStatusbarItems({
       copy,
       remote,
       restarting: updateApply.stage === 'restart',
-      sha,
+      sha: client.sha,
       target: 'client',
       updateAvailable: updateStatus?.updateAvailable,
-      version: appVersion
+      version: client.version
     })
 
     const label =
@@ -504,7 +506,7 @@ export function useStatusbarItems({
       variant: 'action'
     }
   }, [
-    desktopVersion?.appVersion,
+    desktopVersion,
     connection?.mode,
     copy,
     updateApply.applying,

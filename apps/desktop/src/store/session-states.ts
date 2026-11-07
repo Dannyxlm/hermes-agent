@@ -68,7 +68,7 @@ import {
   $unlistedSessionOwnerRows,
   $workspaceCwdOwner,
   clearReadBaseline,
-  getSessionOwnerHint,
+
   knownSessionOwner,
   lineageAliases,
   markSessionRead,
@@ -76,6 +76,7 @@ import {
   migrateSessionOwnerHintsForProfile,
   ownerLookupSessionRows,
   sessionMatchesStoredId,
+  sessionOwnerAmbiguous,
   setActiveSessionStoredIdRotation,
   setAwaitingResponse,
   setBusy,
@@ -1739,16 +1740,14 @@ export function openTileGatewayScopes(): Set<string> {
 
 /**
  * Sync owner resolution for a session id that may be a RUNTIME or a STORED id.
- * Tile route first (exact connectionId+profile, survives relaunch), then the
- * exact unique owner hint (stamped when a routed create returns / at open
- * time; persisted), then the session row's owner (an exact route when the row
- * is connection-tagged, else its bare profile, else the hint's profile). The
+ * Tile route first (exact connectionId+profile, survives relaunch), then a
+ * row-qualified exact hint or the row's owner. A sibling target's remembered
+ * hint cannot override an original row. The
  * row rung searches every source-scoped slice (recents, cron, messaging), not
  * just recents — a cron session's approval.respond used to find no owner here
  * and fail closed on registry-topology installs even though its row (with its
  * `profile` stamp) was already loaded for the sidebar's cron section. The
- * hint outranks the row for the same reason as contrib/wiring's ladder: a
- * row can be stamped from the ambient profile and carries no connection.
+ * row may carry no connection, so a compatible exact hint preserves it.
  * Last rung: the owner recorded from the inbound runtime event itself
  * (sessionOwnerByRuntimeId, #97511) — an orphan runtime whose tile/hint/row
  * binding is absent or stale still routes through the exact
@@ -1771,14 +1770,13 @@ export function knownOwnerForSession(sessionId: null | string | undefined, rows 
 
   const storedSessionId = storedSessionIdForRuntimeId(sessionId) ?? sessionId
 
-  const durable =
-    sessionTileOwner(storedSessionId) ??
-    getSessionOwnerHint(storedSessionId) ??
-    knownSessionOwner(rows, storedSessionId)
+  const durable = sessionTileOwner(storedSessionId) ?? knownSessionOwner(rows, storedSessionId)
 
   if (isSessionOwnerRoute(durable)) {
     return durable
   }
+
+  if (!durable && sessionOwnerAmbiguous(storedSessionId, rows)) { return undefined }
 
   return sessionOwnerByRuntimeId.get(sessionId) ?? durable
 }

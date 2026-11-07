@@ -83,6 +83,7 @@ import { startSessionDrag } from './session-drag'
 import { SessionStatusDot } from './session-status-dot'
 import { useSessionTileActions } from './session-tile-actions'
 import { tileOwnerRoute } from './session-tile-owner'
+import { resumeAndBindSessionTile } from './session-tile-resume'
 import { reasoningEffortPending, type SessionView, SessionViewProvider } from './session-view'
 import { SessionActionsMenu, SessionContextMenu } from './sidebar/session-actions-menu'
 import { lastVisibleMessageIsUser } from './thread-loading'
@@ -521,9 +522,7 @@ export function SessionTilePane({ storedSessionId }: { storedSessionId: string }
 
     resumingRef.current = true
 
-    delegate
-      .resumeTile(storedSessionId)
-      .then(id => patchSessionTile(storedSessionId, { error: undefined, runtimeId: id }))
+    resumeAndBindSessionTile(storedSessionId, delegate)
       .catch(async (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err)
 

@@ -791,6 +791,7 @@ describe('profile-aware plugin session opens', () => {
     expect(setResumeExhaustedSessionId).not.toHaveBeenCalled()
   })
 
+
   it('waits until the target Bot Chat runtime and history are on the focused surface', async () => {
     vi.mocked(openGatewayForProfile).mockImplementationOnce(async () => undefined)
 

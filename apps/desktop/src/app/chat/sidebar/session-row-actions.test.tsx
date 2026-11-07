@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type * as HermesModule from '@/hermes'
 import type { SessionInfo } from '@/hermes'
+import { familyTranslations } from '@/i18n/family'
 import type * as SessionStore from '@/store/session'
 import type * as SessionStatesStore from '@/store/session-states'
 
@@ -19,6 +20,7 @@ afterEach(cleanup)
 vi.mock('@/i18n', () => ({
   useI18n: () => ({
     t: {
+      family: familyTranslations.en,
       common: { cancel: 'Cancel', close: 'Close', delete: 'Delete', save: 'Save' },
       assistant: {
         thread: {

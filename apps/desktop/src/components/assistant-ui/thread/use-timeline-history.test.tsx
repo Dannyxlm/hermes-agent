@@ -17,6 +17,7 @@ vi.mock('@/api/client', () => ({
   sessionReadOwnerPin: () => ({})
 }))
 vi.mock('@/app/chat/session-view', () => ({ useSessionView: () => view }))
+vi.mock('@/app/chat/session-history-owner', () => ({ sessionHistoryOwner: () => ({ ownerRoute: undefined, ambiguous: false }) }))
 vi.mock('@/store/profile', () => ({ $activeGatewayProfile: atom('default') }))
 vi.mock('@/store/session', () => ({ $connection: atom({ mode: 'local' }), getSessionOwnerHint: () => undefined }))
 vi.mock('@/store/transcript-tail', () => ({ pageHonorsLatestOrder: () => true, transcriptTailState: () => undefined }))

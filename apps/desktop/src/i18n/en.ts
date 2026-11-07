@@ -31,9 +31,11 @@ import { enSharedMetrics } from './en_shared_metrics'
 import { enThemePicker } from './en_theme_picker'
 import { enUninstallSection } from './en_uninstall_section'
 import { enUpdateChannel } from './en_update_channel'
+import { familyTranslations } from './family'
 import type { Translations } from './types'
 
 export const en: Translations = {
+  family: familyTranslations.en,
   externalOpenFailed: enExternalOpenFailed,
   sharedMetrics: enSharedMetrics,
   appTour: enAppTour,

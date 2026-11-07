@@ -19,6 +19,8 @@ class FamilySessionParams(Params):
 
 
 class FamilyOverviewParams(Params):
+    # Routing envelope; dispatch/transport grants still own profile access.
+    profile: str | None = None
     since: float | None = Field(default=None, allow_inf_nan=False)
     coming_up_within: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 

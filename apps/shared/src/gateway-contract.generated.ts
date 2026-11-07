@@ -1793,6 +1793,7 @@ export interface FamilyBatch {
   size: number
 }
 export interface FamilyOverviewParams {
+  profile?: string | null
   since?: number | null
   coming_up_within?: number | null
 }

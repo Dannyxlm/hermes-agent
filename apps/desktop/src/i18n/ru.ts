@@ -1,7 +1,8 @@
-// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
 import { defineFieldCopy } from '@/app/settings/field-copy'
 
 import { defineLocale, type TranslationOverrides } from './define-locale'
+// health: allow FILE_LINES -- locale data: translated copy for the usage-window plan UI (allowance gauges, Large/Free tags, the limit card), one key per string
+import { familyTranslations } from './family'
 import { ruBoot } from './ru_boot'
 import { ruCatalog, ruSkillDeepLink } from './ru_catalog'
 import { ruClarify } from './ru_clarify'
@@ -26,6 +27,7 @@ import { ruThemePicker } from './ru_theme_picker'
 import { ruUpdateChannel } from './ru_update_channel'
 
 export const ruOverrides = {
+  family: familyTranslations.ru,
   catalog: ruCatalog,
   connectors: ruConnectors.connectors,
   sharedMetrics: ruSharedMetrics,

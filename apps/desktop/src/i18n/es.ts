@@ -25,9 +25,11 @@ import { esProjects } from './es_projects'
 import { esSharedMetrics } from './es_shared_metrics'
 import { esThemePicker } from './es_theme_picker'
 import { esUpdateChannel } from './es_update_channel'
+import { familyTranslations } from './family'
 import { introEs } from './intro-es'
 
 export const esOverrides = {
+  family: familyTranslations.es,
   sharedMetrics: esSharedMetrics,
   firstRun: esFirstRun,
   intro: introEs,

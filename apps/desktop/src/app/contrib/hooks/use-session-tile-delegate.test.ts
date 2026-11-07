@@ -194,7 +194,7 @@ describe('useSessionTileDelegate resumeTile', () => {
       cols: 96,
       omit_messages: true,
       profile: 'backend-oxcoder'
-    })
+    }, undefined, undefined, { targetProfile: 'backend-oxcoder' })
     expect(ambientRequest).not.toHaveBeenCalled()
   })
 
@@ -261,7 +261,7 @@ describe('useSessionTileDelegate resumeTile', () => {
       omit_messages: false,
       profile: 'backend-tile',
       session_id: 'stored-tile'
-    })
+    }, undefined, undefined, { targetProfile: 'backend-tile' })
     expect(getLatestSessionMessages).not.toHaveBeenCalled()
     expect(states.current.get('runtime-tile')).toMatchObject({ busy: true, model: 'snapshot-model' })
     expect(JSON.stringify(states.current.get('runtime-tile')?.messages)).toContain('new answer')

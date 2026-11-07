@@ -125,6 +125,16 @@ rows must not insert their full height before the outgoing stack can settle.
 No completion callback may clear the measurement of a newly arrived card.
 Reduced motion settles immediately without retaining empty clearance.
 
+## Family browser
+
+The selected chat has a labelled Family button; the shared row/tab menu opens the
+same browser. This chat and Overview are local views in one dismissible dialog,
+not a new workspace or session authority. Rows keep backend status wording
+(including Unknown), profile ownership, and flat tree indentation. Partial reads,
+truncation, missing ownership and unsupported backends are explicit. Opening or
+answering navigates to the ordinary chat surface and never promotes a worker to
+Chats. No response is sent by opening it.
+
 ## Window background behavior
 
 Settings → Appearance → Window layout offers **Minimize to tray**, off by default and

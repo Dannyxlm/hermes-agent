@@ -64,6 +64,8 @@ import { ackStoredSessionId } from '@/store/session-unread'
 import { canOpenSessionInTerminal, canOpenSessionWindow, openSessionInTerminal } from '@/store/windows'
 
 import type { SessionTitleResponse } from '../../types'
+import { familyTarget, type FamilyTarget } from '../family/actions'
+import { FamilyDialog } from '../family/dialog'
 
 // Rename a session, preferring the gateway's session.title RPC over REST.
 //
@@ -279,6 +281,7 @@ function useSessionActions({
   const { t } = useI18n()
   const r = t.sidebar.row
   const [renameOpen, setRenameOpen] = useState(false)
+  const [family, setFamily] = useState<{ target: FamilyTarget | null } | null>(null)
   // The rename item opens a Dialog. When a menu closes, Radix restores focus to
   // its trigger — for a sidebar row that trigger is the row's own <button>, so
   // focus lands there instead of the dialog's input: Space then activates the
@@ -304,6 +307,15 @@ function useSessionActions({
   // OPEN — where else this session can go. A tab surface IS a tab already,
   // so it only offers the window hop (and its own Close, below).
   const openItems: ActionItemSpec[] = [
+    spec({
+      disabled: !sessionId,
+      icon: 'git-branch',
+      label: t.family.title,
+      onSelect: () => {
+        suppressCloseFocusRef.current = true
+        setFamily({ target: familyTarget(sessionId) })
+      }
+    }),
     ...(surface === 'row' && !alreadyTabbed
       ? [
           spec({
@@ -640,7 +652,9 @@ function useSessionActions({
     />
   )
 
-  return { deleteDialog, onCloseAutoFocus, renameDialog, renderItems }
+  const familyDialog = family ? <FamilyDialog onClose={() => setFamily(null)} target={family.target} /> : null
+
+  return { deleteDialog, familyDialog, onCloseAutoFocus, renameDialog, renderItems }
 }
 
 interface DeleteSessionDialogProps {
@@ -690,7 +704,7 @@ export function SessionActionsMenu({
   ...actions
 }: SessionActionsMenuProps) {
   const { t } = useI18n()
-  const { deleteDialog, onCloseAutoFocus, renameDialog, renderItems } = useSessionActions(actions)
+  const { deleteDialog, familyDialog, onCloseAutoFocus, renameDialog, renderItems } = useSessionActions(actions)
 
   return (
     <>
@@ -707,6 +721,7 @@ export function SessionActionsMenu({
         {children}
       </ActionsMenu>
       {renameDialog}
+      {familyDialog}
       {deleteDialog}
     </>
   )
@@ -718,7 +733,7 @@ interface SessionContextMenuProps extends SessionActions {
 
 export function SessionContextMenu({ children, ...actions }: SessionContextMenuProps) {
   const { t } = useI18n()
-  const { deleteDialog, onCloseAutoFocus, renameDialog, renderItems } = useSessionActions(actions)
+  const { deleteDialog, familyDialog, onCloseAutoFocus, renameDialog, renderItems } = useSessionActions(actions)
 
   return (
     <>
@@ -731,6 +746,7 @@ export function SessionContextMenu({ children, ...actions }: SessionContextMenuP
         {children}
       </ActionsContextMenu>
       {renameDialog}
+      {familyDialog}
       {deleteDialog}
     </>
   )

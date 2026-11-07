@@ -25,9 +25,9 @@ import {
   recordSessionWriteVerdict,
   resumeWithStoredTranscriptFallback
 } from '@/store/read-only-transcript'
-import { knownSessionOwner, ownerLookupSessionRows } from '@/store/session'
+import { knownSessionOwner, ownerLookupSessionRows, sessionOwnerAmbiguous } from '@/store/session'
 import { captureSessionControlScope } from '@/store/session-control-scope'
-import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
+import { assertSessionOwnerResolved, SessionOwnerResolutionError } from '@/store/session-owner-resolution'
 import {
   profileScopeForSessionOwner,
   requestForSessionProfile,
@@ -221,10 +221,15 @@ export function useSessionTileDelegate({
     // row's owner (exact when connection-tagged, else the hint / profile) →
     // the async cross-profile probe (exact when the resolved row is tagged).
     const ownerForStoredSession = async (storedSessionId: string): Promise<SessionOwnerScope> => {
-      const owner =
+      const known =
         sessionTileOwnerRoute(storedSessionId) ??
-        knownSessionOwner(ownerLookupSessionRows(), storedSessionId) ??
-        (await resolveSessionOwner(storedSessionId))
+        knownSessionOwner(ownerLookupSessionRows(), storedSessionId)
+
+      if (!known && sessionOwnerAmbiguous(storedSessionId)) {
+        throw new SessionOwnerResolutionError(storedSessionId, 'session.resume')
+      }
+
+      const owner = known ?? (await resolveSessionOwner(storedSessionId))
 
       return owner
     }
