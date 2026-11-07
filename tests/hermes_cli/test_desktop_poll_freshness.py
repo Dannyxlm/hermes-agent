@@ -1,6 +1,7 @@
 """Desktop polls reuse definitions, not observations of clock or process liveness."""
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,8 @@ def activity_store(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     import hermes_state
     monkeypatch.setattr(hermes_state, "DEFAULT_DB_PATH", home / "state.db")
+    real_ns = time.time_ns
+    monkeypatch.setattr(time, "time_ns", lambda: real_ns() + 10_000_000_000)
     db = SessionDB(db_path=home / "state.db")
     clock = [1794000000.0]
     monkeypatch.setattr(status.time, "time", lambda: clock[0])
@@ -267,3 +270,44 @@ def test_cron_partial_read_failure_is_retried_without_file_changes(cron_reads, m
     assert {job["id"] for job in first.json()} == {"worker_alpha"}
     second = client.get("/api/cron/jobs")
     assert {job["id"] for job in second.json()} == {"default", "worker_alpha"}
+
+
+def _freeze_same_tick_metadata(monkeypatch, paths):
+    original = Path.stat
+    stamps = {}
+    for path in paths:
+        try:
+            stamps[str(path)] = original(path)
+        except FileNotFoundError:
+            stamps[str(path)] = None
+    latest = max(stamp.st_mtime_ns for stamp in stamps.values() if stamp is not None)
+    monkeypatch.setattr(time, "time_ns", lambda: latest + 1)
+
+    def stat(path, *args, **kwargs):
+        if str(path) in stamps:
+            saved = stamps[str(path)]
+            if saved is None:
+                raise FileNotFoundError(path)
+            return saved
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat)
+
+
+def test_status_racy_metadata_does_not_hide_a_same_tick_write(activity_store, monkeypatch):
+    from hermes_cli.web_routers import status
+
+    db, _clock = activity_store
+    _freeze_same_tick_metadata(monkeypatch, [db.db_path, Path(str(db.db_path) + "-wal")])
+    assert status._count_status_active_sessions() == 1
+    db._write_sql("UPDATE sessions SET ended_at=1 WHERE id='active'")
+    assert status._count_status_active_sessions() == 0
+
+
+def test_cron_racy_metadata_does_not_hide_a_same_tick_edit(cron_reads, monkeypatch):
+    client, homes, _clock = cron_reads
+    path = homes["default"] / "cron/jobs.json"
+    _freeze_same_tick_metadata(monkeypatch, [path])
+    assert client.get("/api/cron/jobs?profile=default").json()[0]["prompt"] == "fixture"
+    path.write_text(json.dumps({"jobs": [{"id": "default", "prompt": "changed", "enabled": True}]}))
+    assert client.get("/api/cron/jobs?profile=default").json()[0]["prompt"] == "changed"

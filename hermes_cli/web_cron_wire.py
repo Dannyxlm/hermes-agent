@@ -35,7 +35,7 @@ def _revision(profile, targets):
     from cron import executions
     stamps = []
     for name, home in targets:
-        ledger = executions.EXECUTIONS_FILE or home / "cron/executions.db"
+        ledger = (executions.EXECUTIONS_FILE or home / "cron/executions.db").resolve()
         files = [home / "cron/jobs.json", ledger, Path(str(ledger) + "-wal")]
         values = tuple(_stamp(path) for path in files)
         if any(value is None for value in values):

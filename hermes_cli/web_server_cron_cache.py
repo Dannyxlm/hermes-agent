@@ -15,11 +15,14 @@ _MAX_TOTAL_BYTES = 16 * 1024 * 1024
 
 
 def _stamp(path):
+    from utils import mtime_is_racy
     try:
         stat = path.stat()
     except FileNotFoundError:
         return (None,)
     except OSError:
+        return None
+    if mtime_is_racy(stat.st_mtime_ns):
         return None
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
@@ -39,7 +42,7 @@ def execution_snapshot(ids):
     clean = list(dict.fromkeys(str(job_id) for job_id in ids if job_id))
     if not clean:
         return {}, []
-    path = executions.EXECUTIONS_FILE or get_hermes_home().resolve() / "cron" / "executions.db"
+    path = (executions.EXECUTIONS_FILE or get_hermes_home().resolve() / "cron" / "executions.db").resolve()
     key = str(path.resolve()), tuple(clean)
     before = _stamp(path), _stamp(Path(str(path) + "-wal"))
     with _lock:

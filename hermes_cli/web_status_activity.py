@@ -9,6 +9,8 @@ _lock = Lock()
 
 
 def activity_signature(path: Path) -> tuple | None:
+    from utils import mtime_is_racy
+    path = path.resolve()
     stamps = []
     for file in (path, Path(str(path) + "-wal")):
         try:
@@ -18,6 +20,8 @@ def activity_signature(path: Path) -> tuple | None:
         except OSError:
             return None
         else:
+            if mtime_is_racy(stat.st_mtime_ns):
+                return None
             stamps.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
     return str(path.resolve()), tuple(stamps)
 
