@@ -126,9 +126,10 @@ def read_metadata(conn, name, tables, columns, fields, *, seeds=None, since=None
         prefix = "gateway.local_policy.v1:"
         for row in conn.execute("SELECT substr(key,?), json_extract(value,'$.entry.session_id'), "
                                 "json_extract(value,'$.principal_id') FROM state_meta "
-                                "WHERE key GLOB ? AND json_valid(value) AND "
-                                "json_extract(value,'$.entry.session_id') IN (SELECT value FROM json_each(?))",
-                                (len(prefix) + 1, prefix + "*", json.dumps(list(sessions)))):
+                                "WHERE key GLOB 'gateway.local_policy.v1:*' AND json_valid(value) AND "
+                                "json_extract(value,'$.entry.session_id') IN (SELECT value FROM json_each(?)) "
+                                "ORDER BY key",
+                                (len(prefix) + 1, json.dumps(list(sessions)))):
             aliases[row[0]] = row[1]
             owners[row[0]] = owners[row[1]] = row[2]
     if "session_turn_leases" in tables and sessions:
