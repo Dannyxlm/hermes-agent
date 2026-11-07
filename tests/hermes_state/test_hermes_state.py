@@ -20,6 +20,7 @@ import hermes_state_schema
 from agent.session_activity import ActivityProvenance, build_activity_snapshot
 from hermes_state import SessionDB
 from hermes_state_common import FTS_SQL, FTS_STORAGE_VERSION, SCHEMA_SQL, SCHEMA_VERSION
+from hermes_state_session_changes import TRIGGERS
 
 
 def _activity_snapshot(db, session_id):
@@ -2143,12 +2144,11 @@ class TestReconcileColumnsErrorHandling:
         db_path = tmp_path / "state.db"
         seed = SessionDB(db_path=db_path)
         seed.close()
-        conn = sqlite3.connect(str(db_path))
-        try:
+        with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+            for trigger in TRIGGERS:
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
             conn.execute("ALTER TABLE sessions DROP COLUMN last_read_at")
             conn.commit()
-        finally:
-            conn.close()
         return db_path
 
     def test_locked_alter_propagates(self, tmp_path):
