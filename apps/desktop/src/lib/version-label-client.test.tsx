@@ -3,11 +3,12 @@ import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { useUpdateVersionLabel } from '@/app/command-palette/use-update-version-label'
 import { useStatusbarItems } from '@/app/shell/hooks/use-statusbar-items'
 import type { DesktopUpstreamTracking, DesktopVersionInfo } from '@/global'
 import { en } from '@/i18n/en'
 import { $connection } from '@/store/session'
-import { $desktopVersion, $updateApply, $updateStatus } from '@/store/updates'
+import { $backendUpdateStatus, $desktopVersion, $updateApply, $updateStatus } from '@/store/updates'
 
 const packageCommit = 'abcdef1234567890abcdef1234567890abcdef12'
 const runtimeCommit = '1234567890abcdef1234567890abcdef12345678'
@@ -78,6 +79,7 @@ afterEach(() => {
   $connection.set(null)
   $desktopVersion.set(null)
   $updateStatus.set(null)
+  $backendUpdateStatus.set(null)
   $updateApply.set(idleApply)
 })
 
@@ -86,6 +88,8 @@ describe('client badge build identity', () => {
     $desktopVersion.set(packageVersion)
     $updateStatus.set({ supported: true, currentSha: runtimeCommit, upstreamTracking: tracking })
     const badge = mountClientBadge()
+    const palette = renderHook(() => useUpdateVersionLabel())
+    expect(palette.result.current).toBe('v1.2.3+10')
 
     expect(badge()?.label).toBe('v1.2.3+10 (+3)')
     expect(badge()?.title).toContain(packageCommit.slice(0, 7))
@@ -101,9 +105,16 @@ describe('client badge build identity', () => {
     expect(badge()?.label).toBe('v1.2.3+10 (+2?)')
     expect(badge()?.title).toContain(packageCommit.slice(0, 7))
     expect(badge()?.title).not.toContain('eeeeeee')
+    expect(palette.result.current).toBe('v1.2.3+10')
 
     act(() => $desktopVersion.set({ ...packageVersion, commit: 'b'.repeat(40) }))
     expect(badge()?.title).toContain('bbbbbbb')
+    act(() => $desktopVersion.set({ ...packageVersion, clientVersion: '1.2.4' }))
+    expect(palette.result.current).toBe('v1.2.4')
+    act(() => $desktopVersion.set({ ...packageVersion, clientVersion: '', commit: 'b'.repeat(40) }))
+    expect(palette.result.current).toBe('bbbbbbb')
+    act(() => $desktopVersion.set({ ...packageVersion, clientVersion: '', commit: 'c'.repeat(40) }))
+    expect(palette.result.current).toBe('ccccccc')
   })
 
   it('falls back to the build commit offline, never an updater SHA or a remote version', () => {
@@ -121,6 +132,7 @@ describe('client badge build identity', () => {
 
   it('keeps the client identity on a remote connection and refreshes it when the package changes', () => {
     $desktopVersion.set(packageVersion)
+    $backendUpdateStatus.set({ supported: true, currentVersion: '8.7.6', currentSha: runtimeCommit })
     $connection.set({
       baseUrl: 'https://remote.example',
       isFullscreen: false,
@@ -132,6 +144,8 @@ describe('client badge build identity', () => {
       windowButtonPosition: null
     })
     const badge = mountClientBadge()
+    const palette = renderHook(() => useUpdateVersionLabel())
+    expect(palette.result.current).toBe(en.shell.statusbar.backendLabel('8.7.6'))
 
     expect(badge()?.label).toBe(en.shell.statusbar.clientLabel('1.2.3+10'))
     expect(badge()?.title).toContain(packageCommit.slice(0, 7))
@@ -139,5 +153,6 @@ describe('client badge build identity', () => {
 
     act(() => $desktopVersion.set({ ...packageVersion, clientVersion: '1.2.4' }))
     expect(badge()?.label).toBe(en.shell.statusbar.clientLabel('1.2.4'))
+    expect(palette.result.current).toBe(en.shell.statusbar.backendLabel('8.7.6'))
   })
 })

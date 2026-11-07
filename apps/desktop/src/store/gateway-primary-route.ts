@@ -2,6 +2,8 @@ import { atom } from 'nanostores'
 
 /** The window primary socket's own route, whichever gateway is in front. */
 export interface PrimaryGatewayRoute {
+  /** Backend profile advertised by this descriptor, not a Desktop alias. */
+  targetProfile?: string
   /** Registry source the primary socket serves, when known. */
   connectionId: null | string
   /** Resolved mode of the primary's descriptor: a `local` primary is ONE

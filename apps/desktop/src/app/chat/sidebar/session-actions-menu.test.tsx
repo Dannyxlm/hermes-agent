@@ -108,6 +108,7 @@ vi.mock('@/store/session-states', () => ({
   $sessionStates: atom<Record<string, unknown>>({}),
   $sessionTiles: atom<unknown[]>([]),
   knownOwnerForSession: vi.fn(() => undefined),
+  ownerConnectionMode: vi.fn(() => null),
   storedSessionIdForRuntimeId: vi.fn(() => null),
   closeAllOpenSessionTiles: vi.fn(),
   openSessionTile: vi.fn()

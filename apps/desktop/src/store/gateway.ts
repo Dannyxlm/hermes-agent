@@ -33,6 +33,7 @@ import {
 import { $gatewayActivationEpoch } from '@/store/gateway-activation-epoch'
 import { isMissingConnectionError, isMissingProfileError } from '@/store/gateway-dial-failures'
 import { isKeptRoute, keptRouteOpened } from '@/store/gateway-kept-routes'
+import { captureGatewayOwner, dialedGatewayOwnerMode } from '@/store/gateway-owner-route'
 import { $primaryGatewayRoute } from '@/store/gateway-primary-route'
 import type { RegistryConfig } from '@/store/gateway-registry-config'
 import { publishRequestConnection } from '@/store/gateway-request-scope'
@@ -295,7 +296,8 @@ export function setPrimaryGateway(gateway: HermesGateway | null, profile = 'defa
 export function setPrimaryGatewayConnectionId(
   connectionId: null | string | undefined,
   mode: 'local' | 'remote' | null | undefined = undefined,
-  profile?: string
+  profile?: string,
+  targetProfile?: string
 ): void {
   // Every caller publishes the window's OWN primary socket (boot, reconnect,
   // connection apply, HMR survivor), so record it even while a secondary is
@@ -306,7 +308,7 @@ export function setPrimaryGatewayConnectionId(
   // the primary is in front.
   const id = (connectionId ?? '').trim() || null
   const primaryMode = mode === 'local' || mode === 'remote' ? mode : null
-  $primaryGatewayRoute.set({ connectionId: id, mode: primaryMode })
+  $primaryGatewayRoute.set({ connectionId: id, mode: primaryMode, ...(targetProfile ? { targetProfile } : {}) })
 
   // A re-home names the profile the primary will serve on its new machine;
   // pairing the new connection with the OLD machine's primary profile let a
@@ -317,32 +319,25 @@ export function setPrimaryGatewayConnectionId(
   }
 }
 
-/**
- * Mode of the socket this window already dialed for `(connectionId, profile)`,
- * following gatewayForProfile's precedence: the primary socket when it serves
- * that profile, else a secondary's own descriptor. Null until one is dialed.
- */
+/** Mode of this owner's already-dialed socket; null until proven. */
 export function dialedGatewayModeFor(connectionId: null | string, profile: string): 'local' | 'remote' | null {
-  const id = String(connectionId ?? '').trim() || null
-  const key = normKey(profile)
-
-  const primary = $primaryGatewayRoute.get()
-
-  if (key === g.primaryProfile && (!id || id === primary.connectionId) && primary.mode) {
-    return primary.mode
-  }
-
-  const mode = g.secondaries.get(registryBackendScopeKey(id, key))?.connection?.mode
-
-  return mode === 'local' || mode === 'remote' ? mode : null
+  return dialedGatewayOwnerMode(connectionId, profile, g.primaryProfile, $primaryGatewayRoute.get(), g.secondaries)
 }
 
 /** Publish the registry source owned by the window primary socket. */
 export function setPrimaryGatewayConnection(
-  connection: Pick<HermesConnection, 'connectionId' | 'mode'> | null,
+  connection: Pick<HermesConnection, 'connectionId' | 'mode' | 'profile'> | null,
   profile?: string
 ): void {
-  setPrimaryGatewayConnectionId(connection?.connectionId, connection?.mode, profile)
+  setPrimaryGatewayConnectionId(connection?.connectionId, connection?.mode, profile, connection?.profile)
+}
+
+/** Pin a known legacy profile door before any asynchronous Family navigation. */
+export function captureGatewayOwnerForProfile(profile: string) {
+  const key = normKey(profile)
+  const onPrimary = key === g.primaryProfile || isPrimaryRider(key, primaryIdentity())
+
+  return captureGatewayOwner(key, g.primaryProfile, $primaryGatewayRoute.get(), onPrimary, g.secondaries.get(key)?.connection)
 }
 
 function traceAgentRoute(scope: string, via: string): void {
@@ -1121,7 +1116,7 @@ export async function requestGatewayForProfile<T>(
   params: Record<string, unknown> = {},
   timeoutMs?: number,
   signal?: AbortSignal,
-  { spawnPriority = 'background' }: { spawnPriority?: SpawnPriority } = {}
+  { spawnPriority = 'background', targetProfile }: { spawnPriority?: SpawnPriority; targetProfile?: string } = {}
 ): Promise<T> {
   const route = await gatewayForProfile(profile, true, spawnPriority)
 
@@ -1130,7 +1125,7 @@ export async function requestGatewayForProfile<T>(
       throw new Error(`Hermes gateway unavailable for profile "${route.key}"`)
     }
 
-    const routedParams = route.scopeProfile ? { ...params, profile: route.key } : params
+    const routedParams = route.scopeProfile ? { ...params, profile: targetProfile ?? route.key } : params
 
     // Same arity contract as the ambient path in session-request-router: only
     // pass the deadline args through when the caller set them, so a plain
@@ -1167,13 +1162,13 @@ export async function requestGatewayForAgent<T>(
   params: Record<string, unknown> = {},
   timeoutMs?: number,
   signal?: AbortSignal,
-  { spawnPriority = 'background' }: { spawnPriority?: SpawnPriority } = {}
+  { spawnPriority = 'background', targetProfile }: { spawnPriority?: SpawnPriority; targetProfile?: string } = {}
 ): Promise<T> {
   const key = normKey(profile)
   const scope = registryBackendScopeKey(connectionId, key)
 
   if (scope === key) {
-    return requestGatewayForProfile<T>(key, method, params, timeoutMs, signal, { spawnPriority })
+    return requestGatewayForProfile<T>(key, method, params, timeoutMs, signal, { spawnPriority, targetProfile })
   }
 
   // A primary remote selected from the connection registry carries its source
@@ -1187,13 +1182,13 @@ export async function requestGatewayForAgent<T>(
   if (isPrimaryRegistryRoute(connectionId, key)) {
     traceAgentRoute(scope, 'primary')
 
-    return requestGatewayForProfile<T>(key, method, params, timeoutMs, signal, { spawnPriority })
+    return requestGatewayForProfile<T>(key, method, params, timeoutMs, signal, { spawnPriority, targetProfile })
   }
 
   if (notePrimaryRider(primaryIdentity(), scope, await ridesPrimaryBackend(connectionId, key))) {
     traceAgentRoute(scope, 'primary-shared')
 
-    return requestOnPrimaryGateway<T>(method, { ...params, profile: key }, timeoutMs, signal)
+    return requestOnPrimaryGateway<T>(method, { ...params, profile: targetProfile ?? key }, timeoutMs, signal)
   }
 
   traceAgentRoute(scope, 'secondary')

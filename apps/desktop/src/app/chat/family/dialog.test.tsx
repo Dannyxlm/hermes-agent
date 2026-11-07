@@ -1,7 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { familyTranslations } from '@/i18n/family'
+import { deferred } from '@/test/deferred'
 
 import { familyChatTarget, familyTarget, type FamilyTarget } from './actions'
 import { FamilyDialog } from './dialog'
@@ -13,6 +15,7 @@ const owner = vi.hoisted(() => vi.fn())
 vi.mock('@/i18n', () => ({ useI18n: () => ({ t: { family: familyTranslations.en, common: { close: 'Close' } } }) }))
 vi.mock('@/store/gateway', () => ({
   activeGateway: () => null,
+  captureGatewayOwnerForProfile: () => null,
   requestGatewayForAgent: (...args: unknown[]) => rpc(...args),
   requestGatewayForProfile: (...args: unknown[]) => rpc(...args),
   retainGatewayForSessionTurn: vi.fn()
@@ -46,7 +49,7 @@ describe('Family rendered native-contract browser', () => {
     const onClose = vi.fn()
     render(<FamilyDialog onClose={onClose} target={target} />)
     expect(await screen.findByText('Worker investigation')).toBeTruthy()
-    expect(rpc).toHaveBeenCalledWith('box', 'desktop-alias', 'session.family', { session_id: 'stored-parent', profile: 'default' }, 15_000, undefined)
+    expect(rpc).toHaveBeenCalledWith('box', 'desktop-alias', 'session.family', { session_id: 'stored-parent', profile: 'default' }, 15_000, undefined, { targetProfile: 'default' })
     fireEvent.click(screen.getByRole('button', { name: 'Open chat' }))
     await waitFor(() => expect(open).toHaveBeenCalledWith('stored-child', expect.objectContaining({
       route: { connectionId: 'box', profile: 'desktop-alias', targetProfile: 'default', mode: 'remote' },
@@ -68,8 +71,19 @@ describe('Family rendered native-contract browser', () => {
     expect(screen.getByText('No chat action available')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Answer in chat' }))
     await waitFor(() => expect(open).toHaveBeenCalledWith('compressed-tip', expect.objectContaining({
-      route: { connectionId: 'box', profile: 'reviewer', targetProfile: 'reviewer', mode: 'remote' }
+      route: { connectionId: 'box', profile: 'desktop-alias', targetProfile: 'reviewer', mode: 'remote' }
     })))
+  })
+
+  it('renders the next worker status after its polling interval', async () => {
+    vi.useFakeTimers()
+    render(<FamilyDialog onClose={vi.fn()} target={target} />)
+    await act(async () => {})
+    expect(screen.getByText('Working')).toBeTruthy()
+    rpc.mockResolvedValue(tree([node({ status: 'done' })]))
+    await act(() => vi.advanceTimersByTimeAsync(10_000))
+    expect(screen.getByText('Done')).toBeTruthy()
+    expect(screen.queryByText('Working')).toBeNull()
   })
 
   it('shows partial, truncated and unavailable-profile evidence explicitly', async () => {
@@ -85,11 +99,25 @@ describe('Family rendered native-contract browser', () => {
       : tree()))
     render(<FamilyDialog onClose={vi.fn()} target={target} />)
     await screen.findByText('Worker investigation')
+    expect(screen.getByRole('button', { name: 'This chat', pressed: true })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
     await screen.findByText('Other family')
+    expect(screen.getByRole('button', { name: 'Overview', pressed: true })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'View family' }))
     await screen.findByText('Worker investigation')
-    expect(rpc).toHaveBeenLastCalledWith('box', 'reviewer', 'session.family', { session_id: 'other-root', profile: 'reviewer' }, 15_000, undefined)
+    expect(rpc).toHaveBeenLastCalledWith('box', 'desktop-alias', 'session.family', { session_id: 'other-root', profile: 'reviewer' }, 15_000, undefined, { targetProfile: 'reviewer' })
+  })
+
+  it('removes ready-tree actions immediately while the replacement Overview is pending', async () => {
+    render(<FamilyDialog onClose={vi.fn()} target={target} />)
+    await screen.findByRole('button', { name: 'Open chat' })
+    const pending = deferred<unknown>()
+    rpc.mockReturnValueOnce(pending.promise)
+    fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
+    expect(screen.queryByRole('button', { name: 'Open chat' })).toBeNull()
+    expect(screen.queryByText('Worker investigation')).toBeNull()
+    await act(async () => pending.resolve({ protocol_version: 1, complete: true, unavailable_profiles: [], roots: [], earlier: [] }))
+    expect(screen.getByText('No related work in this window')).toBeTruthy()
   })
 
   it('never paints a late previous tree under the newly selected overview', async () => {
@@ -135,6 +163,32 @@ describe('Family rendered native-contract browser', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(close).toHaveBeenCalled())
   })
+
+  it.each(['success', 'error'])('ignores a dismissed dialog\'s late open %s after reopening', async outcome => {
+    const pending = deferred<void>()
+    open.mockReturnValueOnce(pending.promise)
+
+    function Harness() {
+      const [shown, setShown] = useState(false)
+
+      return <><button onClick={() => setShown(true)}>Browse family</button>
+        {shown && <FamilyDialog onClose={() => setShown(false)} target={target} />}</>
+    }
+
+    render(<Harness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Browse family' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(open).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Browse family' }))
+    await screen.findByText('Worker investigation')
+    await act(async () => {
+      if (outcome === 'success') { pending.resolve() } else { pending.reject(new Error('Old open failed')) }
+    })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })
 
 describe('Family identity and projection boundary', () => {
@@ -144,6 +198,7 @@ describe('Family identity and projection boundary', () => {
     expect(familyChatTarget(target, { ...pending, session_id: null }, true)).toBeNull()
     expect(familyChatTarget(target, { ...pending, profile: 'different-profile' }, true)).toBeNull()
     expect(familyChatTarget(target, { ...pending, actions: [] }, true)).toBeNull()
+    expect(familyChatTarget(target, node({ actions: [] }), false)).toBeNull()
   })
   it('translates a runtime selection to its stored parent before reading', () => {
     expect(familyTarget('runtime-parent')).toEqual(target)

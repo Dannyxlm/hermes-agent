@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/error-state'
 import { Loader } from '@/components/ui/loader'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { useI18n } from '@/i18n'
 
 import { familyChatTarget, type FamilyTarget, openFamilyChat, targetForProfile } from './actions'
@@ -44,6 +45,13 @@ function FamilyBrowser({ initialTarget, onOpened }: { initialTarget: FamilyTarge
   const read = useFamily(target, overview, revision)
   const [opening, setOpening] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
+  const mounted = useRef(false)
+  // Invalidate in the unmount commit, before a settling Open can dismiss a replacement.
+  useLayoutEffect(() => {
+    mounted.current = true
+
+    return () => { mounted.current = false }
+  }, [])
 
   const openChat = async (node: FamilyDisplayNode, answer: boolean) => {
     if (opening) { return }
@@ -55,19 +63,24 @@ function FamilyBrowser({ initialTarget, onOpened }: { initialTarget: FamilyTarge
 
     try {
       await openFamilyChat(destination)
-      onOpened()
+
+      if (mounted.current) { onOpened() }
     } catch (error) {
-      setOpenError(error instanceof Error ? error.message : String(error))
-    } finally { setOpening(null) }
+      if (mounted.current) { setOpenError(error instanceof Error ? error.message : String(error)) }
+    } finally { if (mounted.current) { setOpening(null) } }
   }
 
   return (
     <>
       <div className="flex items-center gap-2">
-        <Button onClick={() => {
-          setTarget(initialTarget); setOverview(false)
-        }} size="sm" variant={!overview ? 'secondary' : 'ghost'}>{c.thisChat}</Button>
-        <Button onClick={() => setOverview(true)} size="sm" variant={overview ? 'secondary' : 'ghost'}>{c.overview}</Button>
+        <SegmentedControl
+          onChange={view => {
+            if (view === 'chat') { setTarget(initialTarget) }
+            setOverview(view === 'overview')
+          }}
+          options={[{ id: 'chat', label: c.thisChat }, { id: 'overview', label: c.overview }]}
+          value={overview ? 'overview' : 'chat'}
+        />
         <div className="flex-1" />
         <Button onClick={() => setRevision(value => value + 1)} size="sm" variant="ghost">{c.refresh}</Button>
       </div>

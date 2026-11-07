@@ -88,7 +88,7 @@ export const isSessionOwnerRoute = (owner: SessionOwnerScope): owner is SessionO
 const isRoute = isSessionOwnerRoute
 
 function routeParams(route: SessionProfileRoute, params: Record<string, unknown>): Record<string, unknown> {
-  if (!route.targetProfile || !Object.prototype.hasOwnProperty.call(params, 'profile')) {
+  if (!route.targetProfile || (route.targetProfile === route.profile && !Object.prototype.hasOwnProperty.call(params, 'profile'))) {
     return params
   }
 
@@ -208,6 +208,14 @@ export function requestForSessionProfile<T>(
     const routedParams = routeParams(ownerProfile, params)
 
     const profile = normKey(ownerProfile.profile)
+    const targetProfile = ownerProfile.targetProfile
+
+    if (targetProfile && targetProfile !== profile) {
+      return withRoutedTurnLease(connectionId, profile, method, routedParams, () =>
+        requestGatewayForAgent<T>(connectionId, profile, method, routedParams, timeoutMs, signal,
+          { targetProfile })
+      )
+    }
 
     return withRoutedTurnLease(connectionId, profile, method, routedParams, () =>
       timeoutMs === undefined && signal === undefined
