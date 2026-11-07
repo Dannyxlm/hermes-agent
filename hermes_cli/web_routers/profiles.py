@@ -37,6 +37,7 @@ from hermes_cli.web_server_config import (
 )
 from hermes_cli.web_server_gateway import _strip_session_list_rows
 from hermes_cli.web_routers._common import _CONFIG_MUTATION_LOCK
+from hermes_cli.web_routers.profile_sessions_cache import profile_sessions_response_cache
 from hermes_cli.web_server_profiles import (
     _fallback_profile_dicts, _hub_action_name, _write_profile_mcp_servers,
 )
@@ -322,7 +323,7 @@ def _stat_fingerprint(path: Path):
         stat = path.stat()
     except OSError:
         return None
-    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
 def _sidebar_db_fingerprint(db_path: Path):
@@ -454,6 +455,7 @@ def _csv_list(value: Optional[str]) -> list[str]:
 
 
 @sessions_router.get("/api/profiles/sessions")
+@profile_sessions_response_cache("sessions")
 def get_profiles_sessions(
     # ``le=500`` caps the page size — this endpoint fans out across EVERY profile's state.db.
     # 500 (not 100) because desktop callers use limit=200 and the electron remote-merge
@@ -523,7 +525,7 @@ def get_profiles_sessions(
 
 
 @sessions_router.get("/api/profiles/sessions/sidebar")
-@_sidebar_singleflight_cache
+@profile_sessions_response_cache("sidebar")
 def get_profiles_sessions_sidebar(
     recents_profile: str = "all", recents_limit: int = 20, recents_exclude: str | None = None,
     cron_limit: int = 50, messaging_limit: int = 100, messaging_exclude: str | None = None):
