@@ -11,6 +11,7 @@ import pytest
 
 from tui_gateway import server
 from tui_gateway import ws as ws_mod
+from tui_gateway import ws_read_lane
 
 
 class Socket:
@@ -44,7 +45,7 @@ class Socket:
 def rig(monkeypatch):
     gates, log = {}, []
 
-    async def dispatch(authority, req, method, transport):
+    async def dispatch(authority, req, method, transport, **_):
         log.append(f"start:{req['id']}")
         try:
             gate = gates.get(method)
@@ -89,9 +90,10 @@ async def test_waiting_context_reads_keep_reader_backpressure(rig):
     try:
         # A bounded reader parks with frames unread; give it every chance to drain them all.
         assert not await settle(lambda: sock.inbound.empty(), timeout=2.0)
-        bound = ws_mod._WS_DISPATCH_QUEUE_MAX + ws_mod._WS_CONCURRENT_READ_LIMIT + ws_mod._WS_WAITING_READ_LIMIT + 2
+        bound = ws_mod._WS_DISPATCH_QUEUE_MAX + ws_read_lane.ADMITTED_LIMIT + 2
         assert sock.received <= bound, (sock.received, bound)
-        assert sum(entry.startswith("start:") for entry in log) == ws_mod._WS_CONCURRENT_READ_LIMIT
+        # One method: its own cap, not the socket's, bounds how many run.
+        assert sum(entry.startswith("start:") for entry in log) == ws_read_lane.PER_METHOD_LIMIT
     finally:
         release.set()
     assert await settle(lambda: sock.inbound.empty())
@@ -124,7 +126,8 @@ async def test_hang_up_drops_reads_that_never_started(rig):
     task = asyncio.create_task(ws_mod.handle_ws(sock))
     for n in range(6):
         sock.inbound.put_nowait(rpc(n))
-    assert await settle(lambda: sock.received == 6 and sum(e.startswith("start:") for e in log) == 2)
+    assert await settle(lambda: sock.received == 6
+                        and sum(e.startswith("start:") for e in log) == ws_read_lane.PER_METHOD_LIMIT == 2)
     sock.inbound.put_nowait(None)
     assert not await settle(lambda: "teardown" in log, timeout=2.0), "teardown ran under a started read"
     release.set()

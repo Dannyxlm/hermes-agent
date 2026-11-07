@@ -96,11 +96,14 @@ def _submit_compaction_session_rpc(session: dict, run, on_submit_error):
     return future
 
 
-def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
+def dispatch(req: dict, transport: Optional[Transport] = None, *, on_caller_thread: bool = False) -> dict | None:
     """Route inbound RPCs — long handlers to the pool (returns None; the worker writes its own
     response via the bound transport), everything else inline (returns the response dict).
     *transport* pins every write of this request — events included — to that transport;
-    omitted → the module stdio transport (``tui_gateway.entry`` behaviour)."""
+    omitted → the module stdio transport (``tui_gateway.entry`` behaviour). *on_caller_thread*: the
+    caller is already a worker of its own, off every reader (a WebSocket read lane, bounded per
+    socket), so a long handler runs here instead of taking a slot of the pool every client's long
+    controls share; a session in between-turns compaction still queues on its FIFO."""
     t = transport or _stdio_transport
     token = bind_transport(t)
     try:
@@ -123,8 +126,15 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
             session.get("_between_turns_compaction") is not None
             or (pending_rpc is not None and not pending_rpc.done())
             or getattr(session.get("agent"), "compression_between_turns", False) is True)
-        if normalized[1] not in _LONG_HANDLERS and not compaction_session:
+        long_handler = normalized[1] in _LONG_HANDLERS
+        if not long_handler and not compaction_session:
             return handle_request(req)
+        if on_caller_thread and not compaction_session:
+            try:
+                return handle_request(req)
+            # health: allow BLE001 -- the answer the long-handler pool gives a handler that raised (run() below)
+            except Exception as exc:
+                return _err(req.get("id"), -32000, f"handler error: {exc}")
         from hermes_cli.backend_retirement import retirement
 
         # Reserve BEFORE enqueueing: a queued handler has accepted work even though no worker runs yet.

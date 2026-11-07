@@ -177,7 +177,7 @@ def _slow_dispatch_harness(monkeypatch):
     monkeypatch.setattr(server, "_WS_ORPHAN_REAP_GRACE_S", 0)
     sent, log, release = [], [], threading.Event()
 
-    def fake_dispatch(req, transport):
+    def fake_dispatch(req, transport, **_):
         method = req.get("method")
         log.append(f"dispatch:{method}")
         if method in {"slow", "session.context_breakdown"}:
