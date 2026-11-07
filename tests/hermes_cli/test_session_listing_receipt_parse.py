@@ -16,7 +16,7 @@ from hermes_state import SessionDB
 
 @pytest.fixture(autouse=True)
 def fresh_cache(monkeypatch):
-    monkeypatch.setattr(local, "_LINEAGE_RECEIPTS", {}, raising=False)
+    monkeypatch.setattr(local, "_LINEAGE_RECEIPTS", type(local._LINEAGE_RECEIPTS)())
 
 
 @pytest.fixture

@@ -5,6 +5,7 @@ import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 
 from hermes_state_runtime import RuntimeStoreError, _epoch, _json
 
@@ -360,10 +361,42 @@ def local_conversation_ids(conn, session_id):
     return list(dict.fromkeys([owner, *(sid for sid in lineage if isinstance(sid, str))]))
 
 
+_LINEAGE_RECEIPTS = OrderedDict()
+_RECEIPT_CACHE_LOCK = threading.Lock()
+
+
+def _receipt_file_version(conn):
+    scope = _LISTING_LINEAGES.get()
+    if scope is None or not scope[0].read_only or conn.in_transaction:
+        return None
+    path = Path(scope[0].db_path).resolve()
+    versions = []
+    try:
+        for candidate in (path, Path(str(path) + '-wal')):
+            try:
+                stat = candidate.stat()
+            except FileNotFoundError:
+                versions.append(None)
+                continue
+            versions.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    except OSError:
+        return None
+    if versions[0] is None or versions[0][:2] != scope[0]._db_file_identity:
+        return None
+    return str(path), tuple(versions)
+
+
 def _lineage_receipts(conn):
     """``[(owner, lineage)]`` for every receipt holding more than one segment."""
     indexed = conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' "
                            "AND name='idx_state_meta_local_lineage'").fetchone() is not None
+    version = _receipt_file_version(conn) if not indexed else None
+    if version is not None:
+        with _RECEIPT_CACHE_LOCK:
+            cached = _LINEAGE_RECEIPTS.get(version)
+            if cached is not None:
+                _LINEAGE_RECEIPTS.move_to_end(version)
+                return [(owner, list(lineage)) for owner, lineage in cached]
     # A literal predicate lets SQLite prove partial-index membership. Stores without
     # the optional offline accelerator keep the exact scan, including writable stores.
     index = ' INDEXED BY idx_state_meta_local_lineage' if indexed else ''
@@ -376,6 +409,14 @@ def _lineage_receipts(conn):
         owner, lineage = receipt.get('session_id'), receipt.get('lineage')
         if isinstance(owner, str) and all(isinstance(sid, str) for sid in lineage):
             receipts.append((owner, lineage))
+    if version is not None and version == _receipt_file_version(conn):
+        identities = [value for owner, lineage in receipts for value in (owner, *lineage)]
+        if len(identities) <= 4096 and sum(map(len, identities)) <= 65536:
+            with _RECEIPT_CACHE_LOCK:
+                _LINEAGE_RECEIPTS[version] = tuple((owner, tuple(lineage)) for owner, lineage in receipts)
+                _LINEAGE_RECEIPTS.move_to_end(version)
+                while len(_LINEAGE_RECEIPTS) > 16:
+                    _LINEAGE_RECEIPTS.popitem(last=False)
     return receipts
 
 
