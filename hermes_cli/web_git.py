@@ -226,7 +226,7 @@ def repo_status(cwd: str) -> dict | None:
     files = [_classify(tag, xy, path) for tag, xy, path in _walk_entries(raw)]
     # +/- vs HEAD, then fold in untracked insertions (`git diff HEAD` ignores them, so a
     # new-file-only turn would read +0); bounded scan.
-    counts = _numstat(cwd, ["HEAD"]).values()
+    counts = _numstat(cwd, ["HEAD"]).values() if any(not f["untracked"] for f in files) else ()
     added = sum(a for a, _ in counts)
     added += sum(_untracked_insertions(cwd, f["path"]) for f in files[:_UNTRACKED_SCAN_CAP] if f["untracked"])
     return {

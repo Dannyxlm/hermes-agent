@@ -4,6 +4,8 @@ Rebound onto server.py's globals at install time (``method_ctx.bind_module``), s
 bodies reference server globals bare (``_ok``, ``_err``, ``_sessions``, ...).
 """
 
+import threading
+
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
@@ -321,6 +323,8 @@ def _model_skew_err(rid) -> dict | None:
 # config and credential files is the same answer. ``refresh`` always rebuilds, and stores the result.
 _MODEL_OPTIONS_CACHE: dict = {}
 _MODEL_OPTIONS_TTL_S = 60.0
+# Bounded stripes coalesce cold opens without a process-wide provider-discovery lock.
+_MODEL_OPTIONS_LOCKS = tuple(threading.Lock() for _ in range(16))
 
 
 def _credential_stamp(path: Path):
@@ -336,6 +340,13 @@ def _model_options_key(home, ctx, params: dict) -> tuple:
     return (str(home), stamps, repr(ctx), bool(params.get("explicit_only")), bool(params.get("include_unconfigured")))
 
 
+def _model_options_hit(key, refresh):
+    cached = _MODEL_OPTIONS_CACHE.get(key)
+    if cached is not None and not refresh and time.monotonic() - cached[0] < _MODEL_OPTIONS_TTL_S:
+        return copy.deepcopy(cached[1])
+    return None
+
+
 @method("model.options")
 @_profile_scoped
 @_catch(5033)
@@ -349,16 +360,20 @@ def _(rid, params: dict) -> dict:
     ctx = _model_picker_context(_session_agent(params))
     refresh = bool(params.get("refresh"))
     key = _model_options_key(get_hermes_home(), ctx, params)
-    cached = _MODEL_OPTIONS_CACHE.get(key)
-    if cached is not None and not refresh and time.monotonic() - cached[0] < _MODEL_OPTIONS_TTL_S:
-        return _ok(rid, copy.deepcopy(cached[1]))
-    payload = build_model_options_payload(
-        ctx, explicit_only=bool(params.get("explicit_only")),
-        include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
-    if len(_MODEL_OPTIONS_CACHE) >= 16:
-        _MODEL_OPTIONS_CACHE.clear()
-    _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), copy.deepcopy(payload))
-    return _ok(rid, payload)
+    cached = _model_options_hit(key, refresh)
+    if cached is not None:
+        return _ok(rid, cached)
+    with _MODEL_OPTIONS_LOCKS[hash(key) % len(_MODEL_OPTIONS_LOCKS)]:
+        cached = _model_options_hit(key, refresh)
+        if cached is not None:
+            return _ok(rid, cached)
+        payload = build_model_options_payload(
+            ctx, explicit_only=bool(params.get("explicit_only")),
+            include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
+        if len(_MODEL_OPTIONS_CACHE) >= 16:
+            _MODEL_OPTIONS_CACHE.clear()
+        _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), copy.deepcopy(payload))
+        return _ok(rid, payload)
 
 
 @method("model.save_key")

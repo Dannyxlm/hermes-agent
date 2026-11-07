@@ -415,7 +415,7 @@ def _profiles(authority, actor, home, params, siblings=()):
         raise RuntimeStoreError('invalid_params')
     from gateway.session_authorities import served_profile_name
     name = served_profile_name(home)
-    profile = _profile_info(name, home, is_default=name == 'default')
+    profile = _profile_info(name, home, is_default=name == 'default', lazy_skill_count=True)
     row = {'name': name, 'path': str(home), 'is_default': profile.is_default,
            'model': profile.model, 'provider': profile.provider,
            'description': profile.description or '', 'display_name': profile.display_name or '',

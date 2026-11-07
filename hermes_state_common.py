@@ -694,6 +694,11 @@ CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- Family needs only physical target, logical owner and principal. Frozen policies can be
+-- large: a key-prefix scan reparses every policy even for a single-session lineage read.
+CREATE INDEX IF NOT EXISTS idx_state_meta_local_target
+    ON state_meta(json_extract(value,'$.entry.session_id'), key, json_extract(value,'$.principal_id'))
+    WHERE key GLOB 'gateway.local_policy.v1:*' AND json_valid(value);
 
 
 CREATE TABLE IF NOT EXISTS gateway_routing (

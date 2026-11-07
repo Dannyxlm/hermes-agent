@@ -84,8 +84,9 @@ def _family_root_visible(profile, stored_id):
     """Readable under family.overview's rule: a transport, a profile this connection may see, and
     the chat stored there. The chat need not be hosted: the Agents page opens families of chats
     that aren't open on the phone. Hosting still governs Stop and Answer (see _family_live)."""
+    from contextlib import closing
+    import sqlite3
     from hermes_cli.profiles import get_profile_dir
-    from hermes_family import read_profile
     from tui_gateway.ws_legacy_fallback import connection_profile_home
     if current_transport() is None:
         return False
@@ -93,10 +94,14 @@ def _family_root_visible(profile, stored_id):
     own = connection_profile_home()
     if own and home != Path(own).resolve():
         return False
-    if not (home / "state.db").is_file():
+    path = home / "state.db"
+    if not path.is_file():
         return False
-    snapshot = read_profile(profile, home / "state.db", seeds=[(profile, stored_id)], walk="lineage")
-    return stored_id in snapshot.sessions
+    # The seed is present in its lineage exactly when the stored row exists. Loading
+    # that lineage also parses policy ownership and leases; visibility needs neither.
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2)) as conn:
+        conn.execute("PRAGMA query_only=1")
+        return conn.execute("SELECT 1 FROM sessions WHERE id=?", (stored_id,)).fetchone() is not None
 
 
 @method("session.family")
