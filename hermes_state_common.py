@@ -699,6 +699,12 @@ CREATE TABLE IF NOT EXISTS state_meta (
 CREATE INDEX IF NOT EXISTS idx_state_meta_local_target
     ON state_meta(json_extract(value,'$.entry.session_id'), key, json_extract(value,'$.principal_id'))
     WHERE key GLOB 'gateway.local_policy.v1:*' AND json_valid(value);
+-- List membership must not parse every frozen policy. Keep the full values off the index;
+-- Python decodes only qualifying receipts, preserving its duplicate-key semantics.
+CREATE INDEX IF NOT EXISTS idx_state_meta_local_lineage
+    ON state_meta(key)
+    WHERE key GLOB 'gateway.local_policy.v1:*' AND json_valid(value)
+      AND json_array_length(value, '$.lineage') > 1;
 
 
 CREATE TABLE IF NOT EXISTS gateway_routing (
