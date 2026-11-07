@@ -20,10 +20,46 @@ from tui_gateway.turn_marker import read_turn_marker, record_turn_start
 pytest_plugins = ["tests.tui_gateway.test_auto_continue"]
 
 
+@pytest.mark.parametrize('entry', ['info', 'cold_resume', 'refusal'])
+def test_owner_transport_restart_preserves_reads_and_unknown_barrier(monkeypatch, tmp_path, entry):
+    from hermes_cli.gateway_client import GatewayClientError
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key, turns, _emitted = _legacy(monkeypatch, db)
+        _unknown_owner(monkeypatch, db, key)
+
+        @contextlib.asynccontextmanager
+        async def restarted(*args, **kwargs):
+            raise GatewayClientError('Gateway bootstrap identity changed')
+            yield
+        monkeypatch.setattr(owner_forward, 'connect_owner', restarted)
+        try:
+            if entry == 'cold_resume':
+                server._sessions.pop(sid)
+                monkeypatch.setattr(server, '_enable_gateway_prompts', lambda: None)
+                reply = server.handle_request({'id': 'resume', 'method': 'session.resume',
+                    'params': {'session_id': key, 'source': 'desktop', 'omit_messages': True}})
+                if 'result' in reply:
+                    sid = reply['result']['session_id']
+            else:
+                reply = server.handle_request({'id': entry, 'method': 'prompt.submit' if entry == 'refusal' else 'session.info',
+                    'params': {'session_id': sid, **({'text': 'never replay'} if entry == 'refusal' else {})}})
+            if entry == 'refusal':
+                assert reply.get('error', {}).get('data', {}).get('ownership_reason') == 'outcome_unknown'
+            else:
+                assert 'error' not in reply, reply
+            assert not turns
+            assert server._canonical_ledger_refusal(server._sessions[sid]).ledger_status == 'unknown'
+        finally:
+            server._sessions.pop(sid, None)
+
+
 @pytest.mark.parametrize("unknown_table", ["admission", "worker"])
 def test_unknown_barrier_dominates_queued_followers(monkeypatch, tmp_path, unknown_table):
     db = SessionDB(db_path=tmp_path / "state.db")
     sid, key, turns, _emitted = _legacy(monkeypatch, db)
+    def no_ready_owner(home):
+        raise owner_forward.OwnerNotRunning('synthetic unavailable owner')
+    monkeypatch.setattr(owner_forward, 'discover_owner', no_ready_owner)
     forwarded = []
     monkeypatch.setattr(owner_forward, "forward_prompt", lambda *a: forwarded.append(a) or {})
     try:

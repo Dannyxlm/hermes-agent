@@ -21,6 +21,55 @@ def _session(sid: str, **fields) -> ProcessSession:
     return ProcessSession(id=sid, command="cmd", task_id="task", started_at=time.time(), **fields)
 
 
+@pytest.mark.parametrize('consume', ['wait', 'log'])
+def test_consumption_between_snapshot_and_publication_cannot_resurrect_notice(tmp_path, monkeypatch, consume):
+    import queue
+    from tools import process_registry_results as results
+    from tools.process_registry_delivery import restore_process_completions
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    registry = ProcessRegistry()
+    process = ProcessSession(id='proc_consume_race', command='build', started_at=1,
+        session_key='owner', parent_session_id='owner', notify_on_complete=True, output_buffer='final output')
+    registry._running[process.id] = process
+    snapshot, release, observed = (threading.Event() for _ in range(3))
+    save = results.save_completed_record
+
+    def paused_save(record):
+        if record['notification']['status'] == 'pending':
+            snapshot.set()
+            assert release.wait(10)
+        return save(record)
+
+    monkeypatch.setattr(results, 'save_completed_record', paused_save)
+    seen = []
+
+    def read():
+        seen.append(registry.wait(process.id, timeout=5) if consume == 'wait' else registry.read_log(process.id))
+        observed.set()
+
+    finisher = threading.Thread(target=registry._finish_exited, args=(process, 0))
+    # Capture the live session before finalization takes the registry lock.
+    original = registry.get
+    monkeypatch.setattr(registry, 'get', lambda sid: process if sid == process.id else original(sid))
+    finisher.start()
+    reader = threading.Thread(target=read)
+    try:
+        assert snapshot.wait(10)
+        reader.start()
+        assert observed.wait(5), 'collected output was blocked behind producer publication'
+    finally:
+        release.set()
+        finisher.join(10)
+        if reader.ident is not None:
+            reader.join(10)
+    assert not finisher.is_alive() and not reader.is_alive()
+    assert seen and seen[0]['output'] == 'final output'
+    replay = queue.Queue()
+    restore_process_completions(replay)
+    assert replay.empty(), 'a stale producer snapshot resurrected consumed output'
+
+
 def test_duplicate_finisher_leaves_completion_to_the_owner(monkeypatch):
     """A second finisher must not release waiters while the first is still publishing the notice."""
     registry = ProcessRegistry()
@@ -275,6 +324,51 @@ def _sandbox_session(registry, monkeypatch, env) -> ProcessSession:
 
 def _poll_sandbox(registry, session, env):
     registry._env_poller_loop(session, env, "/tmp/bg.log", "/tmp/bg.pid", "/tmp/bg.exit")
+
+
+def test_consumption_is_exact_to_process_start_and_idempotent(monkeypatch, tmp_path):
+    from tools.process_registry_delivery import (completion_event, mark_completion_consumed,
+                                                 notification_state, restore_process_completions)
+    from tools.process_registry_results import save_completed_result
+
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    registry = ProcessRegistry()
+    older = ProcessSession(id='proc_reused', command='old build', started_at=1, notify_on_complete=True)
+    current = ProcessSession(id='proc_reused', command='new build', started_at=2, notify_on_complete=True)
+    save_completed_result(current)
+    event = completion_event(current)
+    mark_completion_consumed(registry, older)
+    pending = notification_state(event)
+    assert pending is not None and pending['status'] == 'pending'
+    mark_completion_consumed(registry, current)
+    mark_completion_consumed(registry, current)
+    consumed = notification_state(event)
+    assert consumed is not None and consumed['reason'] == 'consumed'
+    restored = ProcessRegistry()
+    restore_process_completions(restored.completion_queue)
+    assert restored.completion_queue.empty()
+
+
+def test_notification_kill_does_not_reenter_the_process_lock(monkeypatch):
+    registry = ProcessRegistry()
+    env = _SandboxEnv()
+    session = _sandbox_session(registry, monkeypatch, env)
+    session.notify_on_complete = True
+
+    class BoundedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            assert self.lock.acquire(timeout=2), 'process lock reentered during notification publication'
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    session._lock = cast(Any, BoundedLock())
+    result = registry.kill_process(session.id)
+    assert result['status'] == 'killed', result
+    assert registry.is_completion_consumed(session.id)
 
 
 def test_a_sandbox_exit_read_after_a_kill_keeps_the_kill(monkeypatch):

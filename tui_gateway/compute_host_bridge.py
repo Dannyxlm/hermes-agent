@@ -301,42 +301,54 @@ def _apply_compute_host_metadata_mirror(
     if not isinstance(frame, dict):
         return
     with _history_lock(session):
-        if not _compute_host_adopt_frame_meta(session, frame, between_turns_publication=between_turns_publication):
-            return
-        if isinstance(frame.get("history"), list):
-            session["history"] = frame["history"]
-        if frame.get("message_count") is not None:
-            with contextlib.suppress(Exception):
-                session["_metadata_message_count"] = int(frame.get("message_count") or 0)
-        info = frame.get("session_info")
-        if isinstance(info, dict):
-            session["_metadata_mirror"] = {**_metadata_mirror(session), **info}
-            session["_metadata_mirror_updated_at"] = time.time()
+        _apply_compute_host_metadata_mirror_locked(session, frame, between_turns_publication=between_turns_publication)
 
 
-def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict) -> None:
+def _apply_compute_host_metadata_mirror_locked(session, frame, *, between_turns_publication=False):
+    import time
+    if not _compute_host_adopt_frame_meta(session, frame, between_turns_publication=between_turns_publication):
+        return
+    if isinstance(frame.get('history'), list):
+        session['history'] = frame['history']
+    if frame.get('message_count') is not None:
+        with contextlib.suppress(Exception):
+            session['_metadata_message_count'] = int(frame.get('message_count') or 0)
+    info = frame.get('session_info')
+    if isinstance(info, dict):
+        session['_metadata_mirror'] = {**_metadata_mirror(session), **info}
+        session['_metadata_mirror_updated_at'] = time.time()
+
+
+def _on_compute_host_turn_done(rid: str, sid: str, session: dict, frame: dict, *, turn_id=None) -> None:
+    import sqlite3
+    import time
     with session["history_lock"]:
-        _compute_host_adopt_frame_meta(session, frame)
+        if turn_id is not None:
+            if session.get('_compute_host_turn_id') != turn_id:
+                return
+            session.pop('_compute_host_turn_id', None)
+            session.pop('_compute_host_completing', None)
+            session.pop('_compute_host_activity_ns', None)
+        _apply_compute_host_metadata_mirror_locked(session, frame)
         session["running"] = False
         session["last_active"] = time.time()
         _clear_inflight_turn(session)
         session.pop("_compute_host_open_request", None)
         session.pop("_compute_host_open_requests", None)
-    # The isolated turn carried the queued model switch to the compute host, whose
-    # turn thread applied it. Clear the server-side stash so it isn't re-forwarded
-    # (kept on error so the fail-open in-process path can still apply it).
-    if frame.get("type") != "turn.error":
-        session.pop("pending_model_switch", None)
+        if frame.get("type") != "turn.error":
+            session.pop("pending_model_switch", None)
     if frame.get("type") == "turn.error":
         message = str(frame.get("message") or "compute host turn failed")
         _emit("message.complete", sid, {"text": f"Error: {message}", "status": "error"})
-    _apply_compute_host_metadata_mirror(session, frame)
-    # Settlement of a turn whose session was closed mid-flight: the real lease was held for it.
+    # The real lease outlives a session closed mid-flight, but never this completed turn.
     _release_deferred_active_session_lease(session)
-    info = _compute_host_session_info(session)
-    if not frame.get("session_info_emitted"):
-        _emit("session.info", sid, info)
-    _drain_queued_prompt(rid, sid, session)
+    try:
+        if not frame.get("session_info_emitted"):
+            _emit("session.info", sid, _compute_host_session_info(session))
+    except (OSError, RuntimeError, sqlite3.Error):
+        logger.warning('Compute-host completion projection unavailable', exc_info=True)
+    finally:
+        _drain_queued_prompt(rid, sid, session)
 
 
 def _settle_compute_host_queue(session: dict, queued_prompt: dict | None, done: dict) -> None:
@@ -375,29 +387,44 @@ def _submit_prompt_to_compute_host(
         session["_compute_host_active"] = True
         session.pop("_compute_host_activity_ns", None)
 
-    def _complete(done: dict) -> None:
-        with session["history_lock"]:
-            if (session.get("_compute_host_turn_id") != turn_id
-                    or done.get("request_id") != turn_id or done.get("sid") != sid):
+    def _finish(done: dict) -> None:
+        import sqlite3
+        with session['history_lock']:
+            if session.get('_compute_host_turn_id') != turn_id:
                 return
-            # Commit while this dispatch still owns the slot; a late callback must not
-            # settle or clear a replacement, even when the client reused its RPC id.
-            _settle_compute_host_queue(session, queued_prompt, done)
-            session.pop("_compute_host_turn_id", None)
-            session.pop("_compute_host_activity_ns", None)
         try:
-            # Interrupted after start is not proof of non-invocation. Only the
-            # child's explicit correlated admission refusal releases this queue's receipts.
-            if queued_prompt is not None and done.get("dispatch_refused") is True:
+            _settle_compute_host_queue(session, queued_prompt, done)
+            if queued_prompt is not None and done.get('dispatch_refused') is True:
                 _restore_refused_queued_attachments(queued_prompt, sid)
-        except (ValueError, OSError):
-            logger.warning("failed to restore refused queued attachment receipts", exc_info=True)
-            _emit("error", sid, {"message": "The attachment send was refused before invocation, but its receipt "
-                                "could not be restored. Retain the originals and reconcile before retrying."})
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
+            logger.warning('Compute-host terminal receipt requires reconciliation', exc_info=True)
         finally:
-            if queued_prompt is not None:
-                _emit("session.info", sid, _session_control_info(session))
-            _on_compute_host_turn_done(rid, sid, session, done)
+            try:
+                _on_compute_host_turn_done(rid, sid, session, done, turn_id=turn_id)
+            finally:
+                if queued_prompt is not None:
+                    try:
+                        _emit('session.info', sid, _session_control_info(session))
+                    except (OSError, RuntimeError, sqlite3.Error):
+                        logger.warning('Compute-host receipt projection unavailable', exc_info=True)
+
+    def _complete(done: dict) -> None:
+        with session['history_lock']:
+            if (session.get('_compute_host_turn_id') != turn_id
+                    or done.get('request_id') != turn_id or done.get('sid') != sid
+                    or session.get('_compute_host_completing') == turn_id):
+                return
+            session['_compute_host_completing'] = turn_id
+        # This callback runs on the supervisor's sole frame reader. Terminal storage and
+        # owner metadata must not stop it from reading controls, answers or other sessions.
+        from agent.memory_provider import spawn_context_thread
+
+        def finish_scoped():
+            with _session_profile_runtime_scope(session):
+                _finish(done)
+
+        worker = spawn_context_thread(target=finish_scoped, name=f'compute-host-complete-{sid}')
+        worker.start()
     from tui_gateway.host_supervisor import TurnDispatchRefused
     try:
         try:

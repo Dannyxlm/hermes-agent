@@ -28,6 +28,33 @@ def _seed(conn, delegation_id, *, delivery="pending", state="completed", updated
          json.dumps({"summary": "retained result"})))
 
 
+def test_worker_owned_settlement_preserves_committed_partial_children(tmp_path):
+    from gateway.session_worker_delegation import _child, _complete
+    from hermes_state import SessionDB
+
+    task = {'is_batch': True, 'goals': ['first', 'second'], 'task_indexes': [3, 7]}
+    child = {'task_index': 3, 'status': 'completed', 'summary': 'durable useful work'}
+    event = {'type': 'async_delegation', 'delegation_id': 'worker-partial', 'status': 'stalled',
+             'completed_at': time.time(), 'parent_session_id': 'parent', 'session_key': 'owner',
+             'origin_ui_session_id': '', 'origin_session_id': '', 'error': 'unfinished child'}
+    with SessionDB(tmp_path / 'state.db') as db:
+        db.create_session('parent', source='cli')
+        db._write_sql('''INSERT INTO async_delegations
+            (delegation_id,origin_session,parent_session_id,state,dispatched_at,updated_at,
+             task_json,owner_execution_id) VALUES(?,?,?,'running',?,?,?,?)''',
+            ('worker-partial', 'owner', 'parent', time.time(), time.time(), json.dumps(task), 'worker'))
+        db._execute_write(lambda conn: _child(db, conn, 'parent',
+            {'delegation_id': 'worker-partial', 'entry': child}, execution_id='worker'))
+        db._execute_write(lambda conn: _complete(db, conn, 'parent',
+            {'event': event, 'result': {'status': 'stalled'}}, execution_id='worker'))
+        with db._read_ctx() as conn:
+            row = conn.execute('SELECT event_json,result_json FROM async_delegations').fetchone()
+        children = json.loads(row['result_json']).get('results', [])
+        assert children and children[0] == child, 'worker-owned completion erased a committed child'
+        assert children[1]['task_index'] == 7 and children[1]['status'] == 'unknown'
+        assert json.loads(row['event_json'])['results'] == children
+
+
 def test_dispatch_prunes_settled_history_without_losing_pending_replay():
     pending_ids = {f"pending-{i}" for i in range(ad._MAX_RETAINED_COMPLETED + 1)}
     now = time.time()
@@ -97,3 +124,70 @@ def test_expired_delivered_and_dropped_history_is_pruned_but_pending_and_live_re
     with ad._transaction() as conn:
         assert {row[0] for row in conn.execute("SELECT delegation_id FROM async_delegations")} == {
             "old-pending", "running", "finalizing"}
+
+
+@pytest.mark.parametrize('commit_during_finalize', [False, True])
+def test_forced_settlement_preserves_committed_children_on_delivery_and_reload(monkeypatch, commit_during_finalize):
+    import threading
+    from tools.process_registry import process_registry
+
+    offered = queue.Queue()
+    monkeypatch.setattr(process_registry, 'completion_queue', offered)
+    record = dict(delegation_id='partial-batch', dispatched_at=time.time(), status='running',
+                  is_batch=True, goals=['finished', 'unfinished'], task_indexes=[3, 7], session_key='owner')
+    ad._persist_dispatch(record)
+    with ad._records_lock:
+        ad._records['partial-batch'] = record
+    completed = dict(task_index=3, status='completed', summary='durable useful work')
+    entered, release = threading.Event(), threading.Event()
+    persist = ad._persist_completion
+
+    def paused_persist(event, result):
+        entered.set()
+        assert release.wait(5)
+        return persist(event, result)
+
+    if commit_during_finalize:
+        monkeypatch.setattr(ad, '_persist_completion', paused_persist)
+    else:
+        ad.record_unit_child('partial-batch', completed)
+        release.set()
+    worker = threading.Thread(target=ad._finalize,
+                              args=('partial-batch', lambda rec: ad._stalled_result('partial-batch', rec), 'stalled'))
+    worker.start()
+    try:
+        if commit_during_finalize:
+            assert entered.wait(5)
+            ad.record_unit_child('partial-batch', completed)
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    event = offered.get_nowait()
+    expected = [completed, dict(task_index=7, status='unknown', summary=None, error=event['error'])]
+    assert event['results'] == expected
+    assert 'run it again' not in event['error']
+    assert ad.get_durable_delegation('partial-batch')['result']['results'] == expected
+    # A late runner's empty result cannot replace terminal delivery.
+    ad._finalize('partial-batch', {'results': []}, 'completed')
+    assert offered.empty()
+    replay = queue.Queue()
+    assert ad.restore_undelivered_completions(replay) == 1
+    assert replay.get_nowait()['results'] == expected
+
+
+def test_forced_settlement_with_every_child_recorded_has_no_unknown_children(monkeypatch):
+    from tools.process_registry import process_registry
+    offered = queue.Queue()
+    monkeypatch.setattr(process_registry, 'completion_queue', offered)
+    record = dict(delegation_id='finished-batch', dispatched_at=time.time(), status='running',
+                  is_batch=True, goals=['first', 'second'], session_key='owner')
+    ad._persist_dispatch(record)
+    with ad._records_lock:
+        ad._records['finished-batch'] = record
+    children = [dict(task_index=i, status='completed', summary=f'answer {i}') for i in range(2)]
+    for child in reversed(children):
+        ad.record_unit_child('finished-batch', child)
+    ad._finalize('finished-batch', lambda rec: ad._stalled_result('finished-batch', rec), 'stalled')
+    assert offered.get_nowait()['results'] == children
+    assert ad.get_durable_delegation('finished-batch')['result']['results'] == children

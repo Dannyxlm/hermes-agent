@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from functools import partial
 import sqlite3
+import threading
 from types import SimpleNamespace
 import uuid
 
@@ -58,6 +59,8 @@ class LiveSession:
     # ``mutation_lock``, so admissions are not parked behind an LLM call): no turn is claimed
     # under a compression that is still preparing its replacement transcript.
     claim_gate: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Executor-side agent reuse cannot cross a still-running Stop effect.
+    control_handoff: contextlib.AbstractContextManager = field(default_factory=threading.RLock)
     # Set by ``_schedule`` while a drain is alive. The claim commits off-loop, so input admitted
     # after its transaction read the FIFO would otherwise be stranded by a drain that exits idle.
     rescan: bool = False
@@ -926,36 +929,8 @@ class SessionAuthority:
         return self._receipt(row)
 
     async def interrupt(self, actor, ref, generation):
-        self.authorize(actor, ref, 'session:control')
-        handle = self._handle(ref)
-        if handle.execution_generation != generation:
-            raise RuntimeStoreError('stale_generation')
-        live, agent = self.sessions[ref.session_id], None
-        if handle.execution_state == 'running':
-            # Latches are written under the lock adopt_agent takes on the executor thread, BEFORE the
-            # agent is called: an adoption racing the call consumes them. The agent is called outside it.
-            with live.event_stream.lock:
-                adopted_generation, agent = self.adopted.get(ref.session_id, (None, None))
-                if adopted_generation != generation:
-                    # Its execution returned and only the settlement is left: nothing to stop, and the route's
-                    # agent may already be the NEXT turn's (own-agent runs install it before their claim).
-                    returned = (live.event_stream.execution.get('execution_generation') == generation
-                                and self.executing.get(ref.session_id) != generation)
-                    agent = None if returned else self.agent(ref)
-                    if not returned and not self._runs_own_agent(ref):
-                        # Accepted for this exact claim before its turn adopted an agent: whatever agent
-                        # the turn adopts for this generation must not run the work as if no Stop arrived.
-                        self.pending_stops[ref.session_id] = generation
-                if agent is not None:
-                    self.delivered_stops[ref.session_id] = generation
-        # Stop hard-cancels this turn (aborts compression too). Background delegations are not the
-        # turn: they keep running and report back; `/stop` and session close/reset end them.
-        from agent.interrupt_compat import request_hard_interrupt
-        if agent is not None:
-            from hermes_state_launch_causes import stamp_stop
-            stamp_stop(agent, "user_stop")
-            request_hard_interrupt(agent)
-        return self._handle(ref)
+        from gateway.session_thread_controls import interrupt
+        return await interrupt(self, actor, ref, generation)
 
     def _classic_turn_holds(self, route):
         """The route's running slot is held by a turn this FIFO did not claim (the drain is serial:
@@ -1007,19 +982,25 @@ class SessionAuthority:
         turn's finalizer cleared it, so it is dropped rather than cancelling this turn. A managed
         worker is a fresh process per turn and carries no earlier flag to drop."""
         live = self.sessions.get(session_id)
-        # The turn's executor thread runs this; the stream lock orders it against session.steer's latch.
-        with live.event_stream.lock if live is not None else contextlib.nullcontext():
-            self.adopted[session_id] = (generation, agent)
+        # Adoption and cancellation share a handoff lock, but neither calls the agent under
+        # the stream lock: compression publishes status while holding its own commit fence.
+        with live.control_handoff if live is not None else contextlib.nullcontext():
+            with live.event_stream.lock if live is not None else contextlib.nullcontext():
+                self.adopted[session_id] = (generation, agent)
+                clear_old_stop = self.delivered_stops.pop(session_id, generation) != generation
+                stopped = self.pending_stops.get(session_id) == generation
+                if stopped:
+                    del self.pending_stops[session_id]
+                    self.delivered_stops[session_id] = generation
+                latched, steers = self.pending_steers.pop(session_id, (None, ()))
             clear = getattr(agent, 'clear_interrupt', None)
-            if self.delivered_stops.pop(session_id, generation) != generation and clear is not None:
+            if clear_old_stop and clear is not None:
                 clear()
-            if self.pending_stops.get(session_id) == generation:
-                del self.pending_stops[session_id]
+            if stopped:
                 from agent.interrupt_compat import request_hard_interrupt
                 from hermes_state_launch_causes import stamp_stop
                 stamp_stop(agent, "user_stop")
                 request_hard_interrupt(agent)
-            latched, steers = self.pending_steers.pop(session_id, (None, ()))
             for text in steers if latched == generation else ():
                 agent.steer(text)
 

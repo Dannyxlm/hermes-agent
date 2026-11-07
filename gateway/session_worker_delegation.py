@@ -99,9 +99,13 @@ def _complete(db, conn, session_id, payload, *, execution_id):
     _number(event.get('completed_at'))
     if row['state'] != 'running':
         raise RuntimeStoreError('admission_conflict')
+    from tools.async_delegation import merge_completion_children
+    event, result = dict(event), dict(payload['result'])
+    merge_completion_children(event, result, json.loads(row['task_json'] or '{}'),
+                              json.loads(row['result_json'] or '{}'))
     conn.execute('''UPDATE async_delegations SET state=?,completed_at=?,updated_at=?,event_json=?,result_json=?
         WHERE delegation_id=?''', (event['status'], event['completed_at'], time.time(),
-        json.dumps(event), json.dumps(payload['result']), event['delegation_id']))
+        json.dumps(event), json.dumps(result), event['delegation_id']))
     return {'value': None}
 
 

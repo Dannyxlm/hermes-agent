@@ -2017,11 +2017,15 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             with session._lock:
                 output = _completion_output(session)
                 if consume_output:
-                    mark_completion_consumed(self, session)
+                    self._completion_consumed.add(session.id)
+                    session._notification_consumed = True
                 session.exited = True
                 session.exit_code = -15  # SIGTERM
                 session.completion_reason = "killed"
                 session.termination_source = source
+            # Result publication snapshots the same non-reentrant lock.
+            if consume_output:
+                mark_completion_consumed(self, session)
             # The reader thread can finalise the session while the signal path
             # blocks in the SIGKILL grace window: its ``save_completed_result``
             # then persists this kill as a plain ``exited``. Re-write the receipt

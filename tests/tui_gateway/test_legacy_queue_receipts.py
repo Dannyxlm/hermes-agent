@@ -10,6 +10,30 @@ from tests.tui_gateway.test_queued_prompt_persistence import _busy, _desktop_ses
 pytest_plugins = ['tests.tui_gateway.test_auto_continue']
 
 
+def test_compressed_queue_merge_retains_original_receipt_identity(monkeypatch, tmp_path):
+    from tui_gateway.local_queue_receipts import snapshot
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key = _desktop_session(monkeypatch, db)
+        session = server._sessions[sid]
+        try:
+            _busy(session)
+            first = server._handle_busy_submit('B', sid, session, 'B', None, queued=True)['result']['input_id']
+            server._ensure_session_db_row(session)
+            tip = key + '-cont'
+            db.create_session(tip, 'desktop', parent_session_id=key)
+            db.end_session(key, end_reason='compression')
+            session['session_key'] = tip
+            second = server._handle_busy_submit('C', sid, session, 'C', None, queued=True)['result']['input_id']
+            assert first == second
+            rows = [r for r in snapshot(db, tip, server._sessions) if r['input_id'] == first]
+            assert len(rows) == 1
+            assert rows[0]['session_id'] == key
+            server._dispose_local_queue(session, [session['queued_prompt']], 'cancelled')
+            assert snapshot(db, tip, {})[0]['outcome'] == 'cancelled'
+        finally:
+            server._sessions.pop(sid, None)
+
+
 def test_a_dispatched_inline_queue_commits_its_terminal_receipt_with_the_real_turn(
         monkeypatch, tmp_path, turn_env, marker_home, emits):
     db = SessionDB(db_path=tmp_path / 'state.db')

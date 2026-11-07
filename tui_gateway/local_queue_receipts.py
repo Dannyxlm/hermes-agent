@@ -23,7 +23,7 @@ def accept(db, session, envelope):
     existing = envelope.get('_queue_receipt')
     from tui_gateway.turn_marker import _writer_identity
     receipt = {**(existing or {}), 'input_id': existing['input_id'] if existing else uuid.uuid4().hex,
-               'session_id': session['session_key'],
+               'session_id': existing['session_id'] if existing else session['session_key'],
                'runtime_id': session.setdefault('_queue_owner', uuid.uuid4().hex),
                'status': 'queued', 'outcome': None, 'user': envelope['text'], **_writer_identity()}
     db._execute_write(lambda conn: conn.execute(
@@ -71,7 +71,10 @@ def snapshot(db, session_id, live_sessions):
             lost = runtime is None and (receipt.get('writer_pid') == os.getpid()
                                        or marker_writer_state(receipt) == 'dead')
 
-            if receipt['status'] == 'queued' and lost:
+            unresolved = runtime is not None and receipt['input_id'] in runtime.get('_unsettled_local_queue', {})
+            if unresolved and receipt['status'] not in {'terminal', 'unknown'}:
+                receipt.update(status='unknown', outcome=None, reason='terminal_receipt_unsaved')
+            elif receipt['status'] == 'queued' and lost:
                 receipt.update(status='terminal', outcome='cancelled', reason='backend_restart')
                 conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(receipt), stored['key']))
             elif receipt['status'] == 'transferred' and lost:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from agent.memory_provider import spawn_context_thread as _SPAWN_CONTEXT_THREAD
 from tests.tui_gateway.test_attachment_operation_reconciliation import Pipe
 from tests.tui_gateway.test_attachment_operations import call, upload
 from tui_gateway import server
@@ -21,6 +22,15 @@ _USES_COMPUTE_HOST = server._session_uses_compute_host
 
 class SplitComputeProcesses:
     def __init__(self, parent_records, monkeypatch):
+        from agent import memory_provider
+
+        deferred = memory_provider.spawn_context_thread
+
+        def spawn(target, *, name, **kwargs):
+            factory = _SPAWN_CONTEXT_THREAD if name.startswith('compute-host-complete-') else deferred
+            return factory(target=target, name=name, **kwargs)
+
+        monkeypatch.setattr(memory_provider, 'spawn_context_thread', spawn)
         self.parent_records = parent_records
         self.child_records = {}
         self.output = io.StringIO()
@@ -54,6 +64,12 @@ class SplitComputeProcesses:
         # Dispatch the actual child's frames only after restoring the parent process map.
         for reply in replies:
             self.supervisor._handle_host_frame(reply)
+        # The real reader delegates terminal storage/projection, so await that boundary
+        # before switching this fixture's shared module map to its synthetic child again.
+        for worker in threading.enumerate():
+            if worker.name == f'compute-host-complete-{frame["sid"]}':
+                worker.join(10)
+                assert not worker.is_alive()
         return replies
 
     def close(self):

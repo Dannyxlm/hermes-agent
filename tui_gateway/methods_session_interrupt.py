@@ -54,7 +54,6 @@ def _recover_unreachable_compute_host_turn(sid: str, session: dict, inflight_at_
     with session["history_lock"]:
         session["_turn_cancel_requested"] = True
         cancelled = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
-        _dispose_local_queue(session, cancelled, "cancelled")
         session["queued_prompt"] = None
         session.pop("queued_prompts", None)
         session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
@@ -62,6 +61,7 @@ def _recover_unreachable_compute_host_turn(sid: str, session: dict, inflight_at_
         if not pending and session.get("running") and inflight_now is not None and inflight_now is inflight_at_interrupt:
             session["running"] = False
             _clear_inflight_turn(session)
+    _dispose_local_queue(session, cancelled, "cancelled")
     for envelope in cancelled:
         _restore_refused_queued_attachments(envelope, sid)
     _clear_pending(sid)
@@ -132,7 +132,7 @@ def _(rid, params: dict) -> dict:
 def _forwarded_control(rid, sid, session, verb, admission_id, generation=None, *, stop=False):
     from tui_gateway.owner_forward import cached_blocking_unknown, control_forwarded, pending_submissions
     from hermes_state_runtime import RuntimeStoreError
-    from hermes_cli.gateway_client import GatewayRPCError
+    from hermes_cli.gateway_client import GatewayClientError, GatewayRPCError
     from websockets.exceptions import WebSocketException
     try:
         result = control_forwarded(session, verb, admission_id, generation, stop=stop)
@@ -140,7 +140,7 @@ def _forwarded_control(rid, sid, session, verb, admission_id, generation=None, *
         return _err(rid, 4090, exc.reason, data={"reason": exc.reason})
     except GatewayRPCError as exc:
         return _err(rid, 4090, str(exc), data=exc.data)
-    except (OSError, RuntimeError, TimeoutError, WebSocketException) as exc:
+    except (GatewayClientError, OSError, RuntimeError, TimeoutError, WebSocketException) as exc:
         with session['history_lock']:
             record = session.get('_forwarded_admissions', {}).get(admission_id)
             if record is not None and record.get('observed_only'):

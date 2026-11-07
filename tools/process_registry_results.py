@@ -112,8 +112,17 @@ def save_completed_record(record):
         path = result_path(record['id'])
         with _FileLock(directory.with_suffix(".lock")):
             previous = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+            notification = record.get('notification') or {}
+            consumed = notification.get('status') == 'terminal' and notification.get('reason') == 'consumed'
+            if consumed and previous and previous.get('started_at') != record['started_at']:
+                return  # A stale reader cannot consume a replacement process with the same id.
             if previous.get("started_at") == record['started_at'] and "notification" in previous:
-                record["notification"] = previous["notification"]
+                from tools.process_registry_delivery import _matches
+                stored = previous['notification']
+                if consumed and not _matches(stored, notification['event']):
+                    return
+                record["notification"] = ({**stored, 'status': 'terminal', 'reason': 'consumed'}
+                    if consumed and stored.get('status') in {'pending', 'unknown'} else stored)
             atomic_json_write(path, record, mode=0o600)
         try:
             _result_paths()

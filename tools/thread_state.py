@@ -205,8 +205,9 @@ def _marker_dir(home: Path) -> Path:
 
 
 def _marker(home: Path, admission_id: str, status: str) -> Path:
-    # A paused turn is reported once as paused, and again once it finally settles.
-    return _marker_dir(home) / (admission_id + (".paused" if status == "paused" else ""))
+    # A Stop request acknowledges only a stopped outcome, never an answer that wins the race.
+    suffix = {"paused": ".paused", "stopped": ".stopped"}.get(status, "")
+    return _marker_dir(home) / (admission_id + suffix)
 
 
 def delivered(home: Path, admission_id: str, status: str) -> bool:

@@ -513,6 +513,15 @@ class _TurnRun:
     receipt_attempted: bool = False
 
 
+def _commit_terminal_callback(st: _TurnRun, result: dict) -> None:
+    """A terminal receipt failure retains uncertainty, not a replacement error answer."""
+    st.receipt_attempted = True
+    try:
+        st.receipt_committed = st.terminal_callback(result) is not False
+    except Exception:
+        logger.exception('Terminal turn receipt remains unresolved')
+
+
 def _adopt_out_of_band_turns(session: dict) -> None:
     """Fold turns another surface appended to this session (Telegram reply, cron run) into the model-facing
     history before the turn snapshots it. The desktop already repaints them from the DB (#86588); without
@@ -993,12 +1002,10 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
         if _error_surface:
             payload["error_surface"] = _error_surface
     if st.terminal_callback is not None:
-        st.receipt_attempted = True
-        st.terminal_callback({
+        _commit_terminal_callback(st, {
             "status": {"interrupted": "cancelled", "error": "failed"}.get(status, "settled"),
             "text": raw if isinstance(raw, str) else str(raw),
             **({"error": str(error_value or raw)} if status == "error" else {})})
-        st.receipt_committed = True
     if st.receipt_committed:
         _retire_turn_marker(session, st.marker_key)
     return payload, raw, status
@@ -1018,12 +1025,7 @@ def _recover_turn_exception(sid: str, session: dict, st: _TurnRun, e: BaseExcept
     # A finalizer exception can leave in-memory history at the turn-start snapshot.
     _restore_agent_history_after_turn_error(session, st.agent)
     if st.terminal_callback is not None and not st.receipt_attempted:
-        st.receipt_attempted = True
-        try:
-            st.terminal_callback({"status": "failed", "text": "", "error": str(e)})
-            st.receipt_committed = True
-        except Exception:
-            logger.exception("hosted room terminal receipt commit failed")
+        _commit_terminal_callback(st, {"status": "failed", "text": "", "error": str(e)})
     try:
         # Same terminal error frame shape as the returned-error path.
         _emit_terminal_turn_error(sid, session, e, retire_marker=st.receipt_committed)
@@ -1185,10 +1187,8 @@ def _run_prompt_submit(
             prepared = _prepare_turn_input(sid, session, st, text, images)
             if prepared is None:
                 if st.terminal_callback is not None and not st.receipt_attempted:
-                    st.receipt_attempted = True
-                    st.terminal_callback({
+                    _commit_terminal_callback(st, {
                         "status": "failed", "text": "", "error": "Context injection refused."})
-                    st.receipt_committed = True
                 return
             prompt, run_message, cols, streamer = prepared
             _invoke_agent(

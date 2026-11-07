@@ -517,15 +517,37 @@ def _accept_local_queue_receipt(session, envelope):
 
 
 def _dispose_local_queue(session, envelopes, outcome):
+    import sqlite3
     from tui_gateway.local_queue_receipts import disposition
     envelopes = [e for e in envelopes if e.get("_queue_receipt") is not None]
     if not envelopes:
         return
-    with _session_db(session) as db:
-        if db is None:
-            raise RuntimeError("session storage unavailable")
-        for envelope in envelopes:
-            disposition(db, envelope, outcome)
+    if outcome == 'dispatched':
+        # Dispatch is a mandatory pre-invocation write, unlike terminal/projection work.
+        with _session_db(session) as db:
+            if db is None:
+                raise RuntimeError("session storage unavailable")
+            for envelope in envelopes:
+                disposition(db, envelope, outcome)
+        return True
+    saved = True
+    for envelope in envelopes:
+        input_id = envelope['_queue_receipt']['input_id']
+        with session['history_lock']:
+            session.setdefault('_unsettled_local_queue', {})[input_id] = envelope
+        try:
+            with _session_db(session) as db:
+                if db is None:
+                    raise RuntimeError("session storage unavailable")
+                disposition(db, envelope, outcome)
+        except (OSError, RuntimeError, sqlite3.Error):
+            saved = False
+            logger.warning('Local queue terminal receipt remains unresolved', exc_info=True)
+        else:
+            if outcome != 'unknown':
+                with session['history_lock']:
+                    session['_unsettled_local_queue'].pop(input_id, None)
+    return saved
 
 
 def _restore_local_queue_receipt(session, envelope):
@@ -540,9 +562,7 @@ def _local_queue_terminal_kwargs(sid, session, envelope):
 
     def terminal(result):
         outcome = {"settled": "completed", "cancelled": "interrupted", "failed": "failed"}[result["status"]]
-        with session["history_lock"]:
-            _dispose_local_queue(session, [envelope], outcome)
-        _emit("session.info", sid, _session_control_info(session))
+        return _dispose_local_queue(session, [envelope], outcome)
     return {"terminal_callback": terminal}
 
 
@@ -556,11 +576,37 @@ def _queued_dispatch_kwargs(queued, generation):
     return kwargs
 
 
+def _restore_changed_queue_claim(sid, session, queued, generation):
+    with session['history_lock']:
+        if int(session.get('_queued_prompt_generation', 0)) == generation:
+            return False
+        cancelled = bool(session.get('_turn_cancel_requested'))
+        if cancelled:
+            if receipt := queued.get('_queue_receipt'):
+                session.setdefault('_unsettled_local_queue', {})[receipt['input_id']] = queued
+        else:
+            _restore_local_queue_receipt(session, queued)
+            if selection := queued.get('_attachment_queue'):
+                selection['store'].queued(selection['ids'], selection['id'], sid)
+            advanced = session.get('queued_prompt')
+            _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get('queued_prompts') or [])])
+        session['running'] = False
+    if cancelled:
+        _dispose_local_queue(session, [queued], 'cancelled')
+        _restore_refused_queued_attachments(queued, sid)
+    return True
+
+
 def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     """Fire a queued next-turn prompt if one is waiting and the session is idle. True when dispatched: the caller
     skips lower-priority follow-ups this cycle (the user's message wins)."""
+    if session.get('_compute_host_completing'):
+        return False
+    if session.get('_unsettled_local_queue') and _canonical_ledger_refusal(session) is not None:
+        return False
     with _session_turn_admission(session) as admitted:
-        if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
+        if (not admitted or session.get("_closing")
+                or not (queued := session.get("queued_prompt")) or session.get("running")):
             return False
         queue_generation = int(session.get("_queued_prompt_generation", 0))
 
@@ -583,22 +629,8 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         if queued_transport is not None and not _transport_is_dead(queued_transport):
             _attach_session_transport(session, queued_transport)
     use_compute_host = _session_uses_compute_host(session)
-    with session["history_lock"]:
-        if int(session.get("_queued_prompt_generation", 0)) != queue_generation:
-            # Generation bump cancelled the claim (Stop, compress re-anchor, …): don't dispatch, but restore the
-            # envelope (claimed head first, then whatever advanced into the slot) so a legitimate follow-up isn't dropped.
-            # See #84417.
-            if session.get("_turn_cancel_requested"):
-                _dispose_local_queue(session, [queued], "cancelled")
-                _restore_refused_queued_attachments(queued, sid)
-            else:
-                _restore_local_queue_receipt(session, queued)
-                if selection := queued.get("_attachment_queue"):
-                    selection["store"].queued(selection["ids"], selection["id"], sid)
-                advanced = session.get("queued_prompt")
-                _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
-            session["running"] = False
-            return True
+    if _restore_changed_queue_claim(sid, session, queued, queue_generation):
+        return True
     kwargs = _queued_dispatch_kwargs(queued, queue_generation)
     # Re-place the accept-time rows (if any) at the transcript END before the turn's rows follow
     # them, and slot the dispatching envelope's fresh row for adoption. EVERY queued envelope is

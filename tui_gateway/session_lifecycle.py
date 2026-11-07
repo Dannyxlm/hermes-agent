@@ -216,6 +216,12 @@ def _canonical_ledger_refusal(session: dict):
                 return None
             with read_ctx() as conn:
                 row = next(iter(conn.execute(_CANONICAL_PENDING_SQL, (key, key))), None)
+            if session.get('_compute_host_completing'):
+                row = ('unknown', None)
+            if row is None:
+                from tui_gateway.local_queue_receipts import snapshot
+                if any(receipt['status'] == 'unknown' for receipt in snapshot(db, key, _sessions)):
+                    row = ('unknown', None)
     except sqlite3.Error:
         logger.warning("canonical ledger read failed for %s", key, exc_info=True)
         return ActiveSessionRefusal(_SESSION_OWNERSHIP_UNAVAILABLE, SESSION_COORDINATION_UNAVAILABLE)
@@ -825,7 +831,6 @@ def _interrupt_session_turn(
     with session["history_lock"]:
         session["_turn_cancel_requested"] = True
         cancelled = ([session["queued_prompt"]] if session.get("queued_prompt") else []) + list(session.get("queued_prompts") or [])
-        _dispose_local_queue(session, cancelled, "cancelled")
         session["queued_prompt"] = None
         session.pop("queued_prompts", None)
         session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
@@ -836,47 +841,43 @@ def _interrupt_session_turn(
                     selection["store"].reconcile_queue(operation_id, set(), sid, cancelled_id=selection["id"])
                 except (ValueError, OSError):
                     logger.warning("cancelled attachment queue requires receipt reconciliation", exc_info=True)
-    if use_compute_host and (should_interrupt or session.get("_compute_host_active")):
-        # Queue cancellation must survive a failed control write. A lazy idle
-        # session has no child to interrupt and must not spawn one for Stop.
-        _get_compute_host_supervisor().interrupt(sid, request_id=request_id)
-    if should_interrupt:
-        # Sibling of gateway/run_agent_cache.py::_interrupt_and_clear_session: a user-initiated stop of a
-        # live TUI/desktop turn is the same "loop is gone" event for plugins holding per-turn external
-        # resources. Observer-only; dispatch failures never break the interrupt.
-        # Every caller (session.interrupt RPC, orphan/idle reapers, lease takeover) is off-turn, so bind the
-        # SESSION's profile as _finalize_session does or an observer's get_hermes_home() names the launch
-        # profile (#125063). hydrate_secrets=False: observer-only, /stop must stay fast.
-        try:
-            from hermes_cli.plugins import invoke_hook as _invoke_hook
-            with _session_profile_runtime_scope(session, hydrate_secrets=False):
-                _invoke_hook(
-                    "agent_loop_stopped", session_key=session.get("session_key", ""), platform="tui",
-                    reason="user_stop", invalidation_reason="session_interrupt",
-                )
-        except Exception:
-            logger.debug("agent_loop_stopped hook dispatch failed", exc_info=True)
-    if not use_compute_host:
+    try:
+        if use_compute_host and (should_interrupt or session.get("_compute_host_active")):
+            # A lazy idle session has no child to interrupt and must not spawn one for Stop.
+            _get_compute_host_supervisor().interrupt(sid, request_id=request_id)
         if should_interrupt:
-            from agent.interrupt_compat import request_hard_interrupt
-            request_hard_interrupt(session.get("agent"))
-        if not run_thread_alive and not compressing:
-            with session["history_lock"]:
-                if session.get("running"):
-                    session["running"] = False
-                    _clear_inflight_turn(session)
-    # Sibling of the #102895 finalize-path fix above: an explicit /stop (or the WS-orphan reaper's
-    # interrupt-at-grace) must also reach a background memory/skill review, not just the foreground
-    # turn. The review fork is invisible to `should_interrupt`/`run_thread_alive` above (both gated
-    # on the FOREGROUND turn's session["running"]/_run_thread) — a user hitting Stop while only the
-    # post-turn review is still running (the common case: the main turn already finished) would see
-    # "stopped" while the review keeps calling the model. Fires unconditionally (both compute-host
-    # and in-process turns) since the review is always local to this process.
-    if (agent_for_review := session.get("agent")) is not None:
-        with contextlib.suppress(Exception):
-            from agent.background_review import cancel_background_review_for_live_turn
-            cancel_background_review_for_live_turn(
-                agent_for_review, message="session interrupted", tool_reason="session interrupted")
+            # Sibling of gateway/run_agent_cache.py::_interrupt_and_clear_session: a user-initiated stop of a
+            # live TUI/desktop turn is the same "loop is gone" event for plugins holding per-turn external
+            # resources. Observer-only; dispatch failures never break the interrupt.
+            # Every caller (session.interrupt RPC, orphan/idle reapers, lease takeover) is off-turn, so bind the
+            # SESSION's profile as _finalize_session does or an observer's get_hermes_home() names the launch
+            # profile (#125063). hydrate_secrets=False: observer-only, /stop must stay fast.
+            try:
+                from hermes_cli.plugins import invoke_hook as _invoke_hook
+                with _session_profile_runtime_scope(session, hydrate_secrets=False):
+                    _invoke_hook(
+                        "agent_loop_stopped", session_key=session.get("session_key", ""), platform="tui",
+                        reason="user_stop", invalidation_reason="session_interrupt",
+                    )
+            except Exception:
+                logger.debug("agent_loop_stopped hook dispatch failed", exc_info=True)
+        if not use_compute_host:
+            if should_interrupt:
+                from agent.interrupt_compat import request_hard_interrupt
+                request_hard_interrupt(session.get("agent"))
+            if not run_thread_alive and not compressing:
+                with session["history_lock"]:
+                    if session.get("running"):
+                        session["running"] = False
+                        _clear_inflight_turn(session)
+        # Stop also owns the background review, even after the foreground turn returned.
+        if (agent_for_review := session.get("agent")) is not None:
+            with contextlib.suppress(Exception):
+                from agent.background_review import cancel_background_review_for_live_turn
+                cancel_background_review_for_live_turn(
+                    agent_for_review, message="session interrupted", tool_reason="session interrupted")
+    finally:
+        _dispose_local_queue(session, cancelled, "cancelled")
     _clear_pending(sid)
     with contextlib.suppress(Exception):
         # Deny-resolve every pending approval so no agent thread blocks on the queue. The
@@ -894,10 +895,26 @@ def _session_control_info(session):
     """Receipt projection shared by cold and warm resume; no replay or transcript inference."""
     from tui_gateway.owner_forward import blocking_unknown, pending_submissions
     from tui_gateway.local_queue_receipts import snapshot
+    import sqlite3
     info = {"pending_submissions": pending_submissions(session), "blocking_unknown": blocking_unknown(session)}
-    with _session_db(session) as db:
-        if db is not None:
-            info["queue_receipts"] = snapshot(db, session["session_key"], _sessions)
+    lineage = {session['session_key']}
+    try:
+        with _session_db(session) as db:
+            if db is not None:
+                lineage.update(db.get_compression_lineage(session['session_key']) or [])
+                info["queue_receipts"] = snapshot(db, session["session_key"], _sessions)
+    except (OSError, RuntimeError, sqlite3.Error):
+        logger.warning('Local queue receipt projection unavailable', exc_info=True)
+    with session['history_lock']:
+        unresolved = [{**envelope['_queue_receipt'], 'status': 'unknown', 'outcome': None}
+                      for envelope in session.get('_unsettled_local_queue', {}).values()
+                      if envelope['_queue_receipt']['session_id'] in lineage]
+    if unresolved:
+        pending = {row['input_id']: row for row in info.get('queue_receipts', [])}
+        pending.update({row['input_id']: {k: v for k, v in row.items()
+                       if k not in ('runtime_id', 'writer_pid', 'writer_start_time')} for row in unresolved
+                       if pending.get(row['input_id'], {}).get('status') not in {'terminal', 'unknown'}})
+        info['queue_receipts'] = list(pending.values())
     return info
 
 
