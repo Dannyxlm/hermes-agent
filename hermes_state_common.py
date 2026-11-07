@@ -970,6 +970,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_tool_names
 -- a small candidate set before compression-chain and preview hydration.
 CREATE INDEX IF NOT EXISTS idx_sessions_effective_activity
     ON sessions(COALESCE(last_activity_at, started_at) DESC, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sessions_listing_scope
+    ON sessions(archived, source, hidden, message_count, parent_session_id, model_config,
+                session_key, created_source, cwd, id, started_at, last_activity_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_listing_pinned
+    ON sessions(pinned, started_at DESC) WHERE pinned = 1;
 -- CLI/TUI listings match gateway rows stored as source='local' by created_source,
 -- before LIMIT. created_source is reconciled onto legacy DBs, so this index lives
 -- here rather than in SCHEMA_SQL. A source-only index would walk every local row

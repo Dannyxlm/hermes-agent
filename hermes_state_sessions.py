@@ -1264,6 +1264,7 @@ class SessionSessionsMixin(SessionActivityMixin):
         include_pinned: bool = False, session_key: str | None = None, include_hidden: bool = False,
         include_subagents: bool = False, root_ids: Sequence[str] | None = None,
         local_created_sources: Sequence[str] | None = None, exclude_threads: bool = False,
+        selection_only: bool = False,
     ) -> list[dict[str, Any]]:
         """List sessions with preview and ``last_active`` in one query. ``order_by_last_active`` sorts
         by the chain TIP via a recursive CTE (the only path honouring ``id_query`` / ``search_query``);
@@ -1307,6 +1308,11 @@ class SessionSessionsMixin(SessionActivityMixin):
             "" if compact_rows else "LEFT JOIN system_prompts sp ON sp.hash = s.system_prompt_hash"
         )
         from_sessions = f"FROM sessions s\n                {prompt_join}"
+        if selection_only:
+            from hermes_state_session_list import SELECTION_COLUMNS
+            select_head = f"SELECT {SELECTION_COLUMNS}, '' AS _preview_raw, "
+            prompt_join = ''
+            from_sessions = 'FROM sessions s'
         if order_by_last_active:
             # The CTE walks compression-continuation edges forward from the admitted
             # rows; MAX over the chain gives effective_last_active in SQL. Do NOT
@@ -1332,9 +1338,11 @@ class SessionSessionsMixin(SessionActivityMixin):
                 "WHERE EXISTS (SELECT 1 FROM sessions _seed_c WHERE _seed_c.parent_session_id = s.id)")
             outer_where, id_params = self._chain_search_where("", id_needle, search_needle)
             query = f"""
-                WITH RECURSIVE admitted(id) AS MATERIALIZED (SELECT s.id FROM sessions s {where_sql}),
+                WITH RECURSIVE admitted(id, started_at, last_activity_at) AS MATERIALIZED (
+                    SELECT s.id, s.started_at, s.last_activity_at FROM sessions s {where_sql}
+                ),
                 chain(root_id, cur_id) AS (
-                    SELECT s.id, s.id FROM admitted roots JOIN sessions s ON s.id = roots.id {seed_where}
+                    SELECT s.id, s.id FROM admitted s {seed_where}
                     UNION ALL
                     SELECT c.root_id, child.id
                     FROM chain c
@@ -1357,7 +1365,7 @@ class SessionSessionsMixin(SessionActivityMixin):
                     SELECT s.id AS page_id,
                         COALESCE(cm.effective_last_active, {_sql_session_last_active("s")},
                                  {_sql_in_window("s.started_at")}) AS effective_last_active
-                    FROM admitted roots JOIN sessions s ON s.id = roots.id
+                    FROM admitted s
                     LEFT JOIN chain_max cm ON cm.root_id = s.id
                     {outer_where}
                     ORDER BY effective_last_active DESC, s.started_at DESC, s.id DESC
@@ -1417,7 +1425,7 @@ class SessionSessionsMixin(SessionActivityMixin):
                     sessions.append(s)
         if project_compression_tips and not include_children:
             from hermes_state_session_list import project_compression_tips
-            sessions = project_compression_tips(self, sessions, compact_rows)
+            sessions = project_compression_tips(self, sessions, compact_rows, selection_only=selection_only)
         if heads:
             from hermes_state_local import annotate_local_lineages
             sessions = annotate_local_lineages(sessions, heads)
