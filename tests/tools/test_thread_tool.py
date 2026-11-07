@@ -63,6 +63,27 @@ def home(tmp_path, monkeypatch):
     return home
 
 
+@pytest.mark.parametrize('reason', ['Gateway disconnected; turn outcome is unknown. Do not resend.',
+                                     'Gateway disconnected before the request was sent; nothing was sent.'])
+def test_owner_transport_error_keeps_its_delivery_uncertainty(home, monkeypatch, reason):
+    import asyncio
+    from hermes_cli import gateway_client, gateway_runtime
+    from tools import thread_tool as tool
+
+    @contextlib.asynccontextmanager
+    async def disconnected(**kwargs):
+        raise gateway_client.GatewayClientError(reason)
+        yield
+
+    monkeypatch.setattr(gateway_runtime, 'discover_gateway_endpoint',
+                        lambda *a, **k: SimpleNamespace(state='ready', endpoint=object()))
+    monkeypatch.setattr(gateway_client, 'connect_gateway', disconnected)
+    with pytest.raises(tool.ThreadError) as error:
+        asyncio.run(tool._with_owner(home, DANNY, lambda client: None))
+    assert error.value.code == 'owner_unavailable'
+    assert reason in str(error.value)
+
+
 def _db(home):
     return SessionDB(home / "state.db")
 

@@ -709,9 +709,42 @@ def _process_completion_display_metadata(batch, registry) -> dict:
                         for event in events]}
 
 
+def _notif_prepare_completion_batch(session, notifications, registry, deferred):
+    from tools.process_registry_notifications import ProcessNotificationBatch
+    from tools.async_delegation import claim_event_delivery, release_event_delivery
+    from tools.process_registry_delivery import legacy_notification_handoff, legacy_notification_submitted
+    claimed, index = [], 0
+    try:
+        for index, (event, event_text) in enumerate(notifications):
+            if (claim := claim_event_delivery(event, 'tui-completion-batch')) is not None:
+                claimed.append((event, event_text, claim))
+                if not legacy_notification_handoff(event):
+                    claimed.pop()
+                    release_event_delivery(event, claim)
+        batch = ProcessNotificationBatch(tuple((event, text) for event, text, _claim in claimed))
+        text = batch.render(registry)
+        metadata = _process_completion_display_metadata(batch, registry) if text is not None else None
+        return batch, text, metadata, claimed
+    except Exception:
+        logger.warning('Completion batch preparation failed', exc_info=True)
+        _notif_release_turn(session)
+        hand_back = deferred.append if deferred is not None else registry.completion_queue.put
+        for event, _text, claim in claimed:
+            try:
+                legacy_notification_submitted(event, False)
+            except (OSError, ValueError, RuntimeError):
+                logger.warning('Unsubmitted process notice refund remains unresolved', exc_info=True)
+            _notif_defer_event(event, claim, hand_back)
+        prepared = {id(event) for event, _text, _claim in claimed}
+        for event, _text in notifications[index:]:
+            if id(event) not in prepared:
+                hand_back(event)
+        return None
+
+
 def _notif_dispatch_completions(sid, session, notifications, registry, deferred):
-    from tools.process_registry_notifications import PROCESS_COMPLETE_DISPLAY_KIND, ProcessNotificationBatch
-    from tools.async_delegation import claim_event_delivery, complete_event_delivery, release_event_delivery
+    from tools.process_registry_notifications import PROCESS_COMPLETE_DISPLAY_KIND
+    from tools.async_delegation import complete_event_delivery, release_event_delivery
 
     if not notifications:
         return
@@ -721,21 +754,10 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
         if deferred is None:
             time.sleep(0.25)
         return
-    claimed: list = []
-    try:
-        for event, event_text in notifications:
-            if (claim := claim_event_delivery(event, "tui-completion-batch")) is not None:
-                from tools.process_registry_delivery import legacy_notification_handoff
-                if legacy_notification_handoff(event):
-                    claimed.append((event, event_text, claim))
-        batch = ProcessNotificationBatch(tuple((event, event_text) for event, event_text, _claim in claimed))
-        text = batch.render(registry)
-    except Exception as exc:
-        _notif_log_failure("completion batch preparation failed", exc)
-        _notif_release_turn(session)
-        for event, _text, claim in claimed:
-            release_event_delivery(event, claim)
+    prepared = _notif_prepare_completion_batch(session, notifications, registry, deferred)
+    if prepared is None:
         return
+    _batch, text, metadata, claimed = prepared
     if text is None:
         _notif_release_turn(session)
     accepted = False
@@ -744,7 +766,7 @@ def _notif_dispatch_completions(sid, session, notifications, registry, deferred)
             accepted = _notif_submit(f"__notif__{int(time.time() * 1000)}", sid, session, text,
                                      "completion batch dispatch failed", display_kind=PROCESS_COMPLETE_DISPLAY_KIND,
                                      report_ownership_refusal=False,
-                                     display_metadata=_process_completion_display_metadata(batch, registry))
+                                     display_metadata=metadata)
             if not accepted:
                 for event, _text, claim in claimed:
                     from tools.process_registry_delivery import legacy_notification_submitted

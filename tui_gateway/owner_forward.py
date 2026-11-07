@@ -137,7 +137,7 @@ class _Relay:
 
     async def _run(self) -> None:
         async with connect_owner(self.home, self.endpoint) as client:
-            attached = await client.rpc("session.resume", session_id=self.key)
+            attached = await client.rpc("session.resume", session_id=self.key, omit_messages=True)
             target = str(attached.get("session_id") or self.key)
             receipt = await self._submit(client, target)
             if receipt.get("voice_stopped") is True:
@@ -240,7 +240,7 @@ def blocking_unknown(session: dict, refusal=None) -> list[dict]:
     """
     from tui_gateway import server
     from tui_gateway.contracts.common import BlockingUnknownAdmission
-    from hermes_cli.gateway_client import GatewayRPCError
+    from hermes_cli.gateway_client import GatewayClientError
     from hermes_state_runtime import RuntimeStoreError
     from pydantic import ValidationError
     from websockets.exceptions import WebSocketException
@@ -279,7 +279,7 @@ def blocking_unknown(session: dict, refusal=None) -> list[dict]:
             return await refresh()
     try:
         return asyncio.run(refresh_bounded())
-    except (GatewayRPCError, RuntimeStoreError, ValidationError, OSError, RuntimeError,
+    except (GatewayClientError, RuntimeStoreError, ValidationError, OSError, RuntimeError,
             TimeoutError, WebSocketException):
         logger.debug('Owner could not verify unknown admission for %s', target, exc_info=True)
         return []

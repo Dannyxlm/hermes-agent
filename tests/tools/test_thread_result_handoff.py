@@ -13,6 +13,30 @@ from tests.tools.test_thread_tool import _db, admit, call, settle, thread
 pytest_plugins = ['tests.tools.test_thread_tool']
 
 
+def test_same_epoch_unknown_is_uncertain_not_proof_of_restart(home):
+    from types import SimpleNamespace
+    from gateway.session_settlement_recovery import _mark_unknown
+    from gateway.thread_wake import render
+    from hermes_state_runtime import begin_runtime_epoch, get_session_admission
+
+    with _db(home) as db:
+        epoch = begin_runtime_epoch(db, instance_id='still-alive')
+        thread(db, 'child')
+        admit(db, 'child', 'uncertain', 'started')
+        db._write_sql('UPDATE session_admissions SET owner_epoch=?', (epoch,))
+        row = get_session_admission(db, admission_id='uncertain')
+        assert row is not None
+        assert _mark_unknown(SimpleNamespace(db=db, epoch=epoch, sessions={}), row) == 'unknown'
+        current = get_session_admission(db, admission_id='uncertain')
+        assert current is not None and current['owner_epoch'] == epoch
+    result = call(action='wait', thread_id='child', admission_id='uncertain')['threads'][0]
+    text = render([{**result, 'profile': 'default'}], [], 'default')
+    for copy in (text, result['note']):
+        assert 'restart' not in copy.lower()
+        assert 'uncertain' in copy.lower()
+        assert 'not rerun automatically' in copy.lower()
+
+
 def test_tail_read_does_not_acknowledge_unseen_admission_results(home):
     from tools import thread_state as ts
 

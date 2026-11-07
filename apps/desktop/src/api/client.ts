@@ -271,7 +271,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
 
     // The implicit route of a named launch profile and its explicit name are
     // one owner. Store retry identities under that stable name across redials.
-    return profile === previous ? params : { ...params, profile }
+    return profile === previous && sid === params.session_id ? params : { ...params, session_id: sid, profile }
   }
 
   private normalizeCanonicalEvent(event: GatewayEvent): boolean {

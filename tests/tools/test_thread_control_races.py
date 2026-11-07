@@ -222,3 +222,139 @@ def test_owner_never_coerces_force_into_permission_to_stop_a_human(owner_env, pa
     with pytest.raises(GatewayRPCError, match='invalid_params'):
         asyncio.run(request())
     assert not agent.interrupted
+
+
+@pytest.mark.parametrize('thread_control', [False, True])
+def test_stop_keeps_owner_loop_live_during_compression_commit(owner_env, thread_control):
+    import threading
+    from agent.conversation_compression import CompressionCommitFence
+    from agent.interrupt_control import _fence_cancel_before_commit
+
+    env = owner_env
+    add_thread(env)
+    row, _ = admit(env, 'thread-first')
+    live = env.authority.sessions['child']
+    fence = CompressionCommitFence()
+    entered, publish, published = threading.Event(), threading.Event(), threading.Event()
+    outcome = []
+
+    class Agent(TurnAgent):
+        def interrupt(self, *args, **kwargs):
+            entered.set()
+            _fence_cancel_before_commit(fence, when_in_flight=True, failure_log='test')
+            super().interrupt()
+
+    agent = Agent()
+    env.authority.adopt_agent('child', row['generation'], agent)
+
+    def commit():
+        assert fence.begin_commit()
+        published.set()
+        try:
+            assert publish.wait(5)
+            got = live.event_stream.lock.acquire(timeout=3)
+            outcome.append(got)
+            if got:
+                live.event_stream.lock.release()
+        finally:
+            fence.finish_commit()
+
+    worker = threading.Thread(target=commit, daemon=True)
+    worker.start()
+    assert published.wait(5)
+
+    async def scenario():
+        params = dict(session_id='child', execution_generation=row['generation'])
+        if thread_control:
+            params['thread_control'] = dict(admission_id=row['admission_id'], launch_id='thread:child',
+                                            launcher_profile='default', launcher_session_id='parent', force=False)
+        stop = asyncio.create_task(env.rpc('session.interrupt', **params))
+        # A watchdog releases the commit if a broken Stop parks the owner loop.
+        watchdog = threading.Timer(3, publish.set)
+        watchdog.start()
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            loop_progressed = not publish.is_set()
+            publish.set()
+            await asyncio.wait_for(stop, 5)
+            assert loop_progressed, 'Stop blocked the owner event loop'
+        finally:
+            publish.set()
+            watchdog.cancel()
+            await asyncio.to_thread(worker.join, 5)
+
+    asyncio.run(scenario())
+    assert outcome == [True], 'Stop held the stream lock across compression cancellation'
+    assert agent.interrupted
+
+
+@pytest.mark.parametrize('cancel_caller', [False, True])
+@pytest.mark.parametrize('raises', [False, True])
+def test_delayed_stop_excludes_successor_claim_and_agent_adoption(owner_env, cancel_caller, raises):
+    import threading
+    env = owner_env
+    add_thread(env)
+    row, _ = admit(env, 'thread-first')
+    entered, release, adopted = threading.Event(), threading.Event(), threading.Event()
+
+    class Agent(TurnAgent):
+        def clear_interrupt(self):
+            self.interrupted = False
+
+        def interrupt(self, *args, **kwargs):
+            entered.set()
+            assert release.wait(5)
+            super().interrupt()
+            if raises:
+                raise ValueError('interrupt failed')
+
+    agent = Agent()
+    env.authority.adopt_agent('child', row['generation'], agent)
+
+    async def scenario():
+        stop = asyncio.create_task(env.authority.interrupt(env.connection.actor, SessionRef(str(env.home), 'child'),
+                                                          row['generation']))
+        watchdog = threading.Timer(3, release.set)
+        watchdog.start()
+        successor = None
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            assert not release.is_set(), 'Stop blocked the owner event loop'
+            finish(env, row)
+            # Exercise adoption directly as well as the normal FIFO claim gate.
+            def adopt_successor():
+                env.authority.adopt_agent('child', row['generation'] + 1, agent)
+                adopted.set()
+            successor = asyncio.create_task(asyncio.to_thread(adopt_successor))
+            if cancel_caller:
+                stop.cancel()
+            await asyncio.sleep(0)
+            assert env.authority.sessions['child'].claim_gate.locked()
+            assert not adopted.is_set()
+        finally:
+            release.set()
+            watchdog.cancel()
+            result = await asyncio.gather(stop, return_exceptions=True)
+            if successor is not None:
+                await asyncio.wait_for(successor, 5)
+        if not cancel_caller and raises:
+            assert isinstance(result[0], ValueError)
+        assert not env.authority.sessions['child'].claim_gate.locked()
+        assert not agent.interrupted, 'late Stop reached the cached successor agent'
+
+    asyncio.run(scenario())
+
+
+def test_stop_request_does_not_acknowledge_a_completed_result(owner_env):
+    from tools import thread_state as ts
+    env = owner_env
+    add_thread(env)
+    row, agent = admit(env, 'thread-first')
+    assert call(action='stop', thread_id='child')['status'] == 'stopping'
+    assert agent.interrupted
+    finish(env, row)
+    items, _ = ts.wake_state(env.home, 'default', ['parent'])
+    assert row['admission_id'] in {item['admission_id'] for item in items}
+    read = call(action='read', thread_id='child', admission_id=row['admission_id'])
+    assert read['result']['status'] == 'done'
+    assert not ts.wake_state(env.home, 'default', ['parent'])[0]

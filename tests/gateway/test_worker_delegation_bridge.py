@@ -21,7 +21,8 @@ from gateway.session_worker import _claim
 from tools.async_delegation import _initialize_schema
 
 
-def test_bridge_publishes_committed_completion_and_rejects_another_principal(tmp_path, monkeypatch):
+@pytest.mark.parametrize('finished_children', [None, 1, 2])
+def test_bridge_publishes_committed_completion_and_rejects_another_principal(tmp_path, monkeypatch, finished_children):
     from gateway.session_worker_delegation import worker_delegation_request
     from tools.process_registry import process_registry
     target = queue.Queue()
@@ -43,24 +44,47 @@ def test_bridge_publishes_committed_completion_and_rejects_another_principal(tmp
         claim = _claim(connection, ref, scope)
         register_worker_execution(db, epoch=epoch, execution_id='worker', session_id='parent', generation=0,
                                   kind='compute', adoption_secret=claim)
-        payload = dict(delegation_id='deleg_owned', task={'goal': 'inert'}, dispatched_at=time.time(),
+        task = {'goal': 'inert'}
+        if finished_children is not None:
+            task.update(is_batch=True, goals=['first', 'second'], task_indexes=[3, 7])
+        payload = dict(delegation_id='deleg_owned', task=task, dispatched_at=time.time(),
                        parent_session_id='parent', session_key='', origin_ui_session_id='', origin_session_id='')
         params = scope | dict(epoch=epoch, sequence=1, operation='delegation.dispatch', payload=payload)
         asyncio.run(worker_delegation_request(connection, ref, params))
         event = dict(type='async_delegation', delegation_id='deleg_owned', parent_session_id='parent',
             session_key='', origin_ui_session_id='', origin_session_id='', status='completed',
             completed_at=time.time(), summary='durable')
-        params = scope | dict(epoch=epoch, sequence=2, operation='delegation.complete',
-                              payload={'event': event, 'result': {'summary': 'durable'}})
+        result = {'summary': 'durable'}
+        sequence = 2
+        expected = []
+        if finished_children is not None:
+            event.update(status='stalled', summary=None, error='synthetic forced settlement')
+            result = {'status': 'stalled'}
+            # The terminal payload predates these commits and contains no child facts.
+            for index in [3, 7][:finished_children]:
+                child = {'task_index': index, 'status': 'completed', 'summary': f'durable child {index}'}
+                child_params = scope | dict(epoch=epoch, sequence=sequence, operation='delegation.child',
+                                           payload={'delegation_id': 'deleg_owned', 'entry': child})
+                asyncio.run(worker_delegation_request(connection, ref, child_params))
+                expected.append(child)
+                sequence += 1
+            if finished_children == 1:
+                expected.append({'task_index': 7, 'status': 'unknown', 'summary': None, 'error': event['error']})
+        params = scope | dict(epoch=epoch, sequence=sequence, operation='delegation.complete',
+                              payload={'event': event, 'result': result})
+        original_request = json.loads(json.dumps(params))
+        published = event | ({'results': expected} if finished_children is not None else {})
         response = asyncio.run(worker_delegation_request(connection, ref, params))
         assert response == {'value': None}
-        assert target.get_nowait() == event | {'restored': True}
+        assert params == original_request, 'completion enrichment must not change the retry receipt digest'
+        assert target.get_nowait() == published | {'restored': True}
         assert asyncio.run(worker_delegation_request(connection, ref, params)) == response
-        assert target.get_nowait() == event | {'restored': True}
+        assert target.get_nowait() == published | {'restored': True}
         with db._read_ctx() as conn:
-            row = conn.execute('SELECT event_json FROM async_delegations').fetchone()
-            assert json.loads(row[0]) == event
-            assert conn.execute('SELECT COUNT(*) FROM worker_receipts').fetchone()[0] == 2
+            row = conn.execute('SELECT event_json,result_json FROM async_delegations').fetchone()
+            assert json.loads(row[0]) == published
+            assert json.loads(row[1]) == result | ({'results': expected} if finished_children is not None else {})
+            assert conn.execute('SELECT COUNT(*) FROM worker_receipts').fetchone()[0] == sequence
         actor.subject = 'mallory'
         with pytest.raises(RuntimeStoreError, match='permission_denied'):
             asyncio.run(worker_delegation_request(connection, ref, params))

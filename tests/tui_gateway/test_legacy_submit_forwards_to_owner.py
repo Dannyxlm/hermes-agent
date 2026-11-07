@@ -24,6 +24,92 @@ from tui_gateway import server
 from tests.waiting import wait_until
 
 
+@pytest.mark.parametrize('size,pending_size', [(20, 0), (700_000, 0), (20, 1_100_000)])
+def test_forwarded_followup_uses_bounded_metadata_attach_for_large_transcripts(monkeypatch, tmp_path, size, pending_size):
+    import json
+    from gateway.session_controls import AuthorityConnection
+    from hermes_cli.gateway_client import GatewayClient
+    from websockets.asyncio.client import connect
+    from websockets.asyncio.server import serve
+    from websockets.exceptions import ConnectionClosed
+    from tui_gateway import owner_forward
+
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key, turns, _ = _legacy(monkeypatch, db)
+        db.create_session(key, 'test')
+        db.append_message(key, role='user', content='x' * size)
+        db.append_message(key, role='assistant', content='y' * size)
+        epoch = begin_runtime_epoch(db, instance_id='gateway')
+        original = admit_session_input(db, epoch=epoch, principal_id='bot', session_id=key,
+                                       request_id='existing', payload={'text': 'existing turn'})
+        claim_session_input(db, epoch=epoch, session_id=key)
+        if pending_size:
+            admit_session_input(db, epoch=epoch, principal_id='bot', session_id=key,
+                                request_id='large-pending', payload={'text': 'z' * pending_size})
+        authority = _owner(monkeypatch, db, key, epoch)
+        seen, answers = [], []
+
+        @contextlib.asynccontextmanager
+        async def wire(home, endpoint):
+            loop, pending = asyncio.get_running_loop(), set()
+
+            async def handler(ws):
+                class Socket:
+                    def write(self, frame):
+                        def schedule():
+                            task = asyncio.create_task(ws.send(json.dumps(frame)))
+                            pending.add(task)
+                            task.add_done_callback(pending.discard)
+                        loop.call_soon_threadsafe(schedule)
+                        return True
+
+                    def close(self):
+                        pass
+                connection = AuthorityConnection(authority, Socket(), {'user_id': 'desktop'})
+                try:
+                    async for raw in ws:
+                        request = json.loads(raw)
+                        seen.append(request)
+                        answer = await connection.dispatch(request)
+                        answers.append((request['method'], answer.get('error')))
+                        await ws.send(json.dumps(answer))
+                except ConnectionClosed:
+                    pass
+                finally:
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+            async with serve(handler, '127.0.0.1', 0) as listener:
+                port = listener.sockets[0].getsockname()[1]
+                async with connect(f'ws://127.0.0.1:{port}', proxy=None, max_size=2**20) as ws:
+                    async with GatewayClient(ws) as client:
+                        yield client
+
+        monkeypatch.setattr(owner_forward, 'connect_owner', wire)
+        try:
+            reply = server.handle_request({'id': 'send', 'method': 'prompt.submit',
+                'params': {'session_id': sid, 'text': 'synthetic followup'}})
+            rows = list_session_admissions(db, session_id=key)
+            if pending_size:
+                assert reply['error']['data']['reason'] == 'SESSION_OWNER_BUSY'
+                assert [frame['method'] for frame in seen] == ['session.resume']
+                assert len(rows) == 2 and not turns
+                return
+            assert 'error' not in reply, (reply, answers)
+            assert len(rows) == 2 and not turns
+            assert next(row for row in rows if row['admission_id'] == original['admission_id'])['status'] == 'started'
+            mine = next(row for row in rows if row['admission_id'] == reply['result']['admission_id'])
+            assert mine['status'] == 'queued' and mine['payload']['text'] == 'synthetic followup'
+            assert [frame['method'] for frame in seen] == ['session.resume', 'prompt.submit']
+            assert seen[0]['params'].get('omit_messages') is True
+        finally:
+            server._sessions[sid]['_finalized'] = True
+            for worker in threading.enumerate():
+                if worker.name == f'owner-forward-{key[:24]}':
+                    worker.join(5)
+                    assert not worker.is_alive()
+            server._sessions.pop(sid, None)
+
+
 @pytest.mark.parametrize("action", ["cancel", "stop", "discard", "foreign", "claim_race"])
 def test_forwarded_controls_reach_only_the_exact_owner_admission(monkeypatch, tmp_path, action):
     from gateway.session_contract import SessionRef

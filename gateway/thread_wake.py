@@ -40,11 +40,20 @@ from tools import thread_state as ts
 logger = logging.getLogger(__name__)
 
 SWEEP_S = 10.0
+HINT_MIN_INTERVAL_S = 0.25
+# Process-local, target-less hint for the single owner-lifetime worker. It carries no
+# profile/session authority: every pass rereads the profiles the owner still serves.
+_changed = threading.Event()
 EXCERPT = 600
 BACKOFF_S, BACKOFF_MAX_S = 60.0, 3600.0
 SUBMISSION_PREFIX = "thread_update:"  # not ts.REQUEST_PREFIX: the lead's own ledger isn't a thread's
 RESENT = "\n\n(Sent again: the turn that first carried this update was cut off or cancelled.)"
 MAX_RESENDS = 3
+
+
+def hint() -> None:
+    """Request an early pass; safe under a stream lock (no reads, RPC or callbacks)."""
+    _changed.set()
 
 
 def render(items: list[dict], still: list[str], profile: str) -> str:
@@ -53,8 +62,8 @@ def render(items: list[dict], still: list[str], profile: str) -> str:
         handle = item["thread_id"] if item["profile"] == profile else f"{item['profile']}:{item['thread_id']}"
         name = f"{item.get('title') or ts.MARK + ' (untitled)'} ({handle})"
         if item["status"] == "paused":
-            lines.append(f"\n{name}: paused. A gateway restart cut off the turn you sent; nothing reruns it. "
-                         "thread action=stop clears it, then send to carry on.")
+            lines.append(f"\n{name}: paused. The turn's outcome is uncertain; it is not rerun automatically. "
+                         "Inspect its exact result before deciding whether to stop or send more work.")
             continue
         lines.append(f"\n{name} finished: {item['status']}.")
         if item.get("error"):
@@ -375,11 +384,22 @@ class Sweeper:
         return ok
 
     def run(self, stop_event: threading.Event, interval: float = SWEEP_S) -> None:
-        while not stop_event.wait(interval):
+        next_periodic = time.monotonic() + interval
+        not_before = 0.0
+        while not stop_event.is_set():
+            _changed.wait(max(0.0, next_periodic - time.monotonic()))
+            # Burst hints coalesce into one pass, including hints arriving during a scan.
+            # Waiting on stop here keeps shutdown prompt even during the rate limit.
+            if stop_event.wait(max(0.0, not_before - time.monotonic())):
+                return
+            _changed.clear()
             try:
                 self.sweep()
             except Exception:  # health: allow BLE001 -- the owner's only thread-update loop must outlive a bad read
                 logger.warning("thread update sweep failed", exc_info=True)
+            now = time.monotonic()
+            not_before = now + HINT_MIN_INTERVAL_S
+            next_periodic = now + interval
 
 
 def start(stop_event: threading.Event, homes) -> threading.Thread:
@@ -401,5 +421,6 @@ def start_for(runner):
 
     def finish() -> None:
         done.set()
+        hint()
         worker.join(timeout=30)
     return finish

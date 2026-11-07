@@ -21,6 +21,17 @@ class ProcessTerminationMixin:
     ``_detached_host_fate`` and ``_daemon_term_grace_seconds``. See ProcessRegistry."""
 
     @staticmethod
+    def _stop_scope(session: "ProcessSession") -> bool:
+        """Stop the session's systemd scope: True when it has none or the stop worked. Every kill
+        path stops the scope through here, so a failed stop always leaves it marked for retry."""
+        from tools.process_registry import _stop_systemd_unit
+        if not session.systemd_unit:
+            return True
+        stopped = _stop_systemd_unit(session.systemd_unit)
+        session._scope_stop_pending = not stopped
+        return stopped
+
+    @staticmethod
     def _proc_alive(proc) -> bool:
         """True if a psutil.Process is running and not a zombie (already dead, just unreaped)."""
         try:

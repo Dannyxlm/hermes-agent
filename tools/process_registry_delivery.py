@@ -183,12 +183,17 @@ def legacy_notification_submitted(event, accepted):
 def mark_completion_consumed(registry, session):
     registry._completion_consumed.add(session.id)
     session._notification_consumed = True
-    if session._result_persistence_error:
-        return  # The live wait/log succeeded; there is no durable receipt to acknowledge.
-    event = {'type': 'completion', 'session_id': session.id, 'started_at': session.started_at,
-             'parent_session_id': session.parent_session_id, 'session_key': session.session_key}
+    if not session.notify_on_complete:
+        return
+    # A waiter can observe exit before the producer writes its first result. Publish its
+    # consumption at the same file-lock boundary now; a stale producer snapshot then merges
+    # that terminal fact rather than resurrecting a pending notice after restart.
     try:
-        settle_notification(event, 'terminal', reason='consumed', expected_status='pending')
+        event = {'type': 'completion', 'session_id': session.id, 'started_at': session.started_at,
+                 'parent_session_id': session.parent_session_id, 'session_key': session.session_key}
+        if not settle_notification(event, 'terminal', reason='consumed', expected_status='pending'):
+            from tools.process_registry_results import completed_result_record, save_completed_record
+            save_completed_record(completed_result_record(session))
     except (OSError, ValueError, RuntimeError):
         # The output read succeeded. Keep volatile consumption, but do not claim that
         # the receipt was settled; another successful observation can persist it later.

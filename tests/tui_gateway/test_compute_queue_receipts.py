@@ -3,6 +3,7 @@
 The supervisor's event dispatcher is real; submit is inert and never starts, signals or
 reconciles a worker process. Crash frames test uncertainty, not live process recovery.
 """
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -59,6 +60,13 @@ def _receipt(env, input_id):
     return next(r for r in snapshot(env.db, env.key, server._sessions) if r['input_id'] == input_id)
 
 
+def _wait_for_terminal_callback(env):
+    for worker in threading.enumerate():
+        if worker.name == f'compute-host-complete-{env.sid}':
+            worker.join(timeout=10)
+            assert not worker.is_alive(), 'terminal receipt/projection callback did not finish'
+
+
 @pytest.mark.parametrize('done,status,outcome', [
     ({'type': 'turn.end'}, 'terminal', 'completed'),
     ({'type': 'turn.end', 'interrupted': True}, 'terminal', 'interrupted'),
@@ -74,6 +82,7 @@ def test_correlated_completion_commits_the_exact_receipt(compute_queue, done, st
     assert env.session['running'] and env.session['_compute_host_turn_id'] == frame['request_id']
     env.supervisor._handle_host_frame({**done, 'sid': env.sid, 'request_id': frame['request_id'],
                                        'session_info_emitted': True})
+    _wait_for_terminal_callback(env)
     receipt = _receipt(env, input_id)
     assert (receipt['status'], receipt['outcome']) == (status, outcome)
     assert not env.session['running'] and not env.session.get('_compute_host_turn_id')
@@ -89,17 +98,21 @@ def test_old_or_mismatched_completion_cannot_settle_the_replacement(compute_queu
     frame, complete = env.frames[0], env.callbacks[0]
     # Even calling the registered closure directly cannot bypass wire correlation.
     complete({'type': 'turn.end', 'request_id': 'not-this-turn', 'sid': env.sid})
+    _wait_for_terminal_callback(env)
     assert _receipt(env, first)['status'] == 'transferred'
     assert env.session['_compute_host_turn_id'] == frame['request_id']
     env.supervisor._handle_host_frame({'type': 'turn.end', 'sid': env.sid, 'request_id': frame['request_id']})
+    _wait_for_terminal_callback(env)
     second = _dispatch(env, 'C')
     replacement = env.frames[1]['request_id']
     assert replacement != frame['request_id']
     complete({'type': 'turn.error', 'reason': 'exception', 'sid': env.sid, 'request_id': frame['request_id']})
+    _wait_for_terminal_callback(env)
     assert _receipt(env, first)['outcome'] == 'completed'
     assert _receipt(env, second)['status'] == 'transferred'
     assert env.session['running'] and env.session['_compute_host_turn_id'] == replacement
     env.supervisor._handle_host_frame({'type': 'turn.end', 'sid': env.sid, 'request_id': replacement})
+    _wait_for_terminal_callback(env)
     assert _receipt(env, second)['outcome'] == 'completed'
     assert [f['text'] for f in env.frames] == ['B', 'C']
 
@@ -147,6 +160,8 @@ def test_uncertain_dispatch_is_visible_immediately_and_exact_late_completion_can
     accepted = server._handle_busy_submit('B', env.sid, env.session, 'B', None, queued=True)
     env.session['running'] = False
     assert server._drain_queued_prompt('drain', env.sid, env.session)
+    if already_completed:
+        _wait_for_terminal_callback(env)
     receipt = _receipt(env, accepted['result']['input_id'])
     assert (receipt['status'], receipt['outcome']) == (
         ('terminal', 'completed') if already_completed else ('unknown', None))
@@ -155,6 +170,7 @@ def test_uncertain_dispatch_is_visible_immediately_and_exact_late_completion_can
     assert not server._drain_queued_prompt('again', env.sid, env.session)
     env.supervisor._handle_host_frame({'type': 'turn.end', 'sid': env.sid,
                                      'request_id': env.frames[0]['request_id']})
+    _wait_for_terminal_callback(env)
     receipt = _receipt(env, accepted['result']['input_id'])
     assert (receipt['status'], receipt['outcome']) == ('terminal', 'completed')
     assert not env.session['running'] and len(env.frames) == 1
@@ -196,4 +212,5 @@ def test_child_turn_reports_the_real_runner_terminal_outcome(compute_queue, turn
     assert invoked == ['B']
     assert end['terminal_status'] == ('failed' if failed else 'settled')
     env.supervisor._handle_host_frame(end)
+    _wait_for_terminal_callback(env)
     assert _receipt(env, input_id)['outcome'] == ('failed' if failed else 'completed')

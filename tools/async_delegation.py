@@ -238,17 +238,32 @@ def _prune_durable_records() -> None:
                            _MAX_DURABLE_PENDING, pending_count - _MAX_DURABLE_PENDING)
 
 
+def merge_completion_children(event, result, task, partial):
+    """A terminal batch incorporates child facts committed before this transaction."""
+    if not task.get('is_batch') or not partial.get('partial'):
+        return
+    recorded = {r['task_index']: r for r in partial.get('results', []) if type(r.get('task_index')) is int}
+    recorded.update({r['task_index']: r for r in result.get('results', []) if type(r.get('task_index')) is int})
+    indexes = task.get('task_indexes') or list(range(len(task.get('goals') or [])))
+    children = [recorded.get(i) or {'task_index': i, 'status': 'unknown', 'summary': None,
+                                   'error': event.get('error')} for i in indexes]
+    event['results'] = result['results'] = children
+
+
 def _persist_completion(event: dict[str, Any], result: dict[str, Any]) -> None:
-    event, result = redact_completion_event(event), redact_child_result(result)
     if remote := worker_ledger():
-        return remote.complete(event, result)
+        return remote.complete(redact_completion_event(event), redact_child_result(result))
     now = time.time()
     with _DB_LOCK, _transaction() as conn:
+        row = conn.execute('SELECT task_json,result_json FROM async_delegations WHERE delegation_id=?',
+                           (event['delegation_id'],)).fetchone()
+        if row is not None:
+            merge_completion_children(event, result, json.loads(row[0] or '{}'), json.loads(row[1] or '{}'))
         conn.execute("""UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
                event_json=?, result_json=?, delivery_state='pending'
                WHERE delegation_id=?""",
             (event.get("status", "completed"), event.get("completed_at", now), now,
-             json.dumps(event), json.dumps(result), event["delegation_id"]))
+             json.dumps(redact_completion_event(event)), json.dumps(redact_child_result(result)), event["delegation_id"]))
 
 
 def record_unit_child(delegation_id: str, entry: dict[str, Any]) -> None:
@@ -1292,6 +1307,9 @@ def _stalled_error_text(event_record: dict[str, Any]) -> str:
     label = f'Background task "{goal[:120]}"' if goal else "The background task"
     quiet = float(event_record.get("_stall_quiet_seconds") or 0)
     silence = f" after {round(quiet / 60)} min of no progress" if quiet >= 60 else ""
+    if event_record.get('is_batch'):
+        return (f"{label} stopped responding{silence}. Any recorded child results are included; "
+                "only unfinished children have unknown outcomes. Reconcile them before retrying.")
     return (f"{label} stopped responding{silence} and was cancelled. Nothing else was affected; "
             "ask me to run it again if you still need it.")
 

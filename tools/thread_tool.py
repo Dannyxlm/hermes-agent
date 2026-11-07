@@ -266,7 +266,7 @@ def _run(coro):
 
 
 async def _with_owner(home: Path, subject: str, fn):
-    from hermes_cli.gateway_client import GatewayRPCError, connect_gateway
+    from hermes_cli.gateway_client import GatewayClientError, GatewayRPCError, connect_gateway
     from hermes_cli.gateway_runtime import discover_gateway_endpoint
     found = await asyncio.to_thread(discover_gateway_endpoint, home, timeout=5)
     if found.state != "ready" or found.endpoint is None:
@@ -278,6 +278,8 @@ async def _with_owner(home: Path, subject: str, fn):
             return await fn(client)
     except GatewayRPCError as exc:
         raise ThreadError("owner_refused", f"The gateway refused the request: {exc}") from exc
+    except GatewayClientError as exc:
+        raise ThreadError("owner_unavailable", str(exc)) from exc
 
 
 async def _attach(client, thread: Thread) -> tuple[dict, Thread]:
@@ -740,8 +742,8 @@ def _report(caller: Caller, thread: Thread, admission: dict | None, cap: int) ->
             if result.get("usage"):
                 out["usage"] = result["usage"]
         elif status == "paused":
-            out["note"] = ("A gateway restart cut this turn off, and the thread's queue waits on it. stop clears it "
-                           "(it doesn't rerun); then send to carry on.")
+            out["note"] = ("This turn's outcome is uncertain, and the thread's queue waits on it. It is not rerun "
+                           "automatically. Inspect its exact result before deciding whether to stop or send more work.")
     return out
 
 

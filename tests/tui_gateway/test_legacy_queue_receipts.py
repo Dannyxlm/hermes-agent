@@ -10,6 +10,30 @@ from tests.tui_gateway.test_queued_prompt_persistence import _busy, _desktop_ses
 pytest_plugins = ['tests.tui_gateway.test_auto_continue']
 
 
+def test_compressed_queue_merge_retains_original_receipt_identity(monkeypatch, tmp_path):
+    from tui_gateway.local_queue_receipts import snapshot
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key = _desktop_session(monkeypatch, db)
+        session = server._sessions[sid]
+        try:
+            _busy(session)
+            first = server._handle_busy_submit('B', sid, session, 'B', None, queued=True)['result']['input_id']
+            server._ensure_session_db_row(session)
+            tip = key + '-cont'
+            db.create_session(tip, 'desktop', parent_session_id=key)
+            db.end_session(key, end_reason='compression')
+            session['session_key'] = tip
+            second = server._handle_busy_submit('C', sid, session, 'C', None, queued=True)['result']['input_id']
+            assert first == second
+            rows = [r for r in snapshot(db, tip, server._sessions) if r['input_id'] == first]
+            assert len(rows) == 1
+            assert rows[0]['session_id'] == key
+            server._dispose_local_queue(session, [session['queued_prompt']], 'cancelled')
+            assert snapshot(db, tip, {})[0]['outcome'] == 'cancelled'
+        finally:
+            server._sessions.pop(sid, None)
+
+
 def test_a_dispatched_inline_queue_commits_its_terminal_receipt_with_the_real_turn(
         monkeypatch, tmp_path, turn_env, marker_home, emits):
     db = SessionDB(db_path=tmp_path / 'state.db')
@@ -32,6 +56,8 @@ def test_a_dispatched_inline_queue_commits_its_terminal_receipt_with_the_real_tu
         receipt = server._session_control_info(session)['queue_receipts'][0]
         assert receipt['input_id'] == accepted['result']['input_id']
         assert (receipt['status'], receipt['outcome']) == ('terminal', 'completed')
+        assert any(event == 'session.info' and receipt in payload.get('queue_receipts', [])
+                   for event, _sid, payload in emits)
         server._sessions.pop(sid)
         # A cold reader must not turn a committed completion into unknown or replay B.
         from tui_gateway.local_queue_receipts import snapshot
@@ -39,6 +65,41 @@ def test_a_dispatched_inline_queue_commits_its_terminal_receipt_with_the_real_tu
     finally:
         server._sessions.pop(sid, None)
         db.close()
+
+
+def test_restart_after_dispatch_preserves_unknown_without_refusing_new_human_input(monkeypatch, tmp_path):
+    from tui_gateway.local_queue_receipts import snapshot
+    with SessionDB(db_path=tmp_path / 'state.db') as db:
+        sid, key = _desktop_session(monkeypatch, db)
+        session = server._sessions[sid]
+        try:
+            _busy(session)
+            accepted = server._handle_busy_submit('B', sid, session, 'old work', None, queued=True)
+            input_id = accepted['result']['input_id']
+            server._dispose_local_queue(session, [session['queued_prompt']], 'dispatched')
+        finally:
+            server._sessions.pop(sid, None)
+        receipt = next(row for row in snapshot(db, key, {}) if row['input_id'] == input_id)
+        assert (receipt['status'], receipt['reason']) == ('unknown', 'backend_restart_after_dispatch')
+        monkeypatch.setattr(server, '_enable_gateway_prompts', lambda: None)
+        opened = server.handle_request({'id': 'resume', 'method': 'session.resume',
+                                       'params': {'session_id': key, 'source': 'desktop', 'omit_messages': True}})
+        resumed_sid = opened['result']['session_id']
+        resumed = server._sessions[resumed_sid]
+        try:
+            assert not resumed.get('queued_prompt')
+            assert server._drain_queued_prompt('no-replay', resumed_sid, resumed) is False
+            _busy(resumed)
+            reply = server.handle_request({'id': 'new', 'method': 'prompt.submit',
+                                           'params': {'session_id': resumed_sid, 'text': 'new explicit input', 'queued': True}})
+            assert 'error' not in reply, reply
+            assert reply['result']['status'] == 'queued'
+            assert resumed['queued_prompt']['text'] == 'new explicit input'
+            assert reply['result']['input_id'] != input_id
+            assert next(row for row in snapshot(db, key, server._sessions)
+                        if row['input_id'] == input_id) == receipt
+        finally:
+            server._sessions.pop(resumed_sid, None)
 
 
 @pytest.mark.parametrize('compute', [False, True])

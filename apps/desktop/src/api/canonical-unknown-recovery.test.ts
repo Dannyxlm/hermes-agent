@@ -86,11 +86,11 @@ async function fixture(patch: Record<string, unknown> = {}, refusal?: string, pr
   } }
 }
 
-test.each(['session.resume', 'session.activate'])('%s automatically reads only the earliest unknown metadata receipt and enables exact Discard', async method => {
+test.each(['session.resume', 'session.activate'].flatMap(method => ['chat', 'compression-tip'].map(requested => [method, requested])))('%s from %s reads the answered owner receipt and enables exact Discard', async (method, requested) => {
   const f = await fixture()
 
   try {
-    const resumed = await f.client.request<any>(method, { session_id: 'chat', profile: 'default', omit_messages: true })
+    const resumed = await f.client.request<any>(method, { session_id: requested, profile: 'default', omit_messages: true })
     applyRuntimeInfo(resumed.info)
     expect(f.frames.filter(frame => frame.method === 'prompt.receipt')).toEqual([
       { method: 'prompt.receipt', params: { session_id: 'chat', admission_id: 'lost', profile: 'default' } }
