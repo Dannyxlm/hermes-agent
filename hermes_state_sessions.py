@@ -1401,7 +1401,8 @@ class SessionSessionsMixin(SessionActivityMixin):
                 pinned_params.extend(root_filter)
             if heads:
                 exclude_superseded_segments(self, pinned_clauses, pinned_params)
-            pinned_clauses.append("s.pinned = 1")
+            # Reject unpinned rows before parsing their lineage/delegate JSON.
+            pinned_clauses.insert(0, "s.pinned = 1")
             pinned_where = _where_sql(pinned_clauses)
             pinned_query = f"""
                 {select_head}{_sql_session_last_active("s")} AS last_active
