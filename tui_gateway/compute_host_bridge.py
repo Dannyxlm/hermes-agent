@@ -418,8 +418,13 @@ def _submit_prompt_to_compute_host(
         from agent.memory_provider import spawn_context_thread
 
         def finish_scoped():
-            with _session_profile_runtime_scope(session):
-                _finish(done)
+            try:
+                with _session_profile_runtime_scope(session):
+                    _finish(done)
+            finally:
+                with session['history_lock']:
+                    if session.get('_compute_host_completing') == turn_id:
+                        session.pop('_compute_host_completing', None)
 
         worker = spawn_context_thread(target=finish_scoped, name=f'compute-host-complete-{sid}')
         worker.start()

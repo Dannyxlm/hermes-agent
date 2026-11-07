@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 
 from hermes_state import SessionDB
-from tests.tui_gateway.test_compute_queue_receipts import _dispatch, compute_queue
+from tests.tui_gateway.test_compute_queue_receipts import _dispatch
+from tests.tui_gateway.test_compute_queue_receipts import compute_queue as compute_queue  # noqa: PLC0414 -- pytest fixture re-export
 from tests.tui_gateway.test_queued_prompt_persistence import _busy, _desktop_session
 from tui_gateway import local_queue_receipts, server as _server
 
@@ -81,7 +82,8 @@ def test_compute_receipt_projection_does_not_occupy_frame_reader(compute_queue, 
                 assert not worker.is_alive()
 
 
-def test_delayed_compute_settlement_cannot_clear_a_replacement_turn(compute_queue, monkeypatch):
+@pytest.mark.parametrize('replacement_completing', [False, True])
+def test_delayed_compute_settlement_cannot_clear_a_replacement_turn(compute_queue, monkeypatch, replacement_completing):
     env = compute_queue
     _dispatch(env)
     frame = env.frames[0]
@@ -101,6 +103,8 @@ def test_delayed_compute_settlement_cannot_clear_a_replacement_turn(compute_queu
             env.session['_compute_host_turn_id'] = 'replacement-dispatch'
             env.session['running'] = True
             env.session['inflight_turn'] = {'user': 'replacement input'}
+            if replacement_completing:
+                env.session['_compute_host_completing'] = 'replacement-dispatch'
     finally:
         release.set()
         for worker in threading.enumerate():
@@ -110,6 +114,7 @@ def test_delayed_compute_settlement_cannot_clear_a_replacement_turn(compute_queu
     assert env.session['running']
     assert env.session['_compute_host_turn_id'] == 'replacement-dispatch'
     assert env.session['inflight_turn']['user'] == 'replacement input'
+    assert env.session.get('_compute_host_completing') == ('replacement-dispatch' if replacement_completing else None)
 
 
 @pytest.mark.parametrize('compute', [False, True])
@@ -189,8 +194,9 @@ def test_local_stop_reaches_agent_despite_receipt_failure(monkeypatch, tmp_path)
             server._sessions.pop(sid, None)
 
 
-def test_completed_queued_turn_keeps_answer_when_receipt_write_fails(
-        monkeypatch, tmp_path, turn_env, marker_home, emits):
+@pytest.mark.parametrize('fault', ['disposition', 'projection'])
+def test_completed_queued_turn_keeps_answer_when_receipt_or_projection_fails(
+        monkeypatch, tmp_path, turn_env, marker_home, emits, fault):
     with SessionDB(db_path=tmp_path / 'state.db') as db:
         sid, key = _desktop_session(monkeypatch, db)
         session = server._sessions[sid]
@@ -211,7 +217,10 @@ def test_completed_queued_turn_keeps_answer_when_receipt_write_fails(
             _busy(session)
             server._handle_busy_submit('B', sid, session, 'B', None, queued=True)
             session['running'] = False
-            monkeypatch.setattr(local_queue_receipts, 'disposition', fail_terminal)
+            if fault == 'disposition':
+                monkeypatch.setattr(local_queue_receipts, 'disposition', fail_terminal)
+            else:
+                monkeypatch.setattr(server, '_session_control_info', _locked)
             assert server._drain_queued_prompt('drain', sid, session) is True
             completes = [p for e, _s, p in emits if e == 'message.complete']
             assert completes and completes[-1].get('text') == 'answer B'

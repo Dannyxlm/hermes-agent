@@ -725,8 +725,8 @@ def _notif_prepare_completion_batch(session, notifications, registry, deferred):
         text = batch.render(registry)
         metadata = _process_completion_display_metadata(batch, registry) if text is not None else None
         return batch, text, metadata, claimed
-    except Exception as exc:
-        _notif_log_failure('completion batch preparation failed', exc)
+    except Exception:
+        logger.warning('Completion batch preparation failed', exc_info=True)
         _notif_release_turn(session)
         hand_back = deferred.append if deferred is not None else registry.completion_queue.put
         for event, _text, claim in claimed:

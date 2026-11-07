@@ -561,8 +561,14 @@ def _local_queue_terminal_kwargs(sid, session, envelope):
         return {}
 
     def terminal(result):
+        import sqlite3
         outcome = {"settled": "completed", "cancelled": "interrupted", "failed": "failed"}[result["status"]]
-        return _dispose_local_queue(session, [envelope], outcome)
+        saved = _dispose_local_queue(session, [envelope], outcome)
+        try:
+            _emit('session.info', sid, _session_control_info(session))
+        except (OSError, RuntimeError, sqlite3.Error):
+            logger.warning('Local queue terminal projection unavailable', exc_info=True)
+        return saved
     return {"terminal_callback": terminal}
 
 

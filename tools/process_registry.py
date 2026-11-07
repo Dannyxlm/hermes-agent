@@ -2046,16 +2046,6 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 from tools.process_launches import finish_process_launch
                 finish_process_launch(session)
 
-    @staticmethod
-    def _stop_scope(session: ProcessSession) -> bool:
-        """Stop the session's systemd scope: True when it has none or the stop worked. Every kill
-        path stops the scope through here, so a failed stop always leaves it marked for retry."""
-        if not session.systemd_unit:
-            return True
-        stopped = _stop_systemd_unit(session.systemd_unit)
-        session._scope_stop_pending = not stopped
-        return stopped
-
     def _signal_kill(self, session: ProcessSession, session_id: str, consume_output: bool) -> Optional[dict]:
         """Deliver the kill via PTY, local Popen tree, sandbox exec or recovered host
         PID. Returns a final result dict when the kill cannot proceed (recycled/dead

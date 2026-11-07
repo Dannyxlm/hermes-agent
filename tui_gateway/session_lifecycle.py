@@ -218,10 +218,8 @@ def _canonical_ledger_refusal(session: dict):
                 row = next(iter(conn.execute(_CANONICAL_PENDING_SQL, (key, key))), None)
             if session.get('_compute_host_completing'):
                 row = ('unknown', None)
-            if row is None:
-                from tui_gateway.local_queue_receipts import snapshot
-                if any(receipt['status'] == 'unknown' for receipt in snapshot(db, key, _sessions)):
-                    row = ('unknown', None)
+            if row is None and session.get('_unsettled_local_queue'):
+                row = ('unknown', None)
     except sqlite3.Error:
         logger.warning("canonical ledger read failed for %s", key, exc_info=True)
         return ActiveSessionRefusal(_SESSION_OWNERSHIP_UNAVAILABLE, SESSION_COORDINATION_UNAVAILABLE)

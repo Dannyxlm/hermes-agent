@@ -17,7 +17,7 @@ from gateway.session_contract import SessionRef
 from gateway.session_settlement_recovery import commit_and_publish
 from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
 from tests.tools.test_thread_tool import DANNY, _db, call, thread
-from tests.tools.test_thread_tool import owner as notice_owner
+from tests.tools.test_thread_tool import owner as owner  # noqa: PLC0414 -- pytest fixture re-export
 from tools import thread_state as ts
 
 pytest_plugins = ['tests.tools.test_thread_tool']
@@ -26,11 +26,6 @@ pytest_plugins = ['tests.tools.test_thread_tool']
 @pytest.fixture(autouse=True)
 def isolated_hints(monkeypatch):
     monkeypatch.setattr(wake, '_changed', threading.Event())
-
-
-@pytest.fixture
-def owner(notice_owner):
-    return notice_owner
 
 
 @pytest.fixture
