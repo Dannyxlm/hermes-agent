@@ -482,6 +482,9 @@ class SessionAuthority:
             }, event_type='session.info')
         from gateway.session_bot_mailbox import wake_bot_receipts
         wake_bot_receipts(self, ref.session_id)
+        if handle.execution_state != 'running' and not pending:
+            from gateway.thread_wake import hint
+            hint()  # advisory: the sweeper still checks durable admissions and leases
 
     def _schedule(self, ref):
         from gateway.session_retirement import restore_retired
@@ -500,6 +503,8 @@ class SessionAuthority:
         for sid in dict.fromkeys((session_id, self.logical_owner(session_id))):
             if sid in self.sessions:
                 self._schedule(SessionRef(self.profile_id, sid))
+        from gateway.thread_wake import hint
+        hint()  # execution.finish committed before the worker RPC calls this
 
     def _pause(self, ref, reason):
         """The FIFO stopped without claiming its head. Committed rows stay queued for a later

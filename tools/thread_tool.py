@@ -742,8 +742,8 @@ def _report(caller: Caller, thread: Thread, admission: dict | None, cap: int) ->
             if result.get("usage"):
                 out["usage"] = result["usage"]
         elif status == "paused":
-            out["note"] = ("A gateway restart cut this turn off, and the thread's queue waits on it. stop clears it "
-                           "(it doesn't rerun); then send to carry on.")
+            out["note"] = ("This turn's outcome is uncertain, and the thread's queue waits on it. It is not rerun "
+                           "automatically. Inspect its exact result before deciding whether to stop or send more work.")
     return out
 
 
