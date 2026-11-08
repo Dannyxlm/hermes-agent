@@ -12,6 +12,10 @@ nightly backup. A database copy nothing uses is dead weight, so it does not wait
   in it open or mapped. A lane that still runs is that process: an open connection, a shell
   parked in the lane dir, a query running. Once the lane's processes are gone, so is its claim.
 
+A process the check cannot see does not protect a copy: another user's (root, a container
+writing through a bind mount) or a same-user one that made itself undumpable. A lane run that
+way marks its entry with :data:`HOLD_NAME`.
+
 Only the database file and its ``-wal``/``-shm``/``-journal`` sidecars go. Reports and logs next
 to it stay under the 24 h rule, and a short ``<name>.reclaimed`` note says what happened. The
 entry's directory timestamps are put back, so the reclaim does not restart that 24 h clock.
@@ -83,9 +87,13 @@ def _qualifies(path: str, st: os.stat_result) -> bool:
             and not path.endswith(SIDECAR_SUFFIXES) and _is_sqlite(path))
 
 
-def _paths_in_use(root: Path) -> list[str] | None:
-    """Paths under *root* (resolved) that a same-user process has as cwd, holds open or has
-    mapped. ``None`` when processes cannot be listed at all: nothing is then reclaimed."""
+def _paths_in_use(root: Path) -> tuple[list[str], int] | None:
+    """``(paths, blind)``: paths under *root* (resolved) that a same-user process has as cwd,
+    holds open or has mapped, and the count of same-user processes whose cwd or descriptors could
+    not be read (``PR_SET_DUMPABLE=0`` helpers such as gpg-agent or sshd). Those cannot be told
+    apart from a lane, and failing closed on them would stop every reclaim on a normal desktop, so
+    they are counted into the audit line instead. ``None`` when processes cannot be listed at
+    all: nothing is then reclaimed."""
     base = os.path.realpath(os.fspath(root))
     prefix = base.rstrip(os.sep) + os.sep
     used: list[str] = []
@@ -97,7 +105,8 @@ def _paths_in_use(root: Path) -> list[str] | None:
                 used.append(path)
 
     if os.path.isdir("/proc/self/fd"):
-        return _proc_paths(keep, used)
+        blind = _proc_paths(keep)
+        return None if blind is None else (used, blind)
     try:
         import psutil
     except ImportError:
@@ -107,6 +116,7 @@ def _paths_in_use(root: Path) -> list[str] | None:
         procs = list(psutil.process_iter(["pid"]))
     except (psutil.Error, OSError):
         return None
+    blind = 0
     for proc in procs:
         try:
             if uid is not None and proc.uids().real != uid:
@@ -114,20 +124,24 @@ def _paths_in_use(root: Path) -> list[str] | None:
             keep(proc.cwd())
             for item in proc.open_files():
                 keep(item.path)
+        except psutil.AccessDenied:
+            blind += 1
         except (psutil.Error, OSError):
             continue
-    return used
+    return used, blind
 
 
-def _proc_paths(keep, used: list[str]) -> list[str] | None:
-    """Linux: read ``/proc`` links without following them (psutil's ``open_files()`` stats every
-    target, a cost per fd and I/O on paths that are not ours). SQLite maps its ``-shm`` (and with
-    ``mmap_size`` the database), so mappings count as well as descriptors."""
+def _proc_paths(keep) -> int | None:
+    """Linux: feed *keep* every cwd, fd and mapping of this user's processes, read from ``/proc``
+    without following the links (psutil's ``open_files()`` stats every target: a cost per fd, and
+    I/O on paths that are not ours). SQLite maps its ``-shm`` (and with ``mmap_size`` the
+    database), so mappings count as well as descriptors. Returns the uninspectable count."""
     uid = os.getuid()
     try:
         pids = [name for name in os.listdir("/proc") if name.isdigit()]
     except OSError:
         return None
+    blind = 0
     for pid in pids:
         proc = f"/proc/{pid}"
         try:
@@ -143,9 +157,11 @@ def _proc_paths(keep, used: list[str]) -> list[str] | None:
                     fields = line.split(None, 5)
                     if len(fields) == 6:
                         keep(fields[5].rstrip("\n"))
+        except PermissionError:
+            blind += 1
         except OSError:
-            continue  # exited mid-scan, or not inspectable (another user's, a setuid helper)
-    return used
+            continue  # exited mid-scan
+    return blind
 
 
 def _entry_in_use(entry: Path, used: list[str]) -> bool:
@@ -206,6 +222,7 @@ def reclaim_idle_db_copies(root: Path, skip_names: frozenset[str], audit: loggin
     """Remove the idle, unused database copies under the top-level entries of *root* (see the
     module docstring); return the bytes freed. Entries in *skip_names* and entries already known
     to hold unreadable files are not looked at."""
+    started = time.monotonic()
     skip = skip_names | stuck.load_skips(root, persist=False) | {stuck.STUCK_STATE_NAME, stuck.STUCK_LOCK_NAME}
     cutoff = time.time() - DB_COPY_IDLE_SECONDS
     try:
@@ -215,10 +232,11 @@ def reclaim_idle_db_copies(root: Path, skip_names: frozenset[str], audit: loggin
     pending = [(e, c) for e in entries if (c := _idle_candidates(e, cutoff))]
     if not pending:
         return 0  # the common pass: no process scan at all
-    used = _paths_in_use(root)
-    if used is None:
+    scan = _paths_in_use(root)
+    if scan is None:
         audit.info("scratch prune: cannot list processes, no database copy reclaimed this pass")
         return 0
+    used, blind = scan
     freed = 0
     for entry, found in pending:
         # Re-validate as late as the loop allows: a lane may have come back since selection.
@@ -228,4 +246,7 @@ def reclaim_idle_db_copies(root: Path, skip_names: frozenset[str], audit: loggin
             continue
         for path, seen in found:
             freed += _remove_copy(path, seen, entry, audit)
+    if freed:
+        audit.info("scratch prune: database copy pass freed %d bytes in %.1f s (%d same-user "
+                   "process(es) could not be inspected)", freed, time.monotonic() - started, blind)
     return freed

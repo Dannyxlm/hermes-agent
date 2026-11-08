@@ -323,7 +323,8 @@ scratch entry, once no process of yours has it open or mapped or works inside th
 database and its `-wal`/`-shm`/`-journal` files go: reports next to it stay under the 24-hour rule,
 a short `<name>.reclaimed` note records the removal, and the entry's own idle clock is not reset.
 A shared snapshot several lanes use in turn opts out with a `.scratch-hold` file at the top of its
-entry. Prune passes run every 15 minutes: at the start of any Hermes process once one is due, and
+entry, and so should a lane whose processes Hermes cannot inspect (another user's, such as root or
+a container writing through a bind mount, or one that made itself undumpable). Prune passes run every 15 minutes: at the start of any Hermes process once one is due, and
 from the gateway's housekeeping while it runs, so a finished lane's copy is gone within the hour.
 
 `desktop.font_family` sets the font for chat and the rest of the Hermes Desktop interface (the terminal pane has its own key above). Give it one installed family name (for example, `OpenDyslexic` or `Atkinson Hyperlegible`) or a CSS font stack; Hermes keeps the active theme's own stack behind it so CJK and emoji glyphs still resolve, and an empty value uses the theme's font. Edit it in **Settings → Appearance → Chat Font**.

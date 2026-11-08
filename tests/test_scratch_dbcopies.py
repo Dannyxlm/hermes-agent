@@ -102,13 +102,20 @@ def test_small_database_stays(tmp_path, monkeypatch):
     assert db.exists()
 
 
-@pytest.mark.platforms("linux")  # open-file and cwd inspection of another process
-@pytest.mark.parametrize("how", ["open", "cwd"])
+_HOLDERS = {
+    "open": "fh = open(sys.argv[1], 'rb')",
+    # SQLite maps its -shm: a mapping outlives its descriptor (trackfd=False keeps no dup).
+    "mmap": "import mmap; fh = open(sys.argv[1], 'rb'); m = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ, trackfd=False); fh.close()",
+    "cwd": "pass",
+}
+
+
+@pytest.mark.platforms("linux")  # open-file, mapping and cwd inspection of another process
+@pytest.mark.parametrize("how", sorted(_HOLDERS))
 def test_copy_a_live_process_still_uses_is_kept(tmp_path, how):
     scratch = get_scratch_dir(tmp_path, prune=False)
     entry, db, _ = _lane(scratch)
-    code = ("import sys, time; fh = open(sys.argv[1], 'rb'); print('ready', flush=True); time.sleep(60)"
-            if how == "open" else "import time; print('ready', flush=True); time.sleep(60)")
+    code = f"import sys, time; {_HOLDERS[how]}; print('ready', flush=True); time.sleep(60)"
     proc = subprocess.Popen([sys.executable, "-c", code, str(db)], cwd=str(entry if how == "cwd" else tmp_path),
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
     try:
@@ -120,6 +127,41 @@ def test_copy_a_live_process_still_uses_is_kept(tmp_path, how):
         proc.wait(timeout=10)
     assert _reclaim(scratch) > 0  # the lane ended: its copy goes on the next pass
     assert not db.exists()
+
+
+def test_copy_replaced_after_selection_is_kept(tmp_path, monkeypatch):
+    """Selection is a snapshot: a copy swapped in before the unlink (same path, new inode) stays."""
+    scratch = get_scratch_dir(tmp_path, prune=False)
+    _entry, db, _ = _lane(scratch)
+    real_scan = dbcopies._paths_in_use
+
+    def scan_then_recopy(root):
+        result = real_scan(root)
+        fresh = _db(db.with_name("fresh.db"))
+        _age(fresh)
+        os.replace(fresh, db)  # a lane re-copied; the entry still looks idle (times aged)
+        _age(db.parent)
+        return result
+
+    monkeypatch.setattr(dbcopies, "_paths_in_use", scan_then_recopy)
+    assert _reclaim(scratch) == 0
+    assert db.exists()
+
+
+def test_nothing_is_reclaimed_when_processes_cannot_be_listed(tmp_path, monkeypatch):
+    scratch = get_scratch_dir(tmp_path, prune=False)
+    _entry, db, _ = _lane(scratch)
+    monkeypatch.setattr(dbcopies, "_paths_in_use", lambda _root: None)
+    assert _reclaim(scratch) == 0
+    assert db.exists()
+
+
+def test_agents_are_told_about_the_reclaim_and_the_hold(tmp_path, monkeypatch):
+    from agent.prompt_builder import _local_host_hints
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    hint = _local_host_hints()[0]
+    assert "30 min" in hint and dbcopies.HOLD_NAME in hint
 
 
 def test_top_level_copy_file_is_reclaimed(tmp_path):
