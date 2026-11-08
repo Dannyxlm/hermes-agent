@@ -291,7 +291,7 @@ backend, cron) and every child it launches gets `TMPDIR`, `TMP` and `TEMP` point
 RAM-backed system temp dir. The system prompt names this directory as the scratch
 directory. Hermes only sets these when they are not already set — a `TMPDIR` exported
 by you or by the OS (macOS `/var/folders`, Windows `%TEMP%`) is left alone. Entries are
-pruned by a background process started right after startup (at most once per hour; startup
+pruned by a background process started right after startup (at most once per 15 minutes; startup
 never waits for it, and the pass still finishes when the command exits at once) once they have
 been **idle for 24 hours**: an entry
 stays as long as anything anywhere inside it was written in the last day, and goes a day after
@@ -310,12 +310,21 @@ process and kept entry is recorded in `~/.hermes/logs/scratch-prune.log`. An ent
 files your user may not read or delete (typically root-owned output of a Docker container that
 wrote into a bind mount) is never deleted partially-blind: it is logged once with the command that
 removes it (`sudo rm -rf '<path>'`, or a `docker run … rm -rf` alternative when Docker is
-installed) and then skipped, not re-scanned every hour, until it is gone, its top directory
+installed) and then skipped, not re-scanned on every pass, until it is gone, its top directory
 changes, or the directories that refused access become accessible to you (for example after
 `sudo chown -R`); it is also re-checked once a week regardless. Hermes never runs that command
 itself. `hermes doctor`
 reports the directory, its size and any such skipped entries, and
 warns about directories over 1 GB elsewhere under `cache/` that no pruner covers.
+
+Large database copies do not wait for the 24 hours. A SQLite file of 64 MB or more (a lane's
+copy of `state.db`, for example) is removed 30 minutes after the last write anywhere in its
+scratch entry, once no process of yours has it open or mapped or works inside that entry. Only the
+database and its `-wal`/`-shm`/`-journal` files go: reports next to it stay under the 24-hour rule,
+a short `<name>.reclaimed` note records the removal, and the entry's own idle clock is not reset.
+A shared snapshot several lanes use in turn opts out with a `.scratch-hold` file at the top of its
+entry. Prune passes run every 15 minutes: at the start of any Hermes process once one is due, and
+from the gateway's housekeeping while it runs, so a finished lane's copy is gone within the hour.
 
 `desktop.font_family` sets the font for chat and the rest of the Hermes Desktop interface (the terminal pane has its own key above). Give it one installed family name (for example, `OpenDyslexic` or `Atkinson Hyperlegible`) or a CSS font stack; Hermes keeps the active theme's own stack behind it so CJK and emoji glyphs still resolve, and an empty value uses the theme's font. Edit it in **Settings → Appearance → Chat Font**.
 

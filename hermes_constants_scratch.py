@@ -415,15 +415,27 @@ def release_git_worktrees(repos: set[str]) -> None:
 
 def prune_idle_entries(
     root: Path, max_idle_hours: float, skip_names: frozenset[str], log_file: Path | None = None,
+    *, reclaim_db_copies: bool = False,
 ) -> int:
     """Delete top-level entries of *root* with no write anywhere in their subtree for
     *max_idle_hours*, reaping processes and worktree registrations rooted in them first.
     Each removal, each signalled process and each entry rescued mid-prune (touched
     again after selection) is recorded in *log_file*. Returns the count actually
-    removed."""
+    removed. *reclaim_db_copies* then also removes the unused database copies of entries
+    that are not yet a day idle (``hermes_constants_scratch_dbcopies``); they are files,
+    not entries, and are not counted."""
     audit = _open_prune_log(log_file)
     try:
-        return _prune_idle_entries(root, max_idle_hours, skip_names, audit)
+        removed = _prune_idle_entries(root, max_idle_hours, skip_names, audit)
+        if reclaim_db_copies:
+            from hermes_constants_scratch_dbcopies import reclaim_idle_db_copies
+
+            try:
+                reclaim_idle_db_copies(root, skip_names, audit)
+            # health: allow BLE001 -- the entry prune above already ran; its count must still be returned
+            except Exception as exc:
+                audit.info("scratch prune: database copy reclaim failed (%s: %r)", type(exc).__name__, str(exc))
+        return removed
     finally:
         if audit is not logger:
             for handler in audit.handlers:
@@ -448,7 +460,7 @@ def _prune_idle_entries(
             doomed.append(e)
         elif denied_dir is not None and stuck.tracking_supported():
             # A dir this user may not list (root-owned 0700) fails every idle scan: kept
-            # (fail-closed) as before, but reported once and no longer re-scanned hourly.
+            # (fail-closed) as before, but reported once and no longer re-scanned every pass.
             stuck.record(root, e, [denied_dir], audit)
     # Runs even with nothing to delete: orphans whose cwd was removed by an earlier pass
     # (or by hand) are found by the deleted-cwd rule, not by membership in ``doomed``.

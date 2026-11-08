@@ -1,5 +1,5 @@
 """Gateway housekeeping chores that keep the data disk healthy: checkpoint-store pruning, stale media-cache
-cleanup and the home-channel prompt for the low-disk auto-prune decision (see ``hermes_cli/prune_advisor.py``).
+cleanup, the scratch-prune cadence and the home-channel prompt for the low-disk auto-prune decision (see ``hermes_cli/prune_advisor.py``).
 
 A headless gateway on a small VPS is where a disk fills up, and its owner may never open the CLI,
 so the question goes to each served profile's home channel; Desktop and Ink TUI viewers of local
@@ -48,6 +48,26 @@ def housekeeping_media_caches() -> None:
             if removed:
                 logger.info("%s cache cleanup: removed %d stale file(s)", name, removed)
         _housekeeping_chore(f"{cache_name} cache cleanup", _one)
+
+
+def housekeeping_disk_tick(runner, loop) -> None:
+    """Every-tick disk chores: the low-disk prompt, then the due scratch prune of each served home."""
+    from gateway.run import _housekeeping_chore
+
+    _housekeeping_chore("Auto-prune low-disk prompt", maybe_post_auto_prune_prompt, runner, loop)
+    _housekeeping_chore("Scratch prune tick", housekeeping_scratch_prune, runner)
+
+
+def housekeeping_scratch_prune(runner) -> None:
+    """Start each served home's scratch prune when its shared stamp says one is due. A process
+    prunes once at boot, and a gateway can run for days with no other Hermes process starting,
+    so without this tick a finished lane's 13 GB database copy waited for whatever started next."""
+    from hermes_constants import get_routing_process_hermes_home, get_scratch_dir, maybe_prune_scratch_dir
+
+    homes = {Path(get_routing_process_hermes_home())}
+    homes.update(Path(home) for home in (getattr(runner, "_served_profile_homes", None) or {}).values())
+    for home in sorted(homes):
+        maybe_prune_scratch_dir(get_scratch_dir(home, prune=False))
 
 
 def maybe_post_auto_prune_prompt(runner, loop) -> None:
