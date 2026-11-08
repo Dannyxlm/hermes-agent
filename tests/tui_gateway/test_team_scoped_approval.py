@@ -174,7 +174,13 @@ def test_room_current_authority_required_before_forward(tmp_path, monkeypatch, m
     with pytest.raises((RuntimeError, ValueError, PermissionError)):
         service.approve_room_task("room", **params)
     assert calls == []
-    assert service.status("room")["pending_actions"]
+    pending = service.status("room")["pending_actions"]
+    if mutation == "settled-task":
+        # Upstream binds visibility to live attempts as well as fencing dispatch.
+        assert pending == []
+        assert ("room", "ops") not in service._pending_actions
+    else:
+        assert len(pending) == 1
 
 
 def test_room_local_enhanced_forward_and_authoritative_clear(tmp_path, monkeypatch):
