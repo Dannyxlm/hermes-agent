@@ -7,13 +7,28 @@ export class FamilyWireSocket extends EventTarget {
   readyState = 0
   constructor(readonly url: string) {
     super()
-    queueMicrotask(() => { this.readyState = 1; this.dispatchEvent(new Event('open')) })
+    queueMicrotask(() => {
+      this.readyState = 1
+      this.dispatchEvent(new Event('open'))
+      // A public dial counts as connected only once its own socket says which session wire it
+      // speaks (`gateway.ready`); a native dial is canonical by provenance and ignores the frame.
+      this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({
+        jsonrpc: '2.0', method: 'event',
+        params: { type: 'gateway.ready', payload: { session_authority: new URL(this.url).searchParams.has('native_dial') } }
+      }) }))
+    })
   }
   send(payload: string) {
     const frame = JSON.parse(payload)
 
     if (!frame.method) { return }
-    FamilyWireSocket.calls.push({ url: this.url, method: frame.method, params: frame.params || {} })
+
+    // The shared client announces `client.capabilities` itself once a public dial is ready; `calls`
+    // records only what the code under test asked for.
+    if (frame.method !== 'client.capabilities') {
+      FamilyWireSocket.calls.push({ url: this.url, method: frame.method, params: frame.params || {} })
+    }
+
     const reply = FamilyWireSocket.answer(frame.method, frame.params || {})
     queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', {
       data: JSON.stringify({ jsonrpc: '2.0', id: frame.id, ...reply })
