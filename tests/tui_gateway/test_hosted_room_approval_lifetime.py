@@ -258,8 +258,21 @@ def test_stale_local_approval_cannot_resolve_replacement_request(tmp_path: Path,
     )
 
 
-def test_allow_paused_after_its_live_read_cannot_answer_after_a_concurrent_stop(pending_approval, monkeypatch):
-    """An Allow whose live-attempt read raced another window's Stop is ordered with that Stop."""
+def _exact_stop(service, task):
+    binding, = service.bindings()
+    service.stop_room_task(
+        "room", cancel_id="stop", expected_task_id=task["identity"].task_id,
+        expected_execution_generation=task["execution_generation"],
+        expected_cancel_generation=task["cancel_generation"],
+        expected_authority_gateway_id=binding.gateway_id, expected_authority_epoch=binding.authority_epoch)
+
+
+@pytest.mark.parametrize("stop", [
+    pytest.param(lambda service, _task: service.stop_room("room", cancel_id="stop"), id="room-stop"),
+    pytest.param(_exact_stop, id="exact-task-stop")])
+def test_allow_paused_after_its_live_read_cannot_answer_after_a_concurrent_stop(pending_approval, monkeypatch, stop):
+    """An Allow whose live-attempt read raced another window's Stop is ordered with that Stop,
+    whether the Stop ends the room's work or only this attempt."""
     import threading
 
     service, task, _lease = pending_approval
@@ -301,8 +314,7 @@ def test_allow_paused_after_its_live_read_cannot_answer_after_a_concurrent_stop(
 
     monkeypatch.setattr(driver, "list_tasks", list_tasks)
     service._approval_stop_lock = _SignallingLock(threading.RLock())
-    stopper = threading.Thread(target=lambda: (read.wait(10), service.stop_room("room", cancel_id="stop"),
-                                               stop_progress.set()))
+    stopper = threading.Thread(target=lambda: (read.wait(10), stop(service, task), stop_progress.set()))
     stopper.start()
     try:
         result = service.approve_room_task(

@@ -800,11 +800,12 @@ class HostedRoomService:
         expected_execution_generation: int, expected_cancel_generation: int,
         expected_authority_gateway_id: str, expected_authority_epoch: int,
     ) -> dict[str, Any]:
-        """Exact Stop does not append the room-wide fence that supersedes sibling work."""
+        """Exact Stop does not append the room-wide fence that supersedes sibling work. Like room
+        Stop it is ordered with an approval's live check and dispatch."""
         authority = self._owned_authority(room_id)
         if authority != (expected_authority_gateway_id, expected_authority_epoch):
             raise hosted_rooms.AuthorityConflictError("hosted room authority changed")
-        with self._policy_lock:
+        with self._approval_stop_lock, self._policy_lock:
             task = next((task for task in driver.list_tasks(self.db_path, room_id=room_id)
                          if task["identity"].task_id == expected_task_id), None)
             if task is None:
