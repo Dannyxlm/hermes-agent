@@ -111,7 +111,9 @@ def _close_child(child: Any, log_message: str) -> None:
     with _quiet(log_message, exc_info=True):
         from hermes_state_launch_causes import finish_child
         if not getattr(child, "_launch_executed", False):
-            finish_child(child, cause="failed_start")
+            # A queued child stopped before it ran keeps the stop's cause (parent_stop, user_stop);
+            # only a child nothing stopped failed to start.
+            finish_child(child, cause=getattr(child, "_launch_stop_cause", None) or "failed_start")
         close = getattr(child, "close", None)
         if callable(close):
             close()
