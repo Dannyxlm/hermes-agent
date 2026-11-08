@@ -13,8 +13,8 @@ import { computed } from 'nanostores'
 
 import type { HermesConnection } from '@/global'
 import { servedByHermesCloud } from '@/lib/hermes-cloud-host'
-import type { UpdateTarget } from '@/lib/update-copy'
 import { $connection } from '@/store/session'
+import type { UpdateTarget } from '@/store/updates'
 
 function connectedToHermesCloud(connection: HermesConnection | null): boolean {
   return connection?.mode === 'remote' && (connection.remoteKind === 'cloud' || isHermesCloudUrl(connection.baseUrl))
