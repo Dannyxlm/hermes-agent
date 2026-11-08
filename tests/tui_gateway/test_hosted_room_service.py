@@ -1814,7 +1814,7 @@ def test_local_room_approval_uses_the_exact_hidden_session(tmp_path: Path, monke
     service = HostedRoomService(_server(), db_path=tmp_path / "state.db")
     monkeypatch.setattr(driver, "list_tasks", lambda *_a, **_kw: [{
         "identity": driver.TaskIdentity("room-1", "task-local-1", "thread-1", "turn-1"),
-        "execution_generation": 1, "status": "running", "payload": {"target_profile": "local"}}])
+        "execution_generation": 1, "cancel_generation": 0, "status": "running", "payload": {"target_profile": "local"}}])
     rpc = _FakeRPC()
     service.rpc = rpc
     service.runtime.rpc = rpc
