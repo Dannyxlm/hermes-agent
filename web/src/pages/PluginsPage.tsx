@@ -5,6 +5,7 @@ import type { Translations } from "@/i18n/types";
 import { Link } from "react-router";
 import { api } from "@/lib/api";
 import { runDashboardPluginUpdate } from "@/lib/plugin-update";
+import { InstalledPluginsHeader } from "@/pages/PluginsPage_updateAll";
 import { setupHasDetails, setupHasInstallableSteps } from "@/lib/memory-provider-setup";
 import type {
   CatalogEntry,
@@ -932,9 +933,7 @@ export default function PluginsPage() {
 
         <div className="flex flex-col gap-3">
 
-          <h3 className="font-mondwest text-display text-xs tracking-[0.12em] text-text-secondary">
-            {t.pluginsPage.pluginListHeading}
-          </h3>
+          <InstalledPluginsHeader pluginCount={rows.length} {...{ loading, loadHub, showToast, t }} />
           <p className="text-xs text-text-tertiary">
             Badges show activation settings, not connection status. Plugins using default activation
             may load when their provider or channel is configured. Check Channels for live connections.

@@ -191,7 +191,7 @@ _LONG_HANDLERS = frozenset({
     "session.info",  # _session_info: up to 0.5 s update-check wait + git subprocess (read-only snapshot)
     "browser.manage", "cli.exec", "complete.path", "complete.slash", "llm.oneshot", "model.options",
     "pet.cells", "pet.gallery", "pet.generate", "pet.hatch", "pet.info", "pet.select", "pet.thumb",
-    "learning.frames", "plugins.manage", "plugins.catalog.lookup", "reload.mcp", "mcp.servers.test",
+    "image.render", "learning.frames", "plugins.manage", "plugins.catalog.lookup", "reload.mcp", "mcp.servers.test",
     "mcp.servers.oauth.start",
     "process.list", "profiles.configure", "profiles.create", "profiles.describe", "profiles.get_asset",
     "profiles.list", "profiles.set_asset", "bot_relay.roster.sync", "bot_relay.outbox.drain",

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { useUpdateVersionLabel } from '@/app/command-palette/use-update-version-label'
+import { useUpdateRowLabel } from '@/app/command-palette/use-update-row-label'
 import { useStatusbarItems } from '@/app/shell/hooks/use-statusbar-items'
 import type { DesktopUpstreamTracking, DesktopVersionInfo } from '@/global'
 import { en } from '@/i18n/en'
@@ -88,7 +88,7 @@ describe('client badge build identity', () => {
     $desktopVersion.set(packageVersion)
     $updateStatus.set({ supported: true, currentSha: runtimeCommit, upstreamTracking: tracking })
     const badge = mountClientBadge()
-    const palette = renderHook(() => useUpdateVersionLabel())
+    const palette = renderHook(() => useUpdateRowLabel())
     expect(palette.result.current).toBe('v1.2.3+10')
 
     expect(badge()?.label).toBe('v1.2.3+10 (+3)')
@@ -144,7 +144,7 @@ describe('client badge build identity', () => {
       windowButtonPosition: null
     })
     const badge = mountClientBadge()
-    const palette = renderHook(() => useUpdateVersionLabel())
+    const palette = renderHook(() => useUpdateRowLabel())
     expect(palette.result.current).toBe(en.shell.statusbar.backendLabel('8.7.6'))
 
     expect(badge()?.label).toBe(en.shell.statusbar.clientLabel('1.2.3+10'))
