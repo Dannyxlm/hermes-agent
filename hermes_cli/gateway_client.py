@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from contextlib import asynccontextmanager, contextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 import contextvars
 import json
 import os
@@ -374,17 +374,17 @@ async def connect_gateway(endpoint=None, subject=None, *, scope=None, purpose="i
             raise GatewayUnavailableError(f"Gateway inaccessible: {exc.reason}" + (f" ({detail})" if detail else ""),
                                           "inaccessible", exc.reason) from exc
         url, protocols = gateway_ws_target(endpoint, ticket)
-    try:
-        # The gateway is a loopback (or explicitly named) peer, never something to route through the
-        # user's HTTP(S) proxy; websockets>=14 reads HTTP_PROXY/HTTPS_PROXY by default and a proxy that
-        # cannot reach 127.0.0.1 turns every launch into a 10 s open timeout.
-        async with connect(url, subprotocols=protocols, open_timeout=10, max_size=max_size,
-                           proxy=None) as ws:
-            if protocols and ws.subprotocol != GATEWAY_WS_PROTOCOL:
-                raise GatewayClientError("Gateway protocol mismatch; update/restart required")
-            async with GatewayClient(ws) as client:
-                yield client
-    except GatewayClientError:
-        raise
-    except (OSError, TimeoutError) as exc:
-        raise GatewayClientError("Gateway connection failed; no local fallback") from exc
+    async with AsyncExitStack() as transport:
+        try:
+            # The gateway is a loopback (or explicitly named) peer, never something to route through the
+            # user's HTTP(S) proxy; websockets>=14 reads HTTP_PROXY/HTTPS_PROXY by default and a proxy that
+            # cannot reach 127.0.0.1 turns every launch into a 10 s open timeout.
+            ws = await transport.enter_async_context(connect(
+                url, subprotocols=protocols, open_timeout=10, max_size=max_size, proxy=None))
+        except (OSError, TimeoutError) as exc:
+            raise GatewayClientError("Gateway connection failed; no local fallback") from exc
+        # Only establishment failures are translated: body/cleanup errors may follow submitted work.
+        if protocols and ws.subprotocol != GATEWAY_WS_PROTOCOL:
+            raise GatewayClientError("Gateway protocol mismatch; update/restart required")
+        async with GatewayClient(ws) as client:
+            yield client
