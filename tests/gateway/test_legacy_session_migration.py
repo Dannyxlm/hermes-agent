@@ -148,7 +148,7 @@ async def test_legacy_adoption_takes_an_idle_chat_a_ledger_deferring_backend_hol
     from gateway.config import GatewayConfig
     from gateway.session import SessionStore
     from gateway.session_authority import initialize_session_authority
-    from gateway.session_contract import Principal
+    from gateway.session_contract import SessionActor
     from gateway.session_local_title import resolve_titled_session
     from hermes_cli.active_sessions import active_session_liveness_guard, release_active_session
     from hermes_state_errors import SessionTurnLeaseLostError
@@ -164,7 +164,7 @@ async def test_legacy_adoption_takes_an_idle_chat_a_ledger_deferring_backend_hol
     db.append_message('old-dash', role='user', content='OPEN_IN_DESKTOP')
     runner = SimpleNamespace(session_store=store, _session_db=db, adapters={}, _draining=False)
     authority = await initialize_session_authority(runner, profile_id=str(tmp_path), instance_id='first')
-    native = Principal('native', str(tmp_path), frozenset({'session:read', 'session:create'}), 'socket')
+    native = SessionActor('native', str(tmp_path), frozenset({'session:read', 'session:create'}), 'socket')
     authority._native_legacy_transports = {native.transport_id: native}
     registry = Path(db.db_path).parent
     # The dashboard's own claim path, exactly as a Desktop chat's first turn takes it.

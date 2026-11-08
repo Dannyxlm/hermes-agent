@@ -1,7 +1,7 @@
 """Canonical profile roster reads use on-demand cached skill counts, never a recursive scan."""
 from types import SimpleNamespace
 
-from gateway.session_contract import Principal
+from gateway.session_contract import SessionActor
 from gateway.session_group_controls import _profiles
 
 
@@ -16,6 +16,6 @@ def test_canonical_roster_uses_the_polled_profile_metadata_path(tmp_path, monkey
 
     monkeypatch.setattr(profiles, '_count_skills', forbidden)
     authority = SimpleNamespace(profile_id=str(tmp_path), hosted_room_service=None)
-    actor = Principal('owner', str(tmp_path), frozenset({'session:read'}), 'fixture')
+    actor = SessionActor('owner', str(tmp_path), frozenset({'session:read'}), 'fixture')
     result = _profiles(authority, actor, tmp_path, {'include_sessions': False})
     assert result['profiles'][0]['skill_count'] == 7
