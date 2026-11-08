@@ -291,7 +291,9 @@ def test_allowlists_match_the_app_schema_exactly():
                              'ComposerFocusToSettled', 'TabFirstContent', 'ScrollInteraction',
                              'app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta',
                              'NotificationOpenToContent', 'InboxFreshAfterForeground', 'ChatOpenToBody',
-                             'ChatOpenBodyToTranscript', 'ChatOpenDocParse'}
+                             'ChatOpenBodyToTranscript', 'ChatOpenDocParse', 'ChatOpenToDestination',
+                             'ChatOpenToModel', 'ChatOpenToTranscriptBody', 'ChatOpenToTranscriptAppear',
+                             'ChatOpenToPushEnd', 'TabToRootBody', 'TabToRootAppear'}
     assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
     assert fr.SCREENS == {'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',
                           'flag', 'unknown'}

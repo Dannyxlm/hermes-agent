@@ -45,6 +45,13 @@ BUDGETS = {
     'ChatOpenToBody': ('ChatOpenToBody', None),
     'ChatOpenBodyToTranscript': ('ChatOpenBodyToTranscript', None),
     'ChatOpenDocParse': ('ChatOpenDocParse', None),
+    'ChatOpenToDestination': ('ChatOpenToDestination', None),
+    'ChatOpenToModel': ('ChatOpenToModel', None),
+    'ChatOpenToTranscriptBody': ('ChatOpenToTranscriptBody', None),
+    'ChatOpenToTranscriptAppear': ('ChatOpenToTranscriptAppear', None),
+    'ChatOpenToPushEnd': ('ChatOpenToPushEnd', None),
+    'TabToRootBody': ('TabToRootBody', None),
+    'TabToRootAppear': ('TabToRootAppear', None),
 }
 TIMED_OUTCOMES = frozenset({'ok'})
 DEFAULT_LOGS = ('gui.log', 'errors.log', 'agent.log')

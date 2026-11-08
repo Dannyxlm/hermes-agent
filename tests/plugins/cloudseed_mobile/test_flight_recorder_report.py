@@ -47,6 +47,23 @@ def test_budget_keys_cover_every_span_name(report):
     assert set(report.BUDGETS) == fr.SPAN_NAMES
 
 
+@pytest.mark.parametrize('name', [
+    'ChatOpenToDestination', 'ChatOpenToModel', 'ChatOpenToTranscriptBody',
+    'ChatOpenToTranscriptAppear', 'ChatOpenToPushEnd', 'TabToRootBody', 'TabToRootAppear',
+])
+def test_subphases_survive_ingest_into_the_report(report, tmp_path, name):
+    events = [{'kind': 'span', 't': T + i, 'name': name, 'outcome': 'ok', 'ms': ms,
+               'attrs': {'entry': 'row'} if name.startswith('Chat') else {'from': '2', 'to': '3'}}
+              for i, ms in enumerate([80, 160])]
+    store(tmp_path, events)
+    rows = report.span_budgets(report.load_day(tmp_path, DAY)[0])
+    assert name in rows
+    row = rows[name]
+    assert (row['count'], row['p50'], row['p90'], row['max']) == (2, 80, 160, 160)
+    assert row['budget_ms'] is None and row['verdict'] == 'not gated'
+    assert name in report.build_report(tmp_path, DAY, [])
+
+
 @pytest.mark.parametrize('with_drops,invalid,unknown', [(False, 0, 0), (True, 10, 31)])
 def test_daily_report_surfaces_content_free_drop_totals(report, tmp_path, with_drops, invalid, unknown):
     event = {'kind': 'lifecycle', 't': T, 'state': 'foreground'}
