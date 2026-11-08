@@ -11,6 +11,46 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def bookkeeping_closed_reason(path: Path, record: dict) -> str | None:
+    """Classify inapplicable terminal work under the jobs lock, not as delivered."""
+    from cron.executions import get_execution, latest_execution
+    from cron.jobs import _with_job, use_cron_store
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    producer = record.get("job") or {}
+    execution_id = producer.get("execution_id")
+
+    def reason(_jobs, _i, job):
+        if not job.get("no_agent"):
+            return "not_direct"
+        if not execution_id:
+            return None
+        latest = latest_execution(job["id"])
+        if latest is not None and latest["id"] != execution_id:
+            return "superseded"
+        row = get_execution(execution_id)
+        # No current target is normal before mark_job_run. Keep the producer's retry.
+        if row is not None and row["status"] not in {"completed", "failed", "unknown"}:
+            return None
+        if not job.get("last_status"):
+            return None
+        queued = job.get("last_delivery_queued") or {}
+        target = "session:" + record["session_id"] if record.get("session_id") else None
+        receipts = [queued.get(target) or {}] if target else [
+            receipt for key, receipt in queued.items() if key.startswith("bot-chat:")]
+        if not any(receipt.get("delivery_id") == record.get("id") for receipt in receipts):
+            return "target_not_current"
+        return None
+
+    home = path.resolve().parent.parent.parent
+    token = set_hermes_home_override(home)
+    try:
+        with use_cron_store(home):
+            return _with_job(producer.get("id"), reason, missing="job_missing")
+    finally:
+        reset_hermes_home_override(token)
+
+
 def settle_pending(path: Path, record: dict) -> bool:
     """Under the pending lock, settle only its current producer receipt; never advance a fire."""
     from cron.session_delivery import _delivery_key

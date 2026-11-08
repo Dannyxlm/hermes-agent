@@ -83,7 +83,8 @@ def _queued(root: Path) -> list[tuple[Path, dict]]:
                 logger.error("Unreadable legacy Bot Chat pending record %s kept as evidence: %s", path, exc)
             continue
         if record.get("status") in {"queued", "transferred"} or (
-                record.get("status") in {"settled", "failed"} and not record.get("bookkeeping_settled")):
+                record.get("status") in {"settled", "failed"}
+                and not record.get("bookkeeping_settled") and not record.get("bookkeeping_closed")):
             found.append((path, record))
     return sorted(found, key=lambda item: (item[1].get("sequence", 0), item[0].name))
 
@@ -144,25 +145,39 @@ def _dispose(path: Path, record: dict) -> bool:
     return True
 
 
-def _close_terminal_wake(path: Path, record: dict) -> None:
+def _close_terminal_wake(path: Path, record: dict, *, changed: bool = False) -> None:
     """Repair old terminal receipts too, without ever submitting their payload again."""
-    if record.get("status") not in {"settled", "failed"} or record.get("bookkeeping_settled"):
-        return
     from cron.session_delivery import transfer_pending
-    from cron.session_delivery_outcome import settle_pending
+    from cron.session_delivery_outcome import bookkeeping_closed_reason, settle_pending
 
-    if not (record.get("session_id") and record.get("admission_id")):
-        from cron.bot_chat_outcome import observe_pending
-        before = dict(record)
-        if not observe_pending(record):
-            return
-        if record != before:
+    if (record.get("status") not in {"settled", "failed"}
+            or record.get("bookkeeping_settled") or record.get("bookkeeping_closed")):
+        if changed:
             atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+        return
+    before = dict(record)
+    try:
+        reason = bookkeeping_closed_reason(path, record)
+    except Exception:
+        if changed:
+            atomic_json_write(path, record, fsync_dir=True, mode=0o600)
+        raise
+    verified = True
+    if reason:
+        record["bookkeeping_closed"] = reason
+    elif not (record.get("session_id") and record.get("admission_id")):
+        from cron.bot_chat_outcome import observe_pending
+        verified = observe_pending(record)
     elif "admission_outcome" not in record:
-        if not transfer_pending(path, record):
-            return
+        verified = transfer_pending(path, record)
+    if before["status"] == "failed" and record.get("status") == "settled":
+        record.clear()
+        record.update(before)
+        verified = False
+    # Persist observation before write-back. A failed jobs save must remain retryable.
+    if changed or record != before:
         atomic_json_write(path, record, fsync_dir=True, mode=0o600)
-    if settle_pending(path, record):
+    if not reason and verified and settle_pending(path, record):
         record["bookkeeping_settled"] = True
         atomic_json_write(path, record, fsync_dir=True, mode=0o600)
 
@@ -181,35 +196,38 @@ def _drain_one(path: Path) -> dict | None:
                 record.get("session_id") and record.get("admission_id")):
             from cron.bot_chat_outcome import observe_pending
             if observe_pending(record):
-                atomic_json_write(path, record, fsync_dir=True, mode=0o600)
-                _close_terminal_wake(path, record)
+                _close_terminal_wake(path, record, changed=True)
             return record
         if _dispose(path, record):
-            atomic_json_write(path, record, fsync_dir=True, mode=0o600)
-            _close_terminal_wake(path, record)
+            _close_terminal_wake(path, record, changed=True)
         return record
 
 
 def drain_pending(key: str) -> dict | None:
     """Process one exact receipt, serializing producers, drainers and direct callers."""
-    return _drain_one(_pending_path(key))
+    from cron.jobs import drain_jobs_read_scope
+
+    with drain_jobs_read_scope():
+        return _drain_one(_pending_path(key))
 
 
 def drain_legacy_pending() -> None:
     """Hand queued records to their owner and observe admitted wakes; never replay uncertain turns."""
     from cron.bot_chat_outcome import settle_bot_chat_jobs
+    from cron.jobs import drain_jobs_read_scope
 
-    settle_bot_chat_jobs()
-    root = get_hermes_home().resolve() / "cron" / "bot_chat_pending"
-    if not root.is_dir():
-        return
-    for path, _ in _queued(root):
-        try:
-            record = _drain_one(path)
-        except Exception as exc:
-            logger.log(logging.DEBUG if path in _warned else logging.WARNING,
-                       "Legacy Bot Chat pending record %s left queued: %s", path, exc, exc_info=True)
-            _warned.add(path)
-            continue
-        if record is not None:
-            logger.info("Legacy Bot Chat pending record %s -> %s", path.name, record["status"])
+    with drain_jobs_read_scope():
+        settle_bot_chat_jobs()
+        root = get_hermes_home().resolve() / "cron" / "bot_chat_pending"
+        if not root.is_dir():
+            return
+        for path, _ in _queued(root):
+            try:
+                record = _drain_one(path)
+            except Exception as exc:
+                logger.log(logging.DEBUG if path in _warned else logging.WARNING,
+                           "Legacy Bot Chat pending record %s left queued: %s", path, exc, exc_info=True)
+                _warned.add(path)
+                continue
+            if record is not None:
+                logger.info("Legacy Bot Chat pending record %s -> %s", path.name, record["status"])

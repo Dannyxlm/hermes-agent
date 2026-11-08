@@ -1368,16 +1368,44 @@ def get_ticker_last_error() -> Optional[str]:
 
 # --- Job CRUD Operations ---
 
-def _parse_jobs_file(jobs_file: Path) -> tuple[Any, bool]:
+def _parse_jobs_file(jobs_file: Path, *, raw: str | None = None) -> tuple[Any, bool]:
     """Tolerant jobs.json parse -> ``(data, used_strict_fallback)``: utf-8-sig absorbs a BOM, strict
     failure retries with ``strict=False``. IO/fallback errors propagate (caller decides repair vs
     bail)."""
-    with open(jobs_file, "r", encoding="utf-8-sig") as f:
-        raw = f.read()
+    if raw is None:
+        with open(jobs_file, "r", encoding="utf-8-sig") as f:
+            raw = f.read()
     try:
         return json.loads(raw), False
     except json.JSONDecodeError:
         return json.loads(raw, strict=False), True
+
+
+_drain_jobs_reads: ContextVar[Optional[dict]] = ContextVar("drain_jobs_reads", default=None)
+
+
+@contextlib.contextmanager
+def drain_jobs_read_scope():
+    """Share only unchanged parsed JSON during one drain; never share mutable job values."""
+    token = _drain_jobs_reads.set({})
+    try:
+        yield
+    finally:
+        _drain_jobs_reads.reset(token)
+
+
+def _read_jobs_file(jobs_file: Path) -> tuple[Any, bool]:
+    memo = _drain_jobs_reads.get()
+    if memo is None:
+        return _parse_jobs_file(jobs_file)
+    path = jobs_file.resolve()
+    raw = path.read_text(encoding="utf-8-sig")
+    cached = memo.get(path)
+    if cached is not None and cached[0] == raw:
+        return copy.deepcopy(cached[1])
+    result = _parse_jobs_file(path, raw=raw)
+    memo[path] = raw, copy.deepcopy(result)
+    return result
 
 
 from cron.launches import remember_jobs
@@ -1396,7 +1424,7 @@ def load_jobs() -> list[dict[str, Any]]:
         return []
 
     try:
-        data, _strict_retry = _parse_jobs_file(jobs_file)
+        data, _strict_retry = _read_jobs_file(jobs_file)
     except OSError as e:
         logger.error("IOError reading jobs.json: %s", e)
         raise RuntimeError(f"Failed to read cron database: {e}") from e
@@ -1481,7 +1509,7 @@ def _peek_jobs_unlocked() -> Optional[list[dict[str, Any]]]:
     if not jobs_file.exists():
         return []
     try:
-        data, _ = _parse_jobs_file(jobs_file)
+        data, _ = _read_jobs_file(jobs_file)
     except Exception:
         return None
     if isinstance(data, dict):
