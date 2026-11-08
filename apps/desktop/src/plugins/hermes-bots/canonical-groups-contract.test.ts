@@ -23,7 +23,11 @@ const route = { connectionId: 'owner', profile: 'team' }
 beforeEach(() => doubles.request.mockReset())
 
 it('reads the generated gateway contract it checks against', () => {
-  expect(declaredGroupMethod('groups.send')?.params).toEqual({ fields: ['profile', 'room_id', 'event_id', 'payload'], required: ['room_id', 'payload'] })
+  // This fork's groups.send also carries the sender's expected authority (hosted-rooms.ts fences on it).
+  expect(declaredGroupMethod('groups.send')?.params).toEqual({
+    fields: ['profile', 'room_id', 'event_id', 'payload', 'expected_authority_gateway_id', 'expected_authority_epoch'],
+    required: ['room_id', 'payload']
+  })
   expect(declaredGroupMethod('groups.capabilities')?.params).toEqual({ fields: ['profile'], required: [] })
   // The gateway's own declaration wins over the standalone server's (which takes only room_id and task_id).
   expect(declaredGroupMethod('groups.retry')?.params.required).toEqual(['room_id', 'member_id', 'task_id', 'execution_generation'])
