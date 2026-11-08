@@ -4488,7 +4488,7 @@ def _start_gateway_housekeeping(
     from gateway.run_delivery_queue_watch import DRAIN_LABEL, DeliveryQueueWatch, wait_for_next_tick
     from gateway.run_profile_reconcile import _mcp_config_reconciler, profile_scoped_chore
     from gateway.run_housekeeping_disk import (
-        housekeeping_checkpoint_prune, housekeeping_media_caches, maybe_post_auto_prune_prompt)
+        housekeeping_checkpoint_prune, housekeeping_disk_tick, housekeeping_media_caches)
     chores: list[tuple[int, str, Any]] = [
         # First every tick: re-stamp ``updated_at`` in gateway_state.json so it is a real heartbeat.
         # ``hermes gateway status`` / ``/api/status`` warn when it ages past 2x ``interval`` with the
@@ -4503,8 +4503,8 @@ def _start_gateway_housekeeping(
         (5, "Channel directory refresh", lambda: adapters and _housekeeping_channel_directory(adapters, loop)),
         (60, "Media cache cleanup", housekeeping_media_caches),
         (60, "Paste sweep", _housekeeping_paste_sweep)]
-    # Low disk + auto-prune undecided: ask on the home channel (two syscalls; snoozed per post).
-    chores.append((1, "Auto-prune low-disk prompt", lambda: maybe_post_auto_prune_prompt(runner, loop)))
+    # Low-disk prompt (two syscalls; snoozed per post) + the due scratch prune of each served home.
+    chores.append((1, "Disk housekeeping tick", lambda: housekeeping_disk_tick(runner, loop)))
     if cron_provider is not None:
         chores.append((5, "Misfire catch-up sweep", lambda: _housekeeping_misfire_catch_up(cron_provider, adapters, loop)))
     if cron_thread is not None:

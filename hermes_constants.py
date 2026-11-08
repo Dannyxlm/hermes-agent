@@ -813,7 +813,9 @@ SCRATCH_TMP_ENV_VARS = ("TMPDIR", "TMP", "TEMP")
 SCRATCH_DIR_MARKER_ENV = "HERMES_SCRATCH_DIR"
 SCRATCH_MAX_IDLE_HOURS = 24
 _SCRATCH_PRUNE_STAMP = ".last_prune"
-_SCRATCH_PRUNE_INTERVAL_SECONDS = 3600
+# Every 15 minutes, not hourly: a finished lane's database copy (13 GB and more) is reclaimed
+# 30 minutes after its last write, so a pass this often has it gone within the hour.
+_SCRATCH_PRUNE_INTERVAL_SECONDS = 900
 _scratch_pruned_once = False
 
 # AF_UNIX socket paths cap at 104 bytes (macOS) / 108 (Linux). Chrome appends
@@ -965,7 +967,8 @@ def get_scratch_dir(home: str | Path | None = None, *, prune: bool = True) -> Pa
     Every Hermes process and child gets ``TMPDIR``/``TMP``/``TEMP`` pointed here at boot (see
     :func:`export_scratch_tmp_env`), so ``tempfile`` defaults land here without call sites
     knowing. Entries idle for ``SCRATCH_MAX_IDLE_HOURS`` are pruned at most once per process
-    and once per hour across processes (stamp file), so a fan-out of children stays cheap.
+    and once per ``_SCRATCH_PRUNE_INTERVAL_SECONDS`` across processes (stamp file), so a fan-out
+    of children stays cheap.
     The pass itself runs in a detached child process (``hermes_constants_scratch_detach``): the
     directory is created and permissioned before this returns, no caller (the boot hook
     included) waits on the idle scan or the ``rmtree`` of a multi-GB entry, and the pass still
@@ -994,12 +997,14 @@ def prune_scratch_dir(scratch: Path | None = None, max_idle_hours: float = SCRAT
     *max_idle_hours*, reaping processes and git worktree registrations rooted in them
     first (``hermes_constants_scratch``); return the count removed. Each removal, each
     kill and each entry rescued mid-prune is recorded in ``<home>/logs/scratch-prune.log``
-    (*scratch* is ``<home>/cache/scratch``)."""
+    (*scratch* is ``<home>/cache/scratch``). Large database copies nothing uses go sooner, 30
+    minutes after their entry's last write (``hermes_constants_scratch_dbcopies``)."""
     from hermes_constants_scratch import prune_idle_entries
 
     root = scratch if scratch is not None else get_scratch_dir(prune=False)
     log_file = root.parent.parent / "logs" / "scratch-prune.log"
-    return prune_idle_entries(root, max_idle_hours, frozenset({_SCRATCH_PRUNE_STAMP}), log_file)
+    return prune_idle_entries(root, max_idle_hours, frozenset({_SCRATCH_PRUNE_STAMP}), log_file,
+                              reclaim_db_copies=True)
 
 
 def _prune_scratch_dir_once(scratch: Path) -> None:
@@ -1007,11 +1012,18 @@ def _prune_scratch_dir_once(scratch: Path) -> None:
     if _scratch_pruned_once:
         return
     _scratch_pruned_once = True
+    maybe_prune_scratch_dir(scratch)
+
+
+def maybe_prune_scratch_dir(scratch: Path) -> bool:
+    """Start the detached prune of *scratch* when the shared stamp says one is due; True when
+    started. Process boot calls this once; the gateway's housekeeping calls it on a timer, so
+    passes keep their cadence while no new Hermes process starts."""
     import time
     stamp = scratch / _SCRATCH_PRUNE_STAMP
     try:
         if time.time() - stamp.stat().st_mtime < _SCRATCH_PRUNE_INTERVAL_SECONDS:
-            return
+            return False
     except OSError:
         pass
     with contextlib.suppress(Exception):
@@ -1019,6 +1031,8 @@ def _prune_scratch_dir_once(scratch: Path) -> None:
         from hermes_constants_scratch_detach import spawn_prune
 
         spawn_prune(scratch)
+        return True
+    return False
 
 
 def scratch_dir_usage_bytes(scratch: Path | None = None) -> int:

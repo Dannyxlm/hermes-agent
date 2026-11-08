@@ -1,8 +1,8 @@
-"""The hourly scratch prune runs in a detached child process, not in the process that is due it.
+"""The periodic scratch prune runs in a detached child process, not in the process that is due it.
 
 A pass can take seconds to minutes (the idle scan of a large tree, the ``rmtree`` of a multi-GB
 entry). Inline, it held every process start; on a daemon thread it died with every short-lived
-``hermes`` command, the hourly stamp already spent. A detached child outlives the command that
+``hermes`` command, the stamp already spent. A detached child outlives the command that
 launched it, so each due pass runs to the end, with the same rules as an inline one.
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ _CHILD = ("import sys; sys.path[:] = sys.argv[3:]; "
 def spawn_prune(scratch: Path) -> None:
     """Start one detached prune of *scratch*, the path the caller resolved (a child never
     re-resolves the profile home). A failed spawn is logged and dropped: the stamp is already
-    spent, so the next pass is the next process past the hourly mark.
+    spent, so the next pass is the next caller past the interval.
 
     This process's ancestry is captured here, before the spawn: once this command and its
     parents exit, the child can no longer see that the user's shell was the caller's."""
