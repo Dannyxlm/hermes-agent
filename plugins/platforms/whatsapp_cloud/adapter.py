@@ -24,7 +24,7 @@ import shutil
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 try:
     from aiohttp import web
@@ -936,7 +936,10 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         approval = _optional_module("tools.approval", "[whatsapp_cloud] approval resolver unavailable")
         if approval is None:
             return False
-        count = approval.resolve_gateway_approval_card(session_key, choice, request_id)
+        # WhatsApp's wire label is "approve"; the shared consent gate accepts
+        # the canonical one-time choice, never an unscoped approval alias.
+        decision = "once" if choice == "approve" else choice
+        count = approval.resolve_gateway_approval_card(session_key, decision, request_id)
         # A tap after the wait timed out (count == 0) must not claim approval:
         # the command was already denied fail-closed.
         if count:
