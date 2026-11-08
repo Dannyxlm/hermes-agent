@@ -147,7 +147,7 @@ def test_peer_approval_is_scoped_visible_and_resolvable(tmp_path: Path, monkeypa
     )
     identity = driver.TaskIdentity("room-1", "task-1", "thread-1", "turn-1")
     monkeypatch.setattr(driver, "list_tasks", lambda *_a, **_kw: [{
-        "identity": identity, "execution_generation": 2, "status": "running",
+        "identity": identity, "execution_generation": 2, "cancel_generation": 0, "status": "running",
         "payload": {"target_member_id": "member-peer", "target_profile": "reviewer"}}])
     transport = service._resolve_member_transport(
         service.bindings()[0],
@@ -227,7 +227,7 @@ def test_stale_local_approval_cannot_resolve_replacement_request(tmp_path: Path,
     service.runtime.rpc = rpc
     monkeypatch.setattr(driver, "list_tasks", lambda *_a, **_kw: [{
         "identity": driver.TaskIdentity("room-1", "task-local-1", "thread-1", "turn-1"),
-        "execution_generation": 1, "status": "running", "payload": {"target_profile": "local"}}])
+        "execution_generation": 1, "cancel_generation": 0, "status": "running", "payload": {"target_profile": "local"}}])
     action = {
         "kind": "approval",
         "task_id": "task-local-1",
