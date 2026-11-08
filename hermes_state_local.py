@@ -1,11 +1,11 @@
 """Private local creation receipts in the canonical runtime transaction owner."""
 import json
-import sqlite3
 import threading
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
 
 from hermes_state_runtime import RuntimeStoreError, _epoch, _json
 
@@ -361,40 +361,62 @@ def local_conversation_ids(conn, session_id):
     return list(dict.fromkeys([owner, *(sid for sid in lineage if isinstance(sid, str))]))
 
 
-# store path -> (receipt stamp, the receipts with a lineage of more than one segment, parsed). Receipts are
-# inserted, deleted, or grow by one segment id (a reset or compression) via UPDATE, so their count, newest
-# rowid and total size name every such change without reading their ~43 KB values (parsing them is the
-# cost). Not exact: a lineage/session_id rewrite of unchanged length would not be seen, and no writer does
-# one; a new writer that could must bump something in this stamp.
-_LINEAGE_RECEIPTS: dict[str, tuple[tuple, list]] = {}
+_LINEAGE_RECEIPTS = OrderedDict()
+_RECEIPT_CACHE_LOCK = threading.Lock()
+
+
+def _receipt_file_version(conn):
+    scope = _LISTING_LINEAGES.get()
+    if scope is None or not scope[0].read_only or conn.in_transaction:
+        return None
+    path = Path(scope[0].db_path).resolve()
+    versions = []
+    try:
+        for candidate in (path, Path(str(path) + '-wal')):
+            try:
+                stat = candidate.stat()
+            except FileNotFoundError:
+                versions.append(None)
+                continue
+            versions.append((stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
+    except OSError:
+        return None
+    if versions[0] is None or versions[0][:2] != scope[0]._db_file_identity:
+        return None
+    return str(path), tuple(versions)
 
 
 def _lineage_receipts(conn):
     """``[(owner, lineage)]`` for every receipt holding more than one segment."""
-    glob = POLICY_PREFIX + '*'
-    scope = _LISTING_LINEAGES.get()
-    # Long-lived readers already have the exact connection/version cache below. Only
-    # disposable readonly listing requests need the fork's cross-request parse cache;
-    # never let its aggregate stamp publish an uncommitted transaction's receipts.
-    use_parse_cache = scope is not None and getattr(scope[0], "read_only", False) and not conn.in_transaction
-    try:
-        stamp = tuple(conn.execute("SELECT COUNT(*), MAX(rowid), TOTAL(octet_length(value)) "
-                                   "FROM state_meta WHERE key GLOB ?", (glob,)).fetchone()) if use_parse_cache else None
-    except sqlite3.OperationalError:  # SQLite before 3.43 has no octet_length: parse every time
-        stamp = None
-    path = conn.execute('PRAGMA database_list').fetchone()[2]
-    cached = _LINEAGE_RECEIPTS.get(path) if stamp is not None and path else None
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
+    indexed = conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' "
+                           "AND name='idx_state_meta_local_lineage'").fetchone() is not None
+    version = _receipt_file_version(conn) if not indexed else None
+    if version is not None:
+        with _RECEIPT_CACHE_LOCK:
+            cached = _LINEAGE_RECEIPTS.get(version)
+            if cached is not None:
+                _LINEAGE_RECEIPTS.move_to_end(version)
+                return [(owner, list(lineage)) for owner, lineage in cached]
+    # A literal predicate lets SQLite prove partial-index membership. Stores without
+    # the optional offline accelerator keep the exact scan, including writable stores.
+    index = ' INDEXED BY idx_state_meta_local_lineage' if indexed else ''
+    rows = conn.execute(
+        f"SELECT value FROM state_meta{index} WHERE key GLOB 'gateway.local_policy.v1:*' "
+        "AND json_valid(value) AND json_array_length(value, '$.lineage') > 1 ORDER BY key")
     receipts = []
-    for (raw,) in conn.execute("SELECT value FROM state_meta WHERE key GLOB ? AND json_valid(value) "
-                               "AND json_array_length(value, '$.lineage') > 1", (glob,)).fetchall():
+    for (raw,) in rows:
         receipt = json.loads(raw)
         owner, lineage = receipt.get('session_id'), receipt.get('lineage')
         if isinstance(owner, str) and all(isinstance(sid, str) for sid in lineage):
             receipts.append((owner, lineage))
-    if stamp is not None and path:
-        _LINEAGE_RECEIPTS[path] = (stamp, receipts)
+    if version is not None and version == _receipt_file_version(conn):
+        identities = [value for owner, lineage in receipts for value in (owner, *lineage)]
+        if len(identities) <= 4096 and sum(map(len, identities)) <= 65536:
+            with _RECEIPT_CACHE_LOCK:
+                _LINEAGE_RECEIPTS[version] = tuple((owner, tuple(lineage)) for owner, lineage in receipts)
+                _LINEAGE_RECEIPTS.move_to_end(version)
+                while len(_LINEAGE_RECEIPTS) > 16:
+                    _LINEAGE_RECEIPTS.popitem(last=False)
     return receipts
 
 

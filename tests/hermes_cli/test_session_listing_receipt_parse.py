@@ -16,7 +16,7 @@ from hermes_state import SessionDB
 
 @pytest.fixture(autouse=True)
 def fresh_cache(monkeypatch):
-    monkeypatch.setattr(local, "_LINEAGE_RECEIPTS", {}, raising=False)
+    monkeypatch.setattr(local, "_LINEAGE_RECEIPTS", type(local._LINEAGE_RECEIPTS)())
 
 
 @pytest.fixture
@@ -27,7 +27,13 @@ def parses(monkeypatch):
 
     def tracked(*args, **kwargs):
         conn = real(*args, **kwargs)
-        conn.set_trace_callback(lambda sql: seen.append(sql) if "json_array_length" in sql else None)
+        def trace(sql):
+            if not sql.lstrip().upper().startswith('SELECT') or 'json_array_length' not in sql:
+                return
+            plan = conn.execute('EXPLAIN ' + sql).fetchall()
+            if any(row[1] == 'Function' and 'json_array_length' in str(row[5]) for row in plan):
+                seen.append(sql)
+        conn.set_trace_callback(trace)
         return conn
 
     monkeypatch.setattr(hermes_state, "_connect_tracked_db", tracked)
@@ -43,6 +49,8 @@ def seed(path, receipts=200):
                 local.POLICY_PREFIX + f"filler-{i}",
                 json.dumps({"session_id": f"filler-{i}", "lineage": [f"filler-{i}"], "policy": "x" * 2000})))
         reset(db, "owner", "next", ["owner", "next"])
+    from hermes_state_listing_indexes import install_listing_indexes
+    install_listing_indexes(path.parent)
     return path
 
 
