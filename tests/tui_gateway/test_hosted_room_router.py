@@ -381,7 +381,7 @@ def test_status_reports_continue_limit_and_routing_modes(tmp_path):
     _room(service, "everyone")
     status = service.status(ROOM_ID)
     assert status["max_continues"] == router.MAX_DISCUSSION_CONTINUES
-    assert status["routing_modes"] == ["everyone", "lead", "auto"]
+    assert status["routing_modes"] == ["everyone", "lead"]  # CloudSeed v0.23 rollback fence: 'auto' not offered yet
 
 
 def test_planner_is_pure_over_a_routed_and_continued_log(tmp_path, answers):

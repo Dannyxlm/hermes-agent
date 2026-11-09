@@ -32,6 +32,11 @@ _CONTEXT_ACTOR = {"kind": "system", "id": "room-control"}
 SCHEDULED_POST_PREFIX = "cron:"
 SCHEDULED_NOTICE_PREFIX = "cron-notice:"
 ROUTING_MODES = ("everyone", "lead", "auto")
+# CloudSeed rollback fence for the v0.23.0 release. Its rollback target (the v0.22.7 fork) plans only
+# 'everyone' and 'lead' rooms, and a stored 'auto' stalls every turn in that room until an operator Stop.
+# So this release reads 'auto' but clients may not choose it. The first release whose rollback target is
+# this one deletes the fence and offers 'auto' (state probe: outputs/releases/2026-11-08-hermes-v0.23/state).
+WRITABLE_ROUTING_MODES = ("everyone", "lead")
 _EMPTY_CONTEXT = {"purpose": "", "notes": "", "routing": "everyone", "lead_member_id": ""}
 
 
