@@ -280,9 +280,12 @@ def _probe_usage(provider, entry):
         payload = usage._get_json("https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, timeout=5.0)
         config = payload.get("config") or {}
         period = config.get("currentPeriod") or {}
-        used = config.get("creditUsagePercent")
-        # A missing/invalid percentage is unknown, not a fresh allowance. The
+        # xAI serializes like proto3 JSON and drops zero-valued fields, so a
+        # healthy reply (a current period with an end) without the key means
+        # 0% used; Grok CLI's own /usage shows 0% for this shape. Without a
+        # period, or with an invalid value, the percentage stays unknown. The
         # range check also rejects NaN and infinities before serialization.
+        used = config.get("creditUsagePercent", 0 if period.get("end") else None)
         if not isinstance(used, (int, float)) or isinstance(used, bool) or not 0 <= used <= 100:
             used = None
         windows = [usage.AccountUsageWindow(

@@ -52,12 +52,35 @@ def test_grok_probe_maps_used_weekly_percent(monkeypatch, grok_entry, base_url, 
     }, timeout=5.0)
 
 
+def test_grok_probe_omitted_percent_on_healthy_reply_is_zero(monkeypatch, grok_entry):
+    # xAI drops zero-valued fields, so an unused account's reply has a period but no percentage.
+    payload = billing_payload(None)
+    payload['config'].pop('creditUsagePercent')
+    monkeypatch.setattr(usage, '_get_json', Mock(return_value=payload))
+
+    window = accounts._probe_usage('xai-oauth', grok_entry)['windows'][0]
+
+    assert window['used_percent'] == 0
+    assert window['remaining_percent'] == 100
+    assert window['reset_at'] == PERIOD_END
+
+
+@pytest.mark.parametrize('payload', [{}, {'config': {}}, {'config': {'currentPeriod': {}}},
+                                     {'config': {'currentPeriod': {'type': 'USAGE_PERIOD_TYPE_WEEKLY'}}}],
+                         ids=['no-config', 'empty-config', 'empty-period', 'period-without-end'])
+def test_grok_probe_omitted_percent_without_period_stays_unknown(monkeypatch, grok_entry, payload):
+    monkeypatch.setattr(usage, '_get_json', Mock(return_value=payload))
+
+    window = accounts._probe_usage('xai-oauth', grok_entry)['windows'][0]
+
+    assert window['used_percent'] is None
+    assert window['remaining_percent'] is None
+
+
 @pytest.mark.parametrize('percent', [None, float('nan'), float('inf'), -float('inf'), -1, 101, True, '25', {}],
-                         ids=['missing', 'nan', 'inf', 'negative-inf', 'negative', 'over-limit', 'bool', 'string', 'object'])
+                         ids=['null', 'nan', 'inf', 'negative-inf', 'negative', 'over-limit', 'bool', 'string', 'object'])
 def test_grok_probe_unknown_percent_preserves_period(monkeypatch, grok_entry, percent):
     payload = billing_payload(percent)
-    if percent is None:
-        payload['config'].pop('creditUsagePercent')
     monkeypatch.setattr(usage, '_get_json', Mock(return_value=payload))
 
     window = accounts._probe_usage('xai-oauth', grok_entry)['windows'][0]
