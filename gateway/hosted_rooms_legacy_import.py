@@ -108,6 +108,10 @@ def _copy_rows(target: sqlite3.Connection, source: Path, *, only: frozenset[str]
             if name == "hosted_rooms":
                 rows = list(rows)
                 copied_rooms = [str(row[room_index]) for row in rows]
+            if "kind" in columns and "payload_json" in columns:
+                from gateway.hosted_room_context import CONTEXT_EVENT_KIND, refuse_unwritable_routing
+                rows, kind, payload = list(rows), columns.index("kind"), columns.index("payload_json")
+                refuse_unwritable_routing(row[payload] for row in rows if row[kind] == CONTEXT_EVENT_KIND)
             target.executemany(
                 f"{verb} INTO {name} ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})", rows)
         if copied_rooms and "event_bytes" not in table_columns(legacy, "hosted_rooms"):
@@ -125,10 +129,11 @@ def import_legacy_rooms(conn: sqlite3.Connection, db_path: Path) -> None:
     source = source_path(db_path)
     if source is None or settled(conn, db_path):
         return
+    from gateway.hosted_rooms import HostedRoomError
     conn.execute("SAVEPOINT legacy_import")
     try:
         copied = _copy_rows(conn, source) if source.is_file() else 0
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, sqlite3.Error, HostedRoomError) as exc:
         # A locked, unreadable or incompatible legacy store must not take hosted rooms down with
         # it: drop the partial copy, leave the marker unset, retry on the next process start.
         conn.execute("ROLLBACK TO legacy_import")

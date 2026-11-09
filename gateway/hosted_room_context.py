@@ -34,8 +34,9 @@ SCHEDULED_NOTICE_PREFIX = "cron-notice:"
 ROUTING_MODES = ("everyone", "lead", "auto")
 # CloudSeed rollback fence for the v0.23.0 release. Its rollback target (the v0.22.7 fork) plans only
 # 'everyone' and 'lead' rooms, and a stored 'auto' stalls every turn in that room until an operator Stop.
-# So this release reads 'auto' but clients may not choose it. The first release whose rollback target is
-# this one deletes the fence and offers 'auto' (state probe: outputs/releases/2026-11-08-hermes-v0.23/state).
+# So this release reads 'auto' but admits no new settings event carrying it: not from a client, a
+# replica page, a promotion or an import (``refuse_unwritable_routing``). The first release whose rollback
+# target is this one deletes the fence (state probe: outputs/releases/2026-11-08-hermes-v0.23/state).
 WRITABLE_ROUTING_MODES = ("everyone", "lead")
 _EMPTY_CONTEXT = {"purpose": "", "notes": "", "routing": "everyone", "lead_member_id": ""}
 
@@ -57,6 +58,17 @@ def validate_context(purpose: Any, notes: Any, routing: Any = "everyone", lead_m
         raise hosted_rooms.HostedRoomError("lead routing needs a lead_member_id")
     return {"purpose": purpose, "notes": notes, "routing": routing,
             "lead_member_id": lead_member_id.strip() if routing == "lead" else ""}
+
+
+def refuse_unwritable_routing(payloads: Any) -> None:
+    """Refuse room settings this release may read but not admit (the rollback fence above).
+    ``payloads``: settings mappings or their stored JSON text."""
+    unwritable = set(ROUTING_MODES) - set(WRITABLE_ROUTING_MODES)
+    for payload in payloads:
+        if isinstance(payload, (str, bytes)):
+            payload = json.loads(payload)
+        if isinstance(payload, Mapping) and payload.get("routing") in unwritable:
+            raise hosted_rooms.HostedRoomError("automatic routing arrives in the next Hermes update")
 
 
 def _local_authority(db_path: DbPath, room_id: Any) -> dict[str, Any]:
@@ -107,6 +119,8 @@ def set_room_context(
             current["lead_member_id"] if lead_member_id is None else lead_member_id)
         if first is None and context["routing"] == "lead" and context["lead_member_id"] not in seated:
             raise hosted_rooms.HostedRoomError("the lead must be a member of this Group Chat")
+        if first is None:  # a retry returns its first event; a new event must not carry 'auto' forward
+            refuse_unwritable_routing([context])
         saved.update(context)
         if original is None:
             return context

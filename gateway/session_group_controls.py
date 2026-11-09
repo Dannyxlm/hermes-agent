@@ -242,12 +242,6 @@ def _group(authority, actor, method, params, *, host_scope=False, automation=Fal
                 result['driver_status'] = service.status(room['room_id'])
         return result
 
-    def context():
-        from gateway.hosted_room_context import ROUTING_MODES, WRITABLE_ROUTING_MODES
-        if params.get('routing') in set(ROUTING_MODES) - set(WRITABLE_ROUTING_MODES):
-            raise rooms.HostedRoomError("automatic routing arrives in the next Hermes update")
-        return set_room_context(db_path, **params)
-
     handlers = {
         'groups.capabilities': capabilities,
         'groups.list': listing,
@@ -255,7 +249,7 @@ def _group(authority, actor, method, params, *, host_scope=False, automation=Fal
         'groups.state': state,
         'groups.log': lambda: rooms.read_events(db_path, **params),
         'groups.rename': lambda: {'room': rooms.rename_room(db_path, **params)},
-        'groups.context': context,
+        'groups.context': lambda: set_room_context(db_path, **params),
         'groups.disband': disband,
     }
     return handlers[method]()
