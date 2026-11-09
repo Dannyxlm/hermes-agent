@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 
 from hermes_cli.observability.relay_shared_metrics import _reconcile_store_consent
-from hermes_cli.observability.shared_metrics import SharedMetricsStore
+from hermes_cli.observability.shared_metrics import SharedMetricsStore, _SCHEMA_BUSY_TIMEOUT_MS
 from hermes_cli.observability.shared_metrics_sender import SharedMetricsSender, reconcile_send_consent
 from hermes_state_wal import is_sqlite_wal_reset_vulnerable
 
@@ -75,3 +75,51 @@ def test_shared_metrics_keeps_canonical_rollback_journal_safety(tmp_path, monkey
         assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 250
     with sqlite3.connect(store.database_path) as check:
         assert check.execute("SELECT value FROM telemetry_state WHERE key = 'schema_version'").fetchone()
+
+
+@pytest.mark.parametrize("vulnerable", [False, True])
+def test_configured_delete_blocked_probe_is_not_bypassed(tmp_path, monkeypatch, vulnerable):
+    import hermes_state_wal
+
+    monkeypatch.setattr(hermes_state_wal, "resolve_journal_mode", lambda: "delete")
+    monkeypatch.setattr(hermes_state_wal, "is_sqlite_wal_reset_vulnerable", lambda: vulnerable)
+    store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
+    holder = sqlite3.connect(store.database_path, isolation_level=None)
+    try:
+        holder.execute("BEGIN EXCLUSIVE")
+        # The canonical policy raises its own OperationalError (without a result code)
+        # when this real lock prevents verification. A long wait must not bypass it.
+        with pytest.raises(sqlite3.OperationalError, match="could not verify journal mode"):
+            with store._connection(busy_timeout_ms=_SCHEMA_BUSY_TIMEOUT_MS):
+                pytest.fail("unverified configured DELETE was bypassed")
+    finally:
+        holder.close()
+    with store._connection() as check:
+        assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+
+@pytest.mark.parametrize("vulnerable", [False, True])
+def test_contended_configured_delete_drain_keeps_deferred_updates(tmp_path, monkeypatch, vulnerable):
+    import hermes_state_wal
+
+    monkeypatch.setattr(hermes_state_wal, "resolve_journal_mode", lambda: "delete")
+    monkeypatch.setattr(hermes_state_wal, "is_sqlite_wal_reset_vulnerable", lambda: vulnerable)
+    store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
+    holder = sqlite3.connect(store.database_path, isolation_level=None)
+    try:
+        holder.execute("BEGIN EXCLUSIVE")
+        for _ in range(2):
+            store.update_rollup_state("contended-rollup", lambda state: (
+                {"count": (state or {}).get("count", 0) + 1}, []
+            ))
+        store.drain_deferred()  # the default 5 s exit drain still cannot verify DELETE
+    finally:
+        holder.close()
+    store.drain_deferred()
+    store.drain_deferred()  # retries must not replay an already committed update
+    with store._connection() as check:
+        row = check.execute("SELECT value FROM telemetry_state WHERE key = 'contended-rollup'").fetchone()
+        assert row is not None, "contended exit drain lost its deferred updates"
+        assert json.loads(row["value"]) == {"count": 2}
+        assert check.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

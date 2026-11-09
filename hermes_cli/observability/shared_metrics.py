@@ -518,7 +518,10 @@ class SharedMetricsStore:
                 busy_timeout_ms=busy_timeout_ms,
             )
         except sqlite3.OperationalError as exc:
-            if busy_timeout_ms != _SCHEMA_BUSY_TIMEOUT_MS or exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+            # Policy refusals can be hand-built errors without a SQLite result code.
+            # Text-based lock matching would bypass unverified configured-DELETE policy.
+            if (busy_timeout_ms != _SCHEMA_BUSY_TIMEOUT_MS
+                    or getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_BUSY):
                 raise
             # A first opener can block the journal-mode switch without honoring the busy
             # timeout. Keep the schema/exit-drain wait; a later open can upgrade the mode.
