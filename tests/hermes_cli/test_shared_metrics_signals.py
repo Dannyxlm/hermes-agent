@@ -91,6 +91,23 @@ def test_turn_validation_reports_disabled_builtin_once_and_unknown_names_never(m
     assert contract.counter_dimensions_are_valid(contract.TOOL_UNAVAILABLE_METRIC, unavailable[0])
 
 
+def test_every_shipped_tool_unavailable_row_exports_with_a_valid_schema(tmp_path):
+    from tests.hermes_cli.test_relay_shared_metrics import _resource, _schema_validator
+
+    store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
+    names = contract.BUILTIN_TOOL_NAMES | contract.RETIRED_TOOL_NAMES
+    for name in sorted(names):
+        store.record_counter(contract.TOOL_UNAVAILABLE_METRIC, {
+            "model": "model-a", "provider": "openrouter", "tool_name": name,
+        }, _resource())
+
+    paths = store.create_and_export_package()
+    assert len(paths) == 1
+    package = json.loads(paths[0].read_text(encoding="utf-8"))
+    assert {row["dimensions"]["tool_name"] for row in package["metrics"]} == names
+    _schema_validator().validate(package)
+
+
 # ---- feature adoption ----
 
 def test_counter_rows_map_to_features():
