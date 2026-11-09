@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
 from typing import Any
 
-from hermes_cli.sqlite_util import add_column_if_missing, write_txn
+from hermes_cli.sqlite_util import add_column_if_missing, open_db, write_txn
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
 
@@ -510,10 +510,23 @@ class SharedMetricsStore:
     def _connection(
         self, *, busy_timeout_ms: int = _BUSY_TIMEOUT_MS
     ) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.database_path, timeout=busy_timeout_ms / 1000)
+        # Rollback-journal readers block consent/export/claim commits. Use the common
+        # WAL policy, including its vulnerable-SQLite and unsupported-filesystem fallbacks.
         try:
-            connection.row_factory = sqlite3.Row
-            connection.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            connection = open_db(
+                self.database_path, db_label="shared_metrics/metrics.sqlite3",
+                busy_timeout_ms=busy_timeout_ms,
+            )
+        except sqlite3.OperationalError as exc:
+            if busy_timeout_ms != _SCHEMA_BUSY_TIMEOUT_MS or exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+                raise
+            # A first opener can block the journal-mode switch without honoring the busy
+            # timeout. Keep the schema/exit-drain wait; a later open can upgrade the mode.
+            connection = open_db(
+                self.database_path, db_label="shared_metrics/metrics.sqlite3",
+                busy_timeout_ms=busy_timeout_ms, wal=False,
+            )
+        try:
             with connection:
                 yield connection
         finally:
