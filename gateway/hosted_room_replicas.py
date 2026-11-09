@@ -157,6 +157,8 @@ def ingest_page(
         new_events = [e for e in events if int(e["seq"]) > last_seq]
         if new_events and int(new_events[0]["seq"]) != last_seq + 1:
             raise ReplicaGapError("page skips sequences the replica has not stored")
+        from gateway.hosted_room_context import CONTEXT_EVENT_KIND, refuse_unwritable_routing
+        refuse_unwritable_routing(e["payload"] for e in new_events if e["kind"] == CONTEXT_EVENT_KIND)
         added_bytes = 0
         for event in new_events:
             size = _event_bytes(event)
@@ -219,6 +221,10 @@ def promote_replica(
             raise RoomConflictError("room_id already exists in the local authoritative store")
         if conn.execute("SELECT 1 FROM hosted_room_retired_ids WHERE room_id=?", (room_id,)).fetchone():
             raise RoomConflictError("room_id belongs to a disbanded room")
+        from gateway.hosted_room_context import CONTEXT_EVENT_KIND, refuse_unwritable_routing
+        refuse_unwritable_routing(row[0] for row in conn.execute(
+            "SELECT payload_json FROM hosted_room_replica_events WHERE room_id=? AND kind=?",
+            (room_id, CONTEXT_EVENT_KIND)))
         previous_gateway, previous_epoch = str(replica["authority_gateway_id"]), int(replica["authority_epoch"])
         target_epoch, claim_seq = previous_epoch + 1, int(replica["last_seq"]) + 1
         claim = _control_event("claimed", target_epoch, {

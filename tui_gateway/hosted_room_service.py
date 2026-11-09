@@ -19,7 +19,8 @@ from gateway import hosted_room_driver as driver
 from gateway import hosted_room_links
 from gateway import hosted_rooms
 from gateway import hosted_room_router as router
-from gateway.hosted_room_context import ROUTING_MODES, room_context
+from gateway import hosted_room_context
+from gateway.hosted_room_context import room_context
 from gateway.hosted_room_policy_checkpoint import HostedRoomPolicyCheckpoint, PolicySnapshot
 from gateway.hosted_room_peer import (
     GatewayRoomCatalog, HostedMemberDispatch, PROTOCOL_VERSION, room_grant_needs_dispatch_refresh)
@@ -951,7 +952,8 @@ class HostedRoomService:
             "last_error": self._prepare_stalls.last_error(room_id),
             "max_rounds": self.discussion_limits.max_rounds,
             "max_continues": router.MAX_DISCUSSION_CONTINUES,
-            "routing_modes": list(ROUTING_MODES),
+            # Offer only what a client may write (the v0.23 rollback fence); stored 'auto' still reads.
+            "routing_modes": list(hosted_room_context.WRITABLE_ROUTING_MODES),
             "peer_routes": self._route_statuses(room_id)}
 
 

@@ -18,6 +18,14 @@ from tests.waiting import wait_until
 from tui_gateway import hosted_room_router_call as router_call
 from tui_gateway.hosted_room_service import HostedRoomService
 
+
+@pytest.fixture(autouse=True)
+def _auto_routing_writable(monkeypatch):
+    """These tests exercise upstream's auto routing itself. CloudSeed's v0.23 rollback fence keeps
+    clients from writing 'auto' (tests/gateway/test_group_routing_rollback_fence.py); lift it here."""
+    from gateway import hosted_room_context
+    monkeypatch.setattr(hosted_room_context, "WRITABLE_ROUTING_MODES", hosted_room_context.ROUTING_MODES)
+
 PROFILES = ("research", "build", "review")
 ROOM_ID = "router-room"
 
