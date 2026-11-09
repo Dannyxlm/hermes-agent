@@ -1,7 +1,7 @@
-"""Auxiliary-task model default factory."""
+"""Pure-data factory for auxiliary model configuration defaults."""
 
 
-def auxiliary_defaults(timeout, *, reasoning_effort=True, **extra):
+def _aux(timeout, *, reasoning_effort=True, **extra):
     """Standard auxiliary-task model block (see DEFAULT_CONFIG["auxiliary"]).
 
     reasoning_effort=False omits that key (MoA blocks configure depth per slot);

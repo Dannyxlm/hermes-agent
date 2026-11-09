@@ -194,6 +194,9 @@ export interface ClientSessionState {
   streamTurnId?: null | string
   /** Exact admission observed on the accepted message.start; absent on legacy/local starts. */
   streamExecutionControl?: (Required<Pick<GatewayEvent, 'admission_id' | 'execution_generation'>> & { ownerKey: string }) | null
+  /** Newest row on screen when that message.start arrived: rows above it are
+   *  earlier turns, even when an interim seal left them marked `interim`. */
+  turnAnchorId?: null | string
   /** A blocking clarify prompt is waiting on the user for this session. Drives
    *  the sidebar "needs input" indicator; cleared when the turn resumes/ends. */
   needsInput: boolean

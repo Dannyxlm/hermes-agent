@@ -1,6 +1,6 @@
-import type { SessionInfo } from '../types.js'
+import type { PendingSubmissionRow } from '../types.js'
 
-export type PendingRow = NonNullable<SessionInfo['pending_submissions']>[number]
+export type PendingRow = PendingSubmissionRow
 
 // Inputs whose transcript bubble this client already painted at submit time.
 // A busy-time admission defers its bubble until the authority starts it, so
@@ -13,7 +13,7 @@ export const resetBubbleLedger = () => shown.clear()
 // Rows the authority just moved queued → started whose bubble nobody painted.
 // Only a transition observed by THIS client counts: a resume snapshot's started
 // row already lives in the replayed history.
-export function newlyStartedRows(previous: PendingRow[] | undefined, incoming: PendingRow[] | undefined): PendingRow[] {
+export function newlyStartedRows(previous: null | PendingRow[] | undefined, incoming: null | PendingRow[] | undefined): PendingRow[] {
   if (!previous || !incoming) { return [] }
   const wasQueued = new Set(previous.filter(row => row.status === 'queued').map(row => row.admission_id))
 

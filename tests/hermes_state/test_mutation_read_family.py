@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from gateway.session_contract import Principal
+from gateway.session_contract import SessionActor
 from hermes_state import SessionDB
 from hermes_state_mutation_binding import BINDING_PREFIX, authorize_history
 import hermes_state_runtime as rt
@@ -105,7 +105,7 @@ def test_foreign_family_member_rolls_back_entire_sidebar_edit(
     args = mutation(epoch, target, 'foreign-read')
     args['payload'] = {'title': 'must roll back', 'unread': False}
     if claimed_anchor:
-        actor = Principal('human', str(db.db_path.parent), frozenset({'session:create'}), 'http')
+        actor = SessionActor('human', str(db.db_path.parent), frozenset({'session:create'}), 'http')
 
         def authorize_write(conn):
             assert authorize_history(conn, actor, target, claim=True)
@@ -139,7 +139,7 @@ def test_receipt_failure_rolls_back_watermarks_and_family_revisions(family_store
 @pytest.mark.parametrize('target', ['root', 'tip', 'stale'])
 def test_cold_history_claim_keeps_same_owner_aliases_readable(family_store, target):
     db, epoch = family_store
-    actor = Principal('human', str(db.db_path.parent), frozenset({'session:create'}), 'http')
+    actor = SessionActor('human', str(db.db_path.parent), frozenset({'session:create'}), 'http')
 
     def authorize_write(conn):
         assert authorize_history(conn, actor, target, claim=True)

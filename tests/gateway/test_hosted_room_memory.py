@@ -35,7 +35,7 @@ def room(tmp_path, monkeypatch):
 
 def submit_task(room, *, automation=False, legacy=False):
     from gateway.session_group_controls import _group
-    from gateway.session_contract import Principal
+    from gateway.session_contract import SessionActor
     from gateway import hosted_room_driver as tasks
     from tui_gateway.hosted_room_driver import HostedRoomBinding
     authority, service, gateway = room
@@ -43,7 +43,7 @@ def submit_task(room, *, automation=False, legacy=False):
         from gateway.hosted_rooms import user_event_id
         event = service.send(room_id='room', event_id=user_event_id('input'), payload={'text': 'input', 'thread_id': 'main'})
     else:
-        event = _group(authority, Principal('owner', authority.profile_id, frozenset(), 'test'), 'groups.send',
+        event = _group(authority, SessionActor('owner', authority.profile_id, frozenset(), 'test'), 'groups.send',
                        {'room_id': 'room', 'event_id': 'input', 'payload': {'text': 'input', 'thread_id': 'main'}},
                        automation=automation)['event']
     identity = tasks.TaskIdentity('room', 'task', 'main', 'turn')
@@ -121,10 +121,10 @@ def test_foreign_control_and_client_attestation_field_are_rejected(room):
 def test_trigger_receipt_is_atomic_and_never_backfills_legacy_events(room, monkeypatch):
     from gateway import hosted_rooms
     from gateway.hosted_room_memory import local_memory_context
-    from gateway.session_contract import Principal
+    from gateway.session_contract import SessionActor
     from gateway.session_group_controls import _group
     authority, service, _ = room
-    actor = Principal('owner', authority.profile_id, frozenset(), 'test')
+    actor = SessionActor('owner', authority.profile_id, frozenset(), 'test')
     params = {'room_id': 'room', 'event_id': 'input', 'payload': {'text': 'input', 'thread_id': 'main'}}
     original = hosted_rooms._insert_event
     def fail(*args, **kwargs):

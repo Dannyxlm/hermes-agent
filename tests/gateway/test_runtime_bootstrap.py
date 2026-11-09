@@ -76,7 +76,7 @@ def test_wake_grant_preserves_exact_login_without_owner_or_host_authority():
 def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind):
     from types import SimpleNamespace
     from gateway.owner_identity import host_owner_subject
-    from gateway.session_contract import Principal
+    from gateway.session_contract import SessionActor
     from gateway.session_identity import authenticated_subject
     from gateway.session_local_migration import (bind_native_transport, require_history_claim,
                                                  adopt_legacy_session, unbind_native_transport)
@@ -85,7 +85,7 @@ def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind
 
     subject = (host_owner_subject() if subject_kind == 'host-owner' else
                authenticated_subject({'provider': 'basic', 'user_id': 'alice'}))
-    actor = Principal(subject, str(tmp_path), frozenset({'session:create', 'session:read'}), 'wake')
+    actor = SessionActor(subject, str(tmp_path), frozenset({'session:create', 'session:read'}), 'wake')
     identity = {'provider': 'local', 'profile_id': str(tmp_path), 'instance_id': 'fixture',
                 'native_bootstrap': True, 'bootstrap_purpose': 'session-wake'}
     with SessionDB(tmp_path / 'state.db') as db:
