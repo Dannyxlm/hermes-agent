@@ -4698,6 +4698,7 @@
                 "start_chat",
                 "terminal",
                 "text_to_speech",
+                "thread",
                 "todo_list",
                 "video_analyze",
                 "video_generate",
