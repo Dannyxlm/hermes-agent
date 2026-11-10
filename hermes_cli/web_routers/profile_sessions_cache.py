@@ -9,6 +9,7 @@ import functools
 import inspect
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Literal, ParamSpec
 
@@ -79,7 +80,15 @@ class _ResponseBytesCache:
         self.body_bytes = 0
         self.latest_wall = float("-inf")
         self.lock = threading.Lock()
-        self.refresh_lock = threading.Lock()
+        self.refresh_locks = weakref.WeakValueDictionary()
+
+    def refresh_lock(self, arguments: _Arguments):
+        # Waiters retain the lock; idle keys disappear instead of accumulating with DB versions.
+        with self.lock:
+            lock = self.refresh_locks.get(arguments)
+            if lock is None:
+                lock = self.refresh_locks[arguments] = threading.Lock()
+            return lock
 
     def _clock(self, now: float) -> None:
         if now < self.latest_wall:
@@ -170,7 +179,7 @@ def profile_sessions_response_cache(listing: _Listing) -> Callable[[Callable[_P,
             cached = cache.get(dependencies, time.time())
             if cached is not None:
                 return cached
-            with cache.refresh_lock:
+            with cache.refresh_lock(tuple(arguments.items())):
                 # A waiter must not reuse the pre-lock roster, policy, or file version.
                 dependencies = _dependencies(arguments, listing)
                 started = time.time()

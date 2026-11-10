@@ -465,3 +465,26 @@ def test_bound_arguments_separate_flat_wire_responses(stores, params):
         expected = oracle.get("/api/profiles/sessions", params=query)
         assert client.get("/api/profiles/sessions", params=query).content == expected.content
         assert client.get("/api/profiles/sessions", params=query).content == expected.content
+
+
+def test_all_profile_refresh_does_not_block_a_single_profile(monkeypatch):
+    from hermes_cli.web_routers import profile_sessions_cache as module
+    entered, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(module, '_dependencies', lambda args, listing: tuple(args.items()))
+
+    @module.profile_sessions_response_cache('sessions')
+    def listing(profile, full=False, archived='exclude', order='recent'):
+        if profile == 'all':
+            entered.set()
+            assert release.wait(10)
+        return {'sessions': [], 'profile': profile}
+
+    with ThreadPoolExecutor(2) as pool:
+        desktop = pool.submit(listing, 'all')
+        assert entered.wait(10)
+        phone = pool.submit(listing, 'ops')
+        try:
+            assert json.loads(phone.result(5).body)['profile'] == 'ops'
+        finally:
+            release.set()
+        assert json.loads(desktop.result(10).body)['profile'] == 'all'
