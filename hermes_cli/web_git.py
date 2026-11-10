@@ -80,7 +80,8 @@ def _is_dir(cwd: str) -> bool:
 
 def _status_z(cwd: str, *extra: str) -> tuple[int, str]:
     """(returncode, raw) of ``git status --porcelain=v2 -z``."""
-    code, raw, _ = _git(cwd, ["status", "--porcelain=v2", *extra, "-z"])
+    # A read must not refresh the index stamp and invalidate the status cache it just filled.
+    code, raw, _ = _git(cwd, ["--no-optional-locks", "status", "--porcelain=v2", *extra, "-z"])
     return code, raw
 
 
