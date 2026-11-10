@@ -8,7 +8,6 @@ wrappers (git/gh can block).
 
 import asyncio
 import copy
-from collections import OrderedDict
 import shutil
 import time
 from functools import partial
@@ -49,50 +48,24 @@ def _git_path(path: str) -> str:
     return str(_fs_path(path))
 
 
-_git_status_cache = OrderedDict()
 _git_status_tasks = {}
 
 
-def _git_status_key(path):
-    from utils import file_signature
-    root = Path(path).resolve()
-    directory = next((p / '.git' for p in (root, *root.parents) if (p / '.git').exists()), root / '.git')
-    if directory.is_file():  # Linked worktrees keep HEAD/index in their private gitdir.
-        text = directory.read_text().strip()
-        if text.startswith('gitdir: '):
-            directory = (directory.parent / text[8:]).resolve()
-    stamps = []
-    for name in ('HEAD', 'index'):
-        try:
-            stamps.append(file_signature((directory / name).stat()))
-        except OSError:
-            stamps.append(None)
-    return str(root), tuple(stamps)
-
-
-async def _git_status_probe(key, task_key):
+async def _git_status_probe(path, task_key):
     try:
-        result = await _git_op(_web_git.repo_status, key[0])
-        if _git_status_key(key[0]) == key:
-            _git_status_cache[key] = (time.monotonic(), copy.deepcopy(result))
-            _git_status_cache.move_to_end(key)
-            while len(_git_status_cache) > 32:
-                _git_status_cache.popitem(last=False)
-        return result
+        return await _git_op(_web_git.repo_status, path)
     finally:
         _git_status_tasks.pop(task_key, None)
 
 
 @router.get("/api/git/status")
 async def git_status_route(path: str):
-    key = _git_status_key(_git_path(path))
-    cached = _git_status_cache.get(key)
-    if cached is not None and 0 <= time.monotonic() - cached[0] < 4:
-        return copy.deepcopy(cached[1])
-    task_key = (asyncio.get_running_loop(), key)
+    # Check every caller before joining; filesystem mutations are not cacheable by git stamps.
+    root = str(Path(_git_path(path)).resolve())
+    task_key = (asyncio.get_running_loop(), root)
     task = _git_status_tasks.get(task_key)
     if task is None:
-        task = _git_status_tasks[task_key] = asyncio.create_task(_git_status_probe(key, task_key))
+        task = _git_status_tasks[task_key] = asyncio.create_task(_git_status_probe(root, task_key))
     return copy.deepcopy(await asyncio.shield(task))
 
 

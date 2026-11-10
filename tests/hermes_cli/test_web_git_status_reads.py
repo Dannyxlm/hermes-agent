@@ -32,37 +32,35 @@ def test_status_still_counts_tracked_and_untracked_changes(repo):
 
 
 @pytest.mark.parametrize('linked_worktree', [False, True])
-def test_route_reuses_status_with_ttl_and_git_stamp_invalidation(repo, monkeypatch, linked_worktree):
+def test_route_reads_mutations_immediately_after_completed_flight(repo, monkeypatch, linked_worktree):
     import asyncio
     from hermes_cli.web_routers import git as router
     if linked_worktree:
         target = repo.parent / 'linked'
         _git(repo, 'worktree', 'add', '-b', 'linked-status', str(target))
-        (target / 'a.txt').write_text('one\ntwo\nthree\n')
-        (target / 'new.py').write_text('print(1)\nprint(2)\n')
         repo = target
-    now, calls = [1000.0], []
-    monkeypatch.setattr(router.time, 'monotonic', lambda: now[0])
+    else:
+        _git(repo, 'checkout', '--', 'a.txt')
+        (repo / 'new.py').unlink()
+    calls = []
     original = web_git.repo_status
     def counted(path):
         calls.append(path)
         return original(path)
     monkeypatch.setattr(web_git, 'repo_status', counted)
-    def status():
-        return asyncio.run(router.git_status_route(str(repo)))
-    first = status()
-    first['changed'] = -1
-    assert status()['changed'] == 2
-    assert len(calls) == 1
-    _git(repo, 'add', 'a.txt')
-    assert status()['staged'] == 1
-    assert len(calls) == 2
-    _git(repo, 'checkout', '-b', 'status-cache-branch')
-    status()
-    assert len(calls) == 3
-    now[0] += 5
-    status()
-    assert len(calls) == 4
+    async def probe():
+        first = await router.git_status_route(str(repo))
+        assert first['changed'] == 0
+        first['changed'] = -1
+        (repo / 'a.txt').write_text('one\ntwo\nthree\n')
+        (repo / 'new.py').write_text('print(1)\nprint(2)\n')
+        changed = await router.git_status_route(str(repo))
+        assert (changed['changed'], changed['unstaged'], changed['untracked']) == (2, 2, 1)
+        assert len(calls) == 2
+        web_git.review_revert(str(repo), 'new.py')
+        assert (await router.git_status_route(str(repo)))['untracked'] == 0
+        assert len(calls) == 3
+    asyncio.run(probe())
 
 
 @pytest.mark.asyncio
