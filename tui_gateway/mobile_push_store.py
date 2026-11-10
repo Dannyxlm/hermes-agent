@@ -157,6 +157,7 @@ class PushStore(ActivityPushStore, WidgetPushStore):
         os.chmod(self.path, 0o600)
         self._lock = threading.RLock()
         self.owner = process_owner()
+        self._retained_at = None
         self._db = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         try:
@@ -847,6 +848,13 @@ class PushStore(ActivityPushStore, WidgetPushStore):
         now = self.clock()
         with self.transaction() as db:
             self._maintain_activity_cleanup(db, now, running)
+        with self._lock:
+            if self._retained_at is not None and 0 <= now - self._retained_at < 600:
+                return
+            self._retain(now)
+            self._retained_at = now
+
+    def _retain(self, now):
         with self.transaction() as db:
             db.execute("DELETE FROM mobile_presence WHERE expires_at<=?", (now,))
             db.execute("DELETE FROM widget_readers WHERE expires_at<=?", (now,))

@@ -541,3 +541,27 @@ def test_logout_removes_durable_cleanup_and_prevents_replay(delivery):
     now[0] += 9 * 3600
     service.drain_once()
     assert sender.jobs == []
+
+
+def test_retention_runs_once_per_ten_minutes_but_activity_cleanup_keeps_running(delivery):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    receipt = register_activity(service, scope, ids, run['run_id'])
+    statements = []
+    service.store._db.set_trace_callback(statements.append)
+    service.drain_once()
+    expire_activity_lease(service, receipt, now[0] + 20)
+    with service.store.transaction() as db:
+        db.execute('INSERT INTO events VALUES (?, ?)', ('expired-event', now[0] - 31 * 86400))
+    now[0] += 30
+    service.drain_once()
+    assert activities(sender)[-1]['payload']['aps']['event'] == 'end'
+    retention = lambda: [sql for sql in statements if sql.startswith('DELETE FROM events')]
+    assert len(retention()) == 1
+    with service.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM events WHERE event_id='expired-event'").fetchone()[0] == 1
+    now[0] += 570
+    service.drain_once()
+    assert len(retention()) == 2
+    with service.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM events WHERE event_id='expired-event'").fetchone()[0] == 0
