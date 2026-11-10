@@ -30,7 +30,7 @@ def invoke(tmp_path, request, *, raw=False):
            'HERMES_HOME': str(isolated), 'PYTHONPATH': str(isolated)}
     proc = subprocess.run([sys.executable, '-I', '-B', str(CLI)],
         input=request if raw else json.dumps(request).encode(),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=isolated, env=env, timeout=20)
+        capture_output=True, check=False, cwd=isolated, env=env, timeout=20)
     assert proc.stdout, proc.stderr.decode('utf-8', errors='replace')
     return proc, json.loads(proc.stdout)
 
