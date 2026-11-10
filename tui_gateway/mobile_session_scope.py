@@ -65,7 +65,10 @@ def projection_destinations(db, profile, stored_ids):
 
 
 def live_draft(home, stored_id):
-    """Only this authenticated owner's attached, empty draft can stand in for a missing row."""
+    """Only an authenticated attached transport in the same host-owner/profile scope may read a draft.
+
+    The owner subject identifies the host, not an individual login; transport membership is the live gate.
+    """
     from . import server
     from .transport import current_transport
     from gateway.session_identity import is_authenticated_identity

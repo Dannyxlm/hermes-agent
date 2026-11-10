@@ -304,15 +304,7 @@ def test_created_draft_is_readable_only_by_its_authenticated_transport_and_profi
         params = {'profile': 'ops', 'stored_session_id': key,
                   'installation_id': str(uuid.uuid4()), 'connection_id': str(uuid.uuid4()),
                   'device_token': 'ab' * 32, 'environment': 'production'}
-    result = rpc(method, **params)
-    assert 'result' in result, result
-    if method == 'session.family':
-        assert result['result']['root']['session_id'] == key
-        assert result['result']['nodes'] == []
-    elif method == 'skills.changes.list':
-        assert result['result']['items'] == []
-    else:
-        assert result['result']['resolved_session_id'] == key
+    # Check refusal codes before acceptance so the same assertions execute on the live base.
     field = 'stored_session_id' if method == 'mobile.session_push.register' else 'session_id'
     code = 4001 if method == 'session.family' else 4400
     for override in ({field: 'unknown-draft'}, {'profile': 'default'}):
@@ -327,12 +319,28 @@ def test_created_draft_is_readable_only_by_its_authenticated_transport_and_profi
             reset_transport(token)
     session = server._sessions[created['session_id']]
     assert session['agent'] is not None and not session['history']
+    identity = peer.auth_identity
+    peer.auth_identity = None
+    try:
+        expected = 4403 if method == 'mobile.session_push.register' else code
+        assert rpc(method, **params)['error']['code'] == expected
+    finally:
+        peer.auth_identity = identity
     owner = session['auth_user_id']
     session['auth_user_id'] = 'foreign-subject'
     try:
         assert rpc(method, **params)['error']['code'] == code
     finally:
         session['auth_user_id'] = owner
+    result = rpc(method, **params)
+    assert 'result' in result, result
+    if method == 'session.family':
+        assert result['result']['root']['session_id'] == key
+        assert result['result']['nodes'] == []
+    elif method == 'skills.changes.list':
+        assert result['result']['items'] == []
+    else:
+        assert result['result']['resolved_session_id'] == key
     if method == 'mobile.session_push.register':
         server._mobile_push_note_submission(session, {'origin': {k: params[k] for k in ('installation_id', 'connection_id')}})
         with push_service.store.transaction() as db:
