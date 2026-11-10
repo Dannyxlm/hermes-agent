@@ -157,7 +157,7 @@ async def test_legacy_adoption_takes_an_idle_chat_a_ledger_deferring_backend_hol
 
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setattr(run, '_load_gateway_config', lambda: {'platform_toolsets': {'cli': []}})
-    monkeypatch.setattr(session_lifecycle, '_load_cfg', lambda: {}, raising=False)  # bound by tui_gateway.server
+    monkeypatch.setattr(session_lifecycle, '_load_cfg', dict, raising=False)  # bound by tui_gateway.server
     store = SessionStore(tmp_path / 'sessions', GatewayConfig())
     db = store._db
     db.create_session('old-dash', source='desktop', model='old', cwd=str(tmp_path))
