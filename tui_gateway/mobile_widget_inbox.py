@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import math
+import time
 from pathlib import Path
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -20,10 +21,12 @@ class _Projection:
     attention: dict | None = None
     items: list | None = None
     revision: str | None = None
+    stamp: tuple | None = None
 
 
 # Process-local, bounded by served stores; never retains a connection or grant.
 _PROJECTIONS = OrderedDict()
+_CUTS = OrderedDict()
 _PROJECTION_LOCK = Lock()
 
 
@@ -46,9 +49,7 @@ def _revision(items):
     return hashlib.sha256(json.dumps(items, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def _cursor_offset(cursor, grant, revision, epoch):
-    if cursor is None:
-        return 0
+def _cursor_value(cursor):
     try:
         if len(cursor) > 1024:
             raise ValueError("invalid cursor")
@@ -58,9 +59,18 @@ def _cursor_offset(cursor, grant, revision, epoch):
             raise ValueError("invalid cursor")
     except (ValueError, KeyError, TypeError, UnicodeError) as error:
         raise ValueError("invalid cursor") from error
+    if not isinstance(value['revision'], str):
+        raise ValueError("invalid cursor")
+    return value
+
+
+def _cursor_offset(cursor, grant, revision, epoch):
+    if cursor is None:
+        return 0
+    value = _cursor_value(cursor)
     if (value["grant"], value["revision"], value["epoch"]) != (grant, revision, epoch):
         raise WidgetInboxChanged("Inbox changed between pages")
-    return offset
+    return value["offset"]
 
 
 def _signature(db):
@@ -116,10 +126,38 @@ def _replies(rows, signature):
     return result
 
 
+def _store_stamp(home):
+    from utils import file_signature, mtime_is_racy
+    stamps = []
+    for name in ('state.db', 'state.db-wal'):
+        try:
+            stat = (home / name).stat()
+        except FileNotFoundError:
+            stamps.append(None)
+            continue
+        if mtime_is_racy(stat.st_mtime_ns):
+            return None
+        stamps.append(file_signature(stat))
+    return tuple(stamps)
+
+
+def _retained(home, revision):
+    with _PROJECTION_LOCK:
+        now = time.monotonic()
+        for key, (at, _) in list(_CUTS.items()):
+            if not 0 <= now - at < 60:
+                del _CUTS[key]
+        entry = _CUTS.get((home, revision))
+        if entry is None:
+            raise WidgetInboxChanged("Inbox cut expired; retry from page one")
+        return entry[1], revision
+
+
 def _projection(db, home):
     with _PROJECTION_LOCK:
-        signature = _signature(db)
+        stamp = _store_stamp(home)
         cut = _PROJECTIONS.get(home)
+        signature = cut.signature if cut is not None and stamp is not None and cut.stamp == stamp else _signature(db)
         if cut is None or cut.signature != signature:
             rows = db.list_sessions_rich(limit=-1, compact_rows=True,
                 order_by_last_active=True, include_pinned=False)
@@ -129,6 +167,11 @@ def _projection(db, home):
             cut.items = _items(cut.rows, cut.replies, attention)
             cut.revision = _revision(cut.items)
             cut.attention = attention
+        cut.stamp = stamp if _store_stamp(home) == stamp else None
+        _CUTS[(home, cut.revision)] = (time.monotonic(), cut.items)
+        _CUTS.move_to_end((home, cut.revision))
+        while len(_CUTS) > 4:
+            _CUTS.popitem(last=False)
         _PROJECTIONS[home] = cut
         _PROJECTIONS.move_to_end(home)
         while len(_PROJECTIONS) > 4:
@@ -159,11 +202,16 @@ def inbox_snapshot(store, token, cursor=None):
     path = home / "state.db"
     coverage = summary_scope(grant['profile'], replies_complete=True)
     epoch = coverage.get('pending_epoch')
-    with server._session_profile_runtime_scope({"profile_home": str(home)}, hydrate_secrets=False):
-        with SessionDB(db_path=path, read_only=True) as db:
-            # One read transaction covers membership, order, lineage and replies.
-            db._conn.execute("BEGIN")
-            items, revision = _projection(db, home)
+    if cursor is not None:
+        value = _cursor_value(cursor)
+        _cursor_offset(cursor, grant['grant_id'], value['revision'], epoch)
+        items, revision = _retained(home, value['revision'])
+    else:
+        with server._session_profile_runtime_scope({"profile_home": str(home)}, hydrate_secrets=False):
+            with SessionDB(db_path=path, read_only=True) as db:
+                # One read transaction covers membership, order, lineage and replies.
+                db._conn.execute("BEGIN")
+                items, revision = _projection(db, home)
     if summary_scope(grant['profile']).get('pending_epoch') != epoch:
         raise WidgetInboxChanged("Inbox changed while reading")
     # Revocation/profile switches during projection assembly must win.
