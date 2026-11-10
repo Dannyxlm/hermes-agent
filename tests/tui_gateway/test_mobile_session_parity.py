@@ -288,7 +288,11 @@ def test_created_draft_is_readable_only_by_its_authenticated_transport_and_profi
     monkeypatch.setattr(Path, 'home', lambda: mobile_home.parent)
     monkeypatch.setattr('hermes_cli.profiles._get_default_hermes_home', lambda: mobile_home)
     monkeypatch.setattr(server, '_register_session_cwd', lambda session: None)
-    monkeypatch.setattr(server, '_schedule_agent_build', lambda *args, **kwargs: None)
+    from types import SimpleNamespace
+    def prewarm(sid):
+        # Faithfully run the real attachment boundary without constructing a provider or starting services.
+        assert server._attach_built_agent(sid, server._sessions[sid], SimpleNamespace())
+    monkeypatch.setattr(server, '_schedule_agent_build', prewarm)
     peer.auth_identity = {'user_id': 'fixture-owner', 'provider': 'fixture-auth'}
     created = rpc('session.create', profile='ops')['result']
     key = created['stored_session_id']
@@ -314,13 +318,15 @@ def test_created_draft_is_readable_only_by_its_authenticated_transport_and_profi
     for override in ({field: 'unknown-draft'}, {'profile': 'default'}):
         assert rpc(method, **{**params, **override})['error']['code'] == code
     foreign = MobilePeer()
-    foreign.auth_identity = {'user_id': 'foreign-owner', 'provider': 'fixture-auth'}
-    token = bind_transport(foreign)
-    try:
-        assert rpc(method, **params)['error']['code'] == code
-    finally:
-        reset_transport(token)
+    for identity in ('foreign-owner', 'fixture-owner'):
+        foreign.auth_identity = {'user_id': identity, 'provider': 'fixture-auth'}
+        token = bind_transport(foreign)
+        try:
+            assert rpc(method, **params)['error']['code'] == code
+        finally:
+            reset_transport(token)
     session = server._sessions[created['session_id']]
+    assert session['agent'] is not None and not session['history']
     owner = session['auth_user_id']
     session['auth_user_id'] = 'foreign-subject'
     try:
@@ -337,3 +343,21 @@ def test_created_draft_is_readable_only_by_its_authenticated_transport_and_profi
         assert len(push_service.sender.jobs) == 1
     with SessionDB(db_path=path, read_only=True) as db:
         assert db.get_session(key) is None
+    # First-submit's real persistence boundary uses the draft's exact key and owning store.
+    with server._session_profile_runtime_scope(session):
+        assert server._ensure_session_db_row(session)
+    with SessionDB(db_path=path, read_only=True) as db:
+        assert db.get_session(key)['user_id'] == owner
+    def forbidden(*args):
+        raise AssertionError('persisted reads consulted draft fallback')
+    monkeypatch.setattr('tui_gateway.mobile_session_scope.live_draft', forbidden)
+    persisted = rpc(method, **params)
+    assert 'result' in persisted, persisted
+    if method == 'mobile.session_push.register':
+        assert persisted['result']['subscription_id'] == result['result']['subscription_id']
+        with push_service.store.transaction() as db:
+            rows = db.execute("SELECT session_id, profile, surface FROM subscriptions").fetchall()
+            assert [tuple(row) for row in rows] == [(key, 'ops', 'native_session')]
+        # The registration is now backed by a real row, not an orphan destination.
+        with SessionDB(db_path=path, read_only=True) as db:
+            assert all(db.get_session(row['session_id']) is not None for row in rows)

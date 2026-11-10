@@ -79,7 +79,7 @@ def live_draft(home, stored_id):
                     or Path(session.get('profile_home') or server._hermes_home).resolve() != Path(home).resolve()
                     or not owner or session.get('auth_user_id') != owner
                     or not server._session_transport_contains(session, peer)
-                    or session.get('agent') is not None or session.get('history') or session.get('parent_session_id')
+                    or session.get('history') or session.get('parent_session_id')
                     or session.get('pending_title') == SessionDB.CANONICAL_BOT_CHAT_TITLE):
                 continue
             return {'id': stored_id, 'source': session.get('source'), 'user_id': owner,
