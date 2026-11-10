@@ -232,7 +232,8 @@ class ActivityPushStore:
         started = preview.step_started_at if preview and preview.step_started_at else run["updated_at"]
         if now - started <= 120 or now - sub["last_timestamp"] < 100:
             return
-        if db.execute("SELECT 1 FROM outbox WHERE subscription_id=? AND state='pending'", (sub["id"],)).fetchone():
+        if db.execute("SELECT 1 FROM outbox WHERE subscription_id=? AND state='pending' AND expires_at>?",
+                      (sub["id"], now)).fetchone():
             return
         scope = Scope(sub["surface"], sub["profile"], sub["session_id"])
         payload = activity_payload(run, scope, now, preview=preview, previews=self._device_previews(db, sub))

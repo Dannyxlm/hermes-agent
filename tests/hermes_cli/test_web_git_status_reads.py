@@ -29,3 +29,144 @@ def test_status_still_counts_tracked_and_untracked_changes(repo):
     _git(repo, 'add', 'a.txt')
     staged = web_git.repo_status(str(repo))
     assert (staged['staged'], staged['added']) == (1, 3)
+
+
+@pytest.mark.parametrize('linked_worktree', [False, True])
+def test_route_reads_mutations_immediately_after_completed_flight(repo, monkeypatch, linked_worktree):
+    import asyncio
+    from hermes_cli.web_routers import git as router
+    if linked_worktree:
+        target = repo.parent / 'linked'
+        _git(repo, 'worktree', 'add', '-b', 'linked-status', str(target))
+        repo = target
+    else:
+        _git(repo, 'checkout', '--', 'a.txt')
+        (repo / 'new.py').unlink()
+    calls = []
+    original = web_git.repo_status
+    def counted(path):
+        calls.append(path)
+        return original(path)
+    monkeypatch.setattr(web_git, 'repo_status', counted)
+    async def probe():
+        first = await router.git_status_route(str(repo))
+        assert first['changed'] == 0
+        first['changed'] = -1
+        (repo / 'a.txt').write_text('one\ntwo\nthree\n')
+        (repo / 'new.py').write_text('print(1)\nprint(2)\n')
+        changed = await router.git_status_route(str(repo))
+        assert (changed['changed'], changed['unstaged'], changed['untracked']) == (2, 2, 1)
+        assert len(calls) == 2
+        web_git.review_revert(str(repo), 'new.py')
+        assert (await router.git_status_route(str(repo)))['untracked'] == 0
+        assert len(calls) == 3
+    asyncio.run(probe())
+
+
+@pytest.mark.asyncio
+async def test_route_coalesces_status_and_a_cancelled_waiter_does_not_cancel_probe(repo, monkeypatch):
+    import asyncio
+    import threading
+    from hermes_cli.web_routers import git as router
+    from tests.waiting import async_wait_until
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    original = web_git.repo_status
+    def blocked(path):
+        calls.append(path)
+        entered.set()
+        assert release.wait(10)
+        return original(path)
+    monkeypatch.setattr(web_git, 'repo_status', blocked)
+    first = asyncio.create_task(router.git_status_route(str(repo)))
+    same_tick = asyncio.create_task(router.git_status_route(str(repo)))
+    await async_wait_until(entered.is_set, timeout=5)
+    # Arrivals while the probe is already reading share one later probe, never one each.
+    late = [asyncio.create_task(router.git_status_route(str(repo))) for _ in range(3)]
+    await asyncio.sleep(0)
+    first.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await first
+    finally:
+        release.set()
+    assert (await same_tick)['changed'] == 2
+    # A cancelled waiter did not cancel the probe its neighbour shares.
+    assert [(await task)['changed'] for task in late] == [2, 2, 2]
+    assert len(calls) == 2
+    assert router._git_status_flights == {}
+
+
+@pytest.mark.asyncio
+async def test_route_never_answers_from_a_probe_that_read_before_the_caller_arrived(repo, monkeypatch):
+    import asyncio
+    import threading
+    from hermes_cli.web_routers import git as router
+    from tests.waiting import async_wait_until
+    _git(repo, 'checkout', '--', 'a.txt')
+    (repo / 'new.py').unlink()
+    read, release = threading.Event(), threading.Event()
+    original = web_git.repo_status
+    def read_then_hold(path):
+        result = original(path)
+        if not read.is_set():
+            read.set()
+            assert release.wait(10)
+        return result
+    monkeypatch.setattr(web_git, 'repo_status', read_then_hold)
+    early = asyncio.create_task(router.git_status_route(str(repo)))
+    await async_wait_until(read.is_set, timeout=5)
+    (repo / 'a.txt').write_text('one\ntwo\nthree\n')
+    (repo / 'new.py').write_text('print(1)\n')
+    late = asyncio.create_task(router.git_status_route(str(repo)))
+    await asyncio.sleep(0)
+    release.set()
+    assert (await early)['changed'] == 0
+    assert (await late)['changed'] == 2, "the caller's own edit is in its answer"
+    assert router._git_status_flights == {}
+
+
+def test_route_malformed_git_file_keeps_null_non_repo_response(tmp_path):
+    import asyncio
+    from hermes_cli.web_routers import git as router
+    (tmp_path / '.git').write_bytes(b'gitdir: \xff\xfe')
+    assert asyncio.run(router.git_status_route(str(tmp_path))) is None
+
+
+@pytest.mark.asyncio
+async def test_abandoned_failed_flight_is_observed_and_next_request_retries(repo, monkeypatch):
+    import asyncio
+    import gc
+    from hermes_cli.web_routers import git as router
+    entered, release, failed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    errors, calls = [], []
+    async def probe(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+            failed.set()
+            raise RuntimeError('fixture git failure')
+        return {'changed': 2}
+    monkeypatch.setattr(router, '_git_op', probe)
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda loop, context: errors.append(context))
+    try:
+        waiter = asyncio.create_task(router.git_status_route(str(repo)))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        del waiter
+        release.set()
+        await asyncio.wait_for(failed.wait(), timeout=5)
+        await asyncio.sleep(0)  # Let completion callbacks consume the now-unobserved exception.
+        gc.collect()
+        # Python 3.14 shield deliberately logs a late exception even when it was retrieved.
+        assert all(error['message'] == 'RuntimeError exception in shielded future' for error in errors)
+        assert (await router.git_status_route(str(repo)))['changed'] == 2
+        assert len(calls) == 2
+    finally:
+        release.set()
+        loop.set_exception_handler(previous)

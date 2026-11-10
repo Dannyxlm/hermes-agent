@@ -4,8 +4,11 @@ Rebound onto server.py's globals at install time (``method_ctx.bind_module``), s
 bodies reference server globals bare (``_ok``, ``_err``, ``_sessions``, ...).
 """
 
+import copy
+import time
 import threading
 import weakref
+from pathlib import Path
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -357,6 +360,26 @@ def _model_options_hit(key, refresh):
     return None
 
 
+def _cached_model_options(home, ctx, params):
+    from hermes_cli.inventory import build_model_options_payload
+    refresh = bool(params.get("refresh"))
+    key = _model_options_key(home, ctx, params)
+    cached = _model_options_hit(key, refresh)
+    if cached is not None:
+        return cached
+    with _model_options_lock(key):
+        cached = _model_options_hit(key, refresh)
+        if cached is not None:
+            return cached
+        payload = build_model_options_payload(
+            ctx, explicit_only=bool(params.get("explicit_only")),
+            include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
+        if len(_MODEL_OPTIONS_CACHE) >= 16:
+            _MODEL_OPTIONS_CACHE.clear()
+        _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), copy.deepcopy(payload))
+        return payload
+
+
 @method("model.options")
 @_profile_scoped
 @_catch(5033)
@@ -364,26 +387,9 @@ def _(rid, params: dict) -> dict:
     skew = _model_skew_err(rid)
     if skew is not None:
         return skew
-    from hermes_cli.inventory import build_model_options_payload
-    # A spawned agent owns the live provider/model/base_url; empty attributes must
-    # NOT clobber disk config (with_overrides is truthy-only).
+    # Empty live attributes must not clobber disk config (with_overrides is truthy-only).
     ctx = _model_picker_context(_session_agent(params))
-    refresh = bool(params.get("refresh"))
-    key = _model_options_key(get_hermes_home(), ctx, params)
-    cached = _model_options_hit(key, refresh)
-    if cached is not None:
-        return _ok(rid, cached)
-    with _model_options_lock(key):
-        cached = _model_options_hit(key, refresh)
-        if cached is not None:
-            return _ok(rid, cached)
-        payload = build_model_options_payload(
-            ctx, explicit_only=bool(params.get("explicit_only")),
-            include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
-        if len(_MODEL_OPTIONS_CACHE) >= 16:
-            _MODEL_OPTIONS_CACHE.clear()
-        _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), copy.deepcopy(payload))
-        return _ok(rid, payload)
+    return _ok(rid, _cached_model_options(get_hermes_home(), ctx, params))
 
 
 @method("model.save_key")

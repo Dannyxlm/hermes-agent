@@ -68,7 +68,8 @@ SPAN_NAMES = frozenset({'LaunchInboxContent', 'ResumeInboxContent', 'ChatOpenCon
                         'InboxFreshAfterForeground', 'ChatOpenToBody', 'ChatOpenBodyToTranscript',
                         'ChatOpenDocParse', 'ChatOpenToDestination', 'ChatOpenToModel',
                         'ChatOpenToTranscriptBody', 'ChatOpenToTranscriptAppear', 'ChatOpenToPushEnd',
-                        'TabToRootBody', 'TabToRootAppear'})
+                        'TabToRootBody', 'TabToRootAppear', 'LaunchToRootMounted',
+                        'LaunchToAuthRestored', 'LaunchToSnapshotRestored', 'LaunchToShellAppeared'})
 SPAN_OUTCOMES = frozenset({'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'})
 SPAN_ATTRS = frozenset({'cached', 'editing_begins', 'entry', 'from', 'host_ready', 'inbox_rows', 'keyboard_shown',
                         'keyboard_was_visible', 'loading', 'notice', 'pre_main_ms', 'restored', 'rows',

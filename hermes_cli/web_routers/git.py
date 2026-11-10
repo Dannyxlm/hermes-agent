@@ -7,6 +7,7 @@ wrappers (git/gh can block).
 """
 
 import asyncio
+import copy
 import shutil
 import time
 from functools import partial
@@ -47,9 +48,51 @@ def _git_path(path: str) -> str:
     return str(_fs_path(path))
 
 
+# (loop, repo root) -> flight. A caller shares a probe only when that probe begins reading
+# after the caller arrived, so a status never predates the caller's own change.
+_git_status_flights = {}
+
+
+async def _git_status_probe(path, key, flight, after=None):
+    me = asyncio.current_task()
+    try:
+        if after is not None:
+            await asyncio.wait([after])
+            flight["running"], flight["queued"] = me, None
+        flight["reading"] = me
+        return await _git_op(_web_git.repo_status, path)
+    finally:
+        if flight["queued"] is me:
+            flight["queued"] = None
+        if flight["queued"] is None and (flight["running"] is me or flight["running"].done()):
+            if _git_status_flights.get(key) is flight:
+                del _git_status_flights[key]
+
+
+def _git_status_task(path, key, flight, after=None):
+    task = asyncio.create_task(_git_status_probe(path, key, flight, after))
+    # The last shielded waiter can leave before a failing probe finishes.
+    task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+    return task
+
+
 @router.get("/api/git/status")
 async def git_status_route(path: str):
-    return await _git_op(_web_git.repo_status, _git_path(path))
+    # Check every caller before joining; filesystem mutations are not cacheable by git stamps.
+    root = str(Path(_git_path(path)).resolve())
+    key = (asyncio.get_running_loop(), root)
+    flight = _git_status_flights.get(key)
+    if flight is None:
+        flight = _git_status_flights[key] = {"running": None, "queued": None, "reading": None}
+        task = flight["running"] = _git_status_task(root, key, flight)
+    elif flight["reading"] is not flight["running"]:
+        task = flight["running"]  # created this tick, not reading yet
+    else:
+        # The running probe may have read before this caller's change: share the next one.
+        task = flight["queued"]
+        if task is None:
+            task = flight["queued"] = _git_status_task(root, key, flight, after=flight["running"])
+    return copy.deepcopy(await asyncio.shield(task))
 
 
 # Cached `gh auth status` for the desktop composer's GitHub suggestion pill. GitHub

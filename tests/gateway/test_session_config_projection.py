@@ -88,3 +88,39 @@ def test_model_options_uses_frozen_selection_without_composer_global_writes(tmp_
                 assert (home / 'config.yaml').read_bytes() == before
                 assert not admissions(home) and not peer.requests
         asyncio.run(probe())
+
+
+@pytest.mark.asyncio
+async def test_authority_picker_reuses_payload_and_invalidates_inputs(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from gateway import session_config
+    from hermes_cli import inventory
+    from hermes_cli.inventory import ConfigContext
+
+    ctx = ConfigContext('openai', 'first', '', {}, [])
+    monkeypatch.setattr(session_config, '_authorize', lambda *args: None)
+    monkeypatch.setattr(inventory, 'load_picker_context', lambda: ctx)
+    builds = []
+    def build(context, **flags):
+        builds.append((context, flags))
+        return {'providers': [{'slug': 'fixture'}], 'model': context.current_model}
+    monkeypatch.setattr(inventory, 'build_model_options_payload', build)
+    connection = SimpleNamespace(authority=SimpleNamespace(profile_id=str(tmp_path)))
+    ref = SimpleNamespace(session_id=None)
+    async def options(**params):
+        return await session_config.model_options(connection, ref, params)
+    first = await options()
+    first['providers'][0]['slug'] = 'mutated'
+    assert (await options())['providers'][0]['slug'] == 'fixture'
+    assert len(builds) == 1
+    for name in ('.env', 'auth.json'):
+        (tmp_path / name).write_text('{}')
+        await options()
+    assert len(builds) == 3
+    await options(refresh=True)
+    assert len(builds) == 4
+    await options(include_unconfigured=True)
+    assert len(builds) == 5
+    ctx = ctx.with_overrides(current_model='second')
+    assert (await options())['model'] == 'second'
+    assert len(builds) == 6

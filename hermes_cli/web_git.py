@@ -80,7 +80,8 @@ def _is_dir(cwd: str) -> bool:
 
 def _status_z(cwd: str, *extra: str) -> tuple[int, str]:
     """(returncode, raw) of ``git status --porcelain=v2 -z``."""
-    code, raw, _ = _git(cwd, ["status", "--porcelain=v2", *extra, "-z"])
+    # Read-only status probes must not write the index or contend with actual git mutations.
+    code, raw, _ = _git(cwd, ["--no-optional-locks", "status", "--porcelain=v2", *extra, "-z"])
     return code, raw
 
 

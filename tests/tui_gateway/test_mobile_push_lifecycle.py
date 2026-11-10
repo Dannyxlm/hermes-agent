@@ -541,3 +541,58 @@ def test_logout_removes_durable_cleanup_and_prevents_replay(delivery):
     now[0] += 9 * 3600
     service.drain_once()
     assert sender.jobs == []
+
+
+@pytest.mark.parametrize('delay', [100, 120, 121])
+def test_only_unexpired_pending_job_suppresses_activity_heartbeat(delivery, delay):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    service.live_runs = lambda: ({run['run_id']}, {run['run_id']})
+    receipt = register_activity(service, scope, ids, run['run_id'])
+    service.record(scope, run['run_id'], 'tool', 'usingTool')
+    now[0] += 10
+    service.drain_once()  # Prime retention and deliver the original update.
+    sender.result = DeliveryResult('retry', 'transport')
+    now[0] += 121
+    service.drain_once()  # A real heartbeat remains pending after a retryable send.
+    assert len(activities(sender)) == 2
+    with service.store.transaction() as db:
+        pending = db.execute("SELECT job_id, expires_at FROM outbox WHERE state='pending' AND subscription_id=?",
+                             (receipt['subscription_id'],)).fetchone()
+        assert pending['expires_at'] == now[0] + 120
+        # Keep the failed attempt in backoff; it must not itself be delivered by this pass.
+        db.execute('UPDATE outbox SET next_attempt=? WHERE job_id=?', (now[0] + 1000, pending['job_id']))
+    sender.result = DeliveryResult('accepted')
+    now[0] += delay
+    service.drain_once()
+    with service.store.transaction() as db:
+        assert db.execute('SELECT 1 FROM outbox WHERE job_id=?', (pending['job_id'],)).fetchone()
+    assert len(activities(sender)) == (2 if delay < 120 else 3)
+    if delay >= 120:
+        heartbeat = activities(sender)[-1]['payload']['aps']
+        assert heartbeat['event'] == 'update'
+        assert heartbeat['stale-date'] == int(now[0] + 120)
+
+
+def test_retention_runs_once_per_ten_minutes_but_activity_cleanup_keeps_running(delivery):
+    service, sender, now, ids, scope = delivery
+    run = service.start_run(scope)
+    receipt = register_activity(service, scope, ids, run['run_id'])
+    statements = []
+    service.store._db.set_trace_callback(statements.append)
+    service.drain_once()
+    expire_activity_lease(service, receipt, now[0] + 20)
+    with service.store.transaction() as db:
+        db.execute('INSERT INTO events VALUES (?, ?)', ('expired-event', now[0] - 31 * 86400))
+    now[0] += 30
+    service.drain_once()
+    assert activities(sender)[-1]['payload']['aps']['event'] == 'end'
+    retention = lambda: [sql for sql in statements if sql.startswith('DELETE FROM events')]
+    assert len(retention()) == 1
+    with service.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM events WHERE event_id='expired-event'").fetchone()[0] == 1
+    now[0] += 570
+    service.drain_once()
+    assert len(retention()) == 2
+    with service.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM events WHERE event_id='expired-event'").fetchone()[0] == 0

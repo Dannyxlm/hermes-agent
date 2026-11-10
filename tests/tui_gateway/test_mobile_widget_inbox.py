@@ -59,8 +59,9 @@ def test_full_inbox_pages_read_markers_and_scoped_rotation(push_service, mobile_
     with SessionDB(db_path=path) as db:
         db._conn.execute("UPDATE sessions SET last_read_at=9999999999 WHERE id='chat-124'")
         db._conn.commit()
-    with pytest.raises(WidgetInboxChanged):
-        inbox_snapshot(push_service.store, params['read_token'], first['next_cursor'])
+    retained = inbox_snapshot(push_service.store, params['read_token'], first['next_cursor'])
+    assert retained['revision'] == first['revision']
+    assert retained['items'] == second['items']
     changed = inbox_snapshot(push_service.store, params['read_token'])
     assert next(r for r in changed['items'] if r['session_id'] == 'chat-124')['reply']['unread'] is False
     # A -> B -> A changes grant identity; no old cursor can cross a profile switch.
@@ -115,3 +116,50 @@ def test_inbox_capability_cannot_expand_authority_and_logout_wins(push_service, 
     monkeypatch.setattr(mobile_widget_inbox, 'page_attention', revoke)
     assert client.get(route + '?inbox=1', headers=headers).status_code == 401
     assert push_service.store.widget_reader(params['read_token']) is None
+
+
+def test_inbox_retained_cut_skips_signature_then_expires_or_evicts(push_service, mobile_home, peer, monkeypatch):
+    from tui_gateway import mobile_widget_inbox as inbox
+    path = mobile_home / 'profiles' / 'ops' / 'state.db'
+    with SessionDB(db_path=path) as db:
+        for n in range(105):
+            db.create_session(f'page-{n}', 'desktop')
+    params, _ = register(peer)
+    now = [1000.0]
+    monkeypatch.setattr('time.monotonic', lambda: now[0])
+    first = inbox_snapshot(push_service.store, params['read_token'])
+    original = inbox._signature
+    def forbidden(db):
+        raise AssertionError('retained page recomputed signature')
+    monkeypatch.setattr(inbox, '_signature', forbidden)
+    assert inbox_snapshot(push_service.store, params['read_token'], first['next_cursor'])['revision'] == first['revision']
+    monkeypatch.setattr(inbox, '_signature', original)
+    for n in range(4):
+        with SessionDB(db_path=path) as db:
+            db.set_session_title('page-104', f'cut {n}')
+        assert inbox_snapshot(push_service.store, params['read_token'])['revision'] != first['revision']
+    with pytest.raises(WidgetInboxChanged):
+        inbox_snapshot(push_service.store, params['read_token'], first['next_cursor'])
+    current = inbox_snapshot(push_service.store, params['read_token'])
+    now[0] += 61
+    with pytest.raises(WidgetInboxChanged):
+        inbox_snapshot(push_service.store, params['read_token'], current['next_cursor'])
+
+
+def test_inbox_stable_store_skips_signature_but_racy_store_does_not(push_service, mobile_home, peer, monkeypatch):
+    from tui_gateway import mobile_widget_inbox as inbox
+    import utils
+    params, _ = register(peer)
+    monkeypatch.setattr(utils, 'mtime_is_racy', lambda stamp: False)
+    first = inbox_snapshot(push_service.store, params['read_token'])
+    calls = []
+    original = inbox._signature
+    def counted(db):
+        calls.append(1)
+        return original(db)
+    monkeypatch.setattr(inbox, '_signature', counted)
+    assert inbox_snapshot(push_service.store, params['read_token'])['revision'] == first['revision']
+    assert calls == []
+    monkeypatch.setattr(utils, 'mtime_is_racy', lambda stamp: True)
+    inbox_snapshot(push_service.store, params['read_token'])
+    assert calls == [1]

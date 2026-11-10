@@ -101,7 +101,9 @@ def _family_root_visible(profile, stored_id):
     # that lineage also parses policy ownership and leases; visibility needs neither.
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2)) as conn:
         conn.execute("PRAGMA query_only=1")
-        return conn.execute("SELECT 1 FROM sessions WHERE id=?", (stored_id,)).fetchone() is not None
+        stored = conn.execute("SELECT 1 FROM sessions WHERE id=?", (stored_id,)).fetchone() is not None
+    from tui_gateway.mobile_session_scope import live_draft
+    return stored or live_draft(home, stored_id) is not None
 
 
 @method("session.family")
@@ -124,6 +126,12 @@ def _family_read_rpc(rid, params):
         since = params.get("since")
         since = time.time() - 43200 if since is None else since
         profiles, unavailable = _family_profiles(root=(profile, sid), since=since)
+        if profile in profiles and sid not in profiles[profile].sessions:
+            from hermes_cli.profiles import get_profile_dir
+            from tui_gateway.mobile_session_scope import live_draft
+            draft = live_draft(get_profile_dir(profile), sid)
+            if draft is not None:
+                profiles[profile].sessions[sid] = draft
         signals = _family_live(profiles, unavailable)
         family = Family({p: s for p, s in profiles.items() if p not in unavailable},
                         live=signals, unavailable_profiles=unavailable)
