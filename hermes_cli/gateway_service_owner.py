@@ -41,16 +41,23 @@ def systemd_unit_is_external(unit_path: Path) -> bool:
         if separator:
             directives.setdefault(key, []).append(value)
     starts = directives.get("ExecStart", [])
-    if (directives.get("Description") != [gw.SERVICE_DESCRIPTION]
-            or len(starts) != 1
-            or not any("gateway.cgroup_cleanup" in command
-                       for command in directives.get("ExecStopPost", []))):
+    if directives.get("Description") != [gw.SERVICE_DESCRIPTION] or len(starts) != 1:
         return True
     try:
         argv = shlex.split(starts[0])
     except ValueError:
         return True
-    if len(argv) < 3 or argv[-2:] != ["gateway", "run"]:
+    # Before source launchers, Hermes generated -m units (initially with --replace
+    # and no cleanup hook). Keep their automatic upgrade path.
+    if argv[-1:] == ["--replace"]:
+        argv = argv[:-1]
+    if len(argv) >= 5 and argv[1:3] == ["-m", "hermes_cli.main"]:
+        args = argv[3:]
+        return not (args == ["gateway", "run"] or
+                    (len(args) == 4 and args[0] == "--profile" and args[-2:] == ["gateway", "run"]))
+    if (len(argv) < 3 or argv[-2:] != ["gateway", "run"]
+            or not any("gateway.cgroup_cleanup" in command
+                       for command in directives.get("ExecStopPost", []))):
         return True
     if Path(argv[0]).parts[-3:] == (".hermes", "bin", "hermes"):
         return False

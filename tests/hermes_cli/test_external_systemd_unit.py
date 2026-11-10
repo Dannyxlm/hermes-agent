@@ -41,7 +41,7 @@ def test_external_unit_survives_operations_byte_for_byte(service, monkeypatch, c
     monkeypatch.setattr(gw, "_recover_pending_systemd_restart", lambda **kw: False)
     monkeypatch.setattr(gw, "_wait_for_systemd_service_restart", lambda **kw: True)
     if operation.endswith("install"):
-        gw.systemd_install(system=True, force=operation == "force_install", force_unit_path=True)
+        gw.systemd_install(system=True, force=operation == "force_install", force_unit_path=operation == "force_install")
     else:
         getattr(gw, f"systemd_{operation}")(system=True)
     assert service.read_bytes() == original
@@ -64,6 +64,16 @@ def test_generated_outdated_unit_still_refreshes(service, monkeypatch, source_la
     service.write_text(current.replace("RestartSec=5", "RestartSec=9"))
     assert gw.refresh_systemd_unit_if_needed(system=True)
     assert service.read_text() == current
+    gw._prepare_service_launcher.assert_called_once_with(system=True, run_as_user="service")
+
+
+@pytest.mark.parametrize("args", ["gateway run", "--profile example gateway run", "gateway run --replace"])
+def test_legacy_generated_unit_still_refreshes(service, monkeypatch, args):
+    service.write_text(f"[Unit]\nDescription={gw.SERVICE_DESCRIPTION}\n[Service]\n"
+                       f"ExecStart=/usr/bin/python -m hermes_cli.main {args}\n")
+    monkeypatch.setattr(gw, "generate_systemd_unit", lambda **kw: "current")
+    assert gw.refresh_systemd_unit_if_needed(system=True)
+    assert service.read_text() == "current"
     gw._prepare_service_launcher.assert_called_once_with(system=True, run_as_user="service")
 
 

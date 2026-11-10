@@ -21,9 +21,11 @@ HERMES_DROPIN = (
 
 def _current_unit_with_dropin(tmp_path, monkeypatch, dropin_text: str):
     unit = tmp_path / "hermes-gateway.service"
-    unit.write_text("[Unit]\nDescription=current\n", encoding="utf-8")
+    current = (f"[Unit]\nDescription={gateway_cli.SERVICE_DESCRIPTION}\n[Service]\n"
+               "ExecStart=/usr/bin/python -m hermes_cli.main gateway run\n")
+    unit.write_text(current, encoding="utf-8")
     monkeypatch.setattr(gateway_cli, "get_systemd_unit_path", lambda system=False: unit)
-    monkeypatch.setattr(gateway_cli, "generate_systemd_unit", lambda **_: "[Unit]\nDescription=current\n")
+    monkeypatch.setattr(gateway_cli, "generate_systemd_unit", lambda **_: current)
     monkeypatch.setattr(gateway_cli, "_sync_hermes_home_from_systemd_unit", lambda **_: None)
     calls = []
     monkeypatch.setattr(gateway_cli, "_run_systemctl", lambda args, **kwargs: calls.append((args, kwargs)))
