@@ -39,6 +39,42 @@ def _dispatch_sync(req: dict, transport=None) -> dict | None:
         reset_transport(token)
 
 
+@pytest.fixture
+def gateway_db(monkeypatch, tmp_path):
+    """Real storage and session initialization, without agent-owned background services."""
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    monkeypatch.setattr(server, "_get_db", lambda: db)
+    monkeypatch.setattr(server, "_wire_session_agent", lambda *a: None)
+    monkeypatch.setattr(server, "_start_session_services", lambda *a: None)
+    monkeypatch.setattr(server, "_schedule_mcp_late_refresh", lambda *a: None)
+    monkeypatch.setattr(server, "_emit", lambda *a: None)
+    try:
+        yield db
+    finally:
+        for sid in list(server._sessions):
+            server._close_session_by_id(sid, end_reason="test_cleanup")
+        db.close()
+
+
+@pytest.fixture
+def hydration_workers(monkeypatch):
+    """Keep hydration threads joinable without replacing their asynchronous execution."""
+    workers = []
+
+    def thread(*args, **kwargs):
+        worker = threading.Thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr(server, "threading", types.SimpleNamespace(**{**vars(threading), "Thread": thread}))
+    yield workers
+    for worker in workers:
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "resume hydration did not finish"
+
+
 @pytest.fixture(autouse=True)
 def _neuter_agent_prewarm_timer(request, monkeypatch):
     """Stub the deferred agent pre-warm timer for every test in this module.
@@ -294,14 +330,23 @@ def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(mo
         assert parent_writes == {"ensure_session": 0, "persist_seed": 0}
         assert server._sessions["iso-sid"]["running"] is True
 
-        fake_supervisor.callback(
-            {
-                "type": "turn.end",
-                "sid": "iso-sid",
-                "request_id": "submit",
-                "history_version": 1,
-            }
-        )
+        done = {"type": "turn.end", "sid": "iso-sid", "history_version": 1}
+        turn_id = fake_supervisor.frames[0]["request_id"]
+        assert turn_id != "submit"
+        for invalid in ({**done, "request_id": "submit"},
+                        {**done, "sid": "other-sid", "request_id": turn_id}):
+            fake_supervisor.callback(invalid)
+            for worker in threading.enumerate():
+                if worker.name == "compute-host-complete-iso-sid":
+                    worker.join(timeout=5)
+                    assert not worker.is_alive(), "invalid completion did not finish"
+            assert server._sessions["iso-sid"]["running"] is True
+            assert server._sessions["iso-sid"]["history_version"] == 0
+        fake_supervisor.callback({**done, "request_id": turn_id})
+        for worker in threading.enumerate():
+            if worker.name == "compute-host-complete-iso-sid":
+                worker.join(timeout=5)
+                assert not worker.is_alive(), "compute completion did not finish"
         assert server._sessions["iso-sid"]["running"] is False
         assert server._sessions["iso-sid"]["history_version"] == 1
     finally:
@@ -3275,63 +3320,15 @@ def test_history_to_messages_keeps_real_user_bracket_text():
 
 
 @pytest.mark.parametrize("omit_messages", [False, True])
-def test_session_resume_uses_parent_lineage_for_display(monkeypatch, omit_messages):
-    captured = {}
+def test_session_resume_uses_parent_lineage_for_display(monkeypatch, omit_messages, gateway_db):
     target = "tip-omit" if omit_messages else "tip-full"
-
-    class FakeDB:
-        def get_session(self, target):
-            return {"id": target}
-
-        def reopen_session(self, target):
-            captured["reopened"] = target
-
-        def get_resume_conversations(self, session_id):
-            return (
-                self.get_messages_as_conversation(session_id, repair_alternation=True),
-                self.get_messages_as_conversation(session_id, include_ancestors=True),
-            )
-
-        def get_ancestor_display_prefix(self, _sid):
-            return []
-
-        def get_messages_as_conversation(
-            self,
-            target,
-            include_ancestors=False,
-            repair_alternation=False,
-            include_row_ids=False,
-            **_kwargs,
-        ):
-            captured.setdefault("history_calls", []).append(
-                (target, include_ancestors, include_row_ids)
-            )
-            return (
-                [
-                    {"role": "user", "content": "root prompt"},
-                    {"role": "assistant", "content": "root answer"},
-                ]
-                if include_ancestors
-                else [{"role": "user", "content": "tip prompt"}]
-            )
-
-    monkeypatch.setattr(server, "_get_db", lambda: FakeDB())
+    gateway_db.create_session("root", source="tui")
+    prompt_id = gateway_db.append_message("root", role="user", content="root prompt", timestamp=100.0)
+    answer_id = gateway_db.append_message("root", role="assistant", content="root answer", timestamp=101.0)
+    gateway_db.end_session("root", "compression")
+    gateway_db.create_session(target, source="tui", parent_session_id="root")
+    tip_id = gateway_db.append_message(target, role="user", content="tip prompt", timestamp=102.0)
     monkeypatch.setattr(server, "_enable_gateway_prompts", lambda: None)
-    monkeypatch.setattr(server, "_set_session_context", lambda target: [])
-    monkeypatch.setattr(server, "_clear_session_context", lambda tokens: None)
-    monkeypatch.setattr(
-        server,
-        "_make_agent",
-        lambda *args, **kwargs: types.SimpleNamespace(model="test"),
-    )
-    monkeypatch.setattr(
-        server,
-        "_session_info",
-        lambda agent, *a: {"model": "test", "tools": {}, "skills": {}},
-    )
-    monkeypatch.setattr(
-        server, "_init_session", lambda sid, key, agent, history, cols=80, **_kwargs: None
-    )
     # The deferred pre-warm timer is neutered module-wide by the autouse
     # _neuter_agent_prewarm_timer fixture; this test only asserts the
     # returned display history.
@@ -3344,12 +3341,15 @@ def test_session_resume_uses_parent_lineage_for_display(monkeypatch, omit_messag
     )
 
     expected = [] if omit_messages else [
-        {"role": "user", "text": "root prompt"},
-        {"role": "assistant", "text": "root answer"},
+        {"role": "user", "text": "root prompt", "timestamp": 100.0, "row_id": prompt_id},
+        {"role": "assistant", "text": "root answer", "timestamp": 101.0, "row_id": answer_id},
+        {"role": "user", "text": "tip prompt", "timestamp": 102.0, "row_id": tip_id},
     ]
     assert resp["result"]["messages"] == expected
-    assert resp["result"]["message_count"] == (1 if omit_messages else 2)
+    assert resp["result"]["message_count"] == (1 if omit_messages else 3)
     assert resp["result"]["messages_omitted"] is omit_messages
+    session = server._sessions[resp["result"]["session_id"]]
+    assert [m["content"] for m in session["history"]] == ["tip prompt"]
 
 
 def test_live_visible_history_falls_back_without_db_or_key():
@@ -3582,14 +3582,12 @@ def test_live_session_payload_reads_profile_db_not_launch_db(monkeypatch, tmp_pa
     assert texts == [m.get("text") for m in server._history_to_messages(display_history)]
 
 
-def test_lazy_child_watch_resume_serves_candidate_inclusive_display(monkeypatch, tmp_path):
+def test_lazy_child_watch_resume_serves_candidate_inclusive_display(monkeypatch, gateway_db):
     """The delegated-child watch-window cold resume (lazy=True) must serve the
     verbatim display projection so a persisted verification candidate is not
     collapsed out of the watch window (#65919 sibling of the warm-payload fix).
     """
-    from hermes_state import SessionDB
-
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = gateway_db
     db.create_session("child1", source="tui")
     db.append_message("child1", role="user", content="child prompt")
     db.append_message(
@@ -3607,10 +3605,6 @@ def test_lazy_child_watch_resume_serves_candidate_inclusive_display(monkeypatch,
     monkeypatch.setattr(
         server, "_claim_active_session_slot", lambda *a, **k: (lease, None)
     )
-    monkeypatch.setattr(
-        server, "_deferred_session_record", lambda *a, **k: {"created_at": 123.0}
-    )
-    monkeypatch.setattr(server, "_claim_or_reuse_live", lambda *a, **k: None)
     monkeypatch.setattr(server, "_child_run_active", lambda *a, **k: False)
     monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda *a, **k: None)
 
@@ -3628,36 +3622,35 @@ def test_lazy_child_watch_resume_serves_candidate_inclusive_display(monkeypatch,
     assert texts == ["child prompt", "child substantive answer", "child terse reply"]
 
 
-def test_session_resume_deferred_history_acknowledges_and_reuses(monkeypatch):
+def test_session_resume_deferred_history_acknowledges_and_reuses(monkeypatch, gateway_db, hydration_workers):
     history_started = threading.Event()
     release_history = threading.Event()
     build_started = threading.Event()
     history_calls = []
     auto_continue_calls = []
-    ancestor = {"role": "assistant", "content": "ancestor"}
-    loaded = {"role": "user", "content": "loaded"}
+    db = gateway_db
+    db.create_session("ancestor", source="tui")
+    db.append_message("ancestor", role="assistant", content="ancestor")
+    db.end_session("ancestor", "compression")
+    db.create_session("large-session", source="tui", parent_session_id="ancestor")
+    for index in range(1200):
+        db.append_message("large-session", role="user" if index % 2 == 0 else "assistant", content=f"loaded {index}")
+    loaded, display = db.get_resume_conversations("large-session")
+    ancestor = db.get_ancestor_display_prefix("large-session")
+    read_history, read_prefix = db.get_resume_conversations, db.get_ancestor_display_prefix
 
-    class FakeDB:
-        def get_session(self, target):
-            return {"id": target, "message_count": 1200}
+    def get_resume_conversations(target):
+        history_calls.append(("resume", target))
+        history_started.set()
+        assert release_history.wait(timeout=5.0)
+        return read_history(target)
 
-        def resolve_resume_session_id(self, target):
-            return target
+    def get_ancestor_display_prefix(target):
+        history_calls.append(("prefix", target))
+        return read_prefix(target)
 
-        def reopen_session(self, target):
-            assert target == "large-session"
-
-        def get_resume_conversations(self, target):
-            history_calls.append(("resume", target))
-            history_started.set()
-            assert release_history.wait(timeout=2.0)
-            return [loaded], [ancestor, loaded]
-
-        def get_ancestor_display_prefix(self, target):
-            history_calls.append(("prefix", target))
-            return [ancestor]
-
-    monkeypatch.setattr(server, "_get_db", lambda: FakeDB())
+    monkeypatch.setattr(db, "get_resume_conversations", get_resume_conversations)
+    monkeypatch.setattr(db, "get_ancestor_display_prefix", get_ancestor_display_prefix)
     monkeypatch.setattr(server, "_enable_gateway_prompts", lambda: None)
     monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
     monkeypatch.setattr(
@@ -3704,9 +3697,9 @@ def test_session_resume_deferred_history_acknowledges_and_reuses(monkeypatch):
             ("resume", "large-session"),
             ("prefix", "large-session"),
         ]
-        assert server._sessions[sid]["history"] == [loaded]
-        assert server._sessions[sid]["display_history_prefix"] == [ancestor]
-        assert server._sessions[sid]["resume_message_count"] == 2
+        assert server._sessions[sid]["history"] == loaded
+        assert server._sessions[sid]["display_history_prefix"] == ancestor
+        assert server._sessions[sid]["resume_message_count"] == len(display) == 1201
         assert auto_continue_calls == [(sid, server._sessions[sid], "large-session")]
     finally:
         release_history.set()
@@ -3718,34 +3711,25 @@ def test_session_resume_deferred_history_acknowledges_and_reuses(monkeypatch):
                 server._sessions.pop(sid, None)
 
 
-def test_session_resume_deferred_history_failure_can_retry(monkeypatch):
+def test_session_resume_deferred_history_failure_can_retry(monkeypatch, gateway_db, hydration_workers):
     first_released = threading.Event()
     build_started = threading.Event()
     attempts = 0
 
-    class FakeDB:
-        def get_session(self, target):
-            return {"id": target, "message_count": 1}
+    db = gateway_db
+    db.create_session("retry-session", source="tui")
+    db.append_message("retry-session", role="user", content="retry loaded")
+    read_history = db.get_resume_conversations
 
-        def resolve_resume_session_id(self, target):
-            return target
+    def get_resume_conversations(target):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            first_released.set()
+            raise RuntimeError("sqlite read failed")
+        return read_history(target)
 
-        def reopen_session(self, _target):
-            pass
-
-        def get_resume_conversations(self, _target):
-            nonlocal attempts
-            attempts += 1
-            if attempts == 1:
-                first_released.set()
-                raise RuntimeError("sqlite read failed")
-            loaded = [{"role": "user", "content": "retry loaded"}]
-            return loaded, loaded
-
-        def get_ancestor_display_prefix(self, _target):
-            return []
-
-    monkeypatch.setattr(server, "_get_db", lambda: FakeDB())
+    monkeypatch.setattr(db, "get_resume_conversations", get_resume_conversations)
     monkeypatch.setattr(
         server,
         "_claim_active_session_slot",
@@ -3768,6 +3752,8 @@ def test_session_resume_deferred_history_failure_can_retry(monkeypatch):
         )
         first_sid = first["result"]["session_id"]
         assert first_released.wait(timeout=1.0)
+        hydration_workers[0].join(timeout=5)
+        assert not hydration_workers[0].is_alive()
         assert first_sid not in server._sessions
 
         second = server._methods["session.resume"](
@@ -3778,6 +3764,8 @@ def test_session_resume_deferred_history_failure_can_retry(monkeypatch):
         assert second_sid != first_sid
         assert server._sessions[second_sid]["resume_history_ready"].wait(timeout=1.0)
         assert build_started.wait(timeout=1.0)
+        assert attempts == 2
+        assert [m["content"] for m in server._sessions[second_sid]["history"]] == ["retry loaded"]
     finally:
         for sid, session in list(server._sessions.items()):
             if session.get("session_key") == "retry-session":
@@ -3787,31 +3775,22 @@ def test_session_resume_deferred_history_failure_can_retry(monkeypatch):
                 server._sessions.pop(sid, None)
 
 
-def test_session_resume_deferred_history_close_cancels_build(monkeypatch):
+def test_session_resume_deferred_history_close_cancels_build(monkeypatch, gateway_db, hydration_workers):
     history_started = threading.Event()
     release_history = threading.Event()
     build_started = threading.Event()
 
-    class FakeDB:
-        def get_session(self, target):
-            return {"id": target, "message_count": 1}
+    db = gateway_db
+    db.create_session("cancel-session", source="tui")
+    db.append_message("cancel-session", role="user", content="late")
+    read_history = db.get_resume_conversations
 
-        def resolve_resume_session_id(self, target):
-            return target
+    def get_resume_conversations(target):
+        history_started.set()
+        assert release_history.wait(timeout=5.0)
+        return read_history(target)
 
-        def reopen_session(self, _target):
-            pass
-
-        def get_resume_conversations(self, _target):
-            history_started.set()
-            assert release_history.wait(timeout=2.0)
-            loaded = [{"role": "user", "content": "late"}]
-            return loaded, loaded
-
-        def get_ancestor_display_prefix(self, _target):
-            return []
-
-    monkeypatch.setattr(server, "_get_db", lambda: FakeDB())
+    monkeypatch.setattr(db, "get_resume_conversations", get_resume_conversations)
     monkeypatch.setattr(server, "_enable_gateway_prompts", lambda: None)
     monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
     monkeypatch.setattr(
@@ -3835,7 +3814,8 @@ def test_session_resume_deferred_history_close_cancels_build(monkeypatch):
         assert session["resume_history_error"] == "session resume cancelled"
 
         release_history.set()
-        time.sleep(0.05)
+        hydration_workers[0].join(timeout=5)
+        assert not hydration_workers[0].is_alive()
         assert not build_started.is_set()
         assert sid not in server._sessions
     finally:
@@ -3843,7 +3823,7 @@ def test_session_resume_deferred_history_close_cancels_build(monkeypatch):
         server._sessions.pop(response.get("result", {}).get("session_id", ""), None)
 
 
-def test_session_resume_follows_compression_tip(monkeypatch, tmp_path):
+def test_session_resume_follows_compression_tip(monkeypatch, gateway_db):
     """Resuming a rotated-out parent id must load the continuation's messages.
 
     Regression for the desktop "I came back and the reply isn't there" report:
@@ -3853,9 +3833,7 @@ def test_session_resume_follows_compression_tip(monkeypatch, tmp_path):
     the response generated after compression. session.resume must follow the
     compression tip via resolve_resume_session_id.
     """
-    from hermes_state import SessionDB
-
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = gateway_db
     base = int(time.time()) - 10_000
     db.create_session("parent_root", source="tui")
     db.append_message(
@@ -3894,19 +3872,12 @@ def test_session_resume_follows_compression_tip(monkeypatch, tmp_path):
     monkeypatch.setattr(
         server, "_session_info", lambda agent, *a: {"model": "test", "tools": {}, "skills": {}}
     )
-    monkeypatch.setattr(
-        server, "_init_session", lambda sid, key, agent, history, cols=80, **_kwargs: None
+    # eager_build: this asserts the synchronously-built agent binds to the
+    # resolved tip (captured["agent_session_id"]); the compression-tip
+    # resolution itself runs before the build and is mode-agnostic.
+    resp = server.handle_request(
+        {"id": "1", "method": "session.resume", "params": {"session_id": "parent_root", "eager_build": True}}
     )
-
-    try:
-        # eager_build: this asserts the synchronously-built agent binds to the
-        # resolved tip (captured["agent_session_id"]); the compression-tip
-        # resolution itself runs before the build and is mode-agnostic.
-        resp = server.handle_request(
-            {"id": "1", "method": "session.resume", "params": {"session_id": "parent_root", "eager_build": True}}
-        )
-    finally:
-        db.close()
 
     # The agent must bind to the continuation tip, and the returned transcript
     # must include the post-compression reply (which lives only in the tip).
@@ -3916,48 +3887,24 @@ def test_session_resume_follows_compression_tip(monkeypatch, tmp_path):
     assert "post-compression reply" in texts
 
 
-def test_session_resume_passes_stored_runtime_to_agent(monkeypatch):
+def test_session_resume_passes_stored_runtime_to_agent(monkeypatch, gateway_db):
     captured = {}
-
-    class FakeDB:
-        def get_session(self, target):
-            return {
-                "id": target,
-                "model": "gpt-5.4",
-                "billing_provider": "openai-codex",
-                "model_config": '{"reasoning_config":{"enabled":true,"effort":"high"},"service_tier":"priority","base_url":"https://custom.example/v1","api_mode":"chat_completions"}',
-            }
-
-        def reopen_session(self, target):
-            pass
-
-        def get_resume_conversations(self, session_id):
-            return (
-                self.get_messages_as_conversation(session_id, repair_alternation=True),
-                self.get_messages_as_conversation(session_id, include_ancestors=True),
-            )
-
-        def get_ancestor_display_prefix(self, _sid):
-            return []
-
-        def get_messages_as_conversation(self, target, include_ancestors=False, repair_alternation=False, **_kwargs):
-            return [{"role": "user", "content": "hello"}]
+    gateway_db.create_session(
+        "stored-session", source="tui", model="gpt-5.4",
+        model_config={"provider": "openai-codex", "reasoning_config": {"enabled": True, "effort": "high"},
+                      "service_tier": "priority", "base_url": "https://custom.example/v1", "api_mode": "chat_completions"},
+    )
+    gateway_db.append_message("stored-session", role="user", content="hello")
 
     def fake_make_agent(sid, key, session_id=None, session_db=None, **kwargs):
         captured.update(kwargs)
         return types.SimpleNamespace(model="gpt-5.4", provider="openai-codex")
 
-    monkeypatch.setattr(server, "_get_db", lambda: FakeDB())
     monkeypatch.setattr(server, "_enable_gateway_prompts", lambda: None)
     monkeypatch.setattr(server, "_set_session_context", lambda target, cwd=None: [])
     monkeypatch.setattr(server, "_clear_session_context", lambda tokens: None)
     monkeypatch.setattr(server, "_make_agent", fake_make_agent)
     monkeypatch.setattr(server, "_session_info", lambda agent, *a: {"model": agent.model, "provider": agent.provider})
-
-    def fake_init_session(sid, key, agent, history, cols=80, **_kwargs):
-        server._sessions[sid] = {"agent": agent, "session_key": key}
-
-    monkeypatch.setattr(server, "_init_session", fake_init_session)
 
     # eager_build: this asserts the synchronous build contract (stored runtime
     # overrides reach _make_agent, info comes from _session_info). The deferred
@@ -3977,9 +3924,13 @@ def test_session_resume_passes_stored_runtime_to_agent(monkeypatch):
     assert captured["service_tier_override"] == "priority"
     runtime_sid = resp["result"]["session_id"]
     assert server._sessions[runtime_sid]["model_override"] == captured["model_override"]
+    assert resp["result"]["info"] == {
+        "model": "gpt-5.4", "provider": "openai-codex",
+        "pending_submissions": [], "blocking_unknown": [], "queue_receipts": [],
+    }
 
 
-def test_session_resume_profile_uses_profile_db_cwd(monkeypatch, tmp_path):
+def test_session_resume_profile_uses_profile_db_cwd(monkeypatch, tmp_path, gateway_db):
     target = "stored-profile-session"
     launch_cwd = tmp_path / "launch"
     profile_cwd = tmp_path / "worker"
@@ -3989,56 +3940,27 @@ def test_session_resume_profile_uses_profile_db_cwd(monkeypatch, tmp_path):
     profile_home.mkdir(parents=True)
     captured = {}
 
-    class ProfileDB:
-        def get_session(self, _target):
-            return {"id": target, "cwd": str(profile_cwd)}
+    from hermes_state_registry import acquire
 
-        def get_session_by_title(self, _target):
-            return None
-
-        def reopen_session(self, _target):
-            captured["reopened"] = _target
-
-        def get_resume_conversations(self, session_id):
-            return (
-                self.get_messages_as_conversation(session_id, repair_alternation=True),
-                self.get_messages_as_conversation(session_id, include_ancestors=True),
-            )
-
-        def get_ancestor_display_prefix(self, _sid):
-            return []
-
-        def get_messages_as_conversation(self, _target, include_ancestors=False, repair_alternation=False, **_kwargs):
-            return [{"role": "user", "content": "hello"}]
-
-        def update_session_cwd(self, *_args):
-            raise AssertionError("profile row already has cwd")
-
-    class LaunchDB:
-        def get_session(self, _target):
-            return {"id": target, "cwd": str(launch_cwd)}
-
-        def update_session_cwd(self, *_args):
-            captured["launch_update"] = True
-
-    profile_db = ProfileDB()
-    launch_db = LaunchDB()
-
-    class FakeWorker:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def close(self):
-            pass
+    profile_db = acquire(profile_home / "state.db")
+    launch_db = gateway_db
+    profile_db.create_session(target, source="tui", cwd=str(profile_cwd))
+    profile_db.append_message(target, role="user", content="hello")
+    profile_db.update_session_cwd(target, str(profile_cwd), git_branch="profile-branch", git_repo_root=str(profile_cwd))
+    launch_db.create_session(target, source="tui", cwd=str(launch_cwd))
+    profile_row, launch_row = profile_db.get_session(target), launch_db.get_session(target)
+    profile_update = Mock(side_effect=AssertionError("profile row already has cwd"))
+    launch_update = Mock(side_effect=AssertionError("must not update launch DB"))
+    monkeypatch.setattr(profile_db, "update_session_cwd", profile_update)
+    monkeypatch.setattr(launch_db, "update_session_cwd", launch_update)
 
     def fake_make_agent(sid, key, session_id=None, session_db=None, **kwargs):
         captured["agent_db"] = session_db
         captured["agent_cwd"] = kwargs.get("cwd_override")
-        return types.SimpleNamespace(model="test/model")
+        return types.SimpleNamespace(model="test/model", _session_db=session_db, close=session_db.close)
 
     monkeypatch.setenv("TERMINAL_CWD", str(launch_cwd))
     monkeypatch.setattr(server, "_profile_home", lambda _profile: profile_home)
-    monkeypatch.setattr("hermes_state_registry.acquire", lambda db_path=None: profile_db)
     monkeypatch.setattr(server, "_get_db", lambda: launch_db)
     monkeypatch.setattr(server, "_enable_gateway_prompts", lambda: None)
     monkeypatch.setattr(
@@ -4048,9 +3970,7 @@ def test_session_resume_profile_uses_profile_db_cwd(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(server, "_clear_session_context", lambda tokens: None)
     monkeypatch.setattr(server, "_make_agent", fake_make_agent)
-    monkeypatch.setattr(server, "_SlashWorker", FakeWorker)
-    monkeypatch.setattr(server, "_wire_callbacks", lambda _sid: None)
-    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+
     monkeypatch.setattr(
         server,
         "_session_info",
@@ -4080,9 +4000,14 @@ def test_session_resume_profile_uses_profile_db_cwd(monkeypatch, tmp_path):
         assert captured["agent_cwd"] == str(profile_cwd)
         assert server._sessions[sid]["cwd"] == str(profile_cwd)
         assert resp["result"]["info"]["cwd"] == str(profile_cwd)
-        assert "launch_update" not in captured
+        profile_update.assert_not_called()
+        launch_update.assert_not_called()
+        assert profile_db.get_session(target) == profile_row
+        assert launch_db.get_session(target) == launch_row
     finally:
-        server._sessions.clear()
+        for sid in list(server._sessions):
+            server._close_session_by_id(sid, end_reason="test_cleanup")
+        profile_db.close()
 
 
 def test_session_cwd_set_profile_session_updates_profile_db(monkeypatch, tmp_path):
@@ -12871,7 +12796,7 @@ def test_session_redirect_rpc_drops_queued_duplicate_of_inflight_user():
     assert not session.get("queued_prompts")
 
 
-def test_session_redirect_build_window_scrubs_stale_p_when_queuing_q():
+def test_session_redirect_build_window_scrubs_stale_p_when_queuing_q(gateway_db):
     """#84417: build-window queue of Q must not leave P ahead of Q."""
     original = "live original P"
     session = _session(running=True)
@@ -12892,10 +12817,15 @@ def test_session_redirect_build_window_scrubs_stale_p_when_queuing_q():
                 "params": {"session_id": "sid", "text": "correction Q"},
             }
         )
+        receipts = server._session_control_info(session)["queue_receipts"]
     finally:
         server._sessions.pop("sid", None)
 
-    assert resp["result"] == {"status": "queued", "text": "correction Q"}
+    input_id = session["queued_prompt"]["_queue_receipt"]["input_id"]
+    assert input_id
+    assert resp["result"] == {"status": "queued", "text": "correction Q", "input_id": input_id}
+    assert receipts == [{"input_id": input_id, "session_id": session["session_key"],
+                         "status": "queued", "outcome": None, "user": "correction Q"}]
     assert session["queued_prompt"]["text"] == "correction Q"
     assert not session.get("queued_prompts")
 
@@ -13001,7 +12931,7 @@ def test_new_turn_does_not_inherit_prior_turn_corrections():
     assert "corrections" not in snapshot
 
 
-def test_session_redirect_queues_during_agent_build_window(monkeypatch):
+def test_session_redirect_queues_during_agent_build_window(monkeypatch, gateway_db):
     # A fresh turn flips running=True and builds the agent asynchronously, so
     # session["agent"] is briefly None. A correction landing here must queue
     # (lossless, reaches the model next turn), not hard-reject as unsupported.
@@ -13016,10 +12946,15 @@ def test_session_redirect_queues_during_agent_build_window(monkeypatch):
                 "params": {"session_id": "sid", "text": "wait, use SQLite"},
             }
         )
+        receipts = server._session_control_info(session)["queue_receipts"]
     finally:
         server._sessions.pop("sid", None)
 
-    assert resp["result"] == {"status": "queued", "text": "wait, use SQLite"}
+    input_id = session["queued_prompt"]["_queue_receipt"]["input_id"]
+    assert input_id
+    assert resp["result"] == {"status": "queued", "text": "wait, use SQLite", "input_id": input_id}
+    assert receipts == [{"input_id": input_id, "session_id": session["session_key"],
+                         "status": "queued", "outcome": None, "user": "wait, use SQLite"}]
     assert session["queued_prompt"]["text"] == "wait, use SQLite"
 
 
@@ -17714,7 +17649,9 @@ def test_session_activate_switches_live_session_without_closing_siblings(monkeyp
         assert resp["result"]["session_key"] == "key-b"
         assert resp["result"]["running"] is True
         assert resp["result"]["status"] == "working"
-        assert resp["result"]["info"] == {"model": "model-b"}
+        assert resp["result"]["info"] == {
+            "model": "model-b", "pending_submissions": [], "blocking_unknown": [], "queue_receipts": [],
+        }
         assert resp["result"]["messages"] == [
             {"role": "user", "text": "new prompt"},
             {"role": "assistant", "text": "new answer"},
@@ -20701,7 +20638,7 @@ def test_prompt_submit_passes_persist_user_message_to_agent(monkeypatch):
         server._sessions.pop("sid", None)
 
 
-def test_fallback_session_info_reports_session_cwd_not_launch_dir(monkeypatch):
+def test_fallback_session_info_reports_session_cwd_not_launch_dir(monkeypatch, gateway_db):
     """A lazily-resumed session must report ITS workspace, not the gateway's.
 
     ``_fallback_session_info`` used ``_default_session_cwd()`` — the directory the
@@ -20713,13 +20650,17 @@ def test_fallback_session_info_reports_session_cwd_not_launch_dir(monkeypatch):
     monkeypatch.setattr(server, "_project_info_for_cwd", lambda cwd: None)
     monkeypatch.setattr(server, "_resolve_model", lambda: "test-model")
 
-    info = server._fallback_session_info({"cwd": "/projects/session-own-repo"})
+    session = server._deferred_session_record(
+        "fallback-key", cols=80, cwd="/projects/session-own-repo", history=[], lease=None,
+    )
+    info = server._fallback_session_info(session)
 
     assert info["cwd"] == "/projects/session-own-repo"
     assert info["branch"] == "bb/feature"
+    assert [info[key] for key in ("pending_submissions", "blocking_unknown", "queue_receipts")] == [[], [], []]
 
 
-def test_fallback_session_info_always_emits_branch(monkeypatch):
+def test_fallback_session_info_always_emits_branch(monkeypatch, gateway_db):
     """``branch`` is always present so a client can CLEAR a stale label.
 
     Omitting the key left the desktop showing the previous conversation's branch
@@ -20730,10 +20671,14 @@ def test_fallback_session_info_always_emits_branch(monkeypatch):
     monkeypatch.setattr(server, "_project_info_for_cwd", lambda cwd: None)
     monkeypatch.setattr(server, "_resolve_model", lambda: "test-model")
 
-    info = server._fallback_session_info({"cwd": "/plain/folder"})
+    session = server._deferred_session_record(
+        "fallback-key", cols=80, cwd="/plain/folder", history=[], lease=None,
+    )
+    info = server._fallback_session_info(session)
 
     assert "branch" in info
     assert info["branch"] == ""
+    assert [info[key] for key in ("pending_submissions", "blocking_unknown", "queue_receipts")] == [[], [], []]
 
 
 BRANCH_REASONING = "the parent's chain of thought"
