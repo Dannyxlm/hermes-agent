@@ -333,10 +333,15 @@ def test_prompt_submit_dispatches_to_compute_host_when_turn_isolation_enabled(mo
         done = {"type": "turn.end", "sid": "iso-sid", "history_version": 1}
         turn_id = fake_supervisor.frames[0]["request_id"]
         assert turn_id != "submit"
-        fake_supervisor.callback({**done, "request_id": "submit"})
-        fake_supervisor.callback({**done, "sid": "other-sid", "request_id": turn_id})
-        assert server._sessions["iso-sid"]["running"] is True
-        assert server._sessions["iso-sid"]["history_version"] == 0
+        for invalid in ({**done, "request_id": "submit"},
+                        {**done, "sid": "other-sid", "request_id": turn_id}):
+            fake_supervisor.callback(invalid)
+            for worker in threading.enumerate():
+                if worker.name == "compute-host-complete-iso-sid":
+                    worker.join(timeout=5)
+                    assert not worker.is_alive(), "invalid completion did not finish"
+            assert server._sessions["iso-sid"]["running"] is True
+            assert server._sessions["iso-sid"]["history_version"] == 0
         fake_supervisor.callback({**done, "request_id": turn_id})
         for worker in threading.enumerate():
             if worker.name == "compute-host-complete-iso-sid":
