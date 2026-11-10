@@ -90,3 +90,49 @@ async def test_route_coalesces_status_and_a_cancelled_waiter_does_not_cancel_pro
         release.set()
     assert (await second)['changed'] == 2
     assert len(calls) == 1
+
+
+def test_route_malformed_git_file_keeps_null_non_repo_response(tmp_path):
+    import asyncio
+    from hermes_cli.web_routers import git as router
+    (tmp_path / '.git').write_bytes(b'gitdir: \xff\xfe')
+    assert asyncio.run(router.git_status_route(str(tmp_path))) is None
+
+
+@pytest.mark.asyncio
+async def test_abandoned_failed_flight_is_observed_and_next_request_retries(repo, monkeypatch):
+    import asyncio
+    import gc
+    from hermes_cli.web_routers import git as router
+    entered, release, failed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    errors, calls = [], []
+    async def probe(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            entered.set()
+            await release.wait()
+            failed.set()
+            raise RuntimeError('fixture git failure')
+        return {'changed': 2}
+    monkeypatch.setattr(router, '_git_op', probe)
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda loop, context: errors.append(context))
+    try:
+        waiter = asyncio.create_task(router.git_status_route(str(repo)))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        del waiter
+        release.set()
+        await asyncio.wait_for(failed.wait(), timeout=5)
+        await asyncio.sleep(0)  # Let completion callbacks consume the now-unobserved exception.
+        gc.collect()
+        # Python 3.14 shield deliberately logs a late exception even when it was retrieved.
+        assert all(error['message'] == 'RuntimeError exception in shielded future' for error in errors)
+        assert (await router.git_status_route(str(repo)))['changed'] == 2
+        assert len(calls) == 2
+    finally:
+        release.set()
+        loop.set_exception_handler(previous)

@@ -66,6 +66,8 @@ async def git_status_route(path: str):
     task = _git_status_tasks.get(task_key)
     if task is None:
         task = _git_status_tasks[task_key] = asyncio.create_task(_git_status_probe(root, task_key))
+        # The last shielded waiter can leave before a failing probe finishes.
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
     return copy.deepcopy(await asyncio.shield(task))
 
 
