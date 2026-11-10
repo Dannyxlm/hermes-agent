@@ -234,7 +234,8 @@ async def model_options(connection, ref, params):
 
     def discover():
         from gateway.run import _profile_runtime_scope
-        from hermes_cli.inventory import load_picker_context, build_model_options_payload
+        from hermes_cli.inventory import load_picker_context
+        from tui_gateway.methods_complete import _cached_model_options
         with _profile_runtime_scope(Path(connection.authority.profile_id)):
             ctx = load_picker_context()
             selected = provider
@@ -242,6 +243,6 @@ async def model_options(connection, ref, params):
                 from hermes_cli.runtime_provider import canonical_custom_identity
                 selected = canonical_custom_identity(base_url=base_url, config_provider=ctx.current_provider, model=model,
                                                      requested=getattr(agent, 'requested_provider', None)) or selected
-            return build_model_options_payload(ctx.with_overrides(current_provider=selected,
-                current_model=model, current_base_url=base_url), **{k: params[k] for k in flags & params.keys()})
+            return _cached_model_options(connection.authority.profile_id,
+                ctx.with_overrides(current_provider=selected, current_model=model, current_base_url=base_url), params)
     return await asyncio.to_thread(discover)
