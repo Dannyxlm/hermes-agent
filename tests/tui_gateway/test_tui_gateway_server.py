@@ -889,9 +889,9 @@ def test_profile_scoped_agent_build_starts_mcp_discovery_in_profile_home(
     monkeypatch.setattr(server, "_SlashWorker", lambda *args: None)
     monkeypatch.setattr(server, "_attach_worker", lambda *args: None)
     monkeypatch.setattr(server, "_config_model_target", lambda: ("", ""))
-    # CI runs this huge file serially under load; a prior session's _build can
-    # still be finishing (session.info emit) when the next test starts, so a
-    # 2s Event wait flakes. Unique sid + longer bound; still fail closed.
+    # session.info's cold tool discovery is unrelated to the MCP-profile contract
+    # and can otherwise outlast the readiness bound with this minimal fake agent.
+    monkeypatch.setattr(server, "_session_info", lambda agent, session=None: {})
     monkeypatch.setattr(server, "_start_notification_poller", lambda *a, **k: None)
     monkeypatch.setattr(server, "_schedule_mcp_late_refresh", lambda *a, **k: None)
     monkeypatch.setattr(server, "_emit", lambda *a, **k: None)
@@ -952,8 +952,8 @@ def test_profile_scoped_agent_build_installs_secret_scope(monkeypatch, tmp_path)
     monkeypatch.setattr(server, "_SlashWorker", lambda *args: None)
     monkeypatch.setattr(server, "_attach_worker", lambda *args: None)
     monkeypatch.setattr(server, "_config_model_target", lambda: ("", ""))
-    # Same CI flake class as the MCP profile-home test: bound wait + less work
-    # on the build thread (no poller / late MCP refresh / session.info emit).
+    # As above, isolate unused session-info rendering from profile-scope setup.
+    monkeypatch.setattr(server, "_session_info", lambda agent, session=None: {})
     monkeypatch.setattr(server, "_start_notification_poller", lambda *a, **k: None)
     monkeypatch.setattr(server, "_schedule_mcp_late_refresh", lambda *a, **k: None)
     monkeypatch.setattr(server, "_emit", lambda *a, **k: None)
