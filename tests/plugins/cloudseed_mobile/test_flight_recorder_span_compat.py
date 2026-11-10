@@ -8,7 +8,8 @@ from tests.plugins.cloudseed_mobile.test_flight_recorder import (
 )
 
 NEW_SPANS = ('app.foreground_fresh', 'chat.history_complete', 'chat.send_first_delta', 'InboxFreshAfterForeground',
-             'ChatOpenToBody', 'ChatOpenBodyToTranscript', 'ChatOpenDocParse')
+             'ChatOpenToBody', 'ChatOpenBodyToTranscript', 'ChatOpenDocParse',
+             'LaunchToRootMounted', 'LaunchToAuthRestored', 'LaunchToSnapshotRestored', 'LaunchToShellAppeared')
 
 
 def span(name):
