@@ -64,6 +64,30 @@ def projection_destinations(db, profile, stored_ids):
     return result
 
 
+def live_draft(home, stored_id):
+    """Only this authenticated owner's attached, empty draft can stand in for a missing row."""
+    from . import server
+    from .transport import current_transport
+    from gateway.session_identity import is_authenticated_identity
+    peer = current_transport()
+    if not is_authenticated_identity(getattr(peer, 'auth_identity', None)):
+        return None
+    owner = server._transport_auth_user_id(peer)
+    with server._sessions_lock:
+        for session in server._sessions.values():
+            if (session.get('session_key') != stored_id or session.get('_finalized')
+                    or Path(session.get('profile_home') or server._hermes_home).resolve() != Path(home).resolve()
+                    or not owner or session.get('auth_user_id') != owner
+                    or not server._session_transport_contains(session, peer)
+                    or session.get('agent') is not None or session.get('history') or session.get('parent_session_id')
+                    or session.get('pending_title') == SessionDB.CANONICAL_BOT_CHAT_TITLE):
+                continue
+            return {'id': stored_id, 'source': session.get('source'), 'user_id': owner,
+                    'title': session.get('pending_title'), 'started_at': session['created_at'],
+                    'cwd': session.get('cwd'), 'model': (session.get('model_override') or {}).get('model')}
+    return None
+
+
 def resolve_destination(profile, home, stored_id):
     """Exact ID only, profile DB only, compression continuations only (never branches)."""
     path = Path(home) / "state.db"
@@ -72,6 +96,9 @@ def resolve_destination(profile, home, stored_id):
     with SessionDB(db_path=path, read_only=True) as db:
         row = db.get_session(stored_id)
         if not row:
+            draft = live_draft(home, stored_id)
+            if draft is not None:
+                return Scope("native_session", profile, stored_id), stored_id, draft.get('title') or "Hermex Ava"
             raise ValueError("unknown stored session")
         chain = db.get_compression_chain(stored_id)
         if not chain:

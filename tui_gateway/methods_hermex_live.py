@@ -59,6 +59,12 @@ def _hermex_window(db, home, params, principal):
 
 def _hermex_changes(db, home, params, principal):
     from hermex_skill_changes import list_changes
+    from tui_gateway.mobile_session_scope import live_draft
+    if db.get_session(params['session_id']) is None and live_draft(home, params['session_id']) is not None:
+        if params.get('cursor'):
+            from hermex_live_reads import LiveConflict
+            raise LiveConflict("cursor expired or scope changed")
+        return {'version': 1, 'profile': params['profile'], 'items': [], 'next_cursor': None}
     return list_changes(db, params, principal)
 
 

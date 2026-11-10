@@ -277,3 +277,63 @@ def test_snapshot_rejects_other_connection_and_profile(mobile_home, peer, ordina
         assert "error" in rpc("session.stream.snapshot", session_id=sid)
     finally:
         reset_transport(token)
+
+
+@pytest.mark.parametrize('method', ['mobile.session_push.register', 'session.family', 'skills.changes.list'])
+def test_created_draft_is_readable_only_by_its_authenticated_transport_and_profile(
+        push_service, mobile_home, peer, monkeypatch, method):
+    from pathlib import Path
+    from tests.tui_gateway.test_methods_mobile import MobilePeer
+    from tui_gateway.transport import bind_transport, reset_transport
+    monkeypatch.setattr(Path, 'home', lambda: mobile_home.parent)
+    monkeypatch.setattr('hermes_cli.profiles._get_default_hermes_home', lambda: mobile_home)
+    monkeypatch.setattr(server, '_register_session_cwd', lambda session: None)
+    monkeypatch.setattr(server, '_schedule_agent_build', lambda *args, **kwargs: None)
+    peer.auth_identity = {'user_id': 'fixture-owner', 'provider': 'fixture-auth'}
+    created = rpc('session.create', profile='ops')['result']
+    key = created['stored_session_id']
+    path = mobile_home / 'profiles' / 'ops' / 'state.db'
+    with SessionDB(db_path=path, read_only=True) as db:
+        assert db.get_session(key) is None
+    params = {'profile': 'ops', 'session_id': key}
+    if method == 'mobile.session_push.register':
+        params = {'profile': 'ops', 'stored_session_id': key,
+                  'installation_id': str(uuid.uuid4()), 'connection_id': str(uuid.uuid4()),
+                  'device_token': 'ab' * 32, 'environment': 'production'}
+    result = rpc(method, **params)
+    assert 'result' in result, result
+    if method == 'session.family':
+        assert result['result']['root']['session_id'] == key
+        assert result['result']['nodes'] == []
+    elif method == 'skills.changes.list':
+        assert result['result']['items'] == []
+    else:
+        assert result['result']['resolved_session_id'] == key
+    field = 'stored_session_id' if method == 'mobile.session_push.register' else 'session_id'
+    code = 4001 if method == 'session.family' else 4400
+    for override in ({field: 'unknown-draft'}, {'profile': 'default'}):
+        assert rpc(method, **{**params, **override})['error']['code'] == code
+    foreign = MobilePeer()
+    foreign.auth_identity = {'user_id': 'foreign-owner', 'provider': 'fixture-auth'}
+    token = bind_transport(foreign)
+    try:
+        assert rpc(method, **params)['error']['code'] == code
+    finally:
+        reset_transport(token)
+    session = server._sessions[created['session_id']]
+    owner = session['auth_user_id']
+    session['auth_user_id'] = 'foreign-subject'
+    try:
+        assert rpc(method, **params)['error']['code'] == code
+    finally:
+        session['auth_user_id'] = owner
+    if method == 'mobile.session_push.register':
+        server._mobile_push_note_submission(session, {'origin': {k: params[k] for k in ('installation_id', 'connection_id')}})
+        with push_service.store.transaction() as db:
+            assert db.execute('SELECT COUNT(*) FROM human_origins').fetchone()[0] == 1
+        server._emit('message.start', created['session_id'])
+        server._emit('message.complete', created['session_id'], {'status': 'complete'})
+        push_service.drain_once()
+        assert len(push_service.sender.jobs) == 1
+    with SessionDB(db_path=path, read_only=True) as db:
+        assert db.get_session(key) is None
