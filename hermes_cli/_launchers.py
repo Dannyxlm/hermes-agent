@@ -834,6 +834,9 @@ def _kept_shared_launcher(name: str, local: Path, store: Path, own: Path | None)
 def ensure_install_launchers(repo_root: Path, out_dir: Path) -> list[str]:
     """Publish exact-install commands; conveniences follow them across Python repins."""
     root = Path(repo_root).resolve()
+    from pm.environments import managed_immutable
+    if managed_immutable(root):
+        raise RuntimeError("Release launchers are externally owned")
     local = root / ".hermes" / "bin"
     local.mkdir(parents=True, exist_ok=True)
     store = store_root(root)
@@ -878,6 +881,9 @@ def expose_cli(project_root: Path | None = None, *, create: bool = True) -> dict
     from pm.paths import install_root
 
     root = Path(project_root or install_root()).resolve()
+    from pm.environments import managed_immutable
+    if managed_immutable(root):
+        return {"ok": True, "skipped": "externally-owned"}
     if _is_windows():
         # The installer stages the user-facing commands into $HERMES_HOME\bin
         # and registers that directory in the User PATH. An update skipped both
