@@ -79,8 +79,10 @@ async def test_route_coalesces_status_and_a_cancelled_waiter_does_not_cancel_pro
         return original(path)
     monkeypatch.setattr(web_git, 'repo_status', blocked)
     first = asyncio.create_task(router.git_status_route(str(repo)))
+    same_tick = asyncio.create_task(router.git_status_route(str(repo)))
     await async_wait_until(entered.is_set, timeout=5)
-    second = asyncio.create_task(router.git_status_route(str(repo)))
+    # Arrivals while the probe is already reading share one later probe, never one each.
+    late = [asyncio.create_task(router.git_status_route(str(repo))) for _ in range(3)]
     await asyncio.sleep(0)
     first.cancel()
     try:
@@ -88,8 +90,40 @@ async def test_route_coalesces_status_and_a_cancelled_waiter_does_not_cancel_pro
             await first
     finally:
         release.set()
-    assert (await second)['changed'] == 2
-    assert len(calls) == 1
+    assert (await same_tick)['changed'] == 2
+    # A cancelled waiter did not cancel the probe its neighbour shares.
+    assert [(await task)['changed'] for task in late] == [2, 2, 2]
+    assert len(calls) == 2
+    assert router._git_status_flights == {}
+
+
+@pytest.mark.asyncio
+async def test_route_never_answers_from_a_probe_that_read_before_the_caller_arrived(repo, monkeypatch):
+    import asyncio
+    import threading
+    from hermes_cli.web_routers import git as router
+    from tests.waiting import async_wait_until
+    _git(repo, 'checkout', '--', 'a.txt')
+    (repo / 'new.py').unlink()
+    read, release = threading.Event(), threading.Event()
+    original = web_git.repo_status
+    def read_then_hold(path):
+        result = original(path)
+        if not read.is_set():
+            read.set()
+            assert release.wait(10)
+        return result
+    monkeypatch.setattr(web_git, 'repo_status', read_then_hold)
+    early = asyncio.create_task(router.git_status_route(str(repo)))
+    await async_wait_until(read.is_set, timeout=5)
+    (repo / 'a.txt').write_text('one\ntwo\nthree\n')
+    (repo / 'new.py').write_text('print(1)\n')
+    late = asyncio.create_task(router.git_status_route(str(repo)))
+    await asyncio.sleep(0)
+    release.set()
+    assert (await early)['changed'] == 0
+    assert (await late)['changed'] == 2, "the caller's own edit is in its answer"
+    assert router._git_status_flights == {}
 
 
 def test_route_malformed_git_file_keeps_null_non_repo_response(tmp_path):
