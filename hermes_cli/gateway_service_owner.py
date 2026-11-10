@@ -15,9 +15,60 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shlex
 import sys
 from pathlib import Path
 from xml.parsers.expat import ExpatError
+
+
+def systemd_unit_is_external(unit_path: Path) -> bool:
+    """Fail closed for system units outside Hermes's generated command family.
+
+    A matching name, description or HERMES_HOME is not ownership. In particular,
+    deployment wrappers retain their interpreter and supervisor contract.
+    """
+    try:
+        text = unit_path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return False
+    except (OSError, UnicodeError):
+        return True
+    from hermes_cli import gateway as gw
+
+    directives = {}
+    for line in text.splitlines():
+        key, separator, value = line.strip().partition("=")
+        if separator:
+            directives.setdefault(key, []).append(value)
+    starts = directives.get("ExecStart", [])
+    if directives.get("Description") != [gw.SERVICE_DESCRIPTION] or len(starts) != 1:
+        return True
+    try:
+        argv = shlex.split(starts[0])
+    except ValueError:
+        return True
+    # Before source launchers, Hermes generated -m units (initially with --replace
+    # and no cleanup hook). Keep their automatic upgrade path.
+    if argv[-1:] == ["--replace"]:
+        argv = argv[:-1]
+    if len(argv) >= 5 and argv[1:3] == ["-m", "hermes_cli.main"]:
+        args = argv[3:]
+        return not (args == ["gateway", "run"] or
+                    (len(args) == 4 and args[0] == "--profile" and args[-2:] == ["gateway", "run"]))
+    if (len(argv) < 3 or argv[-2:] != ["gateway", "run"]
+            or not any("gateway.cgroup_cleanup" in command
+                       for command in directives.get("ExecStopPost", []))):
+        return True
+    if Path(argv[0]).parts[-3:] == (".hermes", "bin", "hermes"):
+        return False
+    # Nix/developer units use runtime_command's isolated bootstrap instead.
+    return not (len(argv) >= 5 and argv[1:3] == ["-I", "-c"]
+                and "import hermes_bootstrap;" in argv[3]
+                and "'hermes_cli.main'" in argv[3])
+
+
+def print_external_systemd_notice(unit_path: Path) -> None:
+    print(f"Gateway unit {unit_path} is externally managed; leaving its definition unchanged.")
 
 
 def pinned_home(definition_path: Path) -> str | None:

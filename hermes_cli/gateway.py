@@ -3353,11 +3353,14 @@ def refresh_systemd_unit_if_needed(system: bool = False) -> bool:
     unit_path = get_systemd_unit_path(system=system)
     if not unit_path.exists():
         return False
-
     # Every boot/start/restart lands here: never rewrite a unit pinning another home (checked before
     # systemd_unit_is_current adopts the unit's home into os.environ).
     from hermes_cli.gateway_service_owner import unit_belongs_to_caller
     if not unit_belongs_to_caller(unit_path, system, "rewrite"):
+        return False
+    if system and gateway_service_owner.systemd_unit_is_external(unit_path):
+        _sync_hermes_home_from_systemd_unit(system=system)
+        gateway_service_owner.print_external_systemd_notice(unit_path)
         return False
     # systemd_unit_is_current is the HERMES_HOME-sync chokepoint; its env mutation persists for the regenerate below.
     current = systemd_unit_is_current(system=system)
@@ -3557,6 +3560,11 @@ def systemd_install(
     from hermes_cli.gateway_service_owner import unit_belongs_to_caller
     if not force_unit_path and not unit_belongs_to_caller(unit_path, system, "overwrite", run_as_user):
         sys.exit(1)
+    if system and gateway_service_owner.systemd_unit_is_external(unit_path):
+        gateway_service_owner.print_external_systemd_notice(unit_path)
+        if enable_on_startup:
+            _run_systemctl(["enable", get_service_name()], system=system, check=True, timeout=30)
+        return
 
     # Offer to remove legacy units first: alongside the new unit they flap-fight for the bot token.
     if has_legacy_hermes_units():
@@ -3737,15 +3745,7 @@ def systemd_restart(system: bool = False):
     if pid is not None and probe_gateway_loop_liveness(pid) == GATEWAY_LOOP_WEDGED:
         # Event loop provably dead: SIGUSR1 can't drain it, so bounded SIGTERM → SIGKILL and let systemd relaunch.
         print(
-            # Health probe says the event loop is provably dead (#81642): SIGUSR1 can never drain it, so the
-            # graceful wait below would burn the full budget. A busy-but-alive gateway (fresh heartbeat)
-            # never takes this path — its in-flight work, including the #86684 cron drain floor, keeps the
-            # full graceful budget.
-            # Health probe says the event loop is provably dead (#81642): the gateway cannot process a
-            # graceful shutdown, so waiting the full drain budget only stalls the restart (and `hermes
-            # update` behind it) for 180s. Bounded escalation instead: SIGTERM grace → SIGKILL → proceed,
-            # ~10s worst case. Never taken for a busy-but-alive gateway — a fresh heartbeat keeps the drain
-            # path (and the #86684 cron drain floor) fully intact.
+            # A wedged loop cannot drain SIGUSR1; a busy-but-alive gateway keeps the full graceful budget.
             f"⚠ Gateway PID {pid} event loop is unresponsive — "
             "skipping graceful drain and forcing a bounded stop..."
         )

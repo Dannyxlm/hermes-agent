@@ -39,7 +39,7 @@
     },
     {
       "id": "runtime-review-hardening",
-      "summary": "Managed runtime safety and integration review fixes, including selector-only rollback deletion of terminal runtime-ledger history while refusing unresolved work"
+      "summary": "Managed runtime safety and integration review fixes, including preservation of externally authored system services, immutable launcher ownership, and selector-only rollback deletion of terminal runtime-ledger history while refusing unresolved work"
     },
     {
       "id": "hermex-shared-state",

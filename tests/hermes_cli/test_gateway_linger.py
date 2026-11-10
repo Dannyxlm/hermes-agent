@@ -224,7 +224,9 @@ def test_existing_system_install_repairs_linger_for_configured_user(monkeypatch,
     """Re-running install on an affected system service provisions linger for the unit's User=."""
     unit_path = tmp_path / "systemd" / "hermes-gateway.service"
     unit_path.parent.mkdir(parents=True)
-    unit_path.write_text("[Service]\nUser=alice\n", encoding="utf-8")
+    unit_path.write_text(
+        f"[Unit]\nDescription={gateway.SERVICE_DESCRIPTION}\n[Service]\nUser=alice\n"
+        "ExecStart=/usr/bin/python -m hermes_cli.main gateway run\n", encoding="utf-8")
     helper_calls = []
 
     monkeypatch.setattr(gateway, "_require_root_for_system_service", lambda action: None)
