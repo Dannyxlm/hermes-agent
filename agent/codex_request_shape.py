@@ -486,7 +486,12 @@ def _replace_private(path: Path, data: bytes) -> None:
 def _read_private(path: Path) -> bytes:
     with suppress(FileNotFoundError):
         fd = _private_open(path, os.O_RDONLY)
-        with os.fdopen(fd, "rb") as handle:
+        try:
+            handle = os.fdopen(fd, "rb")
+        except BaseException:  # e.g. a directory at ``path``: don't leak the descriptor
+            os.close(fd)
+            raise
+        with handle:
             return handle.read()
     return b""
 
@@ -612,8 +617,8 @@ def _pin_incident(path: Path, record: dict, line: str, ring_lines: list[bytes]) 
             continue
         with suppress(ValueError):
             value = json.loads(raw)
-            if isinstance(value, dict):
-                incidents.append((_incident_class(value.get("pinned")), raw))
+            if isinstance(value, dict) and isinstance(value.get("pinned"), dict):
+                incidents.append((_incident_class(value["pinned"]), raw))
     incidents.append((_incident_class(record), entry.encode("ascii")))
     while len(incidents) > MAX_INCIDENTS:
         # Evict the oldest incident of the most frequent class: a burst of one failure kind

@@ -542,3 +542,24 @@ def test_incident_pin_failure_never_changes_the_request_or_the_ring(monkeypatch,
     assert len(server.bodies) == 3
     assert [r["outcome"] for r in shape.read_records(tmp_path / "logs" / shape.RING_FILENAME)] == [
         "accepted", "rejected", "rejected"]
+
+
+def test_append_record_contains_its_own_pin_failure(tmp_path):
+    """append_record itself absorbs a pin failure (not only the probe's outer guard), without leaking fds."""
+    path = _mkdir(tmp_path / "logs") / shape.RING_FILENAME
+    blocked = _mkdir(tmp_path / "logs" / "blocked")
+    fds_before = len(os.listdir("/proc/self/fd"))
+    for n in range(20):
+        assert shape.append_record(path, lambda fp, n=n: {"outcome": "rejected", "http_status": 400,
+                                                          "corr": {"session_id": "local-s1"}, "body": {"bytes": n}},
+                                   4, incidents=blocked) is True
+    assert len(os.listdir("/proc/self/fd")) <= fds_before + 1
+    assert 1 <= len(shape.read_records(path)) <= 4 and blocked.is_dir() and not list(blocked.iterdir())
+
+
+def test_incident_lines_without_a_pinned_record_are_dropped(tmp_path):
+    path = _mkdir(tmp_path / "logs") / shape.RING_FILENAME
+    shape.incidents_path(path).write_text('{"pinned": 1}\n[1]\nnot json\n')
+    _synthetic(path, "rejected", 400, 1)
+    (incident,) = shape.read_records(shape.incidents_path(path))
+    assert incident["pinned"]["http_status"] == 400
