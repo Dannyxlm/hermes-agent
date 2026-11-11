@@ -6,7 +6,9 @@ train, full suite, deploy) without polling. Invariants: each heartbeat carries o
 heartbeats stop at exit, and the normal completion notice still fires.
 """
 import json
+import os
 import queue
+import shlex
 import time
 
 import pytest
@@ -38,15 +40,35 @@ def test_heartbeat_carries_only_new_output_and_stops_at_exit(tmp_path, monkeypat
     monkeypatch.setattr(pr, "HEARTBEAT_MIN_SECONDS", 1)
     monkeypatch.setattr(pr, "HEARTBEAT_TICK_SECONDS", 0.1)
     registry = ProcessRegistry()
-    session = registry.spawn_local("echo first; sleep 2.5; echo second; sleep 2.5", cwd=str(tmp_path))
-    session.notify_on_complete = True
-    assert registry.arm_heartbeat(session, 1) == 1
+    gate = tmp_path / 'next-output'
+    os.mkfifo(gate)
+    gate_fd = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
+    session = None
+    try:
+        # Advance output and exit only after the observer sees each heartbeat;
+        # spawn/launch bookkeeping must not consume the producer's lifetime.
+        command = f"echo first; read -r _ < {shlex.quote(str(gate))}; echo second; read -r _ < {shlex.quote(str(gate))}"
+        session = registry.spawn_local(command, cwd=str(tmp_path))
+        session.notify_on_complete = True
+        assert registry.arm_heartbeat(session, 1) == 1
 
-    assert _wait_until(lambda: registry.poll(session.id)["status"] != "running", timeout=20)
-    # Give the completion event a moment to be enqueued after the reader observes EOF.
-    assert _wait_until(lambda: any(e.get("type") == "completion" for e in list(registry.completion_queue.queue)),
-                       timeout=5)
-    events = _drain(registry.completion_queue)
+        def beat_with(text):
+            return any(e.get('type') == 'heartbeat' and text in e['output']
+                       for e in list(registry.completion_queue.queue))
+
+        assert _wait_until(lambda: beat_with('first'), timeout=20)
+        os.write(gate_fd, b'next\n')
+        assert _wait_until(lambda: beat_with('second'), timeout=20)
+        os.write(gate_fd, b'exit\n')
+        assert _wait_until(lambda: registry.poll(session.id)["status"] != "running", timeout=20)
+        # Give the completion event a moment to be enqueued after the reader observes EOF.
+        assert _wait_until(lambda: any(e.get("type") == "completion" for e in list(registry.completion_queue.queue)),
+                           timeout=5)
+        events = _drain(registry.completion_queue)
+    finally:
+        os.close(gate_fd)
+        if session is not None and not session.exited:
+            registry.kill_process(session.id)
     beats = [e for e in events if e["type"] == "heartbeat"]
     completion = [e for e in events if e["type"] == "completion"]
 
@@ -121,15 +143,26 @@ def test_first_heartbeat_carries_output_produced_before_arming(tmp_path, monkeyp
     monkeypatch.setattr(pr, "HEARTBEAT_MIN_SECONDS", 1)
     monkeypatch.setattr(pr, "HEARTBEAT_TICK_SECONDS", 0.1)
     registry = ProcessRegistry()
-    session = registry.spawn_local("echo first; sleep 3", cwd=str(tmp_path))
-    session.notify_on_complete = True
-    assert _wait_until(lambda: "first" in registry.poll(session.id).get("output_preview", ""), timeout=10)
-    registry.arm_heartbeat(session, 1)
+    # Hold the producer alive until the heartbeat is observed. A fixed sleep
+    # can expire during spawn bookkeeping, before this test ever arms it.
+    gate = tmp_path / 'release'
+    os.mkfifo(gate)
+    gate_fd = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
+    session = None
+    try:
+        session = registry.spawn_local(f"echo first; cat < {shlex.quote(str(gate))}", cwd=str(tmp_path))
+        session.notify_on_complete = True
+        assert _wait_until(lambda: "first" in registry.poll(session.id).get("output_preview", ""), timeout=10)
+        registry.arm_heartbeat(session, 1)
 
-    assert _wait_until(lambda: any(e.get("type") == "heartbeat" for e in list(registry.completion_queue.queue)),
-                       timeout=10)
-    first_beat = next(e for e in _drain(registry.completion_queue) if e["type"] == "heartbeat")
-    assert "first" in first_beat["output"], first_beat
+        assert _wait_until(lambda: any(e.get("type") == "heartbeat" for e in list(registry.completion_queue.queue)),
+                           timeout=10)
+        first_beat = next(e for e in _drain(registry.completion_queue) if e["type"] == "heartbeat")
+        assert "first" in first_beat["output"], first_beat
+    finally:
+        os.close(gate_fd)
+        if session is not None:
+            registry.kill_process(session.id)
 
 
 def test_terminal_dispatch_heartbeat_implies_notify_and_foreground_runs_without_it(monkeypatch):

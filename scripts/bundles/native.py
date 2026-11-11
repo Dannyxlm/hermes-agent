@@ -69,10 +69,10 @@ def stage_uv_cache(source: Path, destination: Path) -> None:
     rebuild falls back to wanting the sdist download and fails closed.
 
     On macOS and Linux, uv's wheel entries (``wheels-v*/pypi/<name>/<version>``,
-    a hash directory deeper for URL, git and named-index sources) are relative
-    symlinks into ``archive-v0/``, and they ship as links. Following them
-    stored every unpacked wheel a second time and gave the seeded machine
-    cache directories where uv renames its own links (#141891).
+    a hash directory deeper for URL, git and named-index sources) are symlinks
+    into ``archive-v0/``. Ship them as relative links, relocating cache-owned
+    absolute targets. Following them stored every unpacked wheel a second time
+    and gave the seeded cache directories where uv renames its own links (#141891).
     """
     def ignore(directory: str, names: list[str]) -> set[str]:
         path = Path(directory)
@@ -87,6 +87,26 @@ def stage_uv_cache(source: Path, destination: Path) -> None:
         return set()
 
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
+    _relocate_cache_links(source, destination)
+
+
+def _relocate_cache_links(source: Path, destination: Path) -> None:
+    """Some uv index entries use absolute links; keep them payload-owned after copying.
+
+    Leave foreign links untouched so preparation's ownership check still refuses them.
+    Never dereference wheels into duplicate directories or mutate the build cache.
+    """
+    source = source.resolve()
+    for directory, dirs, files in os.walk(destination):
+        for name in dirs + files:
+            link = Path(directory) / name
+            if not link.is_symlink() or not os.path.isabs(os.readlink(link)):
+                continue
+            target = link.resolve()
+            if target.is_relative_to(source):
+                relocated = destination / target.relative_to(source)
+                link.unlink()
+                link.symlink_to(os.path.relpath(relocated, link.parent))
 
 
 def stage_pm_runtime(root: Path, python: Path, repo: Path, *, offline: bool = False,

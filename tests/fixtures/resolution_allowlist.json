@@ -615,8 +615,15 @@
   },
   {
     "path": "tui_gateway/methods_prompt.py",
-    "symbol": "_",
-    "kind": "bare_which"
+    "symbol": "_attach_pdf",
+    "kind": "bare_which",
+    "reason": "optional OS poppler-utils pdftoppm, not a Hermes-managed language runtime; reports a missing dependency before rendering"
+  },
+  {
+    "path": "tui_gateway/video_evidence.py",
+    "symbol": "resolve_ffmpeg",
+    "kind": "bare_which",
+    "reason": "optional system ffmpeg/ffprobe pair; falls back to the PM ffmpeg package when PATH does not supply both"
   },
   {
     "path": "agent/anthropic_adapter.py",

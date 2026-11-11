@@ -220,7 +220,7 @@ class TestPromptProgressNotice:
     def test_shows_percent_before_first_token(self):
         mon = self._monitor()
         assert mon._show_prompt_progress(51.0) is True
-        mon.agent._emit_wait_notice.assert_called_once_with("⚙ processing prompt — 40%")
+        mon.agent._emit_wait_notice.assert_called_once_with("⚙ processing prompt — 40%", step_kind="thinking")
         assert mon._show_prompt_progress(51.5) is False  # at most once a second
 
     def test_clears_line_at_first_token(self):
@@ -228,7 +228,7 @@ class TestPromptProgressNotice:
         mon._show_prompt_progress(51.0)
         mon.clients.diag["first_chunk_at"] = 52.0
         assert mon._show_prompt_progress(53.0) is False
-        mon.agent._emit_wait_notice.assert_called_with("")
+        mon.agent._emit_wait_notice.assert_called_with("", step_kind="thinking")
 
 
 class TestLocalStaleBreakerReset:

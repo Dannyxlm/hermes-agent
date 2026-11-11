@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
+
 _original_stdout = sys.stdout
 
 
@@ -47,7 +49,7 @@ def server():
     mod._live_transports.clear()
 
 
-class _KanbanDB:
+class _KanbanDB(EmptyQueueReceipts):
     """Fake profile session store: classifies `worker-1` as kanban-owned, `chat-1` not."""
 
     def __init__(self):

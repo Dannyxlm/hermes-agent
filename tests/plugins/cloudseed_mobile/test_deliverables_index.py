@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 from fastapi import HTTPException
 from plugins.cloudseed_mobile import deliverables_index as ix
-from tests.plugins.test_cloudseed_mobile import client, P
+from tests.plugins.test_cloudseed_mobile import client as client, P  # noqa: PLC0414 - pytest fixture
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
 
 
@@ -14,6 +14,20 @@ def _index_semantics_over_synthetic_paths(monkeypatch):
     are never written to disk. Recent's existence check has its own tests in
     test_deliverables_recent_exists.py."""
     monkeypatch.setattr(ix.DeliverablesIndex, '_exists', lambda self, row: True)
+
+
+@pytest.fixture
+def index_clock(monkeypatch):
+    """Counted work units must not depend on import time or machine load."""
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(expired=False)
+    real_time = ix.time
+    monkeypatch.setattr(ix, "time", SimpleNamespace(
+        monotonic=lambda: 10.0 if clock.expired else 0.0,
+        time=real_time.time, time_ns=real_time.time_ns,
+    ))
+    return clock
 
 
 def store(home,root,count=2):
@@ -396,7 +410,7 @@ def test_refresh_progress_advances_within_long_session_and_ends_despite_partial_
     assert index.query()['coverage']['refresh_progress'] == final['coverage']['refresh_progress']
 
 
-def test_large_store_refresh_bounds_scanned_work_and_metadata_writes(client, monkeypatch):
+def test_large_store_refresh_bounds_scanned_work_and_metadata_writes(client, monkeypatch, index_clock):
     c, home = client
     root, wid = setup_root(c, home)
     store(home, root, 0)
@@ -450,7 +464,7 @@ def test_large_store_refresh_bounds_scanned_work_and_metadata_writes(client, mon
     assert not written.intersection({'generation', 'grant_signature', 'scan_signature', 'scan_version', 'total_sessions'})
 
 
-def test_legacy_cache_rebuilds_lineage_and_reconciles_deletion_in_bounded_units(client):
+def test_legacy_cache_rebuilds_lineage_and_reconciles_deletion_in_bounded_units(client, index_clock):
     c, home = client
     root, wid = setup_root(c, home)
     store(home, root, 6)
@@ -532,7 +546,7 @@ def test_legacy_cache_rebuilds_lineage_and_reconciles_deletion_in_bounded_units(
     assert revoked.query()['items'] == []
 
 
-def test_publication_checkpoint_cancellation_keeps_previous_complete_rows(client, monkeypatch):
+def test_publication_checkpoint_cancellation_keeps_previous_complete_rows(client, monkeypatch, index_clock):
     import threading
     c,home=client; root,wid=setup_root(c,home); store(home,root,1)
     index=ix.DeliverablesIndex(home,'default',[{'id':wid,'root_path':str(root),'name':'Fixture'}])
@@ -562,3 +576,38 @@ def test_publication_checkpoint_cancellation_keeps_previous_complete_rows(client
     with index.connection() as db:
         assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
         assert db.execute('SELECT count(*) FROM prepared_entries').fetchone()[0]==0
+
+
+def test_publication_deadline_preserves_complete_rows_and_resumes(client, monkeypatch, index_clock):
+    c, home = client
+    root, wid = setup_root(c, home)
+    store(home, root, 1)
+    index = ix.DeliverablesIndex(home, 'default', [{'id': wid, 'root_path': str(root), 'name': 'Fixture'}])
+    index.refresh()
+    old = index.query()['items']
+    assert len(old) == 1
+    paths = [root / f'outputs/deadline-{n}.md' for n in range(3)]
+    for path in paths:
+        path.write_text('synthetic delivery')
+    with sqlite3.connect(home / 'state.db') as db:
+        db.execute('UPDATE messages SET content=?', ('\n'.join('MEDIA: ' + str(path) for path in paths),))
+    prepare = index._prepare_occurrences
+
+    def expire_after_one_row(*args):
+        prepare(*args)
+        index_clock.expired = True
+
+    monkeypatch.setattr(index, '_prepare_occurrences', expire_after_one_row)
+    index.refresh()
+    assert index.query()['items'] == old
+    assert index.snapshot()['refresh_pending']
+    with index.connection() as db:
+        assert db.execute('SELECT count(*) FROM prepared_entries').fetchone()[0] == 1
+    monkeypatch.setattr(index, '_prepare_occurrences', prepare)
+    index_clock.expired = False
+    index.refresh()
+    assert {row['relative_path'] for row in index.query()['items']} == {f'outputs/deadline-{n}.md' for n in range(3)}
+    assert not index.snapshot()['refresh_pending']
+    with index.connection() as db:
+        assert db.execute('SELECT count(*) FROM prepared_entries').fetchone()[0] == 0
+        assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'

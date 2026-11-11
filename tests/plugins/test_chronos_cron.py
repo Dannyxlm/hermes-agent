@@ -231,13 +231,17 @@ def test_fire_due_forwards_manual_force_to_claim(chronos, monkeypatch):
         "cron.jobs.claim_job_for_fire",
         lambda jid, **kw: seen.append(kw) or False,
     )
-    monkeypatch.setattr(
-        "cron.executions.create_execution",
-        lambda jid, source: {"id": "exec-1"},
-    )
+    executions = []
+
+    def create_execution(jid, *, source, job):
+        executions.append((jid, source, job))
+        return {"id": "exec-1"}
+
+    monkeypatch.setattr("cron.executions.create_execution", create_execution)
 
     assert prov.fire_due("j1", force=True) is False
     assert seen == [{"return_job": True, "force": True}]
+    assert executions == [("j1", prov.name, None)]
 
 
 def test_fire_due_no_rearm_when_job_gone(chronos, monkeypatch):

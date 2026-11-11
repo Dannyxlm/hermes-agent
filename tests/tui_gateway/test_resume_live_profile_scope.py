@@ -14,12 +14,16 @@ A's runtime — the turn then ran with A's persona and wrote A's memory
 
 from __future__ import annotations
 
+import threading
+
 import pytest
+
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
 
 from tui_gateway import server
 
 
-class _DB:
+class _DB(EmptyQueueReceipts):
     """Minimal ``SessionDB`` stand-in: every profile store knows ``s1``."""
 
     def __init__(self, db_path=None, **_kwargs):
@@ -80,7 +84,7 @@ def _resume(**params):
 
 
 def _register_live(sid: str, profile_home) -> dict:
-    record = {"session_key": "s1", "history": [], "last_active": 0.0}
+    record = {"session_key": "s1", "history": [], "history_lock": threading.RLock(), "last_active": 0.0}
     if profile_home is not None:
         record["profile_home"] = str(profile_home)
     with server._sessions_lock:

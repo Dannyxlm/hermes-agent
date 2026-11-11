@@ -88,7 +88,9 @@ def test_followers_survive_compression_and_restart_in_order_exactly_once(tmp_pat
         'auxiliary': {'title_generation': {'enabled': False},
                       'compression': {'provider': 'custom', 'model': 'summary', 'base_url': url}},
         'compression': {'protect_first_n': 1, 'protect_last_n': 2, 'threshold_tokens': 12000,
-                        'threshold': 0.5, 'in_place': False},
+                        # This journey needs a compacted middle, not the default
+                        # lean mode's 10K-token continuity tail.
+                        'tail_mode': 'legacy', 'threshold': 0.5, 'in_place': False},
         'platform_toolsets': {'cli': []}}))
     (home / 'models_dev_cache.json').write_text(json.dumps({'custom': {'id': 'custom', 'models': {
         name: {'id': name, 'name': name, 'limit': {'context': 64000 if name == 'original' else 1000000,
@@ -147,6 +149,7 @@ def test_followers_survive_compression_and_restart_in_order_exactly_once(tmp_pat
             assert [(r['request_id'], r['status']) for r in pending] == [
                 (compacting['input_id'], 'started')] + [(name, 'queued') for name in FOLLOWERS], pending
             before.update(compacting=compacting, receipts=receipts, child=children[0]['id'],
+                          compacting_wire_text=next(r['text'] for r in reversed(peer.requests) if r['model'] == 'original'),
                           compacting_requests=executed(compacting['text'][:12]))
             assert sum(r['model'] == 'summary' for r in peer.requests) == 1
             # Restart while the compacted turn is still in flight: nothing behind it may run. A
@@ -197,8 +200,20 @@ def test_followers_survive_compression_and_restart_in_order_exactly_once(tmp_pat
         for name in FOLLOWERS:
             wire = next(r['wire'] for r in peer.requests if r['text'] == name)
             # protect_first_n keeps PRESSURE_0 verbatim; the compacted middle is only inside the summary.
-            turns = [str(m.get('content', '')) for m in json.loads(wire)]
-            assert 'SUMMARY_RETAINED_FACTS' in wire and not any(t.startswith('PRESSURE_1 ') for t in turns), name
+            messages = json.loads(wire)
+            turns = [str(m.get('content', '')) for m in messages]
+            assert 'SUMMARY_RETAINED_FACTS' in wire and not any(t.startswith('PRESSURE_1 ') for t in turns), (
+                name, compacting['input_id'], [t[:80] for t in turns])
+            # Lost input stays visible, but its explicit assistant boundary
+            # prevents consecutive-user repair from resubmitting it with a follower.
+            from agent.turn_failure_copy import PARTIAL_FAILED_TURN_NOTICE
+            from gateway.session_settlement_recovery import SHUTDOWN_INTERRUPT_NOTICE
+            lost = [i for i, m in enumerate(messages) if m['role'] == 'user' and m.get('content') == before['compacting_wire_text']]
+            assert len(lost) == 1
+            boundary = messages[lost[0] + 1]
+            assert boundary['role'] == 'assistant'
+            assert boundary['content'] == (SHUTDOWN_INTERRUPT_NOTICE if restart == 'graceful' else PARTIAL_FAILED_TURN_NOTICE)
+            assert messages[-1] == {'role': 'user', 'content': name}
         settled = admissions()
         assert {r['target_session_id'] for r in settled} == {sid}
         assert [r['request_id'] for r in settled][-3:] == list(FOLLOWERS)
@@ -216,6 +231,7 @@ def test_followers_survive_compression_and_restart_in_order_exactly_once(tmp_pat
         assert 'SUMMARY_RETAINED_FACTS' in history and all(name in history for name in FOLLOWERS)
         print(json.dumps({'admissions': settled, 'follower_order': order, 'child': before['child']}))
     finally:
+        (tmp_path / 'model-requests.json').write_text(json.dumps(peer.requests, indent=2))
         peer.release.set()
         peer.shutdown()
         peer.server_close()

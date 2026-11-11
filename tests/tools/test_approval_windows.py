@@ -220,6 +220,7 @@ class TestPowerShellPositionalScriptAndAbbreviatedSwitches:
         "\n ssh -x" * 3000,
     ])
     def test_repeated_launcher_words_scan_in_linear_time(self, command):
-        start = time.perf_counter()
+        # Bound scanner work, not time descheduled behind other suite workers.
+        start = time.process_time()
         assert not _is_dangerous(command)
-        assert time.perf_counter() - start < 2, command[:30]
+        assert time.process_time() - start < 2, command[:30]

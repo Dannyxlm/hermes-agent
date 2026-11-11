@@ -99,6 +99,7 @@ def test_page_keeps_one_sqlite_cut_when_visible_reply_changes(inbox_reader, monk
 def test_relevant_projection_change_refuses_old_cursor(inbox_reader, change):
     path, read, _, _ = inbox_reader
     first = read().json()
+    tail = read(first["next_cursor"]).json()
     with SessionDB(db_path=path) as writer:
         if change == "reply":
             writer.append_message("chat-000", "assistant", "new reply", timestamp=1000)
@@ -112,9 +113,15 @@ def test_relevant_projection_change_refuses_old_cursor(inbox_reader, change):
             }[change]
             writer._conn.execute(sql)
             writer._conn.commit()
+    # A cursor walks the retained immutable cut; a new first page observes the mutation.
     response = read(first["next_cursor"])
-    assert response.status_code == 409
-    assert read().status_code == 200
+    assert response.status_code == 200
+    assert response.json()["items"] == tail["items"]
+    assert response.json()["revision"] == first["revision"]
+    fresh = read()
+    assert fresh.status_code == 200
+    assert fresh.json()["revision"] != first["revision"]
+    assert read(first["next_cursor"]).json()["items"] == tail["items"]
 
 
 def test_epoch_change_during_read_fails_closed(inbox_reader, monkeypatch):

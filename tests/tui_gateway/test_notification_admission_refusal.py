@@ -26,10 +26,12 @@ def test_refused_notification_retains_result_without_spending_attempts(tmp_path,
         _emit=lambda *args: emitted.append(args),
         _session_turn_admission=_session_turn_admission,
         _ensure_active_session_slot=lambda *args: None,
-        _notif_log_failure=lambda *args: None)
+        _notif_log_failure=lambda *args: None,
+        _notif_refusal_backoff=lambda _session: None)
     for module, names in [(prompt_turn, ('_admit_prompt_turn', '_run_prompt_submit')),
                           (session_notifications, ('_notif_submit', '_notif_claim_turn', '_notif_release_turn',
-                           '_notif_dispatch_event', '_notif_dispatch_completions', '_async_delegation_display_metadata',
+                           '_notif_dispatch_event', '_notif_dispatch_completions', '_notif_prepare_completion_batch',
+                           '_async_delegation_display_metadata',
                            '_process_completion_display_metadata'))]:
         for name in names:
             namespace[name] = rebind(getattr(module, name), namespace)

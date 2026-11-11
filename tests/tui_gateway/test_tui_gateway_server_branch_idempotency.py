@@ -5,6 +5,8 @@ import time
 
 import pytest
 
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
+
 from tui_gateway import server
 
 
@@ -56,7 +58,7 @@ def test_session_branch_idempotency_key_dedupes_retry(monkeypatch, tmp_path):
     lost must not leave two children behind. The hit answers the SAME result
     shape (title, parent, message_count) without re-copying the transcript."""
 
-    class ProfileDB:
+    class ProfileDB(EmptyQueueReceipts):
         def __init__(self, db_path=None):
             pass
 

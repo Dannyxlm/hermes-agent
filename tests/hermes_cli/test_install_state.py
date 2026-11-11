@@ -10,6 +10,17 @@ from hermes_cli import install_state
 from hermes_cli.install_state import Evidence, Places
 
 
+@pytest.fixture(autouse=True)
+def _isolated_service_definitions(tmp_path, monkeypatch):
+    """Never enumerate the host's gateway definitions or scheduled tasks."""
+    from hermes_cli import gateway_windows
+    from hermes_platform.resolver import known_dirs
+
+    monkeypatch.setattr(known_dirs, "gateway_service_definition_globs", lambda: ())
+    monkeypatch.setattr(known_dirs, "system_gateway_service_definition_globs", lambda: ())
+    monkeypatch.setattr(gateway_windows, "registered_task_launchers", list)
+
+
 @pytest.fixture
 def machine(tmp_path, monkeypatch):
     """An empty active root (``HERMES_HOME``) plus one other root the probe is told about."""

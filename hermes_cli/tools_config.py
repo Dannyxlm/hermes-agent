@@ -406,6 +406,10 @@ _MCP_ENV_REFERENCE_RE = re.compile(
     r"\s*(?:(?:Bearer|Basic|Token)\s+)?\$\{(?:env:)?[A-Za-z_][A-Za-z0-9_]*\}\s*",
     re.IGNORECASE,
 )
+_MCP_SECRET_KEY_RE = re.compile(
+    r"(?:^|[_-])(?:API[_-]?KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|"
+    r"AUTH|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)(?:[_-]|$)|KEY$", re.IGNORECASE,
+)
 _MCP_SECRET_LEAF_KEYS = frozenset({
     "access_token",
     "api_key",
@@ -449,7 +453,8 @@ def credential_safe_mcp_server_definition(entry: dict) -> tuple[dict, bool]:
     projected definition plus whether the target profile still needs one or
     more credentials configured.
     """
-    from hermes_cli.agent_import import is_secret_key
+    def is_secret_key(key: str) -> bool:
+        return bool(_MCP_SECRET_KEY_RE.search(key or ""))
 
     def is_reference_template(value) -> bool:
         return isinstance(value, str) and bool(_MCP_ENV_REFERENCE_RE.fullmatch(value))

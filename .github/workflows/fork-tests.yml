@@ -32,9 +32,9 @@ jobs:
           enable-cache: true
           python-version: '3.14'
       - name: Install locked development and test dependencies
-        # Same extras as upstream tests.yml: tests/conftest.py forbids lazy installs,
-        # so the gateway suite needs aiohttp and the other optional SDKs up front.
-        run: uv sync --locked --python 3.14 --extra all --group dev --group test --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra parallel-web
+        # tests/conftest.py forbids lazy installs. The root all extra omits
+        # platform SDKs, so provision Slack explicitly for the gateway suite.
+        run: uv sync --locked --python 3.14 --extra all --extra slack --group dev --group test --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra parallel-web
       - name: Run isolated test shard
         env:
           HERMES_PYTHON: ${{ github.workspace }}/.venv/bin/python

@@ -23,13 +23,17 @@ _PROBE = textwrap.dedent("""
     async def main():
         from gateway.run_api import start_gateway_api, stop_gateway_api
         from gateway.runtime_bootstrap import TicketStore
-        import tui_gateway.ws
 
         async def fake_handle_ws(ws, **kwargs):
             await ws.accept(subprotocol="hermes-gateway-v1")
             await ws.send_json({"native": True, "dashboard_loaded": "hermes_cli.web_server" in sys.modules})
             await ws.close()
-        tui_gateway.ws.handle_ws = fake_handle_ws
+        # Only this transport callback is under test here. Importing the real
+        # WS module to replace it also imports FastAPI through its contracts,
+        # contaminating the listener's cold-import assertion before it starts.
+        native_ws = types.ModuleType("tui_gateway.ws")
+        native_ws.handle_ws = fake_handle_ws
+        sys.modules["tui_gateway.ws"] = native_ws
 
         home = sys.argv[1]
         tickets = TicketStore("owner", [home])
@@ -59,7 +63,8 @@ _PROBE = textwrap.dedent("""
             out["rebind"] = int((await asyncio.wait_for(reader.readline(), 10)).split()[1])
             writer.close()
             out["before_http"] = "hermes_cli.web_server" in sys.modules
-            async with httpx.AsyncClient(base_url=handle.api_origin, trust_env=False) as client:
+            # First HTTP mounts the cold dashboard; this probe checks ordering, not import latency.
+            async with httpx.AsyncClient(base_url=handle.api_origin, trust_env=False, timeout=60) as client:
                 out["status"] = (await client.get("/api/status")).status_code
                 out["rebind_http"] = (await client.get("/api/status", headers={"Host": "attacker.invalid"})).status_code
             out["after_http"] = "hermes_cli.web_server" in sys.modules

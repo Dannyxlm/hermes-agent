@@ -49,6 +49,11 @@ def build_lab(home: Path, port: int):
     hermes_cli.env_loader.load_hermes_dotenv = lambda **kwargs: []
     sys.addaudithook(_deny_external_work)
 
+    # Provenance is irrelevant to the synthetic lab; live git discovery would
+    # spawn a child before the app can start, violating the no-subprocess fence.
+    from hermes_cli import version_info
+    version_info._resolve_repo_dir = lambda: None
+
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse
     from hermes_state import SessionDB

@@ -103,7 +103,9 @@ def test_busy_relay_dms_queue_with_their_authors_and_drain_with_them(monkeypatch
             params = {"session_id": "sid", "text": text, "queued": True}
             if author:
                 params["_turn_author"] = DeliveryAuthor(author)
-            assert _result(srv._methods["prompt.submit"]("r", params)) == {"status": "queued"}
+            result = _result(srv._methods["prompt.submit"]("r", params))
+            envelope = session["queued_prompts"][-1] if session.get("queued_prompts") else session["queued_prompt"]
+            assert result == {"status": "queued", "input_id": envelope["_queue_receipt"]["input_id"]}
         # Authored envelopes never merge with each other or with the human's text.
         assert session["queued_prompt"]["turn_author"] == AUTHOR
         assert [e["text"] for e in session["queued_prompts"]] == ["hello", "human note"]
@@ -151,7 +153,8 @@ def test_a_human_prompt_after_a_relayed_dm_runs_without_an_author(turn_env, monk
     srv._sessions["sid"] = session
     try:
         params = {"session_id": "sid", "text": "ping", "queued": True, "_turn_author": DeliveryAuthor(AUTHOR)}
-        assert _result(srv._methods["prompt.submit"]("r", params)) == {"status": "queued"}
+        result = _result(srv._methods["prompt.submit"]("r", params))
+        assert result == {"status": "queued", "input_id": session["queued_prompt"]["_queue_receipt"]["input_id"]}
         session["running"] = False
         assert srv._drain_queued_prompt("d", "sid", session) is True
         session["running"] = True

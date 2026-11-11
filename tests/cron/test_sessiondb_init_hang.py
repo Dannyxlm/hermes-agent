@@ -124,6 +124,15 @@ def test_guard_is_released_and_job_refires_after_sessiondb_hang(owner_run, monke
             release.wait(10)
         return owner.db
 
+    open_store = scheduler._open_cron_session_db
+
+    def open_with_wedged_borrow(fired):
+        # Launch bookkeeping also borrows the registry before inference. Fault
+        # only the bounded conversation-store acquisition, not that earlier
+        # metadata write (which would consume the one wedged call).
+        with patch("hermes_state_registry.acquire", side_effect=acquire):
+            return open_store(fired)
+
     # The scheduler dispatches through the authority; emulate only transport and
     # execution admission, retaining the real guard and run_job lifecycle.
     def admitted(fired, **kwargs):
@@ -136,7 +145,7 @@ def test_guard_is_released_and_job_refires_after_sessiondb_hang(owner_run, monke
     with jobs.use_cron_store(owner.db.db_path.parent):
         saved = jobs.create_job(prompt="hello", schedule="every 5m", deliver="local")
         try:
-            with patch("hermes_state_registry.acquire", side_effect=acquire), \
+            with patch.object(scheduler, "_open_cron_session_db", side_effect=open_with_wedged_borrow), \
                  patch("cron.scheduler_authority.run_canonical_job", side_effect=admitted), \
                  patch("cron.scheduler_authority.reconcile_pending"), \
                  patch.object(scheduler, "get_due_jobs", return_value=[saved]):

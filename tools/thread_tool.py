@@ -983,7 +983,7 @@ def _p(kind, description, **extra):
 THREAD_SCHEMA = {
     "name": "thread",
     "description": (
-        "Lead parallel work through threads: visible chats of the user's that work while you lead. A thread is a "
+        "Lead parallel work in visible, independent agent chats. A thread is a "
         "full agent chat with its own tools and skills; it shows in the user's chat list (titled with "
         f"{MARK}) and under this chat in Family, and the user can open it and talk to it at any time.\n"
         "Actions: create (open a thread with a self-contained brief; it sees nothing of this chat). send (message "

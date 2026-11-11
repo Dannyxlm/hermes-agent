@@ -73,6 +73,8 @@ def test_ambiguous_pipe_delivery_keeps_real_lease_until_settlement(
         else:
             proc.poll = lambda: 1
             supervisor._fail_pending_turns(reason="crash", message="confirmed child death")
+        assert session.get("_compute_host_completing") == turn_id
+        admission[-1].run()  # completion persistence runs off the supervisor reader
         assert not session["running"] and not session.get("_compute_host_turn_id")
         assert lease.released and session.get("queued_prompt") is None
         session.update(_closing=False, _finalized=False)
@@ -139,6 +141,8 @@ def test_stale_uncertain_child_lease_requires_confirmed_death(session, admission
         assert not lease.released and session.get("_compute_host_turn_id")
         proc.poll = lambda: 1
         assert server._reap_stale_deferred_leases() == 1
+        assert session.get("_compute_host_completing") == session["_compute_host_turn_id"]
+        admission[-1].run()
         assert lease.released and not session.get("_compute_host_turn_id")
     finally:
         server._release_deferred_active_session_lease(session)

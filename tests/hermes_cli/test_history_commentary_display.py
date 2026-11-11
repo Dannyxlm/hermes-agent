@@ -180,7 +180,7 @@ def test_rest_pages_bind_the_history_owner_for_messages_and_around(
                 limit=120,
                 offset=0,
                 order="latest",
-                include_compacted=True,
+                include_compacted=True, inline_images=True, display_only=False,
             )
             around = await sessions.get_session_messages_around(
                 "sid", row_id=1, profile=profile, limit=120
@@ -240,7 +240,7 @@ def test_unscoped_rest_history_uses_custom_home_of_its_database(monkeypatch, tmp
             limit=120,
             offset=0,
             order="latest",
-            include_compacted=True,
+            include_compacted=True, inline_images=True, display_only=False,
         )
         around = await sessions.get_session_messages_around(
             "sid",

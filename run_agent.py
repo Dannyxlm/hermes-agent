@@ -346,7 +346,7 @@ class AIAgent(
                 # Launch reservation already stored the lineage marker. A normal upsert keeps
                 # non-null model_config, so merge the completed first-turn config through the
                 # same fenced writer instead of freezing the marker-only reservation forever.
-                self._session_db._write_model_config_patch(
+                self._session_db.patch_session_model_config(
                     self.session_id, self._session_row_model_config() or {})
                 self._session_db_reserved = False
             self._session_db_created = True
