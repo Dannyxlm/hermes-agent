@@ -63,7 +63,8 @@ _PROBE = textwrap.dedent("""
             out["rebind"] = int((await asyncio.wait_for(reader.readline(), 10)).split()[1])
             writer.close()
             out["before_http"] = "hermes_cli.web_server" in sys.modules
-            async with httpx.AsyncClient(base_url=handle.api_origin, trust_env=False) as client:
+            # First HTTP mounts the cold dashboard; this probe checks ordering, not import latency.
+            async with httpx.AsyncClient(base_url=handle.api_origin, trust_env=False, timeout=60) as client:
                 out["status"] = (await client.get("/api/status")).status_code
                 out["rebind_http"] = (await client.get("/api/status", headers={"Host": "attacker.invalid"})).status_code
             out["after_http"] = "hermes_cli.web_server" in sys.modules
