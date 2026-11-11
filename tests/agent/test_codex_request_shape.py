@@ -205,13 +205,16 @@ def test_records_never_contain_text_arguments_outputs_headers_or_credentials(mon
     with caplog.at_level(logging.DEBUG):
         _accepted_then_rejected(monkeypatch, tmp_path)
     ring = (tmp_path / "logs" / shape.RING_FILENAME).read_bytes()
-    lowered = ring.lower()
+    incidents = (tmp_path / "logs" / shape.INCIDENTS_FILENAME).read_bytes()
+    assert incidents  # the rejection was pinned, so the incidents file is checked too
     own_logs = "\n".join(r.getMessage() for r in caplog.records if r.name == shape.__name__)
-    for value in SENTINELS.values():
-        assert value.encode() not in ring
-        assert value not in own_logs
-    for forbidden in (b"chatgpt.com", b"authorization", b"bearer", b"x-client-request-id", b"extra_headers"):
-        assert forbidden not in lowered
+    for stored in (ring, incidents):
+        lowered = stored.lower()
+        for value in SENTINELS.values():
+            assert value.encode() not in stored
+            assert value not in own_logs
+        for forbidden in (b"chatgpt.com", b"authorization", b"bearer", b"x-client-request-id", b"extra_headers"):
+            assert forbidden not in lowered
 
 
 def test_ring_and_key_are_private_and_retention_is_bounded(monkeypatch, tmp_path):
@@ -344,6 +347,8 @@ def test_pre_network_serialization_failure_is_recorded_from_kwargs(monkeypatch, 
     assert record["outcome"] == "no_response" and record["source"] == "kwargs" and record["http_status"] is None
     assert record["error"]["class_chain"][0] == "UnicodeEncodeError"
     assert record["body"]["chars"]["lone_surrogate"] == 1
+    (incident,) = shape.read_records(tmp_path / "logs" / shape.INCIDENTS_FILENAME)
+    assert incident["pinned"] == record and incident["accepted"] is None  # no accepted predecessor
 
 
 def test_busy_ring_lock_skips_the_record_within_the_wait_budget(monkeypatch, tmp_path):
@@ -435,3 +440,126 @@ def test_cli_summary_diffs_rejection_against_last_accepted(monkeypatch, tmp_path
     assert [line["outcome"] for line in lines] == ["accepted", "rejected"]
     assert lines[1]["vs_last_accepted"]["appended_item_types"] == ["reasoning", "function_call",
                                                                     "function_call_output"]
+
+
+def test_rejected_pair_is_pinned_and_survives_ring_eviction(monkeypatch, tmp_path, capsys):
+    agent = _agent(monkeypatch, tmp_path, ring=4)
+    other = "local-" + "cd" * 32
+    server = _Server([200, 200, 400] + [200] * 12)
+    client = _client(server)
+    run_codex_stream(agent, _kwargs(), client=client)  # the predecessor to pin: turn-1:api:1
+    agent.session_id, agent._current_api_request_id = other, "other:api:1"
+    run_codex_stream(agent, _kwargs(), client=client)  # newer accepted record, different session
+    agent.session_id, agent._current_api_request_id = "local-" + "ab" * 32, "turn-1:api:2"
+    with pytest.raises(BadRequestError):
+        run_codex_stream(agent, _kwargs(_follow_up_items()), client=client)
+    ring = tmp_path / "logs" / shape.RING_FILENAME
+    for n in range(12):  # busy traffic scrolls both records out of the ring
+        agent._current_api_request_id = f"turn-2:api:{n}"
+        run_codex_stream(agent, _kwargs(), client=client)
+    assert all(r["outcome"] == "accepted" and r["corr"]["api_request_id"].startswith("turn-2")
+               for r in shape.read_records(ring))
+
+    (incident,) = shape.read_records(tmp_path / "logs" / shape.INCIDENTS_FILENAME)
+    assert incident["schema"] == shape.INCIDENT_SCHEMA and set(incident) == {"schema", "pinned", "accepted"}
+    assert incident["pinned"]["outcome"] == "rejected" and incident["pinned"]["corr"]["api_request_id"] == "turn-1:api:2"
+    # The same-session predecessor, not the newer accepted record from another session.
+    assert incident["accepted"]["corr"] == {"session_id": "local-" + "ab" * 32, "api_request_id": "turn-1:api:1"}
+    # Pinned records are the ring records unchanged: same keys, same body description.
+    assert set(incident["pinned"]) == {"schema", "probe", "route", "corr", "ts", "outcome", "source", "body",
+                                       "http_status", "error"}
+
+    assert shape._main(["--incidents", "--path", str(tmp_path / "logs" / shape.INCIDENTS_FILENAME)]) == 0
+    (line,) = [json.loads(out) for out in capsys.readouterr().out.splitlines()]
+    assert line["outcome"] == "rejected" and line["api_request_id"] == "turn-1:api:2"
+    assert line["vs_last_accepted"] == shape.diff_records(incident["accepted"], incident["pinned"])
+    assert line["vs_last_accepted"]["appended_item_types"] == ["reasoning", "function_call", "function_call_output"]
+    assert shape._main(["--incidents", "--session", other,
+                        "--path", str(tmp_path / "logs" / shape.INCIDENTS_FILENAME)]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def _synthetic(path, outcome, status, n, session="local-s1"):
+    record = {"schema": shape.SCHEMA, "outcome": outcome, "http_status": status,
+              "corr": {"session_id": session, "api_request_id": f"api:{n}"}, "body": {"bytes": n}}
+    assert shape.append_record(path, lambda fp: record, 4, incidents=shape.incidents_path(path))
+
+
+def test_incidents_file_is_bounded_private_and_keeps_a_rare_failure_through_a_burst(tmp_path):
+    path = _mkdir(tmp_path / "logs") / shape.RING_FILENAME
+    incidents = shape.incidents_path(path)
+    _synthetic(path, "accepted", 200, 0)
+    _synthetic(path, "rejected", 400, 1)
+    for n in range(2, 2 + 3 * shape.MAX_INCIDENTS):  # a long burst of another failure class
+        _synthetic(path, "rejected", 429, n, session="local-s2")
+        lines = incidents.read_bytes().splitlines()
+        assert len(lines) <= shape.MAX_INCIDENTS
+        assert all(len(raw) <= 2 * shape.MAX_RECORD_BYTES + 128 for raw in lines)
+    pinned = [entry["pinned"] for entry in shape.read_records(incidents)]
+    assert len(pinned) == shape.MAX_INCIDENTS
+    assert pinned[0]["http_status"] == 400  # the rare 400 survives sixty rate limits
+    last = 1 + 3 * shape.MAX_INCIDENTS
+    assert [p["corr"]["api_request_id"] for p in pinned[1:]] == [
+        f"api:{n}" for n in range(last - shape.MAX_INCIDENTS + 2, last + 1)]  # newest of the burst
+    first = shape.read_records(incidents)[0]
+    assert first["accepted"]["corr"]["api_request_id"] == "api:0"
+    assert stat.S_IMODE(incidents.stat().st_mode) == 0o600
+    assert not list(path.parent.glob("*.tmp")) and not list(path.parent.glob(".*.tmp"))
+    # Accepted records are never pinned, and an unknown session never pairs with another.
+    before = incidents.read_bytes()
+    _synthetic(path, "accepted", 200, 99)
+    assert incidents.read_bytes() == before
+    _synthetic(path, "accepted", 200, 100, session="absent")
+    _synthetic(path, "no_response", None, 101, session="absent")
+    assert shape.read_records(incidents)[-1]["accepted"] is None
+
+
+def test_oversized_records_are_pinned_within_the_record_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(shape, "MAX_RECORD_BYTES", 2000)
+    path = _mkdir(tmp_path / "logs") / shape.RING_FILENAME
+    big = shape.describe_body({"input": _long_items(300), "tools": _tools(10)}, shape._fingerprinter(path.parent))
+    for outcome, status in (("accepted", 200), ("rejected", 400)):
+        assert shape.append_record(path, lambda fp, o=outcome, s=status: {
+            "schema": shape.SCHEMA, "outcome": o, "http_status": s,
+            "corr": {"session_id": "local-s1"}, "body": big}, 4, incidents=shape.incidents_path(path))
+    (incident,) = shape.read_records(shape.incidents_path(path))
+    assert incident["pinned"]["reduced"][-1] == "minimal" and incident["accepted"]["reduced"][-1] == "minimal"
+    assert len(shape.incidents_path(path).read_bytes()) <= 2 * shape.MAX_RECORD_BYTES + 128
+
+
+def test_incident_pin_failure_never_changes_the_request_or_the_ring(monkeypatch, tmp_path):
+    agent = _agent(monkeypatch, tmp_path)
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "logs" / shape.INCIDENTS_FILENAME).mkdir()  # unwritable as a file
+    server = _Server([200, 400, 400])
+    client = _client(server)
+    assert run_codex_stream(agent, _kwargs(), client=client).status == "completed"
+    with pytest.raises(BadRequestError):
+        run_codex_stream(agent, _kwargs(), client=client)
+    monkeypatch.setattr(shape, "_pin_incident", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(BadRequestError):
+        run_codex_stream(agent, _kwargs(), client=client)
+    assert len(server.bodies) == 3
+    assert [r["outcome"] for r in shape.read_records(tmp_path / "logs" / shape.RING_FILENAME)] == [
+        "accepted", "rejected", "rejected"]
+
+
+def test_append_record_contains_its_own_pin_failure(tmp_path):
+    """append_record itself absorbs a pin failure (not only the probe's outer guard), without leaking fds."""
+    path = _mkdir(tmp_path / "logs") / shape.RING_FILENAME
+    blocked = _mkdir(tmp_path / "logs" / "blocked")
+    fds_before = len(os.listdir("/proc/self/fd"))
+    for n in range(20):
+        assert shape.append_record(path, lambda fp, n=n: {"outcome": "rejected", "http_status": 400,
+                                                          "corr": {"session_id": "local-s1"}, "body": {"bytes": n}},
+                                   4, incidents=blocked) is True
+    assert len(os.listdir("/proc/self/fd")) <= fds_before + 1
+    assert 1 <= len(shape.read_records(path)) <= 4 and blocked.is_dir() and not list(blocked.iterdir())
+
+
+def test_incident_lines_without_a_pinned_record_are_dropped(tmp_path):
+    path = _mkdir(tmp_path / "logs") / shape.RING_FILENAME
+    shape.incidents_path(path).write_text('{"pinned": 1}\n[1]\nnot json\n')
+    _synthetic(path, "rejected", 400, 1)
+    (incident,) = shape.read_records(shape.incidents_path(path))
+    assert incident["pinned"]["http_status"] == 400

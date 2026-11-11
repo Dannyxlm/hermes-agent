@@ -17,8 +17,15 @@ scalars, routing metadata, local correlation IDs, plain SHA-256 of tool schemas 
 comparable across installs) and keyed HMAC fingerprints of content. Never retained: headers,
 credentials, URLs, message text, tool arguments, tool output, error messages.
 
-Fingerprints are still private: the HMAC key, ring and lock live 0600 beside the other private
-logs, and a request is never altered or delayed by a failure in here.
+A rare rejection would scroll out of the ring within hours of busy traffic, so every record that is
+not ``accepted`` is also pinned, together with the newest ``accepted`` record from the same session
+still in the ring, to ``codex_request_shape.incidents.jsonl`` beside it. That file holds at most
+``MAX_INCIDENTS`` pairs; when full it evicts the oldest incident of its most frequent outcome/status
+class, so a burst of one kind of failure (say rate limits) cannot push out a single different one.
+Pinned pairs are the same records, unchanged; ``--incidents`` diffs each pair.
+
+Fingerprints are still private: the HMAC key, ring, incidents file and lock live 0600 beside the
+other private logs, and a request is never altered or delayed by a failure in here.
 """
 from __future__ import annotations
 
@@ -31,6 +38,7 @@ import re
 import threading
 import time
 import uuid
+from collections import Counter
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +59,9 @@ MAX_DECODED_WIRE_BYTES = 64 * 1024 * 1024
 LOCK_WAIT_SECONDS = 0.25
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 RING_FILENAME = "codex_request_shape.jsonl"
+INCIDENTS_FILENAME = "codex_request_shape.incidents.jsonl"
+INCIDENT_SCHEMA = "codex-request-shape-incident.v1"
+MAX_INCIDENTS = 20
 _KEY_FILENAME = "codex_request_shape.key"
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_.:\-]{1,64}$")
@@ -83,6 +94,10 @@ def ring_path() -> Path:
     from hermes_constants import get_hermes_home
 
     return get_hermes_home() / "logs" / RING_FILENAME
+
+
+def incidents_path(ring: Path | None = None) -> Path:
+    return (ring or ring_path()).with_name(INCIDENTS_FILENAME)
 
 
 # ── content-free derivation ───────────────────────────────────────────────────────────────
@@ -459,6 +474,28 @@ def _write_private(path: Path, data: bytes) -> Path:
     return tmp
 
 
+def _replace_private(path: Path, data: bytes) -> None:
+    tmp = _write_private(path, data)
+    try:
+        os.replace(tmp, path)
+    finally:
+        with suppress(FileNotFoundError):
+            tmp.unlink()
+
+
+def _read_private(path: Path) -> bytes:
+    with suppress(FileNotFoundError):
+        fd = _private_open(path, os.O_RDONLY)
+        try:
+            handle = os.fdopen(fd, "rb")
+        except BaseException:  # e.g. a directory at ``path``: don't leak the descriptor
+            os.close(fd)
+            raise
+        with handle:
+            return handle.read()
+    return b""
+
+
 def _fingerprinter(directory: Path) -> _Fingerprinter:
     """Load the per-home HMAC key; create it complete (temp + replace) or replace a short one.
 
@@ -546,11 +583,58 @@ def _encode(record: dict) -> str:
     return _dumps(reduced)
 
 
-def append_record(path: Path, record_factory, limit: int) -> bool:
+def _newest_accepted(lines: list[bytes], session: Any) -> dict | None:
+    """The newest ``accepted`` ring record from ``session``; None for an unknown session."""
+    if not isinstance(session, str) or not _ID.fullmatch(session) or session in ("absent", "other"):
+        return None
+    needle = _dumps({"session_id": session})[1:-1].encode("ascii")  # exact serialized form
+    for entry in reversed(lines):
+        if b'"outcome":"accepted"' not in entry or needle not in entry:
+            continue  # cheap byte filter; only candidates are parsed
+        with suppress(ValueError):
+            value = json.loads(entry)
+            if (isinstance(value, dict) and value.get("outcome") == "accepted"
+                    and (value.get("corr") or {}).get("session_id") == session):
+                return value
+    return None
+
+
+def _incident_class(pinned: Any) -> str:
+    if not isinstance(pinned, dict):
+        return "unknown"
+    return f"{pinned.get('outcome')}:{pinned.get('http_status')}"
+
+
+def _pin_incident(path: Path, record: dict, line: str, ring_lines: list[bytes]) -> None:
+    """Pin ``record`` and its same-session accepted predecessor. Called under the ring lock with the
+    ring as it was before ``record``; ``line`` is the record's already size-capped encoding."""
+    accepted = _newest_accepted(ring_lines, (record.get("corr") or {}).get("session_id"))
+    pair = _encode(accepted) if accepted is not None else "null"
+    entry = f'{{"accepted":{pair},"pinned":{line},"schema":"{INCIDENT_SCHEMA}"}}'
+    incidents: list[tuple[str, bytes]] = []
+    for raw in _read_private(path).split(b"\n"):
+        if not raw.strip():
+            continue
+        with suppress(ValueError):
+            value = json.loads(raw)
+            if isinstance(value, dict) and isinstance(value.get("pinned"), dict):
+                incidents.append((_incident_class(value["pinned"]), raw))
+    incidents.append((_incident_class(record), entry.encode("ascii")))
+    while len(incidents) > MAX_INCIDENTS:
+        # Evict the oldest incident of the most frequent class: a burst of one failure kind
+        # cannot push out a rare one.
+        counts = Counter(cls for cls, _ in incidents)
+        top = max(counts.values())
+        del incidents[next(i for i, (cls, _) in enumerate(incidents) if counts[cls] == top)]
+    _replace_private(path, b"".join(raw + b"\n" for _, raw in incidents))
+
+
+def append_record(path: Path, record_factory, limit: int, *, incidents: Path | None = None) -> bool:
     """Build (with the private fingerprint key) and append one record.
 
     At most ``limit`` records are on disk. Reaching the limit trims to the newest three quarters,
     so the file is rewritten once every ``limit // 4`` requests rather than on every request.
+    With ``incidents``, a record that is not ``accepted`` is also pinned there (see module doc).
     Returns False when the lock was not obtained in time and the record was skipped.
     """
     directory = path.parent
@@ -564,31 +648,29 @@ def append_record(path: Path, record_factory, limit: int) -> bool:
                 return False
             fp = _KEYS[cache_key] = _fingerprinter(directory)
     # Describe outside the lock: other requests wait only for the append itself.
-    line = _encode(record_factory(fp)) + "\n"
+    record = record_factory(fp)
+    line = _encode(record)
+    data = (line + "\n").encode("ascii")
     with _ring_lock(directory) as held:
         if not held:
             return False
-        existing = b""
-        with suppress(FileNotFoundError):
-            fd = _private_open(path, os.O_RDONLY)
-            with os.fdopen(fd, "rb") as handle:
-                existing = handle.read()
+        existing = _read_private(path)
         lines = [entry for entry in existing.split(b"\n") if entry.strip()]
         if len(lines) < limit:
             fd = _private_open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
             with os.fdopen(fd, "ab") as handle:
                 if existing and not existing.endswith(b"\n"):
                     handle.write(b"\n")
-                handle.write(line.encode("ascii"))
-            return True
-        keep = max(0, limit - max(1, limit // 4) - 1)
-        kept = lines[len(lines) - keep:] if keep else []
-        tmp = _write_private(path, b"".join(entry + b"\n" for entry in kept) + line.encode("ascii"))
-        try:
-            os.replace(tmp, path)
-        finally:
-            with suppress(FileNotFoundError):
-                tmp.unlink()
+                handle.write(data)
+        else:
+            keep = max(0, limit - max(1, limit // 4) - 1)
+            kept = lines[len(lines) - keep:] if keep else []
+            _replace_private(path, b"".join(entry + b"\n" for entry in kept) + data)
+        if incidents is not None and record.get("outcome") != "accepted":
+            try:
+                _pin_incident(incidents, record, line, lines)
+            except Exception:
+                logger.debug("codex request-shape incident not pinned", exc_info=True)
         return True
 
 
@@ -650,7 +732,7 @@ class RequestShapeProbe:
                     "outcome": outcome, "source": source, "body": described, **extra}
 
         try:
-            if not append_record(self.path, build, self.limit):
+            if not append_record(self.path, build, self.limit, incidents=incidents_path(self.path)):
                 logger.debug("codex request-shape record skipped: ring lock busy")
         except Exception:
             logger.debug("codex request-shape record skipped", exc_info=True)
@@ -736,24 +818,44 @@ def diff_records(previous: dict, current: dict) -> dict[str, Any]:
     }
 
 
+def _summary(record: dict) -> dict[str, Any]:
+    body = record.get("body") or {}
+    return {"ts": record.get("ts"), "probe": record.get("probe"),
+            "session": (record.get("corr") or {}).get("session_id") or "absent",
+            "api_request_id": (record.get("corr") or {}).get("api_request_id"),
+            "outcome": record.get("outcome"), "http_status": record.get("http_status"),
+            "source": record.get("source"), "bytes": body.get("bytes"),
+            "wire_bytes": body.get("wire_bytes"), "encoding": body.get("encoding"),
+            "input_count": (body.get("input") or {}).get("count"), "model": (record.get("route") or {}).get("model")}
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Summarize the private consumer-Codex request-shape ring.")
     parser.add_argument("--session", help="only records for this session id")
-    parser.add_argument("--path", type=Path, default=None)
+    parser.add_argument("--incidents", action="store_true",
+                        help="read the pinned incidents file and diff each pinned record against its "
+                             "same-session accepted predecessor")
+    parser.add_argument("--path", type=Path, default=None,
+                        help="ring file (default under HERMES_HOME), or the incidents file with --incidents")
     args = parser.parse_args(argv)
+    if args.incidents:
+        for incident in read_records(args.path or incidents_path()):
+            pinned, accepted = incident.get("pinned"), incident.get("accepted")
+            if not isinstance(pinned, dict):
+                continue
+            summary = _summary(pinned)
+            if args.session and summary["session"] != args.session:
+                continue
+            summary["vs_last_accepted"] = diff_records(accepted, pinned) if isinstance(accepted, dict) else None
+            print(json.dumps(summary, sort_keys=True))
+        return 0
     records = [r for r in read_records(args.path) if not args.session or (r.get("corr") or {}).get("session_id") == args.session]
     last_accepted: dict[str, dict] = {}
     for record in records:
-        session = (record.get("corr") or {}).get("session_id") or "absent"
-        body = record.get("body") or {}
-        summary = {"ts": record.get("ts"), "probe": record.get("probe"), "session": session,
-                   "api_request_id": (record.get("corr") or {}).get("api_request_id"),
-                   "outcome": record.get("outcome"), "http_status": record.get("http_status"),
-                   "source": record.get("source"), "bytes": body.get("bytes"),
-                   "wire_bytes": body.get("wire_bytes"), "encoding": body.get("encoding"),
-                   "input_count": (body.get("input") or {}).get("count"), "model": (record.get("route") or {}).get("model")}
+        summary = _summary(record)
+        session = summary["session"]
         if record.get("outcome") != "accepted" and session in last_accepted:
             summary["vs_last_accepted"] = diff_records(last_accepted[session], record)
         print(json.dumps(summary, sort_keys=True))

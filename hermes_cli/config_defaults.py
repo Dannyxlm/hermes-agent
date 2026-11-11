@@ -136,7 +136,9 @@ DEFAULT_CONFIG = {
         # Opt-in diagnostics: keep content-free shape records (sizes, key/type signatures, schema
         # hashes, keyed fingerprints; never text, arguments, outputs or headers) of up to the newest
         # N ChatGPT-account Codex requests, accepted and rejected, in a private 0600 ring at
-        # logs/codex_request_shape.jsonl. 0 = off; capped at 200. See agent/codex_request_shape.py.
+        # logs/codex_request_shape.jsonl. 0 = off; capped at 200. Non-accepted records are also pinned
+        # with their same-session predecessor in logs/codex_request_shape.incidents.jsonl (<= 20
+        # pairs, kept until deleted). See agent/codex_request_shape.py.
         "codex_request_shape_ring": 0,
         # Empty-response retry guard. Empty retries re-send the full input at full price; this stops
         # re-billing deterministic empties (unsignaled refusals, zero output tokens) while failing
