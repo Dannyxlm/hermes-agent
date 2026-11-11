@@ -1,14 +1,18 @@
 """Opt-in content-free shape records for consumer-Codex requests (agent/codex_request_shape.py).
 
-The success and rejection paths run the real OpenAI SDK against an ``httpx.MockTransport``, so the
-records are derived from the bytes the SDK actually serialized, not from Hermes' kwargs.
+The success and rejection paths run the real OpenAI SDK, with the production zstd request hook,
+against an ``httpx.MockTransport``. Records therefore come from the bytes that crossed the socket,
+not from Hermes' kwargs.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
+import os
 import stat
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -16,7 +20,10 @@ import pytest
 from openai import BadRequestError, OpenAI
 
 from agent import codex_request_shape as shape
+from agent.codex_headers import codex_request_compression_hooks
 from agent.codex_runtime import run_codex_stream
+
+zstd = pytest.importorskip("compression.zstd")
 
 CODEX_URL = "https://chatgpt.com/backend-api/codex"
 SENTINELS = {
@@ -59,9 +66,15 @@ class _Server:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_completed_sse())
 
 
-def _client(server: _Server) -> OpenAI:
+def _client(server: _Server, *, compress: bool = True) -> OpenAI:
+    hooks = codex_request_compression_hooks(CODEX_URL) if compress else None
+    assert hooks or not compress  # the production hook is active for the official Codex URL
     return OpenAI(api_key=SENTINELS["api_key"], base_url=CODEX_URL, max_retries=0,
-                  http_client=httpx.Client(transport=httpx.MockTransport(server)))
+                  http_client=httpx.Client(transport=httpx.MockTransport(server), event_hooks=hooks or {}))
+
+
+def _sent_json(wire: bytes) -> dict:
+    return json.loads(zstd.decompress(wire) if wire.startswith(shape._ZSTD_MAGIC) else wire)
 
 
 def _agent(monkeypatch, tmp_path, *, ring: int | None = 8, session="local-" + "ab" * 32):
@@ -151,9 +164,11 @@ def test_accepted_and_rejected_records_are_comparable_and_from_wire_bytes(monkey
     assert set(accepted["body"]) == set(rejected["body"])
     assert accepted["http_status"] == 200 and rejected["http_status"] == 400
     for record, wire in zip(records, server.bodies):
-        assert record["source"] == "wire_bytes"
-        assert record["body"]["bytes"] == len(wire)  # exact transmitted size, not a kwargs estimate
-        sent = json.loads(wire)
+        assert wire.startswith(shape._ZSTD_MAGIC)  # production consumer-Codex bodies are zstd on the wire
+        assert record["source"] == "wire_bytes" and record["body"]["encoding"] == "zstd"
+        assert record["body"]["wire_bytes"] == len(wire)  # exact transmitted size
+        assert record["body"]["bytes"] == len(zstd.decompress(wire))  # exact JSON body size
+        sent = _sent_json(wire)
         assert record["body"]["keys"] == {k: shape._json_type(v) for k, v in sorted(sent.items())}
         assert "extra_headers" not in record["body"]["keys"] and record["body"]["config"]["stream"] is True
         assert record["route"] == {"provider": "openai-codex", "model": "gpt-5-codex",
@@ -179,6 +194,7 @@ def test_accepted_and_rejected_records_are_comparable_and_from_wire_bytes(monkey
     assert rejected["body"]["input"]["unpaired_calls"] == 0 and rejected["body"]["input"]["orphan_outputs"] == 0
 
     delta = shape.diff_records(accepted, rejected)
+    assert delta["partial"] is False and delta["first_divergent_index"] is None
     assert delta["input_prefix_kept"] == 3
     assert delta["appended_item_types"] == ["reasoning", "function_call", "function_call_output"]
     assert delta["tools_same"] and delta["instructions_same"] and delta["same_route"]
@@ -199,30 +215,90 @@ def test_records_never_contain_text_arguments_outputs_headers_or_credentials(mon
 
 
 def test_ring_and_key_are_private_and_retention_is_bounded(monkeypatch, tmp_path):
-    agent = _agent(monkeypatch, tmp_path, ring=3)
-    server = _Server([200] * 7)
+    agent = _agent(monkeypatch, tmp_path, ring=4)
+    server = _Server([200] * 11)
     client = _client(server)
-    for n in range(7):
+    path = tmp_path / "logs" / shape.RING_FILENAME
+    for n in range(11):
         agent._current_api_request_id = f"turn-1:api:{n}"
         run_codex_stream(agent, _kwargs(), client=client)
-    path = tmp_path / "logs" / shape.RING_FILENAME
-    records = shape.read_records(path)
-    assert [r["corr"]["api_request_id"] for r in records] == ["turn-1:api:4", "turn-1:api:5", "turn-1:api:6"]
+        ids = [r["corr"]["api_request_id"] for r in shape.read_records(path)]
+        assert 1 <= len(ids) <= 4 and ids[-1] == f"turn-1:api:{n}"  # bounded, newest always kept
+        assert ids == [f"turn-1:api:{k}" for k in range(n - len(ids) + 1, n + 1)]  # contiguous newest run
+    assert len(server.bodies) == 11
     for name in (shape.RING_FILENAME, "codex_request_shape.key", shape.RING_FILENAME + ".lock"):
         assert stat.S_IMODE((tmp_path / "logs" / name).stat().st_mode) == 0o600
     assert stat.S_IMODE((tmp_path / "logs").stat().st_mode) == 0o700
     assert not list((tmp_path / "logs").glob("*.tmp"))
 
 
-def test_oversized_record_is_reduced_to_valid_bounded_json(tmp_path):
-    many = [{"type": "function_call_output", "call_id": f"call_{n}", "output": "x"} for n in range(5000)]
+def _tools(n):
+    return [{"type": "function", "name": f"tool_{k}", "strict": False, "description": "d",
+             "parameters": {"type": "object", "properties": {f"p{j}": {"type": "string"} for j in range(4)}}}
+            for k in range(n)]
+
+
+def _long_items(n):
+    items = []
+    for k in range(n):
+        call = f"call_{k:032d}"
+        items.append({"type": "function_call", "call_id": call, "name": "terminal", "arguments": "{}"} if k % 2 == 0
+                     else {"type": "function_call_output", "call_id": f"call_{k - 1:032d}", "output": "x"})
+    return items
+
+
+def _record(path, body, limit=5):
+    assert shape.append_record(path, lambda fp: {"schema": shape.SCHEMA, "outcome": "accepted",
+                                                 "body": shape.describe_body(body, fp)}, limit)
+    return shape.read_records(path)[-1]
+
+
+@pytest.mark.parametrize("items", [192, 4000])
+def test_realistic_long_session_record_fits_without_reduction(tmp_path, items):
+    """128 tools plus a full head+tail of items still fits the per-record cap unreduced."""
     path = tmp_path / "logs" / shape.RING_FILENAME
-    shape.append_record(path, lambda fp: {"schema": shape.SCHEMA, "body": shape.describe_body(
-        {"input": many, "tools": []}, fp)}, 5)
-    line = path.read_text().strip()
-    assert len(line) <= shape.MAX_RECORD_BYTES
-    record = json.loads(line)
-    assert record["body"]["input"]["count"] == 5000 and record["body"]["input"]["truncated"] == 5000 - shape.MAX_ITEMS
+    record = _record(path, {"input": _long_items(items), "tools": _tools(shape.MAX_TOOLS)})
+    assert "reduced" not in record
+    assert len(path.read_text().strip()) <= shape.MAX_RECORD_BYTES
+    kept = record["body"]["input"]["items"]
+    assert len(kept) == min(items, shape.HEAD_ITEMS + shape.TAIL_ITEMS)
+    assert kept[-1]["i"] == items - 1  # the newest item always survives
+    assert len(record["body"]["tools"]["items"]) == shape.MAX_TOOLS
+
+
+def test_record_reduction_steps_stay_valid_bounded_json(tmp_path, monkeypatch):
+    path = tmp_path / "logs" / shape.RING_FILENAME
+    body = {"input": _long_items(400), "tools": _tools(10)}
+    monkeypatch.setattr(shape, "MAX_RECORD_BYTES", 16 * 1024)
+    record = _record(path, body)
+    assert record["reduced"] == ["tool_items", "input_items_64"]
+    assert [i["i"] for i in record["body"]["input"]["items"]][-1] == 399
+    monkeypatch.setattr(shape, "MAX_RECORD_BYTES", 600)
+    record = _record(path, body)
+    assert record["reduced"][-1] == "minimal" and set(record["body"]) >= {"bytes", "fp", "shape_sha256"}
+    for line in path.read_text().splitlines():
+        json.loads(line)
+
+
+def test_head_and_tail_items_keep_appended_items_visible(tmp_path):
+    path = tmp_path / "logs" / shape.RING_FILENAME
+    before = _long_items(301)
+    after = [*before, {"type": "reasoning", "encrypted_content": "e", "summary": []}, *_long_items(2)]
+    first, second = _record(path, {"input": before}), _record(path, {"input": after})
+    assert second["body"]["input"]["omitted"] == 304 - shape.HEAD_ITEMS - shape.TAIL_ITEMS
+    delta = shape.diff_records(first, second)
+    assert delta["partial"] is True and delta["input_prefix_kept"] is None
+    assert delta["appended_item_types"] == ["reasoning", "function_call", "function_call_output"]
+    assert delta["items_compared"] > 0 and delta["first_divergent_index"] is None
+
+
+def test_diff_reports_unknown_rather_than_empty_when_items_were_dropped():
+    reduced = {"outcome": "rejected", "reduced": ["minimal"], "body": {"bytes": 10}}
+    full = {"outcome": "accepted", "body": {"input": {"count": 3, "items": [{"i": 0, "fp": "a", "t": "message"}]}}}
+    delta = shape.diff_records(full, reduced)
+    assert delta["partial"] is True and delta["input_prefix_kept"] is None
+    assert delta["appended_item_types"] is None and delta["items_compared"] is None
+    assert delta["reduced"] == [None, ["minimal"]]
 
 
 def test_fingerprints_are_keyed_but_schema_hashes_are_portable(tmp_path):
@@ -268,6 +344,55 @@ def test_pre_network_serialization_failure_is_recorded_from_kwargs(monkeypatch, 
     assert record["outcome"] == "no_response" and record["source"] == "kwargs" and record["http_status"] is None
     assert record["error"]["class_chain"][0] == "UnicodeEncodeError"
     assert record["body"]["chars"]["lone_surrogate"] == 1
+
+
+def test_busy_ring_lock_skips_the_record_within_the_wait_budget(monkeypatch, tmp_path):
+    agent = _agent(monkeypatch, tmp_path)
+    server = _Server([200, 200])
+    client = _client(server)
+    run_codex_stream(agent, _kwargs(), client=client)  # creates the ring, key and lock
+    lock_fd = os.open(tmp_path / "logs" / (shape.RING_FILENAME + ".lock"), os.O_RDWR)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)  # another process holds the ring
+        started = time.monotonic()
+        assert run_codex_stream(agent, _kwargs(), client=client).status == "completed"
+        assert time.monotonic() - started < 5
+    finally:
+        os.close(lock_fd)
+    assert len(server.bodies) == 2 and len(shape.read_records(tmp_path / "logs" / shape.RING_FILENAME)) == 1
+
+
+def test_short_key_is_regenerated_instead_of_disabling_the_ring(tmp_path):
+    directory = _mkdir(tmp_path / "logs")
+    (directory / "codex_request_shape.key").write_bytes(b"")
+    fp = shape._fingerprinter(directory)
+    assert len((directory / "codex_request_shape.key").read_bytes()) == 32 and fp("x")
+    assert stat.S_IMODE((directory / "codex_request_shape.key").stat().st_mode) == 0o600
+
+
+def test_identity_wire_and_non_dict_ring_lines(monkeypatch, tmp_path):
+    agent = _agent(monkeypatch, tmp_path)
+    server = _Server([200])
+    run_codex_stream(agent, _kwargs(), client=_client(server, compress=False))
+    path = tmp_path / "logs" / shape.RING_FILENAME
+    with path.open("a") as handle:
+        handle.write("[1, 2]\nnot json\n")
+    (record,) = shape.read_records(path)
+    assert record["body"]["encoding"] == "identity" and record["body"]["bytes"] == len(server.bodies[0])
+
+
+def test_structured_validator_fields_are_kept_as_identifiers_only():
+    request = httpx.Request("POST", CODEX_URL + "/responses")
+    body = {"error": {"code": "invalid_value", "type": "invalid_request_error", "param": "input[3].content",
+                      "message": SENTINELS["detail"]},
+            "detail": [{"loc": ["body", "input", 3], "type": "value_error", "msg": SENTINELS["detail"]}]}
+    error = BadRequestError("bad", response=httpx.Response(400, request=request), body=body)
+    record = shape._error_record(error)
+    assert record["error_param"] == "input[3].content" and record["error_code"] == "invalid_value"
+    assert record["detail_items"] == [{"loc": ["body", "input", 3], "type": "value_error"}]
+    assert SENTINELS["detail"] not in json.dumps(record)
+    assert shape._error_record(BadRequestError("bad", response=httpx.Response(400, request=request),
+                                               body={"error": {"param": "x\n"}}))["error_param"] == "other"
 
 
 def test_ring_failure_never_changes_the_request_outcome(monkeypatch, tmp_path):

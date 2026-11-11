@@ -7,9 +7,10 @@ rejected request against the successful requests just before it.
 
 Off by default. ``agent.codex_request_shape_ring: N`` (N > 0, capped at ``MAX_RING``) makes every
 consumer-Codex Responses request append one record, accepted or rejected, to a private ring at
-``$HERMES_HOME/logs/codex_request_shape.jsonl`` that keeps only the newest N records. Records are
-derived from the bytes the SDK actually serialized (the ``httpx.Request`` content) when the
-client exposes them, otherwise from the final kwargs; ``source`` says which.
+``$HERMES_HOME/logs/codex_request_shape.jsonl`` holding at most the newest N records (when full it
+trims to the newest three quarters). Records are derived from the bytes that crossed the socket
+(the ``httpx.Request`` content after the zstd request hook, decoded here) when the client exposes
+them, otherwise from the final kwargs; ``source`` and ``encoding`` say which.
 
 Retained: key/type signatures, item-type sequences, counts, sizes, allowlisted configuration
 scalars, routing metadata, local correlation IDs, plain SHA-256 of tool schemas (canonical JSON,
@@ -28,6 +29,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
@@ -39,20 +41,28 @@ logger = logging.getLogger(__name__)
 SCHEMA = "codex-request-shape.v1"
 CONFIG_KEY = "codex_request_shape_ring"  # under ``agent:``
 MAX_RING = 200
-MAX_RECORD_BYTES = 64 * 1024
-MAX_ITEMS = 256
+MAX_RECORD_BYTES = 96 * 1024
+# Long sessions are where follow-up 400s happen, so the newest items matter most: keep a head (the
+# stable prefix) and a larger tail (what was just appended), each item carrying its original index.
+HEAD_ITEMS = 32
+TAIL_ITEMS = 160
 MAX_TOOLS = 128
+MAX_DECODED_WIRE_BYTES = 64 * 1024 * 1024
+LOCK_WAIT_SECONDS = 0.25
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 RING_FILENAME = "codex_request_shape.jsonl"
 _KEY_FILENAME = "codex_request_shape.key"
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_.:\-]{1,64}$")
 _ID = re.compile(r"^[A-Za-z0-9_.:\-]{1,128}$")  # local correlation ids (session/api-request), never secrets
+_PARAM = re.compile(r"^[A-Za-z0-9_.:\[\]\-]{1,128}$")  # validator field paths such as input[3].content
 _SUSPECT = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\U00010000-\U0010ffff]")
 _ROLES = frozenset({"user", "assistant", "system", "developer", "tool"})
 _SDK_ONLY_KWARGS = frozenset({"extra_headers", "extra_query", "extra_body", "timeout"})
 _SCALAR_CONFIG = ("model", "store", "stream", "parallel_tool_calls", "service_tier", "truncation",
                   "max_output_tokens", "max_tool_calls", "temperature", "top_p", "background")
 _LOCK = threading.Lock()
+_KEYS: dict[str, Any] = {}  # directory -> _Fingerprinter, loaded once per process
 
 
 def ring_size() -> int:
@@ -79,13 +89,13 @@ def ring_path() -> Path:
 
 def _ident(value: Any) -> str:
     text = str(value or "")
-    return "absent" if not text else text if _ID.match(text) else "other"
+    return "absent" if not text else text if _ID.fullmatch(text) else "other"
 
 
 def _token(value: Any) -> str:
     if value is None:
         return "absent"
-    return value if isinstance(value, str) and _TOKEN.match(value) else "other"
+    return value if isinstance(value, str) and _TOKEN.fullmatch(value) else "other"
 
 
 def _json_type(value: Any) -> str:
@@ -166,13 +176,18 @@ class _Fingerprinter:
         return hmac.new(self._key, data, hashlib.sha256).hexdigest()[:16]
 
 
-def _item_record(item: Any, fp: _Fingerprinter) -> dict[str, Any]:
+def _keys(mapping: dict) -> str:
+    return ",".join(sorted(_token(k) for k in mapping))
+
+
+def _item_record(index: int, item: Any, fp: _Fingerprinter) -> dict[str, Any]:
     if not isinstance(item, dict):
-        return {"t": _json_type(item), "bytes": len(_canonical(item)), "fp": fp(item)}
+        return {"i": index, "t": _json_type(item), "bytes": len(_canonical(item)), "fp": fp(item)}
     kind = item.get("type")
     rec: dict[str, Any] = {
+        "i": index,
         "t": _token(kind) if kind is not None else ("message" if "role" in item else "absent"),
-        "keys": sorted(_token(k) for k in item),
+        "keys": _keys(item),
         "bytes": len(_canonical(item)),
         "fp": fp(item),
     }
@@ -232,8 +247,7 @@ def _tools_record(tools: Any) -> dict[str, Any]:
             entries.append({"type": _json_type(tool)})
             continue
         params = tool.get("parameters")
-        entry = {"type": _token(tool.get("type")), "name": _token(tool.get("name")),
-                 "keys": sorted(_token(k) for k in tool)}
+        entry = {"type": _token(tool.get("type")), "name": _token(tool.get("name")), "keys": _keys(tool)}
         if "strict" in tool:
             entry["strict"] = tool["strict"] if isinstance(tool["strict"], bool) else "other"
         if params is not None:
@@ -267,7 +281,7 @@ def _config_record(body: dict) -> dict[str, Any]:
     text = body.get("text")
     if isinstance(text, dict):
         fmt = text.get("format")
-        cfg["text"] = {"keys": sorted(_token(k) for k in text),
+        cfg["text"] = {"keys": _keys(text),
                        "format_type": _token(fmt.get("type")) if isinstance(fmt, dict) else _json_type(fmt)}
     management = body.get("context_management")
     if isinstance(management, list):
@@ -283,6 +297,12 @@ def _config_record(body: dict) -> dict[str, Any]:
     if isinstance(body.get("metadata"), dict):
         cfg["metadata_keys"] = len(body["metadata"])
     return cfg
+
+
+def _kept_indices(count: int, head: int = HEAD_ITEMS, tail: int = TAIL_ITEMS) -> list[int]:
+    if count <= head + tail:
+        return list(range(count))
+    return [*range(head), *range(count - tail, count)]
 
 
 def describe_body(body: Any, fp: _Fingerprinter) -> dict[str, Any]:
@@ -308,8 +328,8 @@ def describe_body(body: Any, fp: _Fingerprinter) -> dict[str, Any]:
                                      "fp": fp(instructions)}
     if isinstance(items, list):
         described["input"] = {"count": len(items), "bytes": len(_canonical(items)),
-                              "items": [_item_record(item, fp) for item in items[:MAX_ITEMS]],
-                              "truncated": max(0, len(items) - MAX_ITEMS), **_pairing(items)}
+                              "items": [_item_record(i, items[i], fp) for i in _kept_indices(len(items))],
+                              "omitted": max(0, len(items) - HEAD_ITEMS - TAIL_ITEMS), **_pairing(items)}
     elif items is not None:
         described["input"] = {"type": _json_type(items), **(_text_len(items) or {})}
     return described
@@ -334,6 +354,25 @@ def _request_bytes(obj: Any) -> bytes | None:
     return None
 
 
+def decode_wire(data: bytes) -> tuple[bytes | None, str]:
+    """(JSON bytes, content encoding). The official Codex client zstd-compresses request bodies
+    (``agent.codex_headers.codex_request_compression_hooks``), so the raw wire is rarely JSON."""
+    if not data.startswith(_ZSTD_MAGIC):
+        return data, "identity"
+    try:
+        from compression import zstd
+    except ImportError:
+        return None, "zstd_undecodable"
+    decompressor = zstd.ZstdDecompressor()
+    try:
+        decoded = decompressor.decompress(data, max_length=MAX_DECODED_WIRE_BYTES)
+    except Exception:
+        return None, "zstd_undecodable"
+    if not decompressor.eof:
+        return None, "zstd_oversized"
+    return decoded, "zstd"
+
+
 def _wire_bytes_from_stream(stream: Any) -> bytes | None:
     with suppress(Exception):
         return _request_bytes(getattr(stream, "response", None))
@@ -355,6 +394,14 @@ def _wire_bytes_from_error(error: BaseException) -> bytes | None:
     return None
 
 
+def _param(value: Any) -> Any:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if value is None:
+        return "absent"
+    return value if isinstance(value, str) and _PARAM.fullmatch(value) else "other"
+
+
 def _error_record(error: BaseException) -> dict[str, Any]:
     chain: list[str] = []
     current: BaseException | None = error
@@ -370,6 +417,11 @@ def _error_record(error: BaseException) -> dict[str, Any]:
         detail = body.get("detail")
         if isinstance(detail, str):
             rec["detail_chars"] = len(detail)
+        elif isinstance(detail, list):  # FastAPI-style validation list: field locations and codes only
+            rec["detail_items"] = [
+                {"loc": [_param(p) for p in d.get("loc", [])[:8]] if isinstance(d.get("loc"), list) else [],
+                 "type": _token(d.get("type"))} if isinstance(d, dict) else {"type": _json_type(d)}
+                for d in detail[:8]]
         elif detail is not None:
             rec["detail_type"] = _json_type(detail)
         error_obj = body.get("error")
@@ -377,7 +429,9 @@ def _error_record(error: BaseException) -> dict[str, Any]:
         # Structured validator fields are identifiers (field paths, codes), kept only as safe tokens.
         for key in ("code", "type", "param"):
             if key in nested:
-                rec[f"error_{key}"] = _token(nested[key]) if not isinstance(nested[key], int) else nested[key]
+                value = nested[key]
+                rec[f"error_{key}"] = (value if isinstance(value, int) and not isinstance(value, bool)
+                                       else _param(value) if key == "param" else _token(value))
         message = nested.get("message")
         if isinstance(message, str):
             rec["message_chars"] = len(message)
@@ -392,77 +446,150 @@ def _private_open(path: Path, flags: int) -> int:
     return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
 
 
-def _fingerprinter(directory: Path) -> _Fingerprinter:
-    key_path = directory / _KEY_FILENAME
+def _write_private(path: Path, data: bytes) -> Path:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    fd = _private_open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     try:
-        fd = _private_open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-    except FileExistsError:
-        key = key_path.read_bytes()
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+    except BaseException:
+        with suppress(FileNotFoundError):
+            tmp.unlink()
+        raise
+    return tmp
+
+
+def _fingerprinter(directory: Path) -> _Fingerprinter:
+    """Load the per-home HMAC key; create it complete (temp + replace) or replace a short one.
+
+    Called under the ring lock. A regenerated key only breaks fingerprint comparison with older
+    records; every other field stays comparable.
+    """
+    key_path = directory / _KEY_FILENAME
+    with suppress(FileNotFoundError):
+        fd = _private_open(key_path, os.O_RDONLY)
+        with os.fdopen(fd, "rb") as handle:
+            key = handle.read(4096)
         if len(key) >= 32:
             return _Fingerprinter(key)
-        raise ValueError("codex request-shape fingerprint key is malformed")
     key = os.urandom(32)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(key)
+    tmp = _write_private(key_path, key)
+    try:
+        os.replace(tmp, key_path)
+    finally:
+        with suppress(FileNotFoundError):
+            tmp.unlink()
     return _Fingerprinter(key)
 
 
 @contextmanager
-def _ring_lock(directory: Path) -> Iterator[None]:
-    with _LOCK:
+def _ring_lock(directory: Path) -> Iterator[bool]:
+    """Yield True once held. Bounded: a stuck holder (or an NFS home) costs at most
+    ``LOCK_WAIT_SECONDS`` and one skipped record, never a stalled request."""
+    if not _LOCK.acquire(timeout=LOCK_WAIT_SECONDS):
+        yield False
+        return
+    try:
         fd = _private_open(directory / (RING_FILENAME + ".lock"), os.O_RDWR | os.O_CREAT)
         try:
             try:
                 import fcntl
             except ImportError:  # Windows: in-process lock only
-                fcntl = None
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
+                yield True
+                return
+            deadline = time.monotonic() + LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        yield False
+                        return
+                    time.sleep(0.01)
+            yield True
         finally:
             os.close(fd)
+    finally:
+        _LOCK.release()
+
+
+def _dumps(record: dict) -> str:
+    return json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _encode(record: dict) -> str:
-    line = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    """One JSONL line within ``MAX_RECORD_BYTES``, reduced progressively and labelled ``reduced``."""
+    line = _dumps(record)
     if len(line) <= MAX_RECORD_BYTES:
         return line
     reduced = json.loads(line)
-    for section in ("input", "tools"):
-        part = (reduced.get("body") or {}).get(section)
-        if isinstance(part, dict) and "items" in part:
-            part["items_dropped"] = len(part.pop("items"))
-    reduced["reduced"] = "items"
-    line = json.dumps(reduced, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    if len(line) <= MAX_RECORD_BYTES:
-        return line
     body = reduced.get("body") or {}
-    reduced["body"] = {k: body.get(k) for k in ("bytes", "fp", "shape_sha256", "depth", "chars")}
-    reduced["reduced"] = "minimal"
-    return json.dumps(reduced, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    steps: list[str] = []
+    tools = body.get("tools")
+    if isinstance(tools, dict) and "items" in tools:  # tools rarely change; their sha256 still compares
+        tools["items_dropped"] = len(tools.pop("items"))
+        steps.append("tool_items")
+    items_section = body.get("input")
+    for keep in (64, 16, None):
+        reduced["reduced"] = steps
+        line = _dumps(reduced)
+        if len(line) <= MAX_RECORD_BYTES:
+            return line
+        if keep is not None and isinstance(items_section, dict) and isinstance(items_section.get("items"), list):
+            items = items_section["items"]
+            # Head 8 (the stable prefix) plus the newest ``keep``; each item keeps its original index.
+            items_section["items"] = [*items[:8], *items[8:][-keep:]] if len(items) > keep + 8 else items
+            steps.append(f"input_items_{keep}")
+    reduced["body"] = {k: body.get(k) for k in ("bytes", "wire_bytes", "encoding", "fp", "shape_sha256", "depth", "chars")}
+    reduced["reduced"] = [*steps, "minimal"]
+    return _dumps(reduced)
 
 
-def append_record(path: Path, record_factory, limit: int) -> None:
-    """Build (with the private fingerprint key) and append one record, keeping the newest ``limit``."""
+def append_record(path: Path, record_factory, limit: int) -> bool:
+    """Build (with the private fingerprint key) and append one record.
+
+    At most ``limit`` records are on disk. Reaching the limit trims to the newest three quarters,
+    so the file is rewritten once every ``limit // 4`` requests rather than on every request.
+    Returns False when the lock was not obtained in time and the record was skipped.
+    """
     directory = path.parent
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    record = record_factory(_fingerprinter(directory))
-    line = _encode(record)
-    with _ring_lock(directory):
-        lines: list[str] = []
+    limit = max(1, limit)
+    cache_key = str(directory)
+    fp = _KEYS.get(cache_key)
+    if fp is None:
+        with _ring_lock(directory) as held:
+            if not held:
+                return False
+            fp = _KEYS[cache_key] = _fingerprinter(directory)
+    # Describe outside the lock: other requests wait only for the append itself.
+    line = _encode(record_factory(fp)) + "\n"
+    with _ring_lock(directory) as held:
+        if not held:
+            return False
+        existing = b""
         with suppress(FileNotFoundError):
-            lines = [entry for entry in path.read_text(encoding="utf-8").splitlines() if entry.strip()]
-        lines = (lines + [line])[-max(1, limit):]
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
-        fd = _private_open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            fd = _private_open(path, os.O_RDONLY)
+            with os.fdopen(fd, "rb") as handle:
+                existing = handle.read()
+        lines = [entry for entry in existing.split(b"\n") if entry.strip()]
+        if len(lines) < limit:
+            fd = _private_open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+            with os.fdopen(fd, "ab") as handle:
+                if existing and not existing.endswith(b"\n"):
+                    handle.write(b"\n")
+                handle.write(line.encode("ascii"))
+            return True
+        keep = max(0, limit - max(1, limit // 4) - 1)
+        kept = lines[len(lines) - keep:] if keep else []
+        tmp = _write_private(path, b"".join(entry + b"\n" for entry in kept) + line.encode("ascii"))
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines) + "\n")
             os.replace(tmp, path)
-        except BaseException:
+        finally:
             with suppress(FileNotFoundError):
                 tmp.unlink()
-            raise
+        return True
 
 
 def read_records(path: Path | None = None) -> list[dict]:
@@ -471,7 +598,9 @@ def read_records(path: Path | None = None) -> list[dict]:
     with suppress(FileNotFoundError):
         for line in path.read_text(encoding="utf-8").splitlines():
             with suppress(ValueError):
-                records.append(json.loads(line))
+                value = json.loads(line)
+                if isinstance(value, dict):
+                    records.append(value)
     return records
 
 
@@ -497,23 +626,32 @@ class RequestShapeProbe:
 
     def _write(self, outcome: str, wire_kwargs: dict, wire: bytes | None, extra: dict) -> None:
         def build(fp: _Fingerprinter) -> dict:
-            body: Any
-            source = "wire_bytes"
+            body: Any = None
+            encoding = decoded = None
             if wire is not None:
+                decoded, encoding = decode_wire(wire)
+                source = "wire_bytes"
                 try:
-                    body = json.loads(wire)
+                    body = json.loads(decoded) if decoded is not None else None
                 except ValueError:
-                    body, source = None, "wire_bytes_unparsed"
+                    body = None
+                if body is None:
+                    source = "wire_bytes_unparsed"
             else:
                 body, source = body_from_kwargs(wire_kwargs), "kwargs"
             described = describe_body(body, fp) if body is not None else {}
-            described["bytes"] = len(wire) if wire is not None else len(_canonical(body))
+            # bytes: JSON body size; wire_bytes: what crossed the socket (compressed when zstd).
+            described["bytes"] = len(_canonical(body)) if source == "kwargs" else (
+                len(decoded) if body is not None and decoded is not None else None)
+            described["wire_bytes"] = len(wire) if wire is not None else None
+            described["encoding"] = encoding
             described["fp"] = fp(body) if body is not None else fp.raw(wire or b"")
             return {**self.base, "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
                     "outcome": outcome, "source": source, "body": described, **extra}
 
         try:
-            append_record(self.path, build, self.limit)
+            if not append_record(self.path, build, self.limit):
+                logger.debug("codex request-shape record skipped: ring lock busy")
         except Exception:
             logger.debug("codex request-shape record skipped", exc_info=True)
 
@@ -552,34 +690,49 @@ def start_probe(agent: Any, *, call_role: str, stream_attempt: int) -> RequestSh
 # ── offline comparison ───────────────────────────────────────────────────────────────────
 
 def diff_records(previous: dict, current: dict) -> dict[str, Any]:
-    """What changed between two records (typically last accepted → rejected in one session)."""
+    """What changed between two records (typically last accepted → rejected in one session).
+
+    Items are compared by original index. When either record omitted or reduced items, the
+    comparison covers only the indices both kept and ``partial`` says so; unknowns stay ``None``.
+    """
     prev_body, cur_body = previous.get("body") or {}, current.get("body") or {}
     prev_input, cur_input = prev_body.get("input") or {}, cur_body.get("input") or {}
-    prev_items, cur_items = prev_input.get("items") or [], cur_input.get("items") or []
-    common = 0
-    for a, b in zip(prev_items, cur_items):
-        if a.get("fp") != b.get("fp"):
-            break
-        common += 1
+    prev_items = {i.get("i"): i for i in prev_input.get("items") or [] if isinstance(i, dict)}
+    cur_items = {i.get("i"): i for i in cur_input.get("items") or [] if isinstance(i, dict)}
+    prev_count, cur_count = prev_input.get("count"), cur_input.get("count")
+    have_items = "items" in prev_input and "items" in cur_input
+    shared = sorted(set(prev_items) & set(cur_items) - {None})
+    divergent = next((i for i in shared if prev_items[i].get("fp") != cur_items[i].get("fp")), None)
+    complete = (have_items and isinstance(prev_count, int) and isinstance(cur_count, int)
+                and len(prev_items) == prev_count and len(cur_items) == cur_count)
+    appended = None
+    if have_items and isinstance(prev_count, int) and isinstance(cur_count, int):
+        appended = [cur_items[i].get("t") if i in cur_items else "omitted" for i in range(prev_count, cur_count)]
     prev_keys, cur_keys = prev_body.get("keys") or {}, cur_body.get("keys") or {}
     prev_cfg, cur_cfg = prev_body.get("config") or {}, cur_body.get("config") or {}
     prev_tools, cur_tools = prev_body.get("tools") or {}, cur_body.get("tools") or {}
+    prev_chars, cur_chars = prev_body.get("chars") or {}, cur_body.get("chars") or {}
     return {
         "outcomes": [previous.get("outcome"), current.get("outcome")],
+        "sources": [previous.get("source"), current.get("source")],
+        "reduced": [previous.get("reduced"), current.get("reduced")],
+        "partial": not complete,
         "same_route": previous.get("route") == current.get("route"),
         "keys_added": sorted(set(cur_keys) - set(prev_keys)),
         "keys_removed": sorted(set(prev_keys) - set(cur_keys)),
         "key_type_changed": sorted(k for k in set(prev_keys) & set(cur_keys) if prev_keys[k] != cur_keys[k]),
         "config_changed": sorted(k for k in set(prev_cfg) | set(cur_cfg) if prev_cfg.get(k) != cur_cfg.get(k)),
         "instructions_same": (prev_body.get("instructions") or {}).get("fp") == (cur_body.get("instructions") or {}).get("fp"),
-        "tools_same": prev_tools.get("sha256") == cur_tools.get("sha256"),
-        "input_prefix_kept": common,
-        "input_count": [prev_input.get("count"), cur_input.get("count")],
-        "appended_item_types": [i.get("t") for i in cur_items[common:]],
+        "tools_same": prev_tools.get("sha256") == cur_tools.get("sha256") if prev_tools or cur_tools else None,
+        "input_count": [prev_count, cur_count],
+        "items_compared": len(shared) if have_items else None,
+        "first_divergent_index": divergent,
+        "input_prefix_kept": (divergent if divergent is not None else min(prev_count, cur_count))
+        if complete else None,
+        "appended_item_types": appended,
         "bytes": [prev_body.get("bytes"), cur_body.get("bytes")],
-        "chars_changed": {k: [(prev_body.get("chars") or {}).get(k), v]
-                          for k, v in (cur_body.get("chars") or {}).items()
-                          if (prev_body.get("chars") or {}).get(k) != v},
+        "wire_bytes": [prev_body.get("wire_bytes"), cur_body.get("wire_bytes")],
+        "chars_changed": {k: [prev_chars.get(k), v] for k, v in cur_chars.items() if prev_chars.get(k) != v},
     }
 
 
@@ -599,6 +752,7 @@ def _main(argv: list[str] | None = None) -> int:
                    "api_request_id": (record.get("corr") or {}).get("api_request_id"),
                    "outcome": record.get("outcome"), "http_status": record.get("http_status"),
                    "source": record.get("source"), "bytes": body.get("bytes"),
+                   "wire_bytes": body.get("wire_bytes"), "encoding": body.get("encoding"),
                    "input_count": (body.get("input") or {}).get("count"), "model": (record.get("route") or {}).get("model")}
         if record.get("outcome") != "accepted" and session in last_accepted:
             summary["vs_last_accepted"] = diff_records(last_accepted[session], record)
