@@ -305,6 +305,10 @@ async def execute_admission(authority, ref, row):
             from gateway.session_automation import restore_local_automation
             event = restore_local_automation(authority, ref, row)
     if event.internal and 'gateway_session_id' in event.metadata:
+        # The FIFO already claimed this receipted wake. A drain starting before handler dispatch
+        # must not replace it with a restart notice and settle it completed without running it.
+        # New claims are still refused by the authority's transactional admission gate.
+        event._admitted_before_drain = True
         # Main's ownership proof (802fd5782f3): the session the pre-claim check just validated, so the
         # turn's resolver never re-reads (and on a transient failure drops) an admitted completion.
         event.metadata['gateway_proven_session_id'] = (
