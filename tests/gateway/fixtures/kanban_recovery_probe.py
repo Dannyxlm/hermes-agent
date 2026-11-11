@@ -104,7 +104,8 @@ def main():
         kb.create_board('owned')
         with closing(connect(board='owned')) as conn:
             tid = kb.create_task(conn, title='RECOVERY_TASK', assignee='assigned' if mode == 'cross_profile' else 'default',
-                                 workspace_kind='dir', workspace_path=str(workspace), goal_mode=True, goal_max_turns=2)
+                                 workspace_kind='dir', workspace_path=str(workspace), goal_mode=True, goal_max_turns=2,
+                                 model_override='frozen-model', provider_override='custom')
             with daemon(root, owner, env, barrier=False) as (proc, desc):
                 subprocess.Popen = spawn
                 try:

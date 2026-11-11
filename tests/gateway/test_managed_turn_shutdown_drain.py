@@ -32,7 +32,7 @@ async def test_drain_counts_managed_turns_and_the_timeout_path_stops_them(tmp_pa
         assert timed_out is True
         runner._interrupt_running_agents('Gateway shutting down')
         await asyncio.to_thread(child.wait, 10)
-        assert seen.read_bytes() == b'{"type":"stop"}\n'
+        assert seen.read_bytes() == b'{"type":"stop","terminal_cause":"parent_stop"}\n'
     finally:
         await asyncio.to_thread(worker.close)
     assert runner._active_work_count() == 0

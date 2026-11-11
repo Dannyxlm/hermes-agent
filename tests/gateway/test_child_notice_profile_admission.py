@@ -278,9 +278,17 @@ async def test_batched_completions_follow_the_owning_profile(
 
     rig = _build_rig(monkeypatch, tmp_path, request, surface_a, "all")
     runner = rig.runner
+    flush = runner._flush_process_completion_batch
 
     async def consume(leg):
         runner._completion_notification_batch_window = 0.01
+        batch_ready = asyncio.Event()
+
+        async def flush_together(key):
+            await batch_ready.wait()
+            await flush(key)
+
+        monkeypatch.setattr(runner, '_flush_process_completion_batch', flush_together)
         if owner == "live_handoff":
             _transfer_to_parent(rig, leg)
         leg.proc.output_buffer = "PROCESS_RESULT"
@@ -297,10 +305,18 @@ async def test_batched_completions_follow_the_owning_profile(
         pair = [("PROCESS_RESULT", evt), ("COMPANION_RESULT", companion)]
         if path in {"batch_foreground_first", "batch_boundary_first"}:
             pair.reverse()
-        outcomes = await asyncio.gather(*(
+        enqueued = [asyncio.create_task(
             runner._enqueue_process_completion_notification(text, event)
-            for text, event in pair
-        ))
+        ) for text, event in pair]
+        # Profile admission performs off-loop reads. Both eligible completions
+        # must reach the batch before its clock starts, regardless of disk load.
+        from tests.waiting import async_wait_until
+        try:
+            await async_wait_until(lambda: sum(map(len, runner._completion_notification_batches.values())) ==
+                                   1 + int(leg.surfaced), what='eligible completions to enter their batches')
+        finally:
+            batch_ready.set()
+        outcomes = await asyncio.gather(*enqueued)
         assert outcomes[pair.index(("PROCESS_RESULT", evt))] is (True if leg.surfaced else None)
         assert outcomes[pair.index(("COMPANION_RESULT", companion))] is (None if boundary else True)
         texts = "\n".join(event.text for event, _sid, _home in rig.admitted)

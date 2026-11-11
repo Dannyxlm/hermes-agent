@@ -28,7 +28,8 @@ def test_run_task_kanban_write_never_blocks_the_loop(tmp_path, monkeypatch):
     workspace.mkdir()
     kb.create_board('owned')
     with closing(connect(board='owned')) as conn:
-        task_id = kb.create_task(conn, title='Owned', assignee='default', workspace_kind='dir', workspace_path=str(workspace))
+        task_id = kb.create_task(conn, title='Owned', assignee='default', workspace_kind='dir', workspace_path=str(workspace),
+                                 model_override='loop-model', provider_override='custom')
         kb.recompute_ready(conn)
         task = kb.claim_task(conn, task_id)
         board_db = conn.execute('PRAGMA database_list').fetchone()[2]

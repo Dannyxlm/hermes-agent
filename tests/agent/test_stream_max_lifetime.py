@@ -67,8 +67,7 @@ def drip_wire():
 
 
 def test_cap_cuts_a_stream_that_never_goes_quiet(drip_wire, monkeypatch, tmp_path):
-    _set_cap(monkeypatch, tmp_path, 1.5)
-    monkeypatch.setenv("HERMES_STREAM_STALE_TIMEOUT", "1.0")
+    _set_cap(monkeypatch, tmp_path, 0)
     monkeypatch.setenv("HERMES_STREAM_RETRIES", "0")
     monkeypatch.setenv("HERMES_STREAM_STALE_GIVEUP", "2")
     agent = run_agent.AIAgent(
@@ -76,18 +75,31 @@ def test_cap_cuts_a_stream_that_never_goes_quiet(drip_wire, monkeypatch, tmp_pat
         platform="cli", quiet_mode=True, skip_context_files=True, skip_memory=True,
         enabled_toolsets=[], max_iterations=1,
     )
-    def call(prompt):
-        return interruptible_streaming_api_call(agent, {"model": "m", "messages": [{"role": "user", "content": prompt}]})
+    def call(prompt, on_first_delta=None):
+        return interruptible_streaming_api_call(agent, {"model": "m", "messages": [{"role": "user", "content": prompt}]},
+                                               on_first_delta=on_first_delta)
 
-    # Without the cap the drip completes normally after ~8 s; with it each call ends early, with
-    # an error naming the setting (the stream opened, so no "endpoint unreachable" copy).
-    for _ in range(2):
-        started = time.time()
-        with pytest.raises(StreamLifetimeExceeded, match="agent.stream_max_lifetime"):
-            call("hi")
-        assert time.time() - started < 5.0
-    # Cap kills are not stale kills: the breaker (giveup 2) must not refuse a healthy request.
-    assert call("short").choices[0].message.content == "."
+    try:
+        # Establish wire readiness before measuring the live-stream cap. The SDK's
+        # first create lazily imports its request types; that cold path can consume
+        # the entire one-second stale window before the first chunk is read.
+        assert call("short").choices[0].message.content == "."
+        _set_cap(monkeypatch, tmp_path, 1.5)
+        monkeypatch.setenv("HERMES_STREAM_STALE_TIMEOUT", "1.0")
+
+        # Without the cap the drip completes normally after ~8 s; with it each call ends early, with
+        # an error naming the setting (the stream opened, so no "endpoint unreachable" copy).
+        for _ in range(2):
+            streaming = threading.Event()
+            started = time.time()
+            with pytest.raises(StreamLifetimeExceeded, match="agent.stream_max_lifetime"):
+                call("hi", streaming.set)
+            assert streaming.is_set(), 'the lifetime cap must cut an active stream'
+            assert time.time() - started < 5.0
+        # Cap kills are not stale kills: the breaker (giveup 2) must not refuse a healthy request.
+        assert call("short").choices[0].message.content == "."
+    finally:
+        agent.close()
 
 
 def test_yaml_key_is_off_by_default_and_never_undercuts_the_stale_timeout(monkeypatch, tmp_path):

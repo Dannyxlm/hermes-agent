@@ -23,13 +23,17 @@ _PROBE = textwrap.dedent("""
     async def main():
         from gateway.run_api import start_gateway_api, stop_gateway_api
         from gateway.runtime_bootstrap import TicketStore
-        import tui_gateway.ws
 
         async def fake_handle_ws(ws, **kwargs):
             await ws.accept(subprotocol="hermes-gateway-v1")
             await ws.send_json({"native": True, "dashboard_loaded": "hermes_cli.web_server" in sys.modules})
             await ws.close()
-        tui_gateway.ws.handle_ws = fake_handle_ws
+        # Only this transport callback is under test here. Importing the real
+        # WS module to replace it also imports FastAPI through its contracts,
+        # contaminating the listener's cold-import assertion before it starts.
+        native_ws = types.ModuleType("tui_gateway.ws")
+        native_ws.handle_ws = fake_handle_ws
+        sys.modules["tui_gateway.ws"] = native_ws
 
         home = sys.argv[1]
         tickets = TicketStore("owner", [home])
