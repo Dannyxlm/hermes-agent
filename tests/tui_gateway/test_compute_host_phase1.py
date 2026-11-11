@@ -53,7 +53,7 @@ def test_compute_host_routes_relayed_response_and_lock_to_its_open_request(monke
     host = ComputeHost(stdout=out, heartbeat_secs=0)
     sid = "host-clarify"
     server._sessions[sid] = {"history_lock": threading.Lock()}
-    req = server_requests.ServerRequest(sid, "clarify", {"question": "?"})
+    req = server_requests.ServerRequest(sid, "clarify", {"questions": [{"qid": "q0", "question": "?"}]})
     with server_requests._lock:
         server_requests._open[req.id] = req
     locks = []
@@ -67,8 +67,8 @@ def test_compute_host_routes_relayed_response_and_lock_to_its_open_request(monke
         assert _json_lines(out)[-1]["response"] == {"result": {"status": "ok", "remaining": []}}
 
         host._handle_respond({"sid": sid, "request_id": "relay-response",
-                              "params": {"frame": {"jsonrpc": "2.0", "id": req.id, "result": {"answer": "yes"}}}})
-        assert req.answered and req.result == {"answer": "yes"} and req.event.is_set()
+                              "params": {"frame": {"jsonrpc": "2.0", "id": req.id, "result": {"answers": {"q0": "yes"}}}}})
+        assert req.answered and req.result == {"answers": {"q0": "yes"}, "outcome": "submitted"} and req.event.is_set()
         frame = _json_lines(out)[-1]
         assert frame["type"] == "respond.ack" and frame["response"]["result"] == {"status": "ok"}
     finally:

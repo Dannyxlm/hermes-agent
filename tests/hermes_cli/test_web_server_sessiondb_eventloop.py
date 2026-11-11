@@ -74,6 +74,12 @@ class _ReadDB:
     def get_session_rich_row(self, sid):
         return self._hit(None)
 
+    def _own_profile_name(self):
+        return self._hit("default")
+
+    def _read_all(self, sql, params=()):
+        return self._hit([])
+
     def get_compression_tip(self, root_id):
         return self._hit(None)
 

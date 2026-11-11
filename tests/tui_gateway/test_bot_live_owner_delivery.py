@@ -30,6 +30,7 @@ def test_refused_input_reports_a_failed_terminal_outcome():
         "_emit": noop, "bind_transport": noop, "reset_transport": noop,
         "_current_runtime_session_record": contextvars.ContextVar("refused_turn"),
         "_TurnRun": prompt_turn._TurnRun,
+        "_commit_terminal_callback": prompt_turn._commit_terminal_callback,
         "_record_turn_marker": lambda *args, **kwargs: "marker",
         "_prepare_turn_input": lambda *args: None,
         "_release_turn_scopes": noop, "_post_turn_housekeeping": noop,

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
+
 _original_stdout = sys.stdout
 
 
@@ -136,10 +138,6 @@ def test_session_interrupt_uses_explicit_stop_compatibility(server, monkeypatch,
 
     assert response["result"]["status"] == "interrupted"
     assert calls == ["hard" if kind == "hard-only" else "legacy"]
-
-
-# ── write_json ────────────────────────────────────────────────
-
 
 
 # ── _emit ────────────────────────────────────────────────────────────
@@ -666,15 +664,11 @@ def test_approval_respond_4001_when_nothing_resolves(server, monkeypatch):
     assert response["error"]["code"] == 4001
 
 
-# ── Session lookup ───────────────────────────────────────────────────
-
-
-
 # ── session.resume payload ────────────────────────────────────────────
 
 
 def test_session_resume_returns_hydrated_messages(server, monkeypatch):
-    class _DB:
+    class _DB(EmptyQueueReceipts):
         def get_session(self, _sid):
             return {"id": "20260409_010101_abc123"}
 
@@ -705,7 +699,10 @@ def test_session_resume_returns_hydrated_messages(server, monkeypatch):
 
     monkeypatch.setattr(server, "_get_db", lambda: _DB())
     monkeypatch.setattr(server, "_make_agent", lambda sid, key, session_id=None, session_db=None, **_kwargs: object())
-    monkeypatch.setattr(server, "_init_session", lambda sid, key, agent, history, cols=80, **_kwargs: None)
+    def init_session(sid, key, agent, history, cols=80, **_kwargs):
+        server._sessions[sid] = {"session_key": key, "history_lock": threading.RLock()}
+
+    monkeypatch.setattr(server, "_init_session", init_session)
     monkeypatch.setattr(server, "_session_info", lambda _agent, _session=None: {"model": "test/model"})
 
     resp = server.handle_request(
@@ -730,7 +727,7 @@ def test_session_resume_returns_hydrated_messages(server, monkeypatch):
 def test_session_resume_rejects_runaway_transcript_before_history_load(
     server, monkeypatch
 ):
-    class _DB:
+    class _DB(EmptyQueueReceipts):
         def get_session(self, sid):
             return {"id": sid, "message_count": 20_001}
 
@@ -770,7 +767,7 @@ def test_session_resume_deferred_and_omitted_paths_guard_the_tip_only(server, mo
     """
     calls = []
 
-    class _DB:
+    class _DB(EmptyQueueReceipts):
         def get_session(self, sid):
             return {"id": sid, "message_count": 28_730}
 
@@ -788,7 +785,7 @@ def test_session_resume_deferred_and_omitted_paths_guard_the_tip_only(server, mo
                 raise SessionResumeTooLargeError(20_001, 20_000)
             return 666
 
-        def reopen_session(self, _sid):
+        def get_messages_as_conversation(self, _sid, **_kwargs):
             raise RuntimeError("stop before history load")
 
     monkeypatch.setattr(server, "_get_db", lambda: _DB())
@@ -830,7 +827,7 @@ def test_deferred_hydration_falls_back_to_tip_when_lineage_exceeds_limit(server,
     tip = [{"role": "user", "content": "tip"}]
     reads = []
 
-    class _DB:
+    class _DB(EmptyQueueReceipts):
         def reopen_session(self, _sid):
             return True
 
@@ -879,7 +876,7 @@ def test_session_resume_guard_failure_fails_open(server, monkeypatch):
     """A transient guard error must not block resume (fail open, log only)."""
     reads = []
 
-    class _DB:
+    class _DB(EmptyQueueReceipts):
         def get_session(self, sid):
             return {"id": sid}
 
@@ -889,7 +886,8 @@ def test_session_resume_guard_failure_fails_open(server, monkeypatch):
         def resolve_resume_session_id(self, sid):
             return sid
 
-        def assert_resume_safe(self, _sid):
+        def assert_resume_safe(self, _sid, *, tip_only=False):
+            assert tip_only is True
             raise RuntimeError("database is locked")
 
         def get_messages_as_conversation(self, _sid, **_kwargs):

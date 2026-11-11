@@ -65,7 +65,7 @@ async def test_remote_originless_dial_matches_the_same_dial_with_an_origin():
 async def test_loopback_ticket_still_takes_the_native_grant_first():
     reached, closes, redeemed = await _dial("127.0.0.1")
     assert closes == []
-    assert [purpose for _ticket, purpose in redeemed] == ["interactive", "worker-adoption"]
+    assert [purpose for _ticket, purpose in redeemed] == ["interactive", "team-room", "session-wake", "worker-adoption"]
     assert reached == [("127.0.0.1", 40000)]  # neither grant matched: the Webapp's issuer, as before
 
 

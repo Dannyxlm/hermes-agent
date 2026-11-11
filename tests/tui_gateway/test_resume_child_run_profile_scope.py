@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import pytest
 
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
+
 from tui_gateway import server
 
 
-class _EmptyDB:
+class _EmptyDB(EmptyQueueReceipts):
     """Stand-in for ``hermes_state.SessionDB``: the caller's own store, which
     holds no row for the foreign child id."""
 

@@ -26,7 +26,8 @@ async def test_repeated_resume_and_close_preserve_only_live_memberships(tmp_path
         request = {'id': 1, 'method': 'session.resume', 'params': {'session_id': 's'}}
         for connection in (first, peer, first, first):
             result = (await connection.dispatch(request))['result']
-            assert result['info'] == {'desktop_protocol': CANONICAL_GATEWAY_PROTOCOL}
+            assert result['info'] == {'desktop_protocol': CANONICAL_GATEWAY_PROTOCOL,
+                                      'writable': True, 'read_only_reason': None}
         members = authority.sessions['s'].subscribers
         assert len(members) == 2
         await first.close()

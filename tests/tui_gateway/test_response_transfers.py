@@ -10,6 +10,16 @@ from tui_gateway import event_replay, server, server_requests
 from tui_gateway.transport import bind_transport, reset_transport
 
 
+def _without_request_clock(payload):
+    from tests.tui_gateway.protocol_capture_helpers import _request_frame_without_clock
+    if "open_requests" not in payload:
+        return payload
+    for request in payload["open_requests"]:
+        assert isinstance(request["params"]["server_time"], (int, float))
+    return {**payload, "open_requests": [
+        _request_frame_without_clock(request) for request in payload["open_requests"]]}
+
+
 def encoded(value):
     return json.dumps(value, ensure_ascii=False).encode("utf-8")
 
@@ -68,7 +78,7 @@ def test_large_recovery_uses_bounded_frames_without_losing_unicode_or_cut(mobile
     # Publication continues after the immutable cut, before the client downloads it.
     server._emit("message.delta", sid, {"text": "after-cut 🧪"})
     restored = hydrate(descriptor)
-    assert restored == expected
+    assert _without_request_clock(restored) == _without_request_clock(expected)
     if method != "session.events.since":
         cut = restored["stream_snapshot"] if method == "session.resume" else restored
         assert "".join(cut["stream"]["segments"]) == segment * 80
@@ -189,7 +199,7 @@ def test_recovery_uses_existing_surrogate_wire_policy_without_mutating_source(mo
     else:
         assert "response_transfer" not in reply["result"]
         result = json.loads(_sanitize_ws_text(json.dumps(reply, ensure_ascii=False)))["result"]
-    assert result == expected
+    assert _without_request_clock(result) == _without_request_clock(expected)
     assert result["open_requests"][0]["params"]["question"].startswith("valid é🙂 / lone � / low �")
     assert question.params["question"] == dirty
     with SessionDB(mobile_home / "state.db", read_only=True) as db:

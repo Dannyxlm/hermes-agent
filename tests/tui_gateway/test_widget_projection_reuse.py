@@ -19,29 +19,46 @@ def test_pages_and_unrelated_writes_reuse_one_projection(inbox_reader, monkeypat
 
     monkeypatch.setattr(SessionDB, "list_sessions_rich", listing)
     first = read().json()
+    original_signature = inbox._signature
+
+    def no_rebuild(_db):
+        pytest.fail("cursor continuation must not read the current database")
+
+    monkeypatch.setattr(inbox, "_signature", no_rebuild)
     with SessionDB(db_path=path) as writer:
         writer.append_message("unrelated", "assistant", "excluded write")
     second = read(first["next_cursor"])
     assert second.status_code == 200
     assert second.json()["revision"] == first["revision"]
+    monkeypatch.setattr(inbox, "_signature", original_signature)
     assert read().json()["items"] == first["items"]
     assert len(calls) == 1, "unchanged Inbox pages rebuilt durable projection"
     with SessionDB(db_path=path) as writer:
         writer._conn.execute("UPDATE sessions SET title='Changed' WHERE id='chat-000'")
         writer._conn.commit()
-    assert read(first["next_cursor"]).status_code == 409
+    retained = read(first["next_cursor"])
+    assert retained.status_code == 200
+    assert retained.json()["revision"] == first["revision"]
     fresh = read().json()
     assert fresh["revision"] != first["revision"]
     assert read(fresh["next_cursor"]).status_code == 200
     assert len(calls) == 2, "one relevant change must rebuild exactly once"
+    now = inbox.time.monotonic()
+    monkeypatch.setattr(inbox.time, "monotonic", lambda: now + 61)
+    assert read(first["next_cursor"]).status_code == 409
+    assert read(fresh["next_cursor"]).status_code == 409
 
 
 def test_cached_attention_is_not_frozen(inbox_reader, monkeypatch):
     _, read, _, _ = inbox_reader
     first = read().json()
+    tail = read(first["next_cursor"]).json()["items"]
     monkeypatch.setattr(inbox, "page_attention", lambda rows, home: {
         "chat-104": {"kind": "approval", "count": 1, "revision": "new-request"}})
-    assert read(first["next_cursor"]).status_code == 409
+    retained = read(first["next_cursor"])
+    assert retained.status_code == 200
+    assert retained.json()["revision"] == first["revision"]
+    assert retained.json()["items"] == tail
     fresh = read().json()
     assert fresh["revision"] != first["revision"]
     assert any(item["attention"] for item in fresh["items"])
@@ -51,13 +68,17 @@ def test_cached_attention_is_not_frozen(inbox_reader, monkeypatch):
 def test_cached_reply_refreshes_on_in_place_transcript_changes(inbox_reader, change):
     path, read, _, _ = inbox_reader
     first = read().json()
+    tail = read(first["next_cursor"]).json()["items"]
     with SessionDB(db_path=path) as writer:
         if change == "rewrite":
             writer._conn.execute("UPDATE messages SET timestamp=9000 WHERE session_id='chat-000'")
         else:
             writer._conn.execute("DELETE FROM messages WHERE session_id='chat-000'")
         writer._conn.commit()
-    assert read(first["next_cursor"]).status_code == 409
+    retained = read(first["next_cursor"])
+    assert retained.status_code == 200
+    assert retained.json()["revision"] == first["revision"]
+    assert retained.json()["items"] == tail
     assert read().json()["revision"] != first["revision"]
 
 

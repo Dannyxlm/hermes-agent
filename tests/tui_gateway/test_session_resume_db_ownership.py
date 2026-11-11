@@ -33,10 +33,12 @@ import types
 
 import pytest
 
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
+
 from tui_gateway import server
 
 
-class _RecordingDB:
+class _RecordingDB(EmptyQueueReceipts):
     """Stand-in for ``hermes_state.SessionDB`` that counts ``close()`` calls.
 
     Implements only the surface ``session.resume`` touches.
@@ -200,7 +202,7 @@ def test_resume_closes_profile_db_on_live_session_fast_path(profile_dbs, monkeyp
         return db
 
     monkeypatch.setattr("hermes_state_registry.acquire", _factory)
-    live_session = {}
+    live_session = {"session_key": "s1", "history_lock": threading.RLock()}
     with server._sessions_lock:
         server._sessions["live-sid"] = live_session
     monkeypatch.setattr(
@@ -254,7 +256,8 @@ def test_resume_hands_profile_db_to_deferred_history_worker(profile_dbs, monkeyp
     class _BlockingDB(_RecordingDB):
         def close(self):
             super().close()
-            close_completed.set()
+            if self is profile_dbs[0]:  # the control projection may open another short-lived handle
+                close_completed.set()
 
         def get_resume_conversations(self, _target):
             history_started.set()
@@ -309,6 +312,7 @@ def test_resume_keeps_profile_db_open_after_ownership_transfer(profile_dbs, monk
 
     def _fake_init_session(sid, key, agent, history, session_db=None, **_kwargs):
         captured["init_db"] = session_db
+        server._sessions[sid] = {"agent": agent, "session_key": key, "history_lock": threading.RLock()}
 
     monkeypatch.setattr("hermes_state_registry.acquire", _factory)
     monkeypatch.setattr(server, "_make_agent", _fake_make_agent)
@@ -352,7 +356,7 @@ def test_resume_drops_half_built_session_when_init_session_raises(
         # Same ordering as the real one: register, THEN read through the db.
         captured["sid"] = sid
         with server._sessions_lock:
-            server._sessions[sid] = {"agent": agent, "session_key": key}
+            server._sessions[sid] = {"agent": agent, "session_key": key, "history_lock": threading.RLock()}
         raise RuntimeError("database is locked")
 
     monkeypatch.setattr("hermes_state_registry.acquire", _factory)
@@ -400,7 +404,7 @@ def test_resume_eager_never_transfers_shared_launch_db(profile_dbs, monkeypatch)
 
     def _fake_init_session(sid, key, agent, history, session_db=None, **_kwargs):
         with server._sessions_lock:
-            server._sessions[sid] = {"agent": agent, "session_key": key}
+            server._sessions[sid] = {"agent": agent, "session_key": key, "history_lock": threading.RLock()}
 
     monkeypatch.setattr(server, "_make_agent", _fake_make_agent)
     monkeypatch.setattr(server, "_init_session", _fake_init_session)

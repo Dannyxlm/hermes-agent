@@ -55,12 +55,20 @@ def test_a_lost_delivery_claim_hands_the_turn_back(monkeypatch, claim):
     assert server._notif_claim_turn(session) is True, "the session must be claimable again"
 
 
-@pytest.mark.parametrize("fail_at", ["claim", "render"])
-def test_a_completion_batch_that_cannot_be_prepared_hands_the_turn_back(monkeypatch, fail_at):
+@pytest.mark.parametrize(("kind", "fail_at"), [
+    pytest.param("async_delegation", "claim", id="claim"),
+    pytest.param("async_delegation", "render", id="render"),
+    pytest.param("completion", "claim", id="claim-process"),
+    pytest.param("completion", "render", id="render-process"),
+])
+def test_a_completion_batch_that_cannot_be_prepared_hands_the_turn_back(monkeypatch, fail_at, kind):
     events = [{"type": "completion", "session_id": "proc_a"}, {"type": "completion", "session_id": "proc_b"}]
     released: list = []
-    claims = iter(["claim-a", sqlite3.OperationalError("database is locked")] if fail_at == "claim"
-                  else ["claim-a", "claim-b"])
+    if kind == "async_delegation":
+        events = [{"type": kind, "delegation_id": f"deleg-{i}"} for i in range(2)]
+    tokens = ["claim-a", "claim-b"] if kind == "async_delegation" else ["", ""]
+    claims = iter([tokens[0], sqlite3.OperationalError("database is locked")] if fail_at == "claim"
+                  else tokens)
 
     def _claim(evt, consumer):
         value = next(claims)
@@ -70,18 +78,23 @@ def test_a_completion_batch_that_cannot_be_prepared_hands_the_turn_back(monkeypa
 
     monkeypatch.setattr("tools.async_delegation.claim_event_delivery", _claim)
     monkeypatch.setattr("tools.async_delegation.release_event_delivery", lambda evt, c: released.append(c))
+    monkeypatch.setattr("tools.async_delegation.defer_completion_delivery", lambda d, c: released.append(c))
     if fail_at == "render":
         monkeypatch.setattr("tools.process_registry_notifications.ProcessNotificationBatch.render",
                             lambda self, registry: (_ for _ in ()).throw(ValueError("bad payload")))
     started = _no_turn(monkeypatch)
     session = {"history_lock": threading.RLock(), "running": False, "history": []}
 
+    returned = queue.Queue()
     server._notif_dispatch_completions("sid", session, [(e, "t") for e in events],
-                                       SimpleNamespace(completion_queue=queue.Queue()), None)
+                                       SimpleNamespace(completion_queue=returned), None)
 
     assert session["running"] is False and started == []
     # Claims already taken go back too, or those completions are lost to every consumer for 300 s.
-    assert released == (["claim-a"] if fail_at == "claim" else ["claim-a", "claim-b"])
+    expected = (["claim-a"] if fail_at == "claim" else ["claim-a", "claim-b"]) if kind == "async_delegation" else []
+    assert released == expected
+    assert [returned.get_nowait() for _ in events] == events
+    assert returned.empty()
 
 
 def test_a_loop_wakeup_whose_send_cannot_start_hands_the_turn_back(monkeypatch):

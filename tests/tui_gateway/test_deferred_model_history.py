@@ -81,7 +81,7 @@ def test_deferred_resume_preserves_model_history_and_db_ownership(tmp_path, monk
         session = server._sessions[sid]
         assert session["resume_history_ready"].wait(5)
         assert built.wait(5)
-        model_only = source == "desktop" and omit_messages
+        model_only = omit_messages  # noncanonical resumes hydrate model history only when display is omitted
         assert display_reads == ([] if model_only else ["display", "prefix"])
         assert session["history"] == expected
         assert session["display_history_prefix"] == ([] if model_only else prefix)

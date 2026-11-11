@@ -1,5 +1,7 @@
 """Notice presentation is additive: raw/model text remains unchanged."""
+import contextlib
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,16 +11,33 @@ from tui_gateway import server, event_replay
 
 @pytest.mark.parametrize("kind", ["async_delegation_complete", "process_complete", "hidden", "internal_notification"])
 def test_notice_start_survives_snapshot_and_replay(mobile_home, peer, monkeypatch, kind):
-    sid = "notice-runtime"
-    session = {"session_key": "fixture", "transport": peer, "history_lock": threading.RLock()}
+    sid = f"notice-runtime-{kind}"  # torn-down runtime ids are never reused in production
+    agent = SimpleNamespace(session_id="fixture")
+    session = {"session_key": "fixture", "transport": peer, "history_lock": threading.RLock(), "agent": agent}
     server._sessions[sid] = session
     submitted = []
-    monkeypatch.setattr(server, "_run_prompt_submit", lambda *a, **kw: submitted.append((a, kw)))
+    run_submit = server._run_prompt_submit
+
+    def submit(*args, **kwargs):
+        submitted.append((args, kwargs))
+        return run_submit(*args, **kwargs)
+
+    monkeypatch.setattr(server, "_run_prompt_submit", submit)
+    monkeypatch.setattr(server, "_ensure_session_db_row", lambda _session: True)
+    monkeypatch.setattr(server, "_admit_prompt_turn", lambda *a, **kw: ([], agent))
+    monkeypatch.setattr(server, "_routing_provenance_db", lambda _session: contextlib.nullcontext(None))
+    monkeypatch.setattr(server, "_reopen_routed_session_row", lambda *a: None)
+    # Admit through the real execution gate (which emits message.start), but never run inference.
+    monkeypatch.setattr(server, "_start_session_work", lambda *a, **kw: object())
     metadata = {"display_text": "background work finished", "task_count": 1}
     raw = "[ASYNC DELEGATION BATCH COMPLETE — raw envelope]"
-    server._notif_submit("rid", sid, session, raw, "notice", display_kind=kind, display_metadata=metadata)
+    assert server._notif_submit("rid", sid, session, raw, "notice", display_kind=kind, display_metadata=metadata) is True
     start = event_replay.events_since(sid, 0)[-1]
-    assert start["payload"]["presentation"] == {"display_kind": kind, **metadata}
+    if kind == "hidden":
+        # Hidden inputs have no display notice; only visible notice kinds carry presentation metadata.
+        assert not {"presentation", "display_kind", "display_text", "task_count"} & start["payload"].keys()
+    else:
+        assert start["payload"]["presentation"] == {"display_kind": kind, **metadata}
     snapshot = rpc("session.stream.snapshot", session_id=sid)["result"]
     assert snapshot["stream"]["start"] == start["payload"]
     replay = rpc("session.events.since", session_id=sid, last_seen=0)["result"]

@@ -2,6 +2,8 @@
 
 import json
 import threading
+
+from tests.tui_gateway.session_db_fakes import EmptyQueueReceipts
 import types
 from pathlib import Path
 
@@ -16,7 +18,7 @@ def test_session_resume_active_turn_payload_matches_desktop_fixture(server, monk
         )
     )
 
-    class _DB:
+    class _DB(EmptyQueueReceipts):
         def get_session(self, session_id):
             return {"id": session_id}
 
@@ -70,4 +72,5 @@ def test_session_resume_active_turn_payload_matches_desktop_fixture(server, monk
         "stored_session_id": fixture["session_key"],
         "stream": None,
     }
-    assert result == fixture
+    assert result == {**fixture, "info": {**fixture["info"],
+        "pending_submissions": [], "blocking_unknown": [], "queue_receipts": []}}
