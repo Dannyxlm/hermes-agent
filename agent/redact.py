@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import threading
+import time
 import unicodedata
 from urllib.parse import unquote_plus
 
@@ -1133,6 +1134,186 @@ def _is_qualified_key_name(key: str) -> bool:
     return any(w in _KEY_SECRET_QUALIFIERS for w in words[:-1])
 
 
+# Credential words that may sit in the MIDDLE of an env-style name, followed by a qualifier such
+# as a profile, account or environment: ``VENDOR_API_KEY_ALPHA``, ``SERVICE_TOKEN_PROD``,
+# ``DB_PASSWORD_MAIN``. Plurals stay out (``MAX_TOKENS_OVERRIDE`` is a limit, not a token).
+_INFIX_CREDENTIAL_WORDS = frozenset({
+    "apikey", "token", "secret", "password", "passwd", "credential", "credentials", "pat",
+})
+# ``<qualifier>_KEY`` pairs that count as one credential word: ``API_KEY``, ``PRIVATE_KEY``.
+_PAIRED_KEY_QUALIFIERS = _KEY_SECRET_QUALIFIERS | frozenset({"api"})
+# A word after the credential word that makes the field metadata ABOUT a credential, or data that
+# merely mentions one: ``GITHUB_TOKEN_PATH``, ``API_KEY_FILE``, ``CLIENT_SECRET_EXPIRES_AT``,
+# ``TOKEN_COUNT``, ``SSH_AUTH_SOCK``, ``TOKEN_ADDRESS``, ``PASSWORD_RESET``.
+_CREDENTIAL_METADATA_WORDS = frozenset({
+    "address", "age", "arn", "at", "audience", "backend", "budget", "cache", "callback", "changed",
+    "cmd", "command", "contract", "count", "counts", "created", "date", "decimals", "digest", "dir",
+    "directory", "dirs", "disabled", "domain", "email", "enabled", "endpoint", "env", "estimate",
+    "exists", "expiration", "expired", "expires", "expiry", "field", "fields", "file", "files",
+    "fingerprint", "format", "hash", "header", "headers", "helper", "hint", "host", "hosts", "id",
+    "ids", "index", "issuer", "kind", "label", "labels", "last", "len", "length", "limit", "limits",
+    "location", "manager", "max", "method", "methods", "min", "mint", "mode", "model", "name",
+    "names", "owner", "path", "paths", "pattern", "policy", "prefix", "present", "project",
+    "provider", "realm", "redirect", "ref", "refs", "regex", "region", "remaining", "required",
+    "reset", "rotated", "rule", "rules", "scope", "scopes", "set", "sha", "size", "sock", "socket",
+    "source", "status", "storage", "store", "strength", "suffix", "symbol", "tenant", "text",
+    "time", "timeout", "timestamp", "ttl", "type", "types", "updated", "uri", "url", "urls",
+    "usage", "used", "user", "username", "var", "vars", "version",
+})
+
+
+def _credential_word_spans(words: list[str], singles: frozenset):
+    """``(start, end)`` of every credential word in ``words``; a ``<qualifier> key`` pair is one."""
+    for i, word in enumerate(words):
+        if word in _PAIRED_KEY_QUALIFIERS and i + 1 < len(words) and words[i + 1] == "key":
+            yield i, i + 2
+        elif word in singles:
+            yield i, i + 1
+
+
+def _tail_is_qualifier(words: list[str], end: int) -> bool:
+    return not any(w in _CREDENTIAL_METADATA_WORDS for w in words[end:])
+
+
+def _is_suffixed_credential_name(key: str) -> bool:
+    """True for an env-style name with a credential word followed by a qualifier, not by metadata.
+
+    The suffix rules in ``_is_python_repr_secret_key`` only accept names that END in the word,
+    so ``VENDOR_API_KEY_ALPHA`` passed the repr and JSON passes in clear. Upper-case names only,
+    like ``_PYTHON_REPR_ENV_SUFFIXES``: snake/camel data fields (``token_address``,
+    ``password_reset``) describe a credential far more often than they hold one."""
+    if not key.isupper():
+        return False
+    words = _key_name_words(key)
+    return any(end < len(words) and _tail_is_qualifier(words, end)
+               for _, end in _credential_word_spans(words, _INFIX_CREDENTIAL_WORDS))
+
+
+def _is_suffixed_credential_assignment(key: str, value: str) -> bool:
+    """A suffixed credential name whose value is a credential, not a setting.
+
+    The value gate is stricter than for names that end in the word: ``APP_SECRET_MODE: vault``
+    or ``MAX_TOKEN_OUTPUT: 4096`` name a setting, so only password-class names mask any literal;
+    others need an opaque value."""
+    if not _is_suffixed_credential_name(key) or not _should_redact_assignment(key, value, check_keyword=False):
+        return False
+    return (_has_word_bounded_keyword(key, _PASSWORD_KEY_RE) or _has_password_keyword(key)
+            or _looks_like_opaque_credential(value))
+
+
+# ---------------------------------------------------------------------------
+# Exact env-value redaction
+# ---------------------------------------------------------------------------
+# Name and shape rules only see a value next to its name. A credential the process holds in its
+# environment can still be printed anywhere else: a wrapper dumping its execve env as a dict, a
+# config echo, a stack trace. Every credential-named env value is therefore masked by exact match,
+# after all other passes. Only distinctive values qualify, so ordinary words are never erased.
+#
+# Sources: ``os.environ`` plus the secret scope bound to the current context (a routed profile's
+# ``.env`` in a multiplex gateway). A routed profile's values are masked only while its scope is
+# bound, so log records formatted on the listener thread (no scope) get the process values only,
+# and one profile's output is never scrubbed with another profile's values.
+_ENV_SECRET_WORDS = frozenset({
+    "apikey", "token", "secret", "password", "passwd", "pass", "credential", "credentials",
+    "auth", "bearer", "pat",
+})
+# A bare ``KEY`` is a credential only next to one of these: ``VENDOR_API_TEAM_KEY``,
+# ``RELAY_PRIVATE_KEY``, ``API_SERVER_KEY``; never ``HERMES_SESSION_KEY``.
+_ENV_KEY_QUALIFIERS = _KEY_SECRET_QUALIFIERS | frozenset({
+    "api", "server", "client", "account", "license", "deploy", "developer", "admin", "service",
+    "app", "auth", "webhook", "password",
+})
+_ENV_SECRET_MIN_LEN = 12
+_ENV_SECRET_REFRESH_SECONDS = 2.0
+_ENV_SECRET_CACHE: tuple = (None, ())  # (monotonic refresh time, values longest first)
+_SCOPE_SECRET_CACHE: dict = {}         # id(scope) -> (scope, process values, merged values)
+_SCOPE_SECRET_CACHE_MAX = 8
+
+
+def _is_env_secret_name(name: str) -> bool:
+    if _is_glued_credential_env(name):  # PGPASSWORD, MYSQL_PWD, SSHPASS
+        return True
+    words = _key_name_words(name)
+    if not words:
+        return False
+    ends = [end for _, end in _credential_word_spans(words, _ENV_SECRET_WORDS)]
+    if words[-1] == "pw":  # ``DB_PW``; only last, ``PW_TEST_*`` is Playwright configuration
+        ends.append(len(words))
+    if "key" in words:
+        k = words.index("key")
+        if any(w in _ENV_KEY_QUALIFIERS for i, w in enumerate(words) if i != k):
+            ends.append(k + 1)
+    return any(_tail_is_qualifier(words, end) for end in ends)
+
+
+def _is_env_secret_value(value: str) -> bool:
+    if len(value) < _ENV_SECRET_MIN_LEN or value.isdigit() or not _looks_like_opaque_credential(value):
+        return False  # an all-digit value would also hit ids and JSON numbers
+    # A path or ``$VAR`` reference (``SSH_AUTH_SOCK``) is configuration, unless a segment is opaque.
+    if _PATH_OR_VAR_VALUE_RE.match(value):
+        return value[0] != "$" and any(_OPAQUE_PATH_SEGMENT_RE.fullmatch(s) for s in value.split("/"))
+    return True
+
+
+def _collect_env_secret_values(env) -> "tuple | None":
+    """Distinctive credential-named values in ``env``, longest first; ``None`` when unreadable."""
+    try:
+        items = list(env.items())
+    except Exception:  # health: allow BLE001 -- the caller keeps what it had
+        return None
+    values = set()
+    for name, value in items:
+        if isinstance(name, str) and isinstance(value, str):
+            value = value.strip()
+            if _is_env_secret_value(value) and _is_env_secret_name(name):
+                values.add(value)
+    return tuple(sorted(values, key=len, reverse=True))  # a substring never shadows its superstring
+
+
+def _reset_env_secret_value_cache() -> None:
+    """Forget the collected values; the next redaction re-reads the environment."""
+    global _ENV_SECRET_CACHE, _SCOPE_SECRET_CACHE
+    _ENV_SECRET_CACHE = (None, ())
+    _SCOPE_SECRET_CACHE = {}
+
+
+def _env_secret_values() -> tuple:
+    """Credential env values to mask: the process environment (re-read every couple of seconds,
+    since redaction runs on every log record) plus the bound secret scope, if any."""
+    global _ENV_SECRET_CACHE
+    stamp, values = _ENV_SECRET_CACHE
+    now = time.monotonic()
+    if stamp is None or now - stamp > _ENV_SECRET_REFRESH_SECONDS:
+        fresh = _collect_env_secret_values(os.environ)
+        values = values if fresh is None else fresh  # unreadable: keep masking what we had
+        _ENV_SECRET_CACHE = (now, values)
+    from agent.secret_scope import current_secret_scope
+    scope = current_secret_scope()
+    if not scope:
+        return values
+    cache = _SCOPE_SECRET_CACHE
+    hit = cache.get(id(scope))
+    # The entry holds the scope itself, so its id cannot be reused by another mapping meanwhile.
+    if hit is not None and hit[0] is scope and hit[1] is values:
+        return hit[2]
+    scope_values = _collect_env_secret_values(scope) or ()
+    merged = tuple(sorted(set(values) | set(scope_values), key=len, reverse=True)) if scope_values else values
+    if len(cache) >= _SCOPE_SECRET_CACHE_MAX:
+        try:
+            cache.pop(next(iter(cache)), None)
+        except (StopIteration, RuntimeError):  # another thread emptied or resized it: nothing to evict
+            pass
+    cache[id(scope)] = (scope, values, merged)
+    return merged
+
+
+def _redact_env_secret_values(text: str, *, file_read: bool) -> str:
+    for value in _env_secret_values():
+        if value in text:
+            text = text.replace(value, _mask_token_nonreusable(value) if file_read else "***")
+    return text
+
+
 def is_secret_field_name(key: object) -> bool:
     """True when a mapping field named ``key`` holds a credential — the repr-field policy, for callers
     that mask structured config by field instead of by text."""
@@ -1143,9 +1324,6 @@ def _redact_python_repr_fields(text: str) -> str:
     """Fully mask credential fields in Python mapping ``repr`` output."""
     def _sub(match: re.Match) -> str:
         key = match.group("key")
-        if not _is_python_repr_secret_key(key):
-            return match.group(0)
-
         single_value = match.group("single_value")
         if single_value is not None:
             prefix = match.group("single_prefix") or ""
@@ -1155,6 +1333,8 @@ def _redact_python_repr_fields(text: str) -> str:
             prefix = match.group("double_prefix") or ""
             quote = '"'
             value = match.group("double_value")
+        if not (_is_python_repr_secret_key(key) or _is_suffixed_credential_assignment(key, value)):
+            return match.group(0)
 
         # Mapping repr can contain code-shaped fixture values too. Preserve
         # programmatic env lookups just like the ENV/JSON/YAML passes do.
@@ -1284,16 +1464,22 @@ def _json_affixed_key_secret(key: str, value: str) -> bool:
     """Whether ``"key": "value"`` holds a credential under an affixed secret-word key (#147240)."""
     if _JSON_KEY_NAMES_FULL_RE.fullmatch(key):  # the closed-list pass already decided this field
         return False
+    if _DSN_PW_PLACEHOLDER_RE.fullmatch(value) or value.casefold() in _JSON_FLAG_VALUES:
+        return False
+    # ``VENDOR_API_KEY_ALPHA`` / ``GITHUB_PAT_ALPHA`` carry a qualifier after the credential
+    # word, not metadata: they hold one, under the same value gate the repr pass applies.
+    if _is_suffixed_credential_assignment(key, value):
+        return True
     if not (_has_word_bounded_keyword(key, _YAML_CFG_WORD_RE) or _has_password_keyword(key)):
         return False
-    if _DSN_PW_PLACEHOLDER_RE.fullmatch(value) or not _should_redact_assignment(key, value, check_keyword=True):
+    if not _should_redact_assignment(key, value, check_keyword=True):
         return False
     # A key that does not END in the credential word is metadata about one: ``passwordChanged``,
     # ``password_expires_at``, ``tokenUrl``, ``secret_id``, ``secret_arn``, ``PASSWORD_STORE_DIR``
     # carry timestamps, URLs and ids that look opaque, so the value shape cannot decide (#149435
     # review). A boolean answers ``has_password``, it does not hold one.
     # ``api_key_value`` / ``passwordValue`` hold the credential itself: drop that one suffix first.
-    return _is_python_repr_secret_key(_JSON_VALUE_SUFFIX_RE.sub("", key)) and value.casefold() not in _JSON_FLAG_VALUES
+    return _is_python_repr_secret_key(_JSON_VALUE_SUFFIX_RE.sub("", key))
 
 
 def _redact_json_affixed_key(m: "re.Match[str]", mask) -> str:
@@ -1582,7 +1768,10 @@ def redact_sensitive_text(text: str, *, force: bool = False, code_file: bool = F
     if "+" in text:
         text = _SIGNAL_PHONE_RE.sub(_redact_phone, text)
 
-    return text
+    # Last, so values the passes above already masked keep their format; this catches a
+    # credential env value printed away from its name (``{'VENDOR_API_KEY_ALPHA': '…'}``
+    # inside an execve dump, a bare echo), in source-preserving output as well.
+    return _redact_env_secret_values(text, file_read=file_read)
 
 
 # Commands whose stdout is an env-var dump: terminal redaction runs the
@@ -1732,7 +1921,10 @@ def is_env_dump_command(command: str | None) -> bool:
             tokens = shlex.split(seg)
         except ValueError:
             tokens = seg.split()
-        if tokens and tokens[0] in _ENV_DUMP_COMMANDS:
+        # A subshell group (``(env -u X python w.py; …)``) still starts with the dump command.
+        while tokens and tokens[0] == "(":
+            tokens = tokens[1:]
+        if tokens and tokens[0].strip("()") in _ENV_DUMP_COMMANDS:
             return True
     return False
 
