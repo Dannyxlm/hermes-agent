@@ -943,7 +943,7 @@ BROWSER_VAULT_SCHEMA = {
     "name": "browser_vault",
     "description": (
         "Fill saved logins, cards and addresses without exposing secrets. "
-        "Operates on the CURRENT browser page. "
+        "Operates on the CURRENT browser page; covers passwords and credentials. "
         "Actions: request_signin (Ava Desktop only: publish an owner-choice sign-in card and wait; reason required; never submits); list (call first: saved logins/cards/addresses as handles; logins carry the identifier you type "
         "yourself with the browser's input tool; locked password managers appear under `locked`); fill (handle: "
         "the password for a login, card fields after the user confirms, address fields; refused unless the page "

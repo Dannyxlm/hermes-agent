@@ -36,9 +36,16 @@ def test_first_turn_completes_reserved_route_without_losing_lineage(tmp_path, wo
             _session_row_model_config=lambda: dict(route), _cached_system_prompt='',
             _parent_session_id='parent',
         )
-        AIAgent._ensure_db_session(agent)
-        assert agent._session_db_created is True
-        assert agent._session_db_reserved is False
+        if worker:
+            # Workers merge constructor facts through their closed create operation;
+            # delegated local agents complete their reservation through SessionDB.
+            session_db.create_session('reserved', session_source_for('cli'), model='fixture-model',
+                                      model_config=route, parent_session_id='parent',
+                                      cwd=str(Path.cwd()), profile_name=get_active_profile_name())
+        else:
+            AIAgent._ensure_db_session(agent)
+            assert agent._session_db_created is True
+            assert agent._session_db_reserved is False
         assert json.loads(db.get_session('reserved')['model_config']) == {'_delegate_from': 'parent', **route}
     finally:
         if store is not None:

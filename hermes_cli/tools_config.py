@@ -407,8 +407,8 @@ _MCP_ENV_REFERENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _MCP_SECRET_KEY_RE = re.compile(
-    r"(?:^|_)(?:API[_-]?KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|"
-    r"AUTH|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)(?:_|$)|KEY$", re.IGNORECASE,
+    r"(?:^|[_-])(?:API[_-]?KEY|APIKEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|"
+    r"AUTH|PRIVATE[_-]?KEY|ACCESS[_-]?KEY)(?:[_-]|$)|KEY$", re.IGNORECASE,
 )
 _MCP_SECRET_LEAF_KEYS = frozenset({
     "access_token",

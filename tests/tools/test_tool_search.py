@@ -243,6 +243,14 @@ class TestRetrieval:
         names = [h.name for h in hits]
         assert names[0] == "github_create_issue"
 
+    @pytest.mark.parametrize("query", ["credentials", "saved credentials", "browser credentials", "passwords"])
+    def test_browser_vault_remains_discoverable_for_credential_lookup(self, query):
+        from tools.browser_vault_tool import BROWSER_VAULT_SCHEMA
+        from tools.tool_search import build_catalog, search_catalog
+
+        catalog = build_catalog([{"type": "function", "function": BROWSER_VAULT_SCHEMA}])
+        assert [hit.name for hit in search_catalog(catalog, query, limit=3)] == ["browser_vault"]
+
 
     def test_search_respects_limit(self):
         from tools.tool_search import search_catalog

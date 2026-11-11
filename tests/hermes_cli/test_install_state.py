@@ -18,7 +18,7 @@ def _isolated_service_definitions(tmp_path, monkeypatch):
 
     monkeypatch.setattr(known_dirs, "gateway_service_definition_globs", lambda: ())
     monkeypatch.setattr(known_dirs, "system_gateway_service_definition_globs", lambda: ())
-    monkeypatch.setattr(gateway_windows, "registered_task_launchers", lambda: [])
+    monkeypatch.setattr(gateway_windows, "registered_task_launchers", list)
 
 
 @pytest.fixture

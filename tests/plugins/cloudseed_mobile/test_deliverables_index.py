@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 from fastapi import HTTPException
 from plugins.cloudseed_mobile import deliverables_index as ix
-from tests.plugins.test_cloudseed_mobile import client, P
+from tests.plugins.test_cloudseed_mobile import client as client, P  # noqa: PLC0414 - pytest fixture
 from tests.plugins.cloudseed_mobile.test_workspace_files import setup_root
 
 
