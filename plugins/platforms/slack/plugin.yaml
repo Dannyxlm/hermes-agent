@@ -9,6 +9,11 @@ description: >
   commands, threads, mrkdwn rendering, approval blocks, free-response
   channels, mention gating, and channel skill bindings.
 author: NousResearch
+# Keep the platform install self-contained; the root all extra omits platform SDKs.
+python_dependencies:
+  - slack-bolt==1.30.0
+  - slack-sdk==3.45.0
+  - aiohttp==3.14.5
 requires_env:
   - name: SLACK_BOT_TOKEN
     description: "Slack bot token (xoxb-...)"

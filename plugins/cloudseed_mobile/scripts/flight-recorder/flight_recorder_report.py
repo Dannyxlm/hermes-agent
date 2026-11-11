@@ -52,6 +52,10 @@ BUDGETS = {
     'ChatOpenToPushEnd': ('ChatOpenToPushEnd', None),
     'TabToRootBody': ('TabToRootBody', None),
     'TabToRootAppear': ('TabToRootAppear', None),
+    'LaunchToRootMounted': ('LaunchToRootMounted', None),
+    'LaunchToAuthRestored': ('LaunchToAuthRestored', None),
+    'LaunchToSnapshotRestored': ('LaunchToSnapshotRestored', None),
+    'LaunchToShellAppeared': ('LaunchToShellAppeared', None),
 }
 TIMED_OUTCOMES = frozenset({'ok'})
 DEFAULT_LOGS = ('gui.log', 'errors.log', 'agent.log')

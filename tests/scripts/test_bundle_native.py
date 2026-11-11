@@ -469,7 +469,8 @@ def test_staged_cache_skips_build_inputs_before_copying(tmp_path, monkeypatch, p
 
 
 @pytest.mark.platforms("posix")
-def test_staged_cache_keeps_wheel_entries_as_links(tmp_path):
+@pytest.mark.parametrize("absolute", [False, True])
+def test_staged_cache_keeps_wheel_entries_as_links(tmp_path, absolute):
     """uv stores each cached wheel as a relative link into ``archive-v0/``. Following it
     shipped every unpacked wheel twice and handed the seed a directory where uv renames
     its own link (#141891); the payload must carry the link itself."""
@@ -479,7 +480,8 @@ def test_staged_cache_keeps_wheel_entries_as_links(tmp_path):
     (bucket / "pkg" / "__init__.py").write_text("shipped = True\n", encoding="utf-8")
     wheel = cache / "wheels-v6" / "pypi" / "pkg"
     wheel.mkdir(parents=True)
-    os.symlink("../../../archive-v0/bucket", wheel / "1.0-py3-none-any")
+    target = str(bucket) if absolute else "../../../archive-v0/bucket"
+    os.symlink(target, wheel / "1.0-py3-none-any")
 
     shipped = tmp_path / "payload" / "uv-cache"
     native.stage_uv_cache(cache, shipped)
@@ -488,6 +490,25 @@ def test_staged_cache_keeps_wheel_entries_as_links(tmp_path):
     assert link.is_symlink(), "staging followed the wheel link and copied the archive again"
     assert os.readlink(link) == "../../../archive-v0/bucket"
     assert (link / "pkg" / "__init__.py").read_text(encoding="utf-8") == "shipped = True\n"
+    assert os.readlink(wheel / "1.0-py3-none-any") == target
+    shutil.rmtree(cache)
+    assert (link / "pkg" / "__init__.py").read_text(encoding="utf-8") == "shipped = True\n"
+
+
+@pytest.mark.platforms("posix")
+def test_staged_cache_external_links_remain_refused(tmp_path):
+    from scripts.bundles.native_prepared import _check_links
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_text("not cache-owned")
+    (cache / "escape").symlink_to(outside)
+    out = tmp_path / "payload"
+    shipped = out / "uv-cache"
+    native.stage_uv_cache(cache, shipped)
+    with pytest.raises(ValueError, match="escaped prepared path"):
+        _check_links(shipped, out)
 
 
 SELF_BUILD_BACKEND = '''import os, zipfile
@@ -604,10 +625,11 @@ def test_staged_cache_ships_full_wheel_set_and_rebuilds_offline(tmp_path):
         # or built: a per-install venv rebuild must not depend on network
         # reachability for any package the payload already shipped.
         assert any(shipped.rglob("wheel_proof*")), "downloadable wheels ship in the full cache"
-        # uv's wheel entries are links into archive-v0/ (POSIX); each ships as the same link.
+        # Wheel links retain their cache-relative target, not an absolute build-machine path.
         for link in (path for path in cache.rglob("*") if path.is_symlink()):
             copy = shipped / link.relative_to(cache)
-            assert copy.is_symlink() and os.readlink(copy) == os.readlink(link), copy
+            assert copy.is_symlink() and not os.path.isabs(os.readlink(copy)), copy
+            assert copy.resolve().relative_to(shipped) == link.resolve().relative_to(cache)
         # The payload prunes its cache to the lock after staging; the rebuild below reads that.
         native.prune_uv_cache_to_lock(shipped, project)
 
@@ -615,6 +637,8 @@ def test_staged_cache_ships_full_wheel_set_and_rebuilds_offline(tmp_path):
         shutil.rmtree(cache, ignore_errors=True)
         shutil.rmtree(tmp_path / "first", ignore_errors=True)
         shutil.rmtree(project / ".venv", ignore_errors=True)
+        from scripts.bundles.native_prepared import _check_links
+        _check_links(shipped, shipped.parent)
         result = subprocess.run(
             [uv, "sync", "--python", sys.executable, "--frozen", "--offline"],
             env={**env, "UV_CACHE_DIR": str(shipped)}, cwd=project,

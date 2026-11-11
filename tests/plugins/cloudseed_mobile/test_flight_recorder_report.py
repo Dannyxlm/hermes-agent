@@ -50,6 +50,7 @@ def test_budget_keys_cover_every_span_name(report):
 @pytest.mark.parametrize('name', [
     'ChatOpenToDestination', 'ChatOpenToModel', 'ChatOpenToTranscriptBody',
     'ChatOpenToTranscriptAppear', 'ChatOpenToPushEnd', 'TabToRootBody', 'TabToRootAppear',
+    'LaunchToRootMounted', 'LaunchToAuthRestored', 'LaunchToSnapshotRestored', 'LaunchToShellAppeared',
 ])
 def test_subphases_survive_ingest_into_the_report(report, tmp_path, name):
     events = [{'kind': 'span', 't': T + i, 'name': name, 'outcome': 'ok', 'ms': ms,

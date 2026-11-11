@@ -293,7 +293,9 @@ def test_allowlists_match_the_app_schema_exactly():
                              'NotificationOpenToContent', 'InboxFreshAfterForeground', 'ChatOpenToBody',
                              'ChatOpenBodyToTranscript', 'ChatOpenDocParse', 'ChatOpenToDestination',
                              'ChatOpenToModel', 'ChatOpenToTranscriptBody', 'ChatOpenToTranscriptAppear',
-                             'ChatOpenToPushEnd', 'TabToRootBody', 'TabToRootAppear'}
+                             'ChatOpenToPushEnd', 'TabToRootBody', 'TabToRootAppear',
+                             'LaunchToRootMounted', 'LaunchToAuthRestored',
+                             'LaunchToSnapshotRestored', 'LaunchToShellAppeared'}
     assert fr.SPAN_OUTCOMES == {'ok', 'cancelled', 'abandoned', 'superseded', 'empty_verified', 'no_rows', 'no_keyboard'}
     assert fr.SCREENS == {'inbox', 'chats', 'chat', 'desktop', 'files', 'file_preview', 'settings', 'sign_in',
                           'flag', 'unknown'}
