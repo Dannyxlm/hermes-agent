@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -39,6 +40,26 @@ MARKER_TTL_S = 7 * 24 * 3600
 CLAIM_STALE_S = 120
 #: Admission outcome -> thread status.
 SETTLED = {"completed": "done", "failed": "failed", "interrupted": "stopped", "cancelled": "stopped"}
+
+# The framing ``thread_tool`` puts around a brief or a follow-up: a header naming the launching chat and a
+# fixed footer on the brief. Neither says what the work is about.
+_TOOL_HEADER = re.compile(rf"\A\s*{MARK} From [^\n]* \u00b7 thread tool[ \t]*(?:\n+|\Z)")
+_BRIEF_FOOTER = re.compile(r"\n+---\nYou're a thread [^\n]*? opened, a full chat with your own tools and skills\..*\Z", re.DOTALL)
+
+
+def recall_query_text(text: str) -> str:
+    """The text of a tool-sent thread message to search memory with: the message without its framing.
+
+    The header's chat title steers recall towards whatever the launching chat is about, and the launcher's
+    name alias-matches people pages, so every thread opened from one chat recalls the same pages whatever
+    its brief says. Text without the header (the user's own turns) is returned unchanged.
+    """
+    if not isinstance(text, str):
+        return text
+    header = _TOOL_HEADER.match(text)
+    if header is None:
+        return text
+    return _BRIEF_FOOTER.sub("", text[header.end():]).strip()
 
 
 def homes() -> dict[str, Path]:
