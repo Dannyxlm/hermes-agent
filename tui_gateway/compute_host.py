@@ -408,6 +408,15 @@ class ComputeHost:
                 # it. A RAISING _make_agent is the one path where nothing takes it (``owns_db``).
                 session_db = acquire(Path(profile_home) / "state.db")
                 owns_db = True
+            # This process never runs the dashboard's or stdio entry's MCP startup, and nothing else
+            # here starts discovery: without it every MCP tool and ``ctx.call_mcp`` consumer (memory
+            # recall) answers "unavailable" until someone reloads. Same call, same place (after the
+            # profile scope is bound), as the in-process build in session_registry.
+            try:
+                from tui_gateway.entry import ensure_mcp_discovery_started
+                ensure_mcp_discovery_started()
+            except Exception:
+                logging.getLogger(__name__).warning("MCP discovery startup failed", exc_info=True)
             agent = server._make_agent(
                 sid, key, session_id=key, model_override=frame.get("model_override"),
                 reasoning_config_override=frame.get("reasoning_config_override"),
