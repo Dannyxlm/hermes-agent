@@ -1298,8 +1298,21 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
             )
         stream_kwargs = _sanitize_consumer_codex_request(agent, next_api_kwargs)
         stream_kwargs["stream"] = True
+        wire_kwargs = bypass_sdk_request_transform(stream_kwargs)
+        from agent.codex_request_shape import start_probe
         from agent.tier_evidence import observe_tier_stream
-        return observe_tier_stream("responses", bypass_sdk_request_transform(stream_kwargs), active_client.responses.create)
+        # Opt-in (agent.codex_request_shape_ring): content-free shape of the bytes actually sent, for
+        # accepted and rejected attempts alike, so a bare 400 can be diffed against its predecessors.
+        shape_probe = start_probe(agent, call_role=call_role, stream_attempt=attempt + 1)
+        try:
+            stream = observe_tier_stream("responses", wire_kwargs, active_client.responses.create)
+        except BaseException as exc:
+            if shape_probe is not None:
+                shape_probe.failed(wire_kwargs, exc)
+            raise
+        if shape_probe is not None:
+            shape_probe.accepted(wire_kwargs, stream)
+        return stream
 
     def _log_failure(exc: BaseException) -> None:
         request_body_bytes, exception_chain = _codex_request_failure_details(exc)
