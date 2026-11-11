@@ -215,6 +215,10 @@ SCHEMA_HISTORY: dict[str, _TableHistory] = {
         )),
         # GW-18 (package 10, #140968): write-side revision a transcript-derived cache keys on.
         ('32 2026-10-18T10:11Z 1fc1999769', (('+', 'transcript_revision', 'tool_names'),)),
+        ('33 2026-10-24T12:06Z edd86cf58e', (
+            ('+', 'last_activity_kind', 'last_activity_description'),
+            ('+', 'last_activity_tool', 'last_activity_kind'),
+        )),
         ),
     ),
     "messages": _TableHistory(

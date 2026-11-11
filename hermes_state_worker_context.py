@@ -37,7 +37,11 @@ def worker_prompt(db, conn, session_id, payload):
 
 
 def worker_sidecars(db, conn, session_id, payload):
-    if set(payload) != {'patch'} or not isinstance(payload['patch'], dict) or set(payload['patch']) - SIDECAR_KEYS:
+    from hermes_state_worker_lifecycle import _CONSTRUCTOR_CONFIG
+    # Completing a reserved first turn may merge the same constructor facts
+    # already authorized by session.create, never identity or routing fields.
+    allowed = SIDECAR_KEYS | _CONSTRUCTOR_CONFIG
+    if set(payload) != {'patch'} or not isinstance(payload['patch'], dict) or set(payload['patch']) - allowed:
         raise RuntimeStoreError('invalid_params')
     merged = db._merge_model_config_json(conn, session_id, payload['patch'], on_missing='raise')
     conn.execute('UPDATE sessions SET model_config=? WHERE id=?', (merged, session_id))
