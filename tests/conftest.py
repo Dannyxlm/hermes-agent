@@ -388,6 +388,11 @@ def _hermetic_environment(tmp_path, tmp_path_factory, monkeypatch):
     tools_config_mod = sys.modules.get("hermes_cli.tools_config")
     if tools_config_mod is not None and hasattr(tools_config_mod, "_gateway_plugin_toolsets"):
         monkeypatch.setattr(tools_config_mod, "_gateway_plugin_toolsets", None)
+    # The redactor masks credential env values it collected (re-read every couple of seconds): a value
+    # one test set must not stay masked in the next test's output.
+    redact_mod = sys.modules.get("agent.redact")
+    if redact_mod is not None and hasattr(redact_mod, "_reset_env_secret_value_cache"):
+        redact_mod._reset_env_secret_value_cache()
 
     hermes_state_mod = sys.modules.get("hermes_state")
     if hermes_state_mod is not None and hasattr(hermes_state_mod, "DEFAULT_DB_PATH"):
