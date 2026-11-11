@@ -1,7 +1,8 @@
 """Opt-in content-free shape records for consumer-Codex requests (agent/codex_request_shape.py).
 
-The success and rejection paths run the real OpenAI SDK, with the production zstd request hook,
-against an ``httpx.MockTransport``. Records therefore come from the bytes that crossed the socket,
+The success and rejection paths run the real OpenAI SDK, with the production zstd request hook
+(opt-in via ``agent.codex_request_compression``; plain JSON is the default), against an
+``httpx.MockTransport``. Records therefore come from the bytes that crossed the socket,
 not from Hermes' kwargs.
 """
 from __future__ import annotations
@@ -67,8 +68,13 @@ class _Server:
 
 
 def _client(server: _Server, *, compress: bool = True) -> OpenAI:
-    hooks = codex_request_compression_hooks(CODEX_URL) if compress else None
-    assert hooks or not compress  # the production hook is active for the official Codex URL
+    hooks = None
+    if compress:  # the production hook, opted in the way a profile does it
+        from unittest.mock import patch
+
+        with patch("hermes_cli.config.load_config_readonly", return_value={"agent": {"codex_request_compression": True}}):
+            hooks = codex_request_compression_hooks(CODEX_URL)
+    assert hooks or not compress  # the production hook is active for the official Codex URL when opted in
     return OpenAI(api_key=SENTINELS["api_key"], base_url=CODEX_URL, max_retries=0,
                   http_client=httpx.Client(transport=httpx.MockTransport(server), event_hooks=hooks or {}))
 
@@ -164,7 +170,7 @@ def test_accepted_and_rejected_records_are_comparable_and_from_wire_bytes(monkey
     assert set(accepted["body"]) == set(rejected["body"])
     assert accepted["http_status"] == 200 and rejected["http_status"] == 400
     for record, wire in zip(records, server.bodies):
-        assert wire.startswith(shape._ZSTD_MAGIC)  # production consumer-Codex bodies are zstd on the wire
+        assert wire.startswith(shape._ZSTD_MAGIC)  # opted-in consumer-Codex bodies are zstd on the wire
         assert record["source"] == "wire_bytes" and record["body"]["encoding"] == "zstd"
         assert record["body"]["wire_bytes"] == len(wire)  # exact transmitted size
         assert record["body"]["bytes"] == len(zstd.decompress(wire))  # exact JSON body size

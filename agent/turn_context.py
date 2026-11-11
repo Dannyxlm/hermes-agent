@@ -981,9 +981,14 @@ def _memory_turn_start_and_prefetch(
             author_is_bot=bool(_author.get("is_bot")),
         )
     ext_prefetch_cache = ""
+    # A thread's brief or follow-up recalls on its own text, not on the thread tool's framing.
+    _recall_query = _query
     with suppress(Exception):
-        if not is_trivial_prompt(_query):
-            ext_prefetch_cache = agent._memory_manager.prefetch_all(_query, session_id=agent.session_id or "") or ""
+        from tools.thread_state import recall_query_text
+        _recall_query = recall_query_text(_query)
+    with suppress(Exception):
+        if not is_trivial_prompt(_recall_query):
+            ext_prefetch_cache = agent._memory_manager.prefetch_all(_recall_query, session_id=agent.session_id or "") or ""
     # Deterministic recall indicator via _emit_status so the model can't silently
     # drop injected memory.
     if ext_prefetch_cache:
