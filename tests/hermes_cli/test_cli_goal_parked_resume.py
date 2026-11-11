@@ -29,7 +29,10 @@ class _Cli(CLILoopsMixin):
         return self._mgr
 
 
-def test_idle_hook_queues_the_continuation_when_a_timed_barrier_has_elapsed(hermes_home):
+def test_idle_hook_queues_the_continuation_when_a_timed_barrier_has_elapsed(hermes_home, monkeypatch):
+    # Setup/import cost must not consume the one-second barrier before the first check.
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now)
     mgr = goals.GoalManager(session_id="resume-idle")
     mgr.set("finish the thing")
     mgr.wait_for_seconds(1, reason="cooldown")

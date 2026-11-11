@@ -12,19 +12,22 @@ import httpx
 from scripts.mobile_protocol_lab import verify_protocol
 
 
-def test_real_native_protocol_and_shared_persistence():
+def test_real_native_protocol_and_shared_persistence(tmp_path):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     root = Path(__file__).resolve().parents[2]
-    process = subprocess.Popen(
-        [sys.executable, str(root / "scripts/mobile_protocol_lab.py"), "--port", str(port)],
-        cwd=root, env=dict(os.environ), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    startup_log = tmp_path / "protocol-lab.log"
+    with startup_log.open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(
+            [sys.executable, str(root / "scripts/mobile_protocol_lab.py"), "--port", str(port)],
+            cwd=root, env=dict(os.environ), stdout=output, stderr=subprocess.STDOUT)
     try:
         base_url = f"http://127.0.0.1:{port}"
         with httpx.Client(timeout=0.5, trust_env=False) as client:
             for _ in range(100):
-                assert process.poll() is None, "disposable fixture exited before startup"
+                assert process.poll() is None, (
+                    "disposable fixture exited before startup:\n" + startup_log.read_text(encoding="utf-8"))
                 try:
                     if client.get(base_url + "/fixture/native-credentials").status_code == 200:
                         break

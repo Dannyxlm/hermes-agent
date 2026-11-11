@@ -303,12 +303,17 @@ def test_git_dates_added_is_first_commit_updated_is_last_and_renames_keep_added(
 
     dates = mod.load_git_dates(catalog)
 
-    assert dates["alpha.yaml"] == {"addedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-02-01T00:00:00Z"}
-    assert dates["new-name.yaml"] == {"addedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-03-01T00:00:00Z"}
+    # Git versions serialize the same UTC offset as either +00:00 or Z.
+    # Keep the exact dates and rename semantics, not Git's spelling of UTC.
+    def utc_dates(record):
+        return {key: value.replace("+00:00", "Z") for key, value in record.items()}
+
+    assert utc_dates(dates["alpha.yaml"]) == {"addedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-02-01T00:00:00Z"}
+    assert utc_dates(dates["new-name.yaml"]) == {"addedAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-03-01T00:00:00Z"}
     entries = mod.load_catalog_entries(catalog, dates=dates)
     by_name = {e["name"]: e for e in entries}
-    assert by_name["alpha"]["addedAt"] == "2026-01-01T00:00:00Z"
-    assert by_name["alpha"]["updatedAt"] == "2026-02-01T00:00:00Z"
+    assert by_name["alpha"]["addedAt"].replace("+00:00", "Z") == "2026-01-01T00:00:00Z"
+    assert by_name["alpha"]["updatedAt"].replace("+00:00", "Z") == "2026-02-01T00:00:00Z"
 
 
 def test_git_dates_are_null_outside_a_repository(mod, tmp_path):

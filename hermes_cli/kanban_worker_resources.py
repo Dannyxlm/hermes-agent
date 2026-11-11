@@ -37,7 +37,8 @@ def _scope_command(unit: str, *args: str) -> str:
     try:
         result = subprocess.run(
             ["systemctl", "--user", *args, unit], env=systemd_user_bus_env(),
-            capture_output=True, text=True, timeout=3, check=False,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=3, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log.warning("Cannot inspect Kanban scope %s: %s", unit, exc)

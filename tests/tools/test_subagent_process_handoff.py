@@ -7,6 +7,9 @@ named on the child's result as orphaned before teardown kills it.
 """
 
 import json
+import shlex
+import socket
+import sys
 import time
 import weakref
 
@@ -57,8 +60,19 @@ def test_handed_off_process_completion_reaches_parent_and_leftover_is_reported(c
     parent = _Parent()
     child = _Child(parent)
     _register(sid, child)
+    gate = socket.socket()
+    gate.bind(("127.0.0.1", 0))
+    gate.listen()
+    gate.settimeout(10)
+    peer = None
     try:
-        handed = process_registry.spawn_local("sleep 0.4; echo ci-green", task_id=sid, owner_task_id=sid)
+        # Keep the child alive until ownership is transferred, regardless of
+        # config/receipt I/O spent spawning its sibling on a busy machine.
+        code = (f"import socket; s=socket.create_connection({gate.getsockname()!r}); "
+                "s.recv(1); print('ci-green')")
+        handed = process_registry.spawn_local(
+            f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}", task_id=sid, owner_task_id=sid)
+        peer, _ = gate.accept()
         handed.notify_on_complete = True
         leftover = process_registry.spawn_local("sleep 30", task_id=sid, owner_task_id=sid)
 
@@ -70,6 +84,8 @@ def test_handed_off_process_completion_reaches_parent_and_leftover_is_reported(c
 
         # Only the un-handed sibling is left in the child's name — this is what the result entry reports as orphaned.
         assert [s.id for s in process_registry.running_owned_by(sid)] == [leftover.id]
+        assert not handed.exited
+        peer.sendall(b"x")
 
         # Let it exit on its own — a registry wait() would mark the completion consumed (that is the parent-observed path).
         deadline = time.time() + 10
@@ -84,6 +100,9 @@ def test_handed_off_process_completion_reaches_parent_and_leftover_is_reported(c
         assert evt["owner_task_id"] == "parent-turn-1"
         assert "Handed off to you by a subagent" in text and "CI watcher for PR 1" in text
     finally:
+        if peer is not None:
+            peer.close()
+        gate.close()
         process_registry.kill_all(source="test")
         _unregister_subagent(sid)
 

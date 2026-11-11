@@ -234,13 +234,14 @@ def _make_cli():
     cli.max_turns = 5
     cli.enabled_toolsets = []
     cli._session_db = None
+    cli.session_id = "background-parent"
     cli.reasoning_config = None
     cli.service_tier = None
     for attr in ("_providers_only", "_providers_ignore", "_providers_order", "_provider_sort",
                  "_provider_require_params", "_provider_data_collection",
                  "_openrouter_min_coding_score", "_fallback_model",
                  "_sudo_password_callback", "_approval_callback", "_vault_unlock_callback",
-                 "_vault_save_login_callback", "_secret_capture_callback"):
+                 "_vault_save_login_callback", "_vault_code_callback", "_secret_capture_callback"):
         setattr(cli, attr, None)
     cli._ensure_runtime_credentials = lambda: True
     cli._resolve_turn_agent_config = lambda prompt: {

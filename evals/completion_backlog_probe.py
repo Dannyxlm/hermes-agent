@@ -23,6 +23,21 @@ from urllib.request import Request, urlopen
 
 
 def probe(surface, scenario, directory):
+    # Each registry models a fresh installation. Durable completions from an
+    # earlier scenario must not be restored into another scenario's reused owner.
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home = Path(directory).resolve() / 'hermes'
+    home.mkdir(parents=True, exist_ok=True)
+    token = set_hermes_home_override(None)
+    try:
+        with patch.dict(os.environ, {'HERMES_HOME': str(home)}):
+            return _probe(surface, scenario, directory)
+    finally:
+        reset_hermes_home_override(token)
+
+
+def _probe(surface, scenario, directory):
     from cli import HermesCLI
     from tools import process_registry as pr
     from tools.process_registry_notifications import format_process_notification
