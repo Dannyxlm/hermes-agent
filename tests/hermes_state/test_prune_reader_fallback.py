@@ -25,7 +25,7 @@ print('deleted and writable')
         [sys.executable, '-c', script, str(tmp_path / 'state.db')],
         cwd=Path(__file__).resolve().parents[2],
         env={**os.environ, 'HERMES_HOME': str(tmp_path)},
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=15, check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'deleted and writable'
