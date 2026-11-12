@@ -49,6 +49,7 @@ FAST, SLOW = "fast", "slow"
 READ_METHODS = {
     # Session-bound projections of an attached session's live state.
     "session.context_breakdown": SLOW, "subagent.list": SLOW, "process.list": FAST,
+    "session.transcript": SLOW,
     # Process- and store-wide rosters (Inbox, Agents, Projects, model picker, skill review, usage).
     "profiles.list": SLOW, "session.family": SLOW, "family.overview": SLOW, "model.options": SLOW,
     "skills.changes.list": SLOW, "usage.rollup": SLOW,
