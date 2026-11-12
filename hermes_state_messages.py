@@ -29,6 +29,7 @@ from hermes_state_compaction_display import later_tool_copy_ids, not_a_later_too
 from hermes_state_detached_results import SessionDetachedResultsMixin
 from hermes_state_todo import SessionTodoResultMixin
 from hermes_state_stored_reads import SessionStoredReadsMixin
+from hermes_state_message_archive import SessionMessageArchiveMixin
 from hermes_state_identity import (
     _absorbed_uids_json, _restore_identity_columns, _stable_tool_key, _tool_call_uid_map, _tool_call_uid_or_none, _tool_call_uids_json, _uid_list)
 
@@ -92,7 +93,8 @@ def _stale_holder(row, now: float) -> bool:
     return float(row["expires_at"]) <= now or _compression_lock_holder_process_is_dead(row["holder"])
 
 
-class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, SessionStoredReadsMixin):
+class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, SessionStoredReadsMixin,
+                           SessionMessageArchiveMixin):
     """Message append/replace/rewind, reactions, resume conversations, replay dedupe (detached results: the base)."""
 
     def _bump_conversation_generation(self, conn, session_id: str, end_reason: str) -> None:
@@ -2009,38 +2011,3 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         if affected_ids:
             logger.info("Permanently cleared %d stale tool-call marker row(s) in state.db (#78148)", len(affected_ids))
         return _result(affected_ids, backup_path)
-
-
-    def archive_session_messages(
-        self,
-        session_ids: list[str],
-        turn_lease_holder: Optional[str] = None,
-    ) -> int:
-        """Soft-retire active messages for several compression segments."""
-        unique_ids = list(dict.fromkeys(
-            sid for sid in session_ids if isinstance(sid, str) and sid
-        ))
-        if not unique_ids:
-            return 0
-
-        def _do(conn):
-            if turn_lease_holder:
-                self._assert_session_turn_lease_holder_on_conn(
-                    conn,
-                    unique_ids,
-                    turn_lease_holder,
-                )
-            placeholders = ",".join("?" * len(unique_ids))
-            cursor = conn.execute(
-                f"UPDATE messages SET active = 0, compacted = 0 "
-                f"WHERE active = 1 AND session_id IN ({placeholders})",
-                unique_ids,
-            )
-            conn.execute(
-                f"UPDATE sessions SET message_count = 0, tool_call_count = 0 "
-                f"WHERE id IN ({placeholders})",
-                unique_ids,
-            )
-            return cursor.rowcount
-
-        return int(self._execute_write(_do) or 0)

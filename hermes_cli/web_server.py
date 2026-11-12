@@ -46,6 +46,7 @@ from hermes_cli.version_info import get_version_info
 from hermes_cli.web_server_managed_status import (
     _managed_marker_destination_available, _write_managed_update_marker,
     _managed_nonnegative_int, _managed_read_bounded_json, _managed_safe_string, _managed_timestamp,
+    _managed_candidate_request_matches, _managed_update_now, _managed_update_train_enabled,
 )
 
 try:
@@ -400,10 +401,6 @@ _MANAGED_UPDATE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _MANAGED_UPDATE_TRACKED_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
-def _managed_update_now() -> datetime:
-    return datetime.now(UTC)
-
-
 def _managed_update_max_age_seconds() -> int:
     """Return a bounded source-monitor stale threshold.
 
@@ -420,11 +417,6 @@ def _managed_update_max_age_seconds() -> int:
         _MANAGED_UPDATE_MIN_MAX_AGE_SECONDS,
         min(_MANAGED_UPDATE_MAX_MAX_AGE_SECONDS, configured),
     )
-
-
-def _managed_update_train_enabled() -> bool:
-    """Require an explicit deployment opt-in for candidate requests."""
-    return os.environ.get("HERMES_MANAGED_UPDATE_TRAIN_ENABLED", "").strip() == "1"
 
 
 def _managed_source_base(
@@ -691,17 +683,6 @@ def _request_managed_source_refresh() -> dict[str, Any]:
         "requested": requested,
         "error": None if requested else "refresh_request_unavailable",
     }
-
-
-def _managed_candidate_request_matches(
-    payload: Optional[dict[str, Any]], source: dict[str, Any]
-) -> bool:
-    return bool(
-        payload
-        and payload.get("schema_version") == "hermes-update-candidate-request.v1"
-        and payload.get("tracked_upstream") == source.get("tracked_upstream")
-        and payload.get("upstream_head") == source.get("upstream_head")
-    )
 
 
 def _managed_update_check_payload(*, request_refresh: bool) -> dict[str, Any]:

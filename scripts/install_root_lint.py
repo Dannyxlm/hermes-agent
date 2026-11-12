@@ -11,6 +11,8 @@
 
 Production code is pyproject's ``packages.find`` packages and the root ``*.py`` modules. Not caught: a
 climb through a variable (``_pkg = Path(__file__).parent`` then ``_pkg.parent``).
+Exact pre-import entry-point bootstraps, lexical traceback roots and the standalone plugin-demo
+fixture bootstrap are classified separately below: the realpath resolver cannot replace them.
 
 Existing sites never fail anything. ``scripts/install_root_lint_baseline.json`` counts them per kind
 and file; the lint fails only when a file's count rises above it. Run ``--update`` after removing a
@@ -127,16 +129,49 @@ def _edits_sys_path(stmt: ast.stmt) -> bool:
     return any(target is not None and ast.unparse(target).split("[")[0] == "sys.path" for target in targets)
 
 
+def _non_resolver_nodes(rel: Path, tree: ast.Module) -> set[ast.AST]:
+    """Only the reviewed statement in its owning scope, never a file/line-wide exemption."""
+    statements = []
+    if rel.as_posix() in {"hermes_cli/launch_unit.py", "hermes_cli/release_turns.py"}:
+        # Like main.py's bootstrap, these must select this tree BEFORE package imports.
+        # release_turns also runs under -I, where even sibling imports are unavailable.
+        bootstrap = "sys.path.insert(0, str(Path(__file__).resolve().parents[1]))"
+        for stmt in tree.body:
+            if (isinstance(stmt, ast.If) and _script_only_branches(stmt.test) == ("body", "orelse")
+                    and stmt.body and ast.unparse(stmt.body[0]) == bootstrap):
+                statements.append(stmt.body[0])
+                break
+    elif rel.as_posix() == "tui_gateway/methods_mobile_push.py":
+        # co_filename retains the imported `current` symlink spelling. project_root_str()
+        # realpaths it and would misclassify Hermes frames as external library frames.
+        scope = next((stmt for stmt in tree.body if isinstance(stmt, ast.FunctionDef)
+                      and stmt.name == "_raise_site"), None)
+        if scope is not None:
+            statements = [stmt for stmt in scope.body if ast.unparse(stmt) == "root = Path(__file__).parent.parent"][:1]
+    elif rel.as_posix() == "plugins/duty-board/dev/demo_home.py":
+        # This vendored standalone demo selects PLUGIN-local test fixtures, not Hermes.
+        # Keep its bootstrap only when both the root binding and fixture import match.
+        bootstrap = ("ROOT = Path(__file__).resolve().parents[1]", "sys.path.insert(0, str(ROOT))",
+                     "from tests.fixtures.make_home import add_lease, add_message, add_session, make_home")
+        for index in range(len(tree.body) - 2):
+            if tuple(ast.unparse(stmt) for stmt in tree.body[index:index + 3]) == bootstrap:
+                statements.append(tree.body[index + 1])
+                break
+    return {node for stmt in statements for node in ast.walk(stmt)}
+
+
 def collect(root: Path = ROOT) -> dict[str, list[str]]:
     """Per kind, ``["<rel>:<line>", ...]``."""
     found: dict[str, set[tuple[str, int]]] = {kind: set() for kind in KINDS}
     for rel in production_files(root):
         tree = ast.parse((root / rel).read_text(encoding="utf-8-sig"))
+        non_resolver = _non_resolver_nodes(rel, tree)
         for node in ast.walk(tree):
-            if isinstance(node, ast.expr) and (levels := climb(node)) is not None and levels >= len(rel.parts):
+            if (node not in non_resolver and isinstance(node, ast.expr)
+                    and (levels := climb(node)) is not None and levels >= len(rel.parts)):
                 found["root_from_file"].add((rel.as_posix(), node.lineno))
         for stmt in _module_level(tree.body):
-            if _edits_sys_path(stmt):
+            if stmt not in non_resolver and _edits_sys_path(stmt):
                 found["module_sys_path"].add((rel.as_posix(), stmt.lineno))
     return {kind: [f"{rel}:{line}" for rel, line in sorted(sites)] for kind, sites in found.items()}
 

@@ -14,6 +14,10 @@ import time
 import unicodedata
 from urllib.parse import unquote_plus
 
+from agent.redact_pattern_structure import (
+    _extract_literal_prefix, _has_nested_unbounded_repeat, _has_top_level_alternation,
+)
+
 # Shared with agent/file_safety's read-block list so the two defenses can't
 # drift: a blocked file_tools read that falls back to ``cat`` is still caught.
 from agent.file_safety import _BLOCKED_PROJECT_ENV_BASENAMES as _ENV_FILE_BASENAMES
@@ -2020,79 +2024,6 @@ def redact_terminal_output(output: str, command: str | None = None, *, force: bo
 
 # --- Prefix pre-screen: derived from _PREFIX_PATTERNS so a new prefix can't
 # silently break the gate (every match contains its pattern's literal prefix).
-
-def _extract_literal_prefix(pattern: str) -> str:
-    """Leading literal chars of a regex (up to the first metacharacter)."""
-    meta = "[(\\.?*+|{^$"
-    for i, ch in enumerate(pattern):
-        if ch in meta:
-            return pattern[:i]
-    return pattern
-
-
-def _skip_char_class(pattern: str, i: int) -> int:
-    """Given ``pattern[i] == "["``, return the index just past the closing ``]``."""
-    i += 2 if pattern[i + 1:i + 2] == "]" else 1  # a leading "]" is literal
-    while i < len(pattern) and pattern[i] != "]":
-        i += 2 if pattern[i] == "\\" else 1
-    return i
-
-
-def _unbounded_quantifier_follows(pattern: str, j: int) -> bool:
-    """True if an open-ended quantifier (``*``, ``+``, ``{m,}``) starts at ``pattern[j]``."""
-    if j >= len(pattern):
-        return False
-    if pattern[j] in "*+":
-        return True
-    if pattern[j] == "{":
-        k = pattern.find("}", j)
-        body = pattern[j + 1:k] if k != -1 else ""
-        return body[:-1].isdigit() and body.endswith(",")  # {m,} is open-ended; {m} / {m,n} bounded
-    return False
-
-
-def _pattern_structure(pattern: str) -> tuple[bool, bool]:
-    """One scan → ``(has_top_level_alternation, has_nested_unbounded_repeat)``.
-
-    Top-level ``|`` defeats the literal-prefix guarantee (in ``ab|.*`` the prefix
-    binds only the first branch; ``ab(?:x|y)`` is fine). An unbounded quantifier
-    on a group containing one (``(a+)+``, ``(a{2,})+``) is the canonical ReDoS
-    shape. Structural only; overlapping branches (``(a|aa)+``) are not detected.
-    """
-    top_level_alt = nested = False
-    contains_unbounded = [False]  # per open group: does it contain an unbounded repeat?
-    i = 0
-    while i < len(pattern):
-        ch = pattern[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if ch == "[":
-            i = _skip_char_class(pattern, i)
-        elif ch == "(":
-            contains_unbounded.append(False)
-        elif ch == ")":
-            inner = contains_unbounded.pop() if len(contains_unbounded) > 1 else False
-            if inner and _unbounded_quantifier_follows(pattern, i + 1):
-                nested = True
-            contains_unbounded[-1] = contains_unbounded[-1] or inner
-        elif ch == "|" and len(contains_unbounded) == 1:
-            top_level_alt = True
-        elif _unbounded_quantifier_follows(pattern, i):
-            contains_unbounded[-1] = True
-            if ch == "{":
-                i = pattern.find("}", i)  # skip the {m,} body
-        i += 1
-    return top_level_alt, nested
-
-
-def _has_top_level_alternation(pattern: str) -> bool:
-    return _pattern_structure(pattern)[0]
-
-
-def _has_nested_unbounded_repeat(pattern: str) -> bool:
-    return _pattern_structure(pattern)[1]
-
 
 _PREFIX_SUBSTRINGS = tuple(_extract_literal_prefix(p) for p in _PREFIX_PATTERNS)
 

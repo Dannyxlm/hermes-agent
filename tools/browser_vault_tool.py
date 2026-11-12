@@ -628,49 +628,66 @@ def _identifier_fill(classified: list, password_fill: list[dict[str, Any]], iden
     return [{"index": best.control.index, "token": best.token, "value": identifier}]
 
 
+def _inspect_fill_controls(effective_task_id: str, kind: str, classify):
+    """(nonce, classified controls) or (None, error-json), bound to this fresh inspection."""
+    from agent.vault_login_classifier import ClassifiedLoginControl, LoginControl, build_inspection_js
+    nonce = secrets.token_hex(8)
+    inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
+    if not inspect.get("success"):
+        return None, json.dumps(
+            {"success": False, "error": f"Could not inspect page inputs: {inspect.get('error', 'eval failed')}"})
+    raw_controls = _parse_json_result(inspect.get("result"))
+    if isinstance(raw_controls, str):
+        raw_controls = _parse_json_result(raw_controls)
+    if not isinstance(raw_controls, list):
+        return None, json.dumps({"success": False, "error": "Page input inspection returned no usable controls."})
+    found: list[ClassifiedLoginControl] = []
+    for raw in raw_controls:
+        if not isinstance(raw, dict):
+            continue
+        result = classify(LoginControl.from_dict(raw))
+        if result is not None:
+            found.append(result)
+    if not found:
+        return None, json.dumps({"success": False, "error": f"No {kind} form fields were found on the current page."})
+    return nonce, found
+
+
+def _reinspect_approved_payment(effective_task_id: str, kind: str, classify, page_origin: str,
+                               payment: dict, receipt: dict, with_receipt):
+    """Fresh controls after approval, or an error receipt if origin/checkout facts no longer match."""
+    # The human wait can be minutes: the page may have navigated or re-rendered since the first look.
+    if _current_page_origin(effective_task_id) != page_origin:
+        return None, json.dumps({"success": False, "error_type": "origin_changed", "payment": receipt,
+                                "error": f"Refused: the page left {page_origin} while the user was approving. Nothing was written."})
+    nonce, classified = _inspect_fill_controls(effective_task_id, kind, classify)
+    if nonce is None:
+        out = json.loads(classified)
+        out["payment"] = receipt
+        return None, json.dumps(out)
+    # Same-origin cart edits invalidate the approved snapshot just as navigation does.
+    # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
+    current_summary = _checkout_summary(effective_task_id)
+    if _checkout_changed(payment, current_summary):
+        return None, with_receipt({
+            "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
+            "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
+                     "Ask the user for a fresh payment request; never replay this approval."})
+    return nonce, classified
+
+
 def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, effective_task_id: str,
                      with_identifier: bool = False) -> str:
     """Inspect the page, resolve the item's secret and write it; runs inside the backend's fill_context
     after the origin guard passed. ``with_identifier`` also writes the login's (non-secret) identifier."""
     from agent.redact import register_vault_redaction_value
-    from agent.vault_login_classifier import (
-        ClassifiedLoginControl,
-        LoginControl,
-        build_fill_js,
-        build_inspection_js,
-        classify_checkout_control,
-        classify_login_control,
-    )
+    from agent.vault_login_classifier import build_fill_js, classify_checkout_control, classify_login_control
     from agent.vault_backends import UnlockRequired
     from agent.vault_store import VaultError, scrub_secret_from_text
 
     # ── Inspect + classify page controls ────────────────────────────────────
     classify = classify_login_control if meta.kind == "login" else classify_checkout_control
-
-    def inspect_controls():
-        """(nonce, classified controls) or (None, error-json). The nonce binds a fill to THIS inspection."""
-        nonce = secrets.token_hex(8)
-        inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
-        if not inspect.get("success"):
-            return None, json.dumps(
-                {"success": False, "error": f"Could not inspect page inputs: {inspect.get('error', 'eval failed')}"})
-        raw_controls = _parse_json_result(inspect.get("result"))
-        if isinstance(raw_controls, str):
-            raw_controls = _parse_json_result(raw_controls)
-        if not isinstance(raw_controls, list):
-            return None, json.dumps({"success": False, "error": "Page input inspection returned no usable controls."})
-        found: list[ClassifiedLoginControl] = []
-        for raw in raw_controls:
-            if not isinstance(raw, dict):
-                continue
-            result = classify(LoginControl.from_dict(raw))
-            if result is not None:
-                found.append(result)
-        if not found:
-            return None, json.dumps({"success": False, "error": f"No {meta.kind} form fields were found on the current page."})
-        return nonce, found
-
-    nonce, classified = inspect_controls()
+    nonce, classified = _inspect_fill_controls(effective_task_id, meta.kind, classify)
     if nonce is None:
         return classified
 
@@ -694,23 +711,10 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
                           "The user did not confirm filling this payment card. Do not retry; ask them instead."),
                 "payment": _payment_receipt(payment, "expired" if expired else "declined", details, filled=False)})
         receipt = _payment_receipt(payment, "approved", details, filled=False)
-        # The human wait can be minutes: the page may have navigated or re-rendered since the first look.
-        if _current_page_origin(effective_task_id) != page_origin:
-            return json.dumps({"success": False, "error_type": "origin_changed", "payment": receipt,
-                               "error": f"Refused: the page left {page_origin} while the user was approving. Nothing was written."})
-        nonce, classified = inspect_controls()
+        nonce, classified = _reinspect_approved_payment(
+            effective_task_id, meta.kind, classify, page_origin, payment, receipt, with_receipt)
         if nonce is None:
-            out = json.loads(classified)
-            out["payment"] = receipt
-            return json.dumps(out)
-        # Same-origin cart edits invalidate the approved snapshot just as navigation does.
-        # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
-        current_summary = _checkout_summary(effective_task_id)
-        if _checkout_changed(payment, current_summary):
-            return with_receipt({
-                "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
-                "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
-                         "Ask the user for a fresh payment request; never replay this approval."})
+            return classified
 
     # ── Resolve secret and fill (secret never enters any logged string) ─────
     try:

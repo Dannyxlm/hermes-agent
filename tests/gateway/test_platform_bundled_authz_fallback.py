@@ -35,7 +35,7 @@ def test_registered_entries_carry_exactly_the_file_declaration():
 
 @pytest.mark.parametrize("name", ["telegram", "weixin"])
 def test_override_without_fields_still_gates_on_bundled_names(name, monkeypatch):
-    from gateway import pairing, run_startup
+    from gateway import pairing, run_startup_policy
     from gateway.platform_registry import platform_registry
     from hermes_cli.plugins import discover_plugins
 
@@ -47,7 +47,7 @@ def test_override_without_fields_still_gates_on_bundled_names(name, monkeypatch)
 
     declared = bundled_authz(name)
     assert pairing._allowlist_env_for_platform(name) == declared["allowed_users_env"]
-    own = run_startup._own_policy_envs(Platform(name))
+    own = run_startup_policy._own_policy_envs(Platform(name))
     if "own_policy_env" in declared:
         assert own == (*declared["own_policy_env"], declared["allow_all_env"])
     else:

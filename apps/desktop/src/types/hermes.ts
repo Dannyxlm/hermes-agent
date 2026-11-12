@@ -1963,17 +1963,6 @@ export interface MemoryStatusResponse {
   builtin_files: { memory: number; user: number }
 }
 
-/** `GET /api/curator` — background skill-curator status. */
-export interface CuratorStatusResponse {
-  enabled: boolean
-  paused: boolean
-  interval_hours: number | null
-  last_run_at: string | null
-  min_idle_hours: number | null
-  stale_after_days: number | null
-  archive_after_days: number | null
-}
-
 /** `POST /api/ops/debug-share` — shareable diagnostics upload result. */
 export interface DebugShareResponse {
   ok: boolean

@@ -27,6 +27,7 @@ from gateway.restart import (
     DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT, GATEWAY_FATAL_CONFIG_EXIT_CODE, is_global_startup_conflict
 )
 from gateway.run_shutdown import _log_suppressed, _send_error
+from gateway.run_startup_policy import _own_policy_envs
 from hermes_cli.observability.shared_metrics_busy import note_running_chat_owner
 from gateway.shutdown_watchdog import (
     DEFAULT_HEARTBEAT_INTERVAL_S, DEFAULT_LOOP_WATCHDOG_INTERVAL_S,
@@ -67,20 +68,6 @@ def recover_left_core_at_gateway_start() -> bool:
         installed += recover_left_core_in(root)
     return any(feature.platform and feature.plugin in installed for feature in LEFT_CORE)
 
-
-
-def _own_policy_envs(platform) -> Optional[tuple]:
-    """``(dm_policy_env, group_policy_env, allow_all_env)`` for a platform that declares
-    ``own_policy_env``, else None. The live entry wins; a bundled platform whose entry is absent
-    (plugin disabled, safe mode) or lacks the field (a user plugin overriding it) falls back to the
-    names its ``gateway_env.AUTHZ`` declares, so the startup refusal never weakens."""
-    from gateway.platform_env import authz_field
-    from gateway.platform_registry import platform_registry
-    entry = platform_registry.get(platform.value)
-    own = authz_field(platform.value, "own_policy_env", entry)
-    if not own:
-        return None
-    return (*own, authz_field(platform.value, "allow_all_env", entry))
 
 
 class GatewayStartupMixin:

@@ -4,6 +4,8 @@ module-level ``sys.path`` edit, and names the owner to call instead."""
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "install_root_lint.py"
 
 
@@ -70,3 +72,59 @@ def test_new_root_climb_and_module_sys_path_edit_fail_and_name_the_owner(tmp_pat
     rises = lint.regressions(lint.tally(lint.collect(tmp_path)), {"root_from_file": {"top.py": 1}})
     assert rises == ["root_from_file: pkg/sub/mod.py (1, baseline 0)", "module_sys_path: pkg/sub/mod.py (1, baseline 0)"]
     assert "hermes_cli._startup_fast.project_root_str()" in lint.FIX_HINT
+
+
+@pytest.mark.parametrize(("relative", "source", "extra", "kind"), [
+    ("hermes_cli/launch_unit.py", "if __name__ == '__main__':\n"
+     "    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n",
+     "root = Path(__file__).resolve().parents[1]\n", "root_from_file"),
+    ("hermes_cli/release_turns.py", "if __name__ == '__main__':\n"
+     "    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n",
+     "root = Path(__file__).resolve().parents[1]\n", "root_from_file"),
+    ("tui_gateway/methods_mobile_push.py", "def _raise_site(exc):\n"
+     "    root = Path(__file__).parent.parent\n",
+     "root = Path(__file__).parent.parent\n", "root_from_file"),
+    ("plugins/duty-board/dev/demo_home.py", "ROOT = Path(__file__).resolve().parents[1]\n"
+     "sys.path.insert(0, str(ROOT))\n"
+     "from tests.fixtures.make_home import add_lease, add_message, add_session, make_home\n",
+     "sys.path.insert(0, str(ROOT))\n", "module_sys_path"),
+])
+def test_non_resolver_classification_is_exact_not_a_file_exemption(tmp_path, relative, source, extra, kind):
+    """Reviewed bootstrap/lexical sites pass, but a new site in that same file or another does not."""
+    lint = _load()
+    top = relative.split("/")[0]
+    (tmp_path / "pyproject.toml").write_text(
+        f'[tool.setuptools.packages.find]\ninclude = ["{top}"]\n', encoding="utf-8")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(source, encoding="utf-8")
+    assert lint.collect(tmp_path) == {"root_from_file": [], "module_sys_path": []}
+
+    path.write_text(source + extra, encoding="utf-8")
+    assert lint.collect(tmp_path)[kind] == [f"{relative}:{len(source.splitlines()) + 1}"]
+
+    path.unlink()
+    path.with_name("other.py").write_text(source, encoding="utf-8")
+    assert lint.collect(tmp_path)[kind]
+
+
+@pytest.mark.parametrize(("relative", "source"), [
+    ("hermes_cli/launch_unit.py", "if __name__ != '__main__':\n"
+     "    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n"),
+    ("hermes_cli/release_turns.py", "if __name__ == '__main__':\n"
+     "    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))\n"),
+    ("tui_gateway/methods_mobile_push.py", "def other(exc):\n"
+     "    root = Path(__file__).parent.parent\n"),
+    ("plugins/duty-board/dev/demo_home.py", "ROOT = Path(__file__).resolve().parents[1]\n"
+     "sys.path.insert(0, str(ROOT))\n"
+     "from other import make_home\n"),
+])
+def test_non_resolver_classification_rejects_wrong_scope_or_expression(tmp_path, relative, source):
+    lint = _load()
+    top = relative.split("/")[0]
+    (tmp_path / "pyproject.toml").write_text(
+        f'[tool.setuptools.packages.find]\ninclude = ["{top}"]\n', encoding="utf-8")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(source, encoding="utf-8")
+    assert any(lint.collect(tmp_path).values())
