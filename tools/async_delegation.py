@@ -243,7 +243,10 @@ def merge_completion_children(event, result, task, partial):
     if not task.get('is_batch') or not partial.get('partial'):
         return
     recorded = {r['task_index']: r for r in partial.get('results', []) if type(r.get('task_index')) is int}
-    recorded.update({r['task_index']: r for r in result.get('results', []) if type(r.get('task_index')) is int})
+    incoming = {r['task_index']: r for r in result.get('results', []) if type(r.get('task_index')) is int}
+    # Forced settlement's snapshot can contain placeholders for children committed since then.
+    # The transaction's child facts win; an ordinary runner result keeps its existing precedence.
+    recorded = (incoming | recorded) if event.get('status') in ('stalled', 'error') else (recorded | incoming)
     indexes = task.get('task_indexes') or list(range(len(task.get('goals') or [])))
     children = [recorded.get(i) or {'task_index': i, 'status': 'unknown', 'summary': None,
                                    'error': event.get('error')} for i in indexes]
