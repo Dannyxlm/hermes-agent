@@ -41,6 +41,10 @@ kill() {
         builtin kill "${__h_original[@]}"; return
     fi
     for __h_target in "$@"; do
+        # Bash's kill accepts padding and a plus sign, and `ps -o ppid=` pads its output.
+        __h_target="${__h_target#"${__h_target%%[![:space:]]*}"}"
+        __h_target="${__h_target%"${__h_target##*[![:space:]]}"}"
+        __h_target="${__h_target#+}"
         [[ "$__h_target" =~ ^-?[0-9]+$ ]] || continue
         __h_number="${__h_target#-}"
         while [[ ${#__h_number} -gt 1 && "$__h_number" == 0* ]]; do

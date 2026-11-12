@@ -103,6 +103,20 @@ def test_expanded_kill_cannot_stop_own_host(tmp_path, spelling):
 
 
 @pytest.mark.platforms("linux", "macos")
+@pytest.mark.parametrize("shape", ['" $target"', '"$target "', '"+$target"', '" +$target "'])
+def test_padded_or_signed_pid_cannot_stop_own_host(tmp_path, shape):
+    """Bash's kill accepts these spellings; `ps -o ppid=` pads its output, so the first one is real."""
+    with _host(tmp_path) as host:
+        result = _execute(host, f"target={host.pid}; kill -TERM {shape}")
+        if "stopped" in result:
+            host.wait(timeout=10)
+            pytest.fail(f"owned stand-in stopped: {result}")
+        assert result["returncode"] != 0
+        assert result["output"].count("host-stop guard: refused") == 1
+        assert host.poll() is None
+
+
+@pytest.mark.platforms("linux", "macos")
 @pytest.mark.parametrize("background", [False, True])
 def test_host_process_group_is_refused(tmp_path, background):
     with _host(tmp_path) as host:
