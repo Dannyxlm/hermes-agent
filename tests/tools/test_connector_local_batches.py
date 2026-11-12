@@ -7,8 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.mark.parametrize("mixed", [False, True])
-def test_local_batches_rejected_before_any_entry_executes(monkeypatch, mixed):
+@pytest.mark.parametrize("names", [
+    ("session_search", "todo_list"),
+    ("session_search", "connectors__gmail__SEND_EMAIL"),
+    ("mcp__example__search", "mcp__example__fetch"),
+    ("mcp__example__search", "connectors__example__FETCH"),
+])
+def test_local_batches_rejected_before_any_entry_executes(monkeypatch, names):
     import model_tools
     from tools.tool_search import resolve_underlying_call
     from tools.connectors.gateway import bridge, config
@@ -17,10 +22,8 @@ def test_local_batches_rejected_before_any_entry_executes(monkeypatch, mixed):
     monkeypatch.setattr(config, "connectors_available", lambda: True)
     monkeypatch.setattr(bridge, "connectors_available", lambda: True)
     invalidate_check_fn_cache()
-    calls = [
-        {"name": "session_search", "arguments": {}},
-        {"name": "connectors__gmail__SEND_EMAIL" if mixed else "todo_list", "arguments": {}},
-    ]
+    # MCP tools are remote, but only connectors__ names satisfy the bridge batch contract.
+    calls = [{"name": name, "arguments": {}} for name in names]
     name, _args, error = resolve_underlying_call({"calls": calls})
     assert name is None and "exactly one entry" in error
     invoked = []
