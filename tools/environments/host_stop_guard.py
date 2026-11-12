@@ -8,9 +8,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# The word, not the substring: `skills` paths and `pkill` must not switch the guard on.
+_KILL_WORD = re.compile(r"(?<![A-Za-z0-9_])kill(?![A-Za-z0-9_])")
+# Linux refuses a single argument of 128 KiB (MAX_ARG_STRLEN); never push a command over it.
+_MAX_ARGUMENT_BYTES = 131072
 
 
 def _protected_targets() -> set[int]:
@@ -23,12 +29,15 @@ def _protected_targets() -> set[int]:
     for process in processes:
         if process.pid > 1:
             targets.add(process.pid)
-            targets.add(-os.getpgid(process.pid))
+            try:
+                targets.add(-os.getpgid(process.pid))
+            except OSError:
+                pass  # Keep the PIDs already found: one vanished ancestor must not switch the guard off.
     return targets
 
 
 _KILL_FUNCTION = r'''
-kill() {
+function kill {
     local __h_signal=TERM __h_target __h_number
     local -a __h_original=("$@")
     case "${1-}" in
@@ -38,7 +47,10 @@ kill() {
         -*) __h_signal="${1#-}"; shift ;;
     esac
     if [[ "$__h_signal" =~ ^0+$ ]]; then
-        builtin kill "${__h_original[@]}"; return
+        # Bash lets a later -s/-n override the zero, so only a call without one is a pure probe.
+        local __h_later=
+        for __h_target in "$@"; do [[ "$__h_target" == -[sn]* ]] && __h_later=1; done
+        [[ -n "$__h_later" ]] || { builtin kill "${__h_original[@]}"; return; }
     fi
     for __h_target in "$@"; do
         # Bash's kill accepts padding and a plus sign, and `ps -o ppid=` pads its output.
@@ -69,7 +81,7 @@ def guard_shell_command(command: str, *, shell: str) -> str:
     is exactly the accidental computed-parent case. No receiver-side ambiguity can
     turn a legitimate external stop into a refusal.
     """
-    if "kill" not in command or os.name != "posix" or Path(shell).name != "bash":
+    if not _KILL_WORD.search(command) or os.name != "posix" or Path(shell).name != "bash":
         return command
     try:
         targets = _protected_targets()
@@ -77,4 +89,7 @@ def guard_shell_command(command: str, *, shell: str) -> str:
         logger.debug("Host-stop guard unavailable: %s", type(exc).__name__, exc_info=True)
         return command
     pattern = "|".join(str(target) for target in sorted(targets))
-    return _KILL_FUNCTION.replace("__TARGETS__", pattern) + "\n" + command
+    guarded = _KILL_FUNCTION.replace("__TARGETS__", pattern) + "\n" + command
+    if len(guarded.encode("utf-8", "surrogateescape")) >= _MAX_ARGUMENT_BYTES:
+        return command
+    return guarded
