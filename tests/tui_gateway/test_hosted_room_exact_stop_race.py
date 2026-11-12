@@ -3,7 +3,9 @@ confirmation ran) must not be cancelled by the fenced transaction. Synthetic roo
 import pytest
 
 from gateway import hosted_room_driver as driver
-from tests.tui_gateway.test_hosted_room_exact_stop import guards, identity, room, service_for  # noqa: F401
+from tests.tui_gateway.test_hosted_room_exact_stop import guards, identity, service_for
+
+pytest_plugins = ("tests.tui_gateway.test_hosted_room_exact_stop",)
 
 
 def test_deferred_row_without_confirmation_is_refused_in_the_transaction(room):
