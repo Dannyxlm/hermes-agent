@@ -1174,6 +1174,9 @@ class LocalEnvironment(BaseEnvironment):
         if login:
             cmd_string = _append_dropped_path_entries(cmd_string, run_env.get("PATH", ""))
             cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
+        from tools.environments.host_stop_guard import guard_shell_command
+
+        cmd_string = guard_shell_command(cmd_string, shell=bash)
         args = [bash, *(["-l"] if login else []), "-c", cmd_string]
         self._recover_cwd()
         # Not spawn_owned: an awaited command needs no spawn-ledger entry; own_process_groups below hands
