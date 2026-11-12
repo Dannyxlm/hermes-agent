@@ -2,6 +2,7 @@
 
 from unittest.mock import patch as mock_patch
 
+import pytest
 
 from tools.terminal_hints import annotate_failure, annotate_masked_success
 
@@ -23,6 +24,20 @@ class TestAnnotateFailureBasics:
         hint = annotate_failure("git merge x && python t.py", 1, out)
         assert "conflict" in hint.lower()
         assert "python3" not in hint
+
+
+class TestTimeoutHint:
+    @pytest.mark.parametrize("deadline", [None, 120])
+    def test_hint_reports_effective_foreground_cap(self, monkeypatch, deadline):
+        from agent import tool_executor
+        from tools import terminal_tool
+
+        monkeypatch.setattr(terminal_tool, "FOREGROUND_MAX_TIMEOUT", 350)
+        monkeypatch.setattr(tool_executor, "_resolve_concurrent_tool_timeout", lambda: deadline)
+        monkeypatch.setattr(tool_executor, "_resolve_sequential_tool_timeout", lambda: deadline)
+        hint = annotate_failure("sleep 999", 124, "")
+        assert f"foreground max {terminal_tool._effective_foreground_cap()}s" in hint
+        assert "background=true" in hint
 
 
 class TestGhUnknownJsonField:
