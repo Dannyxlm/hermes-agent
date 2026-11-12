@@ -391,6 +391,11 @@ async def _dispatch_request(authority_connection: Any, req: Any, req_method: Any
     threads it hands off to: ``to_thread`` and the legacy pool copy this context. A *read*
     (``ws_read_lane``) runs any legacy handler to completion on the read pool, long ones included."""
     from hermes_cli.process_identity import serving_local_desktop
+    from tui_gateway.server_requests import resolve_pinned_response
+    if authority_connection is not None and resolve_pinned_response(req, transport):
+        # The answer to a request a sidecar RPC sent back to THIS socket (vault.preview.fill's page
+        # scripts); the authority's own registry never holds those ids.
+        return None
     blocking, legacy = ((ws_read_lane.run_blocking, {"on_caller_thread": True}) if read
                         else (asyncio.to_thread, {}))
     with serving_local_desktop(getattr(transport, "desktop_local", False)):

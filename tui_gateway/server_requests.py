@@ -17,6 +17,8 @@ Reconnect: unanswered requests are returned as ``open_requests`` by ``session.re
 ``session.activate`` / ``session.events.since`` (:func:`open_requests`); the shared TypeScript
 channel re-delivers them as if they had just arrived, so the notification replay ring never
 has to carry "a question still waiting for an answer".
+Vault preview operations are live-only: their script payload is discarded after
+dispatch and is never included in these reconnect snapshots.
 
 Batch clarify keeps per-question locks (``clarify.lock`` → :func:`lock_answer`): answers stay
 editable until every question is locked, locked answers survive a timeout, and the last lock
@@ -64,10 +66,12 @@ class ServerRequest:
         "params",
         "profile_home",
         "qids",
+        "replayable",
         "result",
         "revision",
         "sid",
         "timeout_seconds",
+        "transport",
         "withdrawn",
         "writing",
     )
@@ -80,6 +84,7 @@ class ServerRequest:
         self.sid = sid
         self.method = method
         self.params = dict(params)
+        self.replayable = can_replay_request(method, params)
         self.event = threading.Event()
         self.result: dict | None = None
         self.answered = False
@@ -98,6 +103,8 @@ class ServerRequest:
         self.on_result = on_result
         # Client transports that answered NOT_SHOWN_CODE (no window there shows this session).
         self.declined: set = set()
+        # Set = the frame goes to this one client socket and only a response from it settles the request.
+        self.transport: Any = None
         # Published but frame not yet written; a cancel in that gap parks its reason in ``withdrawn`` for _register.
         self.writing = False
         self.withdrawn: str | None = None
@@ -136,6 +143,11 @@ _open: dict[str, ServerRequest] = {}
 _terminal: dict[str, dict] = {}
 _receipts: dict[tuple, dict] = {}
 _MAX_RECEIPTS = 4096
+
+
+def can_replay_request(method: str, params: dict) -> bool:
+    """Secure page scripts belong only to the original live request, never a resume."""
+    return not (method == "preview.act" and params.get("action") == "vault")
 
 # Frame sinks, bound by ``bind_sinks`` from server.py at import time (like the method_ctx split
 # modules): importing server back from here would pick a different module object under the test
@@ -234,12 +246,17 @@ def _register(req: ServerRequest) -> None:
     except ValidationError:
         # Producer input can contain secure values: never echo validation details.
         raise ValueError("Invalid server request params") from None
+    frame = req.frame()
+    if not req.replayable:
+        # Build the immediate wire frame first; pending state keeps only correlation
+        # and cancellation metadata, never the secret-bearing expression.
+        req.params = {}
     with _lock:
         req.writing = True
         _open[req.id] = req
     _attention_changed(req)
     try:
-        _write(req.frame())
+        (req.transport.write if req.transport is not None else _write)(frame)
     finally:
         with _lock:
             req.writing = False
@@ -250,17 +267,21 @@ def _register(req: ServerRequest) -> None:
 
 
 def send(method: str, sid: str, params: dict, *, timeout: float | None,
-         qids: list[str] | None = None) -> dict | None:
+         qids: list[str] | None = None, transport: Any = None) -> dict | None:
     """Send one request and block for the response ``result`` (a dict).
 
     Returns ``None`` when the renderer never answered (timeout, cancel, or an error response — e.g.
     a client without a handler for ``method``). ``timeout`` semantics: None → wait until answered or
     cancelled, 0 → return immediately, > 0 → bounded wait. A batch (``qids``) that settled returns
     ``{"answers": <locked so far>, "outcome"}`` (``submitted`` / ``cancelled`` / ``timed_out``).
+    ``transport`` pins a session-less request to the client socket that asked for it (an RPC handler
+    calling back into its own caller's window): the frame goes only there, only its response settles
+    it, and any error from it (a decline included) is a refusal.
     """
-    if _unanswerable(method, sid):
+    if transport is None and _unanswerable(method, sid):
         return None
     req = ServerRequest(sid, method, params, qids=qids, timeout=timeout)
+    req.transport = transport
     _register(req)
     try:
         req.event.wait(None if req.deadline_monotonic is None else max(0, req.deadline_monotonic - time.monotonic()))
@@ -408,7 +429,12 @@ def resolve_response(frame: dict, transport: Any = None, *, expected_sid: str | 
     rid = frame.get("id")
     if not isinstance(rid, str):
         return False
-    if _is_not_shown(frame):
+    with _lock:
+        pinned = _open.get(rid)
+    if pinned is not None and pinned.transport is not None and pinned.transport is not transport:
+        logger.debug("server request %s: response from a client it was not sent to dropped", rid)
+        return False
+    if _is_not_shown(frame) and (pinned is None or pinned.transport is None):
         return _decline(rid, transport, expected_sid=expected_sid, expected_method=expected_method)
     with _lock:
         req = _open.get(rid)
@@ -428,6 +454,12 @@ def resolve_response(frame: dict, transport: Any = None, *, expected_sid: str | 
                     raise ValueError("question_id required for batch clarification")
             status = "accepted"
         _consume(req, result, status)
+    if "error" in frame:
+        error = frame["error"] if isinstance(frame["error"], dict) else {}
+        # Client exception text/data can echo entered credentials; correlation and numeric code suffice.
+        code = error.get("code")
+        logger.warning("server request %s (%s) answered with error code %s",
+                       rid, req.method, code if type(code) is int else None)
     _deliver(req, status)
     return status != "expired"
 
@@ -505,7 +537,7 @@ def cancel(sid: str | None = None, reason: str = "interrupted", *, method: str |
 def open_requests(sid: str) -> list[dict]:
     """Unanswered requests for *sid*, oldest first."""
     with _lock:
-        reqs = sorted((req for req in _open.values() if req.sid == sid), key=lambda r: r.created_at)
+        reqs = sorted((req for req in _open.values() if req.sid == sid and req.replayable), key=lambda r: r.created_at)
         return [req.snapshot() for req in reqs]
 
 
@@ -519,7 +551,7 @@ def scoped_pending(sid: str, *, profile_home: str) -> list[dict]:
     from .human_input import HUMAN_METHODS, safe_params
     with _lock:
         requests = sorted((req for req in _open.values() if req.sid == sid
-                           and req.profile_home == profile_home and req.method in HUMAN_METHODS
+                           and req.profile_home == profile_home and req.method in HUMAN_METHODS and req.replayable
                            and not req.expired()), key=lambda req: req.created_at)
         return [{**req.snapshot(), 'params': safe_params(req.method, req.snapshot()['params'])} for req in requests]
 
@@ -678,6 +710,18 @@ def pending_kind(sid: str) -> str:
     with _lock:
         reqs = [req for req in _open.values() if req.sid == sid]
     return min(reqs, key=lambda r: r.created_at).method if reqs else ""
+
+
+def resolve_pinned_response(frame: Any, transport: Any) -> bool:
+    """Settle *frame* when it answers a request pinned to *transport* (``send(transport=...)``); False for
+    anything else, which stays with its usual owner (a session authority's own registry, or the
+    unpinned path of :func:`resolve_response`)."""
+    if not is_response_frame(frame) or not isinstance(frame.get("id"), str):
+        return False
+    with _lock:
+        req = _open.get(frame["id"])
+    return req is not None and req.transport is not None and req.transport is transport and resolve_response(
+        frame, transport)
 
 
 def is_response_frame(obj: Any) -> bool:

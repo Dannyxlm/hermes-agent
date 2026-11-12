@@ -1,10 +1,7 @@
 from argparse import Namespace
 import os
 from pathlib import Path
-import subprocess
 import sys
-import textwrap
-import types
 
 import pytest
 from hermes_cli import main_tui_launch
@@ -33,8 +30,6 @@ def main_mod(monkeypatch):
     import hermes_cli.main as mod
 
     monkeypatch.setattr(mod, "_has_any_provider_configured", lambda: True)
-    # Reset the idempotency guard so each test starts fresh.
-    monkeypatch.setattr(mod, "_oneshot_cleanup_done", False)
     return mod
 
 
@@ -68,166 +63,54 @@ def test_exit_after_oneshot_flushes_stdio_and_calls_os_exit(
     assert flushed == ["stdout", "stderr"]
 
 
-def test_oneshot_subprocess_exits_without_teardown_abort():
-    program = textwrap.dedent(
-        """
-        import hermes_cli.oneshot as oneshot
-        from hermes_cli.main import _exit_after_oneshot
+@pytest.mark.asyncio
+async def test_oneshot_gateway_preserves_family_intake_before_execution(monkeypatch):
+    """The retired direct-agent intake now belongs to the gateway launch, not tool env."""
+    from contextlib import asynccontextmanager
+    from hermes_cli import gateway_chat, launch_provenance
+    from hermes_cli._parser import build_top_level_parser
+    from hermes_cli.gateway_chat_view import GatewayChatView
 
-        oneshot._run_agent = lambda *args, **kwargs: ("ok", {"final_response": "ok"})
-        _exit_after_oneshot(oneshot.run_oneshot("hello"))
-        """
-    )
+    provenance = {
+        "HERMES_STARTED_BY_SESSION_ID": "parent",
+        "HERMES_STARTED_BY_PROFILE": "launcher",
+        "HERMES_LAUNCH_TITLE": "short task",
+        "HERMES_LAUNCH_ID": "stable-launch",
+    }
+    for key, value in provenance.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(launch_provenance, "_pending", {})
+    calls = []
 
-    result = subprocess.run(
-        [sys.executable, "-c", program],
-        cwd=Path(__file__).resolve().parents[2],
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
+    class Peer:
+        async def rpc(self, method, **params):
+            assert not set(provenance) & os.environ.keys()
+            calls.append((method, params))
+            if method == "runtime.describe":
+                return {"session_create": {"sources": ["cli", "oneshot"],
+                        "parameters": ["cwd", *launch_provenance.FIELDS]}}
+            assert method == "session.create"
+            return {"stored_session_id": "child"}
 
-    assert result.returncode == 0
-    assert result.stdout in (b"ok\n", b"ok\r\n")
-    # Don't demand byte-empty stderr — an import-time warning from the heavy
-    # CLI import chain shouldn't fail this. What matters is no crash traceback.
-    assert b"Traceback" not in result.stderr
+    @asynccontextmanager
+    async def connected():
+        yield Peer()
 
+    async def rendered(self, query, *, oneshot):
+        assert query == "fixture" and oneshot
+        assert self.session_id == "child" and self.unattended and self.close_on_finite
+        return 0
 
-def _stub_plugin_discovery(monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.plugins",
-        types.SimpleNamespace(discover_plugins=lambda: None),
-    )
-
-
-def test_oneshot_wires_session_db_for_recall(monkeypatch):
-    """hermes -z bypasses HermesCLI, but recall still needs SessionDB."""
-    from hermes_cli.oneshot import _run_agent
-
-    captured = {}
-    sentinel_db = types.SimpleNamespace(close=lambda: None)
-
-    class FakeAgent:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-            self.suppress_status_output = False
-            self.stream_delta_callback = object()
-            self.tool_gen_callback = object()
-
-        def run_conversation(self, prompt, **_kwargs):
-            captured["prompt"] = prompt
-            return {"final_response": "ok", "failed": False, "partial": False}
-
-    def fake_acquire(db_path=None):
-        return sentinel_db
-
-    def mod(name, **attrs):
-        module = types.ModuleType(name)
-        for key, value in attrs.items():
-            setattr(module, key, value)
-        return module
-
-    monkeypatch.setitem(sys.modules, "run_agent", mod("run_agent", AIAgent=FakeAgent))
-    # Oneshot borrows the process-shared registry handle (one writer per state.db path).
-    monkeypatch.setitem(sys.modules, "hermes_state_registry", mod("hermes_state_registry", acquire=fake_acquire))
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.config",
-        mod("hermes_cli.config", load_config=lambda: {"model": {"default": "m"}}),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.models",
-        mod("hermes_cli.models", detect_provider_for_model=lambda *_args, **_kwargs: None),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.runtime_provider",
-        mod(
-            "hermes_cli.runtime_provider",
-            resolve_runtime_with_fallback=lambda _cfg, **_kwargs: (
-                {
-                    "api_key": "k",
-                    "base_url": "u",
-                    "provider": "p",
-                    "api_mode": "chat_completions",
-                    "credential_pool": None,
-                },
-                None,
-            ),
-        ),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.tools_config",
-        mod("hermes_cli.tools_config", _get_platform_tools=lambda *_args, **_kwargs: {"session_search"}),
-    )
-
-    text, result = _run_agent("recall this")
-    assert text == "ok"
-    assert not result.get("failed")
-    assert captured["session_db"] is sentinel_db
-    assert captured["enabled_toolsets"] == ["session_search"]
-    assert captured["prompt"] == "recall this"
-
-
-@pytest.mark.parametrize("run_fails", [False, True], ids=["success", "failure"])
-def test_oneshot_closes_its_relay_root_before_agent_teardown(monkeypatch, run_fails):
-    """hermes -z hard-exits past atexit, so _run_agent itself must finalize the Relay root it opened:
-    keyed to the id at turn entry (compression may rotate it), on failure too, before agent.close()."""
-    from hermes_cli import lifecycle
-    from hermes_cli.oneshot import _run_agent
-
-    events = []
-
-    class FakeAgent:
-        def __init__(self, **_kwargs):
-            self.session_id = "entry-id"
-            self.platform = "cli"
-            self.suppress_status_output = False
-            self.stream_delta_callback = self.tool_gen_callback = object()
-
-        def run_conversation(self, _prompt, **_kwargs):
-            self.session_id = "compressed-child-id"
-            if run_fails:
-                raise RuntimeError("agent failed")
-            return {"final_response": "ok", "failed": False, "partial": False}
-
-        def shutdown_memory_provider(self, *_args):
-            events.append("memory")
-
-        def close(self):
-            events.append("agent_close")
-
-    def mod(name, **attrs):
-        module = types.ModuleType(name)
-        for key, value in attrs.items():
-            setattr(module, key, value)
-        return module
-
-    monkeypatch.setitem(sys.modules, "run_agent", mod("run_agent", AIAgent=FakeAgent))
-    monkeypatch.setitem(sys.modules, "hermes_state_registry", mod("hermes_state_registry", acquire=lambda db_path=None: None))
-    monkeypatch.setitem(sys.modules, "hermes_cli.config", mod("hermes_cli.config", load_config=lambda: {"model": {"default": "m"}}))
-    monkeypatch.setitem(sys.modules, "hermes_cli.models",
-                        mod("hermes_cli.models", detect_provider_for_model=lambda *_a, **_k: None))
-    monkeypatch.setitem(sys.modules, "hermes_cli.runtime_provider", mod(
-        "hermes_cli.runtime_provider",
-        resolve_runtime_with_fallback=lambda _cfg, **_k: ({"api_key": "k", "base_url": "u", "provider": "p",
-                                                           "api_mode": "chat_completions", "credential_pool": None}, None),
-    ))
-    monkeypatch.setitem(sys.modules, "hermes_cli.tools_config",
-                        mod("hermes_cli.tools_config", _get_platform_tools=lambda *_a, **_k: set()))
-    monkeypatch.setattr(lifecycle, "finalize_session", lambda **kw: events.append(("finalize", kw)))
-
-    if run_fails:
-        with pytest.raises(RuntimeError, match="agent failed"):
-            _run_agent("finish this")
-    else:
-        assert _run_agent("finish this")[0] == "ok"
-    assert events == [("finalize", {"session_id": "entry-id", "platform": "cli", "reason": "shutdown"}),
-                      "memory", "agent_close"]
+    monkeypatch.setattr(gateway_chat, "connect_gateway", connected)
+    monkeypatch.setattr(GatewayChatView, "run", rendered)
+    args = build_top_level_parser()[0].parse_args(["-z", "fixture"])
+    assert await gateway_chat.run_gateway_chat(args) == 0
+    create = next(params for method, params in calls if method == "session.create")
+    assert create["source"] == "oneshot"
+    assert {key: create[key] for key in launch_provenance.FIELDS if key in create} == {
+        "started_by_session": "parent", "started_by_profile": "launcher",
+        "launch_title": "short task", "launch_id": "stable-launch",
+    }
 
 
 def test_launch_tui_exports_model_provider_and_toolsets(monkeypatch, main_mod):
@@ -236,7 +119,7 @@ def test_launch_tui_exports_model_provider_and_toolsets(monkeypatch, main_mod):
     active_path_during_call = None
 
     monkeypatch.setattr(main_tui_launch, "_make_tui_argv",
-        lambda tui_dir, tui_dev: (["node", "dist/entry.js"], Path(".")),
+        lambda tui_dir, tui_dev, notices=None: (["node", "dist/entry.js"], Path(".")),
     )
 
     def fake_call(argv, cwd=None, env=None):
@@ -271,7 +154,7 @@ def test_launch_tui_prefers_launch_cwd_over_inherited_hermes_cwd(monkeypatch, ma
     """The directory `hermes --tui` was run from outranks an inherited HERMES_CWD.
 
     A shell export - or an outer `hermes --tui` - leaves HERMES_CWD naming a real but stale
-    directory, and ui-tui/src/gatewayClient.ts:478 starts the gateway in whatever it names,
+    directory, and the gateway Ink's client starts runs the session in whatever it names,
     so the session reads files and completions from the wrong project (#49637).
     """
     stale = tmp_path / "stale-project"
@@ -284,7 +167,7 @@ def test_launch_tui_prefers_launch_cwd_over_inherited_hermes_cwd(monkeypatch, ma
 
     captured = {}
     monkeypatch.setattr(main_tui_launch, "_make_tui_argv",
-        lambda tui_dir, tui_dev: (["node", "dist/entry.js"], Path(".")),
+        lambda tui_dir, tui_dev, notices=None: (["node", "dist/entry.js"], Path(".")),
     )
     monkeypatch.setattr(main_mod.subprocess, "call",
         lambda argv, cwd=None, env=None: captured.update({"env": env}) or 1,
@@ -311,7 +194,7 @@ def test_launch_tui_worktree_still_outranks_the_launch_cwd(monkeypatch, main_mod
     captured = {}
     monkeypatch.setattr(main_tui_launch, "_setup_tui_worktree", lambda: {"path": str(worktree)})
     monkeypatch.setattr(main_tui_launch, "_make_tui_argv",
-        lambda tui_dir, tui_dev: (["node", "dist/entry.js"], Path(".")),
+        lambda tui_dir, tui_dev, notices=None: (["node", "dist/entry.js"], Path(".")),
     )
     monkeypatch.setattr(main_mod.subprocess, "call",
         lambda argv, cwd=None, env=None: captured.update({"env": env}) or 1,
@@ -345,7 +228,7 @@ def test_launch_tui_local_session_starts_in_launch_dir_not_terminal_cwd(monkeypa
 
     captured = {}
     monkeypatch.setattr(main_tui_launch, "_make_tui_argv",
-        lambda tui_dir, tui_dev: (["node", "dist/entry.js"], Path(".")),
+        lambda tui_dir, tui_dev, notices=None: (["node", "dist/entry.js"], Path(".")),
     )
     monkeypatch.setattr(main_mod.subprocess, "call",
         lambda argv, cwd=None, env=None: captured.update({"env": env}) or 1,
@@ -372,7 +255,7 @@ def test_launch_tui_bypass_without_model_refuses_before_the_tui_starts(monkeypat
     monkeypatch.delenv("HERMES_MODEL", raising=False)
     monkeypatch.setenv("HERMES_PYTHON", sys.executable)  # never resolve a python over the real PATH
     monkeypatch.setattr(main_tui_launch, "_make_tui_argv",
-                        lambda tui_dir, tui_dev: (["node", "dist/entry.js"], Path(".")))
+                        lambda tui_dir, tui_dev, notices=None: (["node", "dist/entry.js"], Path(".")))
     spawned = []
     monkeypatch.setattr(main_mod.subprocess, "call", lambda argv, cwd=None, env=None: spawned.append(env) or 0)
     with pytest.raises(SystemExit) as exc:

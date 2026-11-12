@@ -84,6 +84,33 @@ def test_legacy_ordinary_scopes_and_frozen_notice_remain():
     assert decision == {"resolved": True, "choice": "deny", "reason": None}
 
 
+@pytest.mark.parametrize("surface", ["vault-payment", "mcp-elicitation/example"])
+def test_real_consent_wait_keeps_requester_binding_and_deny_only_card_cutoff(monkeypatch, surface):
+    monkeypatch.setattr(wait._ctx, "_get_approval_config", lambda: {"approvers": []})
+    actor = {"HERMES_SESSION_ACTOR_ID": "alice", "HERMES_SESSION_ACTOR_NAME": "Alice",
+             "HERMES_SESSION_CHAT_TYPE": "group"}
+    monkeypatch.setattr(wait._ctx, "_session_env", lambda key: actor.get(key, ""))
+
+    def notify(data):
+        request = approval._gateway_queues["owner"][0]
+        rid = data["request_id"]
+        assert request.card_deny_only is True
+        assert request.authority["requester_id"] == "alice" and request.authority["approvers"] == []
+        assert "authority" not in data
+        assert approval.resolve_gateway_approval_card("owner", "once", rid, actor_id="alice") == 0
+        approval.restrict_gateway_approval_card_to_deny("owner", rid, False)
+        assert approval.resolve_gateway_approval_card("owner", "once", rid, actor_id="bob") == 0
+        for choice in ("session", "always"):
+            assert approval.resolve_gateway_approval_card("owner", choice, rid, actor_id="alice") == 0
+        assert approval.resolve_gateway_approval("owner", "once", request_id=rid,
+            expected_epoch="stale", expected_revision=data["request_revision"]) == 0
+        assert approval.resolve_gateway_approval("owner", "once", request_id=rid,
+            expected_epoch=data["request_epoch"], expected_revision=data["request_revision"], auth="face_id") == 1
+
+    decision = wait._await_gateway_decision("owner", notify, {}, surface=surface, timeout_seconds=30)
+    assert decision == {"resolved": True, "choice": "once", "reason": None, "auth": "face_id"}
+
+
 def test_identical_payments_need_separate_live_decisions(monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     import threading

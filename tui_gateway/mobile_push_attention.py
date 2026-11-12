@@ -78,7 +78,8 @@ def request_frames(session, sid):
     if legacy:
         frames.setdefault(legacy["id"], legacy)
     retired = session.get("_mobile_push_retired_requests", set())
-    return {ident: frame for ident, frame in frames.items() if ident not in retired}
+    return {ident: frame for ident, frame in frames.items()
+            if ident not in retired and frame.get("replayable", True)}
 
 
 def pending_projection(session, sid, now):

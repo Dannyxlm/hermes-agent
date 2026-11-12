@@ -15,6 +15,11 @@ import { familyTranslations } from './family'
 
 export const arOverrides = {
   family: familyTranslations.ar,
+  gatewayGroupOpen: {
+    opening: "جارٍ فتح محادثة المجموعة…",
+    lookupFailed: "تعذّر العثور على هذه المجموعة على البوابة. حاول مجددًا.",
+    missing: "لم تعد محادثة المجموعة هذه موجودة."
+  },
 
   catalog: {
     add: 'إضافة',
