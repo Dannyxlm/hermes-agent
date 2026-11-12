@@ -184,7 +184,12 @@ def _relay_compute_host_rpc(message: dict) -> bool:
     if isinstance(message, dict) and isinstance(message.get("id"), str) and message.get("method") not in (None, "event"):
         # A server request minted by the child: remember it against its session until it is answered/withdrawn.
         session = _sessions.get(str((params or {}).get("session_id") or "")) if isinstance(params, dict) else None
-        pinned = server_requests.preview_request_transport(message)
+        try:
+            pinned = server_requests.preview_request_transport(message)
+        except ValueError:
+            # The owning window disappeared. Let the child time out: answering synchronously
+            # here would wait for an acknowledgement on this same stdout reader thread.
+            return False
         if session is not None:
             replayable = server_requests.can_replay_request(message["method"], params)
             with _history_lock(session):

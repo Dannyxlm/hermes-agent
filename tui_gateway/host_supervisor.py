@@ -485,7 +485,7 @@ class HostSupervisor:
             logger.debug("compute host heartbeat: %s", frame)
         elif ftype == "rpc":
             if isinstance(frame.get("message"), dict):
-                self.rpc_sink(frame["message"])
+                _call_logged(self.rpc_sink, frame["message"], "compute host RPC sink failed")
         elif ftype in ("turn.end", "turn.error"):
             with self._lock:
                 pending = self._pending_turns.pop(request_id, None)
