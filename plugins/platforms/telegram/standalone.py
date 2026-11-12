@@ -37,7 +37,7 @@ _GENERIC_SECRET_ASSIGN_RE = re.compile(
 
 def _sanitize_error_text(text) -> str:
     """Redact secrets from error text before surfacing it to users/models."""
-    redacted = _URL_SECRET_QUERY_RE.sub(lambda m: f"{m.group(1)}***", redact_sensitive_text(text))
+    redacted = _URL_SECRET_QUERY_RE.sub(lambda m: f"{m.group(1)}***", redact_sensitive_text(text, force=True))
     return _GENERIC_SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=***", redacted)
 
 
@@ -337,7 +337,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                       "resolve named topics. Use telegram:<chat_id>:<numeric thread id>, or deliver "
                       "through a cron job while the gateway is running.")
     try:
-        from telegram.error import TelegramError
+
         from plugins.platforms.telegram.telegram_outbound import (
             is_visually_empty, notification_kwargs, resolve_notifications_mode, send_album_standalone,
             send_rich_standalone)
@@ -401,7 +401,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                         last_msg = await _send_telegram_message_with_retry(
                             bot, chat_id=int_chat_id, text=_tg_caption, parse_mode=send_parse_mode, **text_kwargs)
                         _tg_caption = None  # delivered — don't re-caption a later file
-                    except TelegramError as _cap_err:
+                    except Exception as _cap_err:  # health: allow BLE001 -- best-effort caption fallback must not abort remaining media
                         logger.warning("Telegram caption-fallback send failed for missing media: %s",
                                        _sanitize_error_text(_cap_err))
                 continue
@@ -409,7 +409,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
                 last_msg = await _telegram_send_one_media(
                     bot, int_chat_id, media_path, is_voice, caption=_tg_caption, parse_mode=send_parse_mode,
                     has_html=_has_html, thread_kwargs=thread_kwargs, force_document=force_document)
-            except (TelegramError, OSError) as e:
+            except Exception as e:  # health: allow BLE001 -- per-file failure must not retry already-delivered text or skip remaining files
                 warnings.append(_sanitize_error_text(f"Failed to send media {media_path}: {e}"))
                 logger.error(warnings[-1])
         if last_msg is None:
@@ -420,6 +420,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
         return {"error": "python-telegram-bot not installed. Run: "
                 f"{install_hint('telegram')}"}
     except Exception as e:  # health: allow BLE001 -- delivery boundary returns a sanitized error; raw tracebacks can expose bot credentials
+        logger.warning("Telegram send failed: %s", type(e).__name__)
         return _error(f"Telegram send failed: {e}")
 
 
