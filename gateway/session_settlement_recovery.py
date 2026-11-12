@@ -121,7 +121,7 @@ def _publish_completion(authority, live, ref, row, settled, response, captured):
         complete['warning'] = notice
     live.event_stream.publish(ref.session_id, complete)
     from gateway.thread_wake import hint
-    hint()  # committed terminal state; only signal under the stream lock
+    hint(authority.profile_id, ref.session_id)  # committed terminal state; only signal under the stream lock
 
 
 RESTART_INTERRUPT_NOTICE = ('Gateway restarting: this turn was interrupted and will not be run again. '
