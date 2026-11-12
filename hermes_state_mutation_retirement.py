@@ -151,7 +151,7 @@ _LIVE_LEDGER_SQL = """SELECT 1 FROM session_admissions WHERE target_session_id=?
     UNION ALL SELECT 1 FROM worker_executions WHERE session_id=? AND status IN ('registered','running','unknown') LIMIT 1"""
 
 
-def retire_sessions(conn, session_ids, *, expiring=(), routes=None, capture_spillover=True):
+def retire_sessions(conn, session_ids, *, expiring=(), routes=None, capture_spillover=True, snapshot=None):
     """The complete deletion fence for ids that are being deleted in this transaction.
 
     Terminal receipts alone are not enough: without the ``RETIRED_PREFIX`` marker an exact
@@ -164,10 +164,15 @@ def retire_sessions(conn, session_ids, *, expiring=(), routes=None, capture_spil
     if capture_spillover:
         retire_spillover(conn, session_ids)  # before the caller's DELETEs take the pointers away
     retire_terminal_receipts(conn, session_ids)
-    retire_mutation_receipts(conn, session_ids)
-    retire_routes(conn, session_ids, expiring=expiring, routes=routes)
+    if snapshot is None:
+        retire_mutation_receipts(conn, session_ids)
+    else:
+        snapshot.retire_metadata(conn, session_ids)
+    retire_routes(conn, session_ids, expiring=expiring, routes=routes, snapshot=snapshot)
     from hermes_state_local import retire_local_receipts
-    retire_local_receipts(conn, session_ids)
+    retire_local_receipts(conn, session_ids, indexed_only=snapshot is not None)
+    from hermes_state_prune import remove_pending_members
+    remove_pending_members(conn, session_ids)
 
 
 # Mutation-receipt fields that copy user content: the rewound message, a compaction summary and
@@ -240,7 +245,7 @@ def _derived_api_sessions(conn, session_ids):
         (json.dumps(list(session_ids)),))}
 
 
-def retire_prunable(conn, session_ids, *, routes=None, capture_spillover=True):
+def retire_prunable(conn, session_ids, *, routes=None, capture_spillover=True, snapshot=None):
     """Sweep variant of :func:`retire_sessions`: fence the idle sessions and return only those ids.
     A session with live or unknown work is skipped, so one busy row cannot abort a whole
     prune/empty-session sweep (explicit deletes still refuse with ``session_busy``). A local
@@ -262,7 +267,7 @@ def retire_prunable(conn, session_ids, *, routes=None, capture_spillover=True):
     quiet = [sid for sid in session_ids if removable(sid)]
     derived |= _derived_api_sessions(conn, quiet)
     retire_sessions(conn, quiet, expiring=[sid for sid in quiet if sid not in derived],
-                    routes=routes, capture_spillover=capture_spillover)
+                    routes=routes, capture_spillover=capture_spillover, snapshot=snapshot)
     return quiet
 
 
@@ -312,12 +317,15 @@ def _mark_retired(conn, key, *, expires, **fields):
                      "ELSE json_remove(excluded.value, '$.own') END", (key, json.dumps(value)))
 
 
-def retire_routes(conn, session_ids, *, expiring=(), routes=None):
+def retire_routes(conn, session_ids, *, expiring=(), routes=None, snapshot=None):
     expiring = set(expiring)
     for sid in session_ids:
         _mark_retired(conn, RETIRED_PREFIX + sid, expires=sid in expiring, own=True)
         conn.execute('DELETE FROM state_meta WHERE key=?', ('gateway.api.settings.v1.' + sid,))
         conn.execute('DELETE FROM state_meta WHERE key=?', (VIEWER_CLOSE_PREFIX + sid,))
+    if snapshot is not None:
+        snapshot.retire_routes(conn, session_ids)
+        return
     targets = set(session_ids)
     if routes is None:
         routes = conn.execute('SELECT scope,session_key,entry_json FROM gateway_routing').fetchall()

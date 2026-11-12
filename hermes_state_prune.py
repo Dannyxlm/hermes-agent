@@ -5,7 +5,7 @@ import json
 
 from hermes_state_common import _id_chunks, _non_continuation_child_sql, _placeholders, emit_session_deleted
 from hermes_state_keys import prefix_range
-from hermes_state_mutation_retirement import _LIVE_LEDGER_SQL, _local_conversations, retire_prunable
+from hermes_state_mutation_retirement import _LIVE_LEDGER_SQL, _local_conversations, retire_prunable, retired_in
 
 PENDING_PREFIX = 'maintenance.prune.pending.v1.'
 
@@ -35,8 +35,28 @@ def _pending_groups(conn):
         'SELECT key,value FROM state_meta WHERE key>=? AND key<?', prefix_range(PENDING_PREFIX))}
 
 
+def remove_pending_members(conn, session_ids):
+    """Alternate delete paths repair interrupted groups in the same transaction as their delete."""
+    removed = set(session_ids)
+    if not removed:
+        return
+    for key, ids in _pending_groups(conn).items():
+        if removed.intersection(ids):
+            remaining = [sid for sid in ids if sid not in removed]
+            if remaining:
+                conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(remaining), key))
+            else:
+                conn.execute('DELETE FROM state_meta WHERE key=?', (key,))
+
+
+def pending_members(conn, ids):
+    existing = {sid for sid in ids if conn.execute('SELECT 1 FROM sessions WHERE id=?', (sid,)).fetchone()}
+    return existing if existing and all(retired_in(conn, sid) for sid in existing) else None
+
+
 def _groups(conn, candidates):
-    pending = _pending_groups(conn)
+    pending = {key: members for key, ids in _pending_groups(conn).items()
+               if (members := pending_members(conn, ids)) is not None}
     by_sid = {sid: (key, ids) for key, ids in pending.items() for sid in ids}
     seen, groups, skipped = set(), [], set()
     for sid in sorted(candidates):
@@ -81,7 +101,7 @@ def _delete_rows(conn, ids):
         conn.execute(f'DELETE FROM sessions WHERE id IN ({ph})', chunk)
 
 
-def _write_batch(db, conn, groups, routes, cap, where, params, include_pinned, guards):
+def _write_batch(db, conn, groups, snapshot, cap, where, params, include_pinned, guards):
     from hermes_state_media import retire_spillover
     deleted, skipped, in_progress, messages = [], [], [], 0
     for key, ids in groups:
@@ -92,7 +112,7 @@ def _write_batch(db, conn, groups, routes, cap, where, params, include_pinned, g
         # strand a newly published segment. Pending groups keep their original durable membership.
         if key:
             saved = conn.execute('SELECT value FROM state_meta WHERE key=?', (key,)).fetchone()
-            if not saved or json.loads(saved[0]) != ids:
+            if not saved or pending_members(conn, json.loads(saved[0])) != set(ids):
                 skipped.extend(ids)
                 continue
         elif conversation_group(conn, ids) != set(ids):
@@ -104,7 +124,7 @@ def _write_batch(db, conn, groups, routes, cap, where, params, include_pinned, g
         if oversize and (messages or deleted):
             break
         if key is None:
-            quiet = retire_prunable(conn, ids, routes=routes, capture_spillover=False)
+            quiet = retire_prunable(conn, ids, snapshot=snapshot, capture_spillover=False)
             if set(quiet) != set(ids):
                 raise RuntimeError('prune group changed while holding the write lock')
             if oversize:
@@ -140,16 +160,24 @@ def prune_batch(db, older_than_days, source, sessions_dir, guards, session_ids, 
         if requested is not None:
             candidates &= requested
         groups, skipped = _groups(conn, candidates)
-        routes = conn.execute('SELECT scope,session_key,entry_json FROM gateway_routing').fetchall()
+        if not groups:
+            skipped.update(requested or ())
+            return {'deleted': 0, 'deleted_ids': [], 'skipped_ids': sorted(skipped),
+                    'messages_deleted': 0, 'in_progress_ids': [], 'remaining': 0, 'has_more': False}
+        from hermes_state_prune_snapshot import PruneSnapshot, receipts_version
+        # New/repointed receipts invalidate the projection; recheck once after taking the lock.
+        version = receipts_version(conn)
+        snapshot = PruneSnapshot(conn, candidates)
+        check_filters = {**filters, 'include_pinned': True}
+        check_where, check_params = db._prune_where(older_than_days, source, check_filters)
+        result = db._execute_write(lambda writer: _write_batch(
+            db, writer, groups, snapshot, message_cap, check_where, check_params,
+            bool(filters.get('include_pinned')), guards) if receipts_version(writer) == version else None)
     if requested is not None:
         skipped |= requested - candidates
-    # The broad eligibility query and its recursive pinned-tail predicate run on the reader only.
-    # Membership/pins are checked by primary key again inside the transaction.
-    check_filters = {**filters, 'include_pinned': True}
-    check_where, check_params = db._prune_where(older_than_days, source, check_filters)
-    deleted, rejected, pending, messages = db._execute_write(lambda conn: _write_batch(
-        db, conn, groups, routes, message_cap, check_where, check_params,
-        bool(filters.get('include_pinned')), guards))
+    # A concurrent receipt change invalidates the snapshot (including newly inserted receipts).
+    # Yield to the owner between attempts so drain can interrupt even under continual writes.
+    deleted, rejected, pending, messages = result if result is not None else ([], [], [], 0)
     skipped.update(rejected)
     emit_session_deleted(db, deleted, reason='prune', sessions_dir=sessions_dir)
     for sid in deleted:

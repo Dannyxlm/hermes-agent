@@ -883,6 +883,10 @@ class SessionSessionsMixin(SessionActivityMixin):
         """Return affected IDs so authority revisions share this exact lineage selector. A plain
         ``archived`` write (canonical mutation, user/CLI/API) is the DELIBERATE archive and clears
         the idle sweep's ``auto_archived`` provenance, same as :meth:`set_session_archived`."""
+        if column in {"archived", "pinned"}:
+            from hermes_state_mutation_retirement import require_not_retired
+            for row in conn.execute(_LINEAGE_CTE_SQL + "SELECT id FROM lineage", (session_id, session_id)):
+                require_not_retired(conn, row[0])
         if column == "archived" and not extra_set_sql:
             extra_set_sql = ", auto_archived = 0"
         return [row[0] for row in conn.execute(
@@ -916,9 +920,15 @@ class SessionSessionsMixin(SessionActivityMixin):
         ``auto_archived`` on the rows IT hides. A row already archived keeps its provenance, so a
         deliberately archived ancestor is never relabelled as sweep-owned (SQLite evaluates every
         SET expression against the pre-update row)."""
-        return self._set_lineage_column(
-            "archived", session_id, 1,
-            extra_set_sql=", auto_archived = CASE WHEN archived = 0 THEN 1 ELSE auto_archived END")
+        from hermes_state_runtime import RuntimeStoreError
+        try:
+            return self._set_lineage_column(
+                "archived", session_id, 1,
+                extra_set_sql=", auto_archived = CASE WHEN archived = 0 THEN 1 ELSE auto_archived END")
+        except RuntimeStoreError as exc:
+            if exc.reason != "not_found":
+                raise
+            return False
 
     @staticmethod
     def _unarchive_auto_archived_lineage(conn, session_id: str) -> bool:
@@ -980,9 +990,11 @@ class SessionSessionsMixin(SessionActivityMixin):
             return False
         # Clear the accidental end stamp, or a LATER deliberate archive (which never
         # writes end_reason) would auto-resurrect on the next lookup.
-        self._write_sql(
-            "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?", (tip["id"],),
-        )
+        def reopen(conn):
+            from hermes_state_mutation_retirement import require_not_retired
+            require_not_retired(conn, tip["id"])
+            conn.execute("UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?", (tip["id"],))
+        self._execute_write(reopen)
         return True
 
     def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
@@ -1758,6 +1770,8 @@ class SessionSessionsMixin(SessionActivityMixin):
                 "SELECT 1 FROM session_admissions WHERE target_session_id=? UNION ALL "
                 "SELECT 1 FROM worker_executions WHERE session_id=? LIMIT 1", (session_id, session_id)).fetchone():
                 return None
+            from hermes_state_prune import remove_pending_members
+            remove_pending_members(conn, [session_id])
             conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             return cur.rowcount > 0

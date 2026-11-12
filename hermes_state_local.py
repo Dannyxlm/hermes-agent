@@ -217,7 +217,7 @@ def local_policy_rows(conn, session_ids):
     return rows
 
 
-def retire_local_receipts(conn, session_ids):
+def retire_local_receipts(conn, session_ids, *, indexed_only=False):
     """Deletion fence half for owner receipts. A local creation policy carries the launch request
     (``request_json``: a cron fire's job and raw prompt), so it goes exactly when its route does:
     when the receipt's current physical target is deleted (a pruned reset ancestor whose logical
@@ -228,13 +228,14 @@ def retire_local_receipts(conn, session_ids):
         return
     gone = [key for key, value in local_policy_rows(conn, targets).items()
             if _policy_target(value) in targets]
-    gone += [key for key, value in conn.execute('SELECT key,value FROM state_meta WHERE key GLOB ?',
-                                                (API_DECLARED_PREFIX + '*',)) if value in targets]
+    if not indexed_only:
+        gone += [key for key, value in conn.execute('SELECT key,value FROM state_meta WHERE key GLOB ?',
+                                                    (API_DECLARED_PREFIX + '*',)) if value in targets]
+        from hermes_state_common import LEGACY_QUEUE_RECEIPT_PREFIX
+        gone += [key for key, target in conn.execute(
+            "SELECT key, CASE WHEN json_valid(value) THEN json_extract(value, '$.session_id') END "
+            'FROM state_meta WHERE key GLOB ?', (LEGACY_QUEUE_RECEIPT_PREFIX + '*',)) if target in targets]
     gone += [API_BINDING_PREFIX + sid for sid in targets]
-    from hermes_state_common import LEGACY_QUEUE_RECEIPT_PREFIX
-    gone += [key for key, target in conn.execute(
-        "SELECT key, CASE WHEN json_valid(value) THEN json_extract(value, '$.session_id') END "
-        'FROM state_meta WHERE key GLOB ?', (LEGACY_QUEUE_RECEIPT_PREFIX + '*',)) if target in targets]
     conn.executemany('DELETE FROM state_meta WHERE key=?', [(key,) for key in gone])
 
 

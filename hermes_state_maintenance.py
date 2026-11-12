@@ -150,6 +150,9 @@ class SessionMaintenanceMixin:
         dead-holder guards are reclaimed and fenced as a side effect."""
         from hermes_state import SessionCompressionInProgressError
         from hermes_state_errors import SessionTurnLeaseLostError
+        from hermes_state_mutation_retirement import retired_in
+        if not kwargs.get("allow_retired") and retired_in(conn, sid):
+            return True
         try:
             self._check_transcript_write_guards(
                 conn, sid, compression_lock_holder=None, turn_lease_holder=None,
@@ -326,10 +329,8 @@ class SessionMaintenanceMixin:
               AND {_LAST_ACTIVE_SQL} < ?
             ORDER BY s.started_at ASC
             """, (self.CANONICAL_BOT_CHAT_TITLE, cutoff))
-        for row in rows:
-            # Sweep provenance: a later compression/resume of this lineage un-hides it (#117713).
-            self._auto_archive_lineage(row[0])
-        return len(rows)
+        # Fenced retained rows belong to a prune, not the idle archive sweep.
+        return sum(bool(self._auto_archive_lineage(row[0])) for row in rows)
 
     def maybe_auto_archive(
         self, idle_days: float = 3, min_interval_hours: int = 24, exclude_pinned: bool = True,

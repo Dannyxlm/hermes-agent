@@ -36,6 +36,9 @@ def _options(args):
         seconds = parse_duration_seconds(idle)
         if seconds is None or not math.isfinite(seconds) or seconds <= 0:
             raise ValueError('--idle-threshold must be a positive duration (e.g. 30d)')
+        if ids is None and not any(filters.get(key) is not None for key in
+                                   ('last_active_before', 'last_active_after', 'started_before', 'started_after')):
+            ids = []  # No explicit deletion age or id selector: close only, never prune by source.
     return filters, ids, timeout, seconds
 
 
@@ -76,7 +79,7 @@ def cmd_prune(db, args):
         else:
             print(f'Error: {exc}')
         return 1
-    preview = _preview(db, filters, ids, sweep)
+    preview = _preview(db, filters, ids, sweep) if args.dry_run or not args.yes else None
     if args.dry_run:
         if getattr(args, 'json', False):
             print(json.dumps(preview))

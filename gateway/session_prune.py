@@ -72,7 +72,7 @@ async def _apply(authority, filters, never_active, session_ids=None, sweep_idle_
         return await run_prune_batches(
             authority.db, filters, sessions_dir=sessions_dir, session_ids=session_ids,
             sweep_idle_seconds=sweep_idle_seconds,
-            stopping=lambda: authority.runner._draining,
+            stopping=lambda: authority.retiring or authority.retired or authority.runner._draining,
             after_batch=lambda ids: retire_live_sessions(authority, ids))
     retire_live_sessions(authority, deleted_ids)
     return result

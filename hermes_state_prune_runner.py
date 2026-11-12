@@ -29,6 +29,7 @@ def prune_preview(db, filters, session_ids=None):
     days, source = scope.pop('older_than_days', None), scope.pop('source', None)
     where, params = db._prune_where(days, source, scope, whole_lineages=True)
     requested = None if session_ids is None else set(session_ids)
+    check_where, check_params = db._prune_where(days, source, {**scope, 'include_pinned': True})
     with db._read_ctx() as conn:
         rows = [dict(row) for row in conn.execute(
             f'SELECT s.*, {_sql_session_last_active("s")} AS last_active FROM sessions s WHERE {where} '
@@ -39,7 +40,7 @@ def prune_preview(db, filters, session_ids=None):
         groups, skipped = _groups(conn, candidates)
         accepted = set()
         for _, ids in groups:
-            if (_eligible_group(db, conn, ids, where, params,
+            if (_eligible_group(db, conn, ids, check_where, check_params,
                                 include_pinned=bool(scope.get('include_pinned')), guards=False)
                     and not any(guarded_readonly(db, conn, sid) for sid in ids)):
                 accepted.update(ids)
@@ -69,12 +70,15 @@ async def run_prune_batches(db, filters, *, sessions_dir, session_ids=None,
     days = filters.pop('older_than_days', None)
     if days is not None and filters.get('last_active_before') is None and filters.get('started_before') is None:
         filters['last_active_before'] = time.time() - days * 86400
-    remaining_ids = None if session_ids is None else set(session_ids)
+    sweep_only = (sweep_idle_seconds is not None and session_ids is None and days is None
+                  and not any(filters.get(key) is not None for key in
+                              ('last_active_before', 'last_active_after', 'started_before', 'started_after')))
+    remaining_ids = set() if sweep_only else (None if session_ids is None else set(session_ids))
     deleted, skipped, pending, closed = set(), set(), set(), []
     messages, remaining, more = 0, 0, True
     if sweep_idle_seconds is not None and not stopping():
         # Even an all-ages prune must never delete a row it just closed for recovery.
-        preview = await asyncio.to_thread(prune_preview, db, filters, session_ids)
+        preview = await asyncio.to_thread(prune_preview, db, filters, [] if sweep_only else session_ids)
         remaining_ids = {row['id'] for row in preview['candidates']}
         skipped.update(preview['skipped_ids'])
         closed = await asyncio.to_thread(

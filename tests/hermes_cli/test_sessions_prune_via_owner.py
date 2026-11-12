@@ -196,7 +196,8 @@ async def test_owner_batches_and_retires_each_committed_chunk(owned_store, monke
 
 
 @pytest.mark.asyncio
-async def test_drain_finishes_current_batch_and_skips_global_cleanup(owned_store, monkeypatch):
+@pytest.mark.parametrize('drain', ['gateway', 'profile'])
+async def test_drain_finishes_current_batch_and_skips_global_cleanup(owned_store, monkeypatch, drain):
     store = owned_store
     for i in range(2):
         store.db.create_session(f'drain-{i}', 'tool')
@@ -208,7 +209,10 @@ async def test_drain_finishes_current_batch_and_skips_global_cleanup(owned_store
     def batch(**kw):
         result = real(**kw)
         calls.append(result)
-        store.authority.runner._draining = True
+        if drain == 'profile':
+            store.authority.retiring = True
+        else:
+            store.authority.runner._draining = True
         return result
 
     monkeypatch.setattr(store.db, 'prune_sessions', batch)
@@ -449,6 +453,44 @@ async def test_owner_exact_ids_include_archived_and_source_intersect(owned_store
     assert result['deleted_ids'] == (['old-cron'] if include_archived else [])
     assert result['skipped_ids'] == (['old-cli'] if include_archived else ['old-cli', 'old-cron'])
     assert store.db.get_session('old-cli') is not None
+
+
+@pytest.mark.parametrize('selection', ['sweep', 'sweep_empty_ids', 'source_only', 'sweep_age', 'sweep_ids'])
+def test_sweep_cli_requires_explicit_delete_selector(owned_store, capsys, tmp_path, selection):
+    store = owned_store
+    for sid, days, ended in [('stale', 45, False), ('fresh-ended', 1, True), ('old-ended', 100, True)]:
+        store.db.create_session(sid, 'tool')
+        _aged(store.db, sid, days, ended=ended)
+    flags = ['--source', 'tool', '--json']
+    if selection != 'source_only':
+        flags += ['--sweep-stale-open', '--idle-threshold', '30d']
+    if selection in {'sweep_empty_ids', 'sweep_ids'}:
+        ids = tmp_path / 'delete-ids.txt'
+        ids.write_text('old-ended\n' if selection == 'sweep_ids' else '', encoding='utf-8')
+        flags += ['--ids-file', str(ids)]
+    if selection == 'sweep_age':
+        flags += ['--older-than', '30d']
+    expected = {'fresh-ended', 'old-ended'} if selection == 'source_only' else (
+        {'old-ended'} if selection in {'sweep_age', 'sweep_ids'} else set())
+    assert sessions_cmd._cmd_prune_or_archive(store.db, _args(*flags, '--dry-run'), 'prune') in (None, 0)
+    preview = json.loads(capsys.readouterr().out)
+    assert {row['id'] for row in preview['candidates']} == expected
+    assert sessions_cmd._cmd_prune_or_archive(store.db, _args(*flags, '--yes'), 'prune') in (None, 0)
+    result = json.loads(capsys.readouterr().out)
+    assert set(result['deleted_ids']) == expected
+    assert result['closed_ids'] == ([] if selection == 'source_only' else ['stale'])
+    assert store.db.get_session('stale') is not None
+
+
+@pytest.mark.asyncio
+async def test_owner_source_only_sweep_keeps_ended_sessions(owned_store):
+    store = owned_store
+    store.db.create_session('stale', 'cron')
+    _aged(store.db, 'stale', 45, ended=False)
+    reply = await _prune(store, filters={'source': 'cron'}, sweep_idle_seconds=30 * 86400)
+    assert reply['result']['closed_ids'] == ['stale']
+    assert reply['result']['deleted_ids'] == []
+    assert store.db.get_session('old-cron') is not None
 
 
 def test_sweep_cli_never_deletes_just_closed_row_even_without_age_filter(owned_store, capsys):
