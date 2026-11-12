@@ -65,13 +65,16 @@ def test_a_turn_deferred_after_the_snapshot_keeps_disband_waiting(tmp_path: Path
 
 def test_a_turn_deferred_while_its_stop_is_being_asked_keeps_disband_waiting(tmp_path: Path, monkeypatch):
     service, db, identity, _daemon = _stopping_behind_a_silent_daemon(tmp_path)
-    ask = service.runtime._peer_stop_acknowledged
+    ask = service.runtime._interrupt_active_local_task
+    confirmations = []
 
     def deferred_meanwhile(binding, task):
+        confirmations.append(task["identity"])
         _worker_defers(service, task["identity"])  # during the confirmation calls
         return ask(binding, task)
 
-    monkeypatch.setattr(service.runtime, "_peer_stop_acknowledged", deferred_meanwhile)
+    monkeypatch.setattr(service.runtime, "_interrupt_active_local_task", deferred_meanwhile)
     with pytest.raises(hosted_rooms.RoomStopPendingError):
         service.stop_room("room-1", cancel_id="room-disbanded", require_acknowledged=True)
+    assert confirmations == [identity]
     assert driver.get_task(db, identity)["status"] == "deferred"
