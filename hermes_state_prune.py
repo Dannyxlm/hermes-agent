@@ -168,11 +168,13 @@ def prune_batch(db, older_than_days, source, sessions_dir, guards, session_ids, 
         # New/repointed receipts invalidate the projection; recheck once after taking the lock.
         version = receipts_version(conn)
         snapshot = PruneSnapshot(conn, candidates)
-        check_filters = {**filters, 'include_pinned': True}
-        check_where, check_params = db._prune_where(older_than_days, source, check_filters)
-        result = db._execute_write(lambda writer: _write_batch(
-            db, writer, groups, snapshot, message_cap, check_where, check_params,
-            bool(filters.get('include_pinned')), guards) if receipts_version(writer) == version else None)
+    check_filters = {**filters, 'include_pinned': True}
+    check_where, check_params = db._prune_where(older_than_days, source, check_filters)
+    # The reader may borrow the writer connection under the non-reentrant store lock.
+    # Exit its context before entering _execute_write; the version check still fences races.
+    result = db._execute_write(lambda writer: _write_batch(
+        db, writer, groups, snapshot, message_cap, check_where, check_params,
+        bool(filters.get('include_pinned')), guards) if receipts_version(writer) == version else None)
     if requested is not None:
         skipped |= requested - candidates
     # A concurrent receipt change invalidates the snapshot (including newly inserted receipts).
