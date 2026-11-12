@@ -303,8 +303,8 @@ def test_managed_worker_result_uses_the_same_committed_completion_hint(home, own
         assert 'FINISHED_ANSWER' in owner.submits()[0]['text']
 
 
-def idle_leads(authority, count=10):
-    ids = [f'idle-{i:02}' for i in range(count)]
+def idle_leads(authority, count=10, prefix='idle'):
+    ids = [f'{prefix}-{i:02}' for i in range(count)]
     for sid in ids:
         authority.db.create_session(sid, 'tui')
         thread(authority.db, sid + '-child', launcher=sid)
@@ -374,6 +374,47 @@ def test_targeted_completion_interleaves_at_next_lead(home, owner, settlement, m
         assert passed.wait(5)
     assert calls.index('parent') < calls.index(others[1]), calls
     assert calls.count('parent') == 1
+    assert len(owner.submits()) == 1
+
+
+def test_targeted_completion_revisits_lead_seen_before_hint(home, owner, settlement, monkeypatch):
+    others = idle_leads(settlement, prefix='zz')
+    row = claimed(settlement, 'child')
+    entered, release, submitted = threading.Event(), threading.Event(), threading.Event()
+    original, submit = wake.deliver, owner._submit
+    calls, at_submit = [], []
+
+    def slow(home, profile, lead, *args, **kwargs):
+        calls.append(lead)
+        if lead == others[0]:
+            entered.set()
+            assert release.wait(3)
+        if lead in others:
+            threading.Event().wait(0.2)
+        return original(home, profile, lead, *args, **kwargs)
+
+    def observed(*args):
+        receipt = submit(*args)
+        at_submit.extend(calls)
+        submitted.set()
+        return receipt
+
+    monkeypatch.setattr(wake, 'deliver', slow)
+    monkeypatch.setattr(owner, '_submit', observed)
+    with running(home, monkeypatch, interval=60) as (_, passed, _):
+        wake.hint()
+        assert entered.wait(3)
+        assert calls.count('parent') == 1
+        try:
+            complete(settlement, row)
+        finally:
+            release.set()
+        try:
+            assert submitted.wait(3), 'hint was swallowed after the lead was already visited'
+            assert others[1] not in at_submit, at_submit
+        finally:
+            assert passed.wait(5)
+    assert calls.count('parent') == 2
     assert len(owner.submits()) == 1
 
 
@@ -520,6 +561,57 @@ def test_targeted_busy_recheck_stops_after_ack_or_expiry(home, owner, settlement
         sweeper.recheck(now=due)
     assert sweeper._rechecks == {}
     assert owner.submits() == []
+
+
+def test_targeted_unadmitted_receipt_waits_for_periodic_retry(home, owner, settlement, monkeypatch):
+    row = claimed(settlement, 'child')
+    monkeypatch.setattr(owner, '_submit', lambda db, params: {'status': 'refused'})
+    with running(home, monkeypatch, interval=60) as (_, passed, _):
+        complete(settlement, row)
+        assert passed.wait(3)
+        assert len(owner.submits()) == 1
+        threading.Event().wait(2.5)
+        assert len(owner.submits()) == 1
+
+
+@pytest.mark.parametrize('full', [False, True])
+def test_due_recheck_runs_despite_failed_pass(home, owner, settlement, monkeypatch, full):
+    row = claimed(settlement, 'child')
+    settlement.db._write_sql('INSERT INTO session_turn_leases VALUES (?,?,?,?)',
+                             ('parent', 'external-test', time.time(), time.time() + 60))
+    complete(settlement, row)
+    sweeper = wake.Sweeper(lambda: [home])
+    sweeper.targeted()
+    key, (_, expiry, hinted) = next(iter(sweeper._rechecks.items()))
+    sweeper._rechecks[key] = (0.0, expiry, hinted)
+    settlement.db._write_sql('DELETE FROM session_turn_leases WHERE conversation_id=?', ('parent',))
+    stop = threading.Event()
+
+    def failed(*args, **kwargs):
+        stop.set()  # One iteration, even when the failed pass skips its due recheck.
+        raise RuntimeError('discovery failed')
+
+    monkeypatch.setattr(sweeper, 'sweep' if full else 'targeted', failed)
+    if full:
+        wake.hint()
+    sweeper.run(stop, interval=60)
+    assert len(owner.submits()) == 1
+    assert sweeper._rechecks == {}
+
+
+def test_targeted_queue_timing_starts_at_its_own_pass(home, owner, settlement, caplog):
+    caplog.set_level('INFO', logger='gateway.thread_wake')
+    row = claimed(settlement, 'child')
+    complete(settlement, row)
+    sweeper = wake.Sweeper(lambda: [home])
+    old_start = time.monotonic() - 60
+    started = time.monotonic()
+    sweeper.targeted(now=old_start)
+    elapsed_ms = (time.monotonic() - started) * 1000
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith('thread update submitted:')]
+    assert len(lines) == 1
+    fields = dict(field.split('=', 1) for field in lines[0].split()[3:])
+    assert 0 <= float(fields['queue_ms']) <= elapsed_ms + 0.1
 
 
 def test_targeted_refused_submit_logs_one_unadmitted_attempt(home, owner, settlement, monkeypatch, caplog):

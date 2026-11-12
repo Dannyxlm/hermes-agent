@@ -412,6 +412,7 @@ class Sweeper:
 
     def targeted(self, now=None, seen=None) -> int:
         """Drain advisory targets, resolving only stores this owner still serves."""
+        pass_start = time.monotonic()
         with _hint_lock:
             targets = dict(_targets)
             _targets.clear()
@@ -441,7 +442,7 @@ class Sweeper:
         delivered = 0
         for (home, profile, lead), (hinted, child) in candidates.items():
             delivered += self._one(home, profile, lead, now, seen=seen, child=child,
-                                   trace={'trigger': 'hint', 'hinted': hinted, 'pass_start': now})
+                                   trace={'trigger': 'hint', 'hinted': hinted, 'pass_start': pass_start})
         return delivered
 
     def sweep(self, now: float | None = None, *, seen=None) -> int:
@@ -471,10 +472,13 @@ class Sweeper:
         if seen is not None:
             if key in seen:
                 ok, previous = seen[key]
-                if trace is not None and trace.get('hinted') is not None:
-                    previous['hinted'] = min(previous.get('hinted') or trace['hinted'], trace['hinted'])
-                self._remember(key, ok, previous, child)
-                return False
+                hinted = trace.get('hinted') if trace is not None else None
+                # A later hint signals state this earlier read could not have observed.
+                if hinted is None or previous.get('deliver_start', 0.0) >= hinted:
+                    if hinted is not None:
+                        previous['hinted'] = min(previous.get('hinted') or hinted, hinted)
+                    self._remember(key, ok, previous, child)
+                    return False
             seen[key] = (False, {})
         trace = {} if trace is None else trace
         ok = False
@@ -496,7 +500,7 @@ class Sweeper:
         return ok
 
     def _remember(self, key, ok, trace, child=False):
-        if ok or not (trace.get('busy') or trace.get('pending')):
+        if ok or 'submit_start' in trace or not (trace.get('busy') or trace.get('pending')):
             self._rechecks.pop(key, None)
         elif child or key in self._rechecks:
             now = time.monotonic()
@@ -543,11 +547,14 @@ class Sweeper:
                     next_periodic = time.monotonic() + interval
                 else:
                     self.targeted(seen=seen)
-                self.recheck(seen=seen)
             except Exception:  # health: allow BLE001 -- the owner's only thread-update loop must outlive a bad read
                 logger.warning("thread update sweep failed", exc_info=True)
                 if full:
                     next_periodic = time.monotonic() + interval
+            try:
+                self.recheck(seen=seen)
+            except Exception:  # health: allow BLE001 -- recheck failures must not stop periodic discovery
+                logger.warning("thread update recheck failed", exc_info=True)
             not_before = time.monotonic() + HINT_MIN_INTERVAL_S
 
 
