@@ -87,6 +87,42 @@ def test_a_pinned_request_goes_to_and_is_settled_only_by_the_socket_that_asked(w
     assert server_requests.resolve_pinned_response({"id": rid, "result": {"value": "ok"}}, asker)
     worker.join(timeout=10)
     assert out == [{"value": "ok"}]
+    assert wire == []  # cancellation is pinned too, never emitted on stdio
+
+
+def test_agent_vault_followups_are_pinned_to_the_opening_window(wire, monkeypatch):
+    import json
+    owner, phone = _Socket(), _Socket()
+    broadcast = []
+
+    def reply(frame):
+        if frame.get("method") != "preview.act":
+            return
+        operation = frame["params"]["vault"]["operation"]
+        if operation != "open":
+            assert not server_requests.resolve_response({"id": frame["id"], "result": {"value": "forged"}}, phone)
+        value = json.dumps({"success": True, "target": "window-target"})
+        assert server_requests.resolve_response({"id": frame["id"], "result": {"value": value}}, owner)
+
+    def fanout(frame):
+        broadcast.append(frame)
+        reply(frame)
+
+    def pinned(frame):
+        owner.frames.append(frame)
+        reply(frame)
+
+    monkeypatch.setattr(server_requests, "_write", fanout)
+    monkeypatch.setattr(owner, "write", pinned)
+    for operation in ("open", "evaluate", "close"):
+        vault = {"operation": operation}
+        if operation != "open":
+            vault["target"] = "window-target"
+        if operation == "evaluate":
+            vault["expression"] = "synthetic-secret-script"
+        assert server_requests.send("preview.act", "s1", {"action": "vault", "vault": vault}, timeout=1)
+    assert [frame["params"]["vault"]["operation"] for frame in broadcast] == ["open"]
+    assert [frame["params"]["vault"]["operation"] for frame in owner.frames if frame["method"] == "preview.act"] == ["evaluate", "close"]
 
 
 def _answer_with_error(code, message):
@@ -98,6 +134,22 @@ def _answer_with_error(code, message):
     server_requests.resolve_response({"jsonrpc": "2.0", "id": request["id"], "error": {"code": code, "message": message}})
     asker.join(timeout=10)
     return result
+
+
+def test_vault_target_from_another_session_or_disconnected_window_is_not_broadcast(wire):
+    owner = _Socket()
+    opener = {"id": "open", "method": "preview.act", "params": {
+        "session_id": "s1", "action": "vault", "vault": {"operation": "open"}}}
+    server_requests.preview_request_transport(opener)
+    server_requests.remember_preview_response({"id": "open", "result": {
+        "value": '{"success":true,"target":"target"}'}}, owner)
+    params = {"action": "vault", "vault": {"operation": "evaluate", "target": "target", "expression": "secret"}}
+    with pytest.raises(ValueError, match="no longer available"):
+        server_requests.send("preview.act", "other-session", params, timeout=1)
+    server_requests.forget(owner)
+    with pytest.raises(ValueError, match="no longer available"):
+        server_requests.send("preview.act", "s1", params, timeout=1)
+    assert wire == [] and owner.frames == []
 
 
 @pytest.mark.parametrize("code", [-32603, -32601])

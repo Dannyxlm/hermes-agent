@@ -157,6 +157,8 @@ def _compute_host_adopt_frame_meta(
 def _relay_compute_host_rpc(message: dict) -> bool:
     """Relay host frames to the client while mirroring the server→client request the host has open, so a
     reconnecting client gets it back through ``open_requests``."""
+    from tui_gateway import server_requests
+    pinned = None
     params = message.get("params") if isinstance(message, dict) else None
     if isinstance(message, dict) and message.get("method") == "compute_host.session_meta":
         if isinstance(params, dict):
@@ -182,10 +184,9 @@ def _relay_compute_host_rpc(message: dict) -> bool:
     if isinstance(message, dict) and isinstance(message.get("id"), str) and message.get("method") not in (None, "event"):
         # A server request minted by the child: remember it against its session until it is answered/withdrawn.
         session = _sessions.get(str((params or {}).get("session_id") or "")) if isinstance(params, dict) else None
+        pinned = server_requests.preview_request_transport(message)
         if session is not None:
-            from tui_gateway.server_requests import can_replay_request
-
-            replayable = can_replay_request(message["method"], params)
+            replayable = server_requests.can_replay_request(message["method"], params)
             with _history_lock(session):
                 mirrored = {
                     "id": message["id"], "method": message["method"],
@@ -196,10 +197,11 @@ def _relay_compute_host_rpc(message: dict) -> bool:
         session = _sessions.get(str(params.get("session_id") or ""))
         payload = params.get("payload")
         if session is not None and isinstance(payload, dict):
+            pinned = server_requests.forget_preview_request(payload.get("id"))
             with _history_lock(session):
                 if _open_request_matches(session, payload.get("id")):
                     _forget_compute_request(session, payload.get("id"))
-    return write_json(message)
+    return pinned.write(message) if pinned is not None else write_json(message)
 
 
 def _history_lock(session: dict):
@@ -237,6 +239,13 @@ def _relay_compute_host_response(frame: dict) -> bool:
     if located is None or not _session_uses_compute_host(located[1]):
         return False
     sid, session = located
+    from tui_gateway import server_requests
+    from tui_gateway.transport import current_transport
+    transport = current_transport()
+    if not server_requests.preview_response_allowed(frame, transport):
+        return True  # Owned request, but not this client's response to settle.
+    # Record before forwarding: the child can issue its follow-up before respond.ack.
+    server_requests.remember_preview_response(frame, transport)
     with _history_lock(session):
         mirrored = session.get("_compute_host_open_requests", {}).get(frame.get("id"))
         if mirrored is None:

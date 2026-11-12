@@ -143,6 +143,66 @@ _open: dict[str, ServerRequest] = {}
 _terminal: dict[str, dict] = {}
 _receipts: dict[tuple, dict] = {}
 _MAX_RECEIPTS = 4096
+_preview_openers: dict[str, str] = {}
+_preview_owners: dict[tuple[str, str], Any] = {}
+_preview_pins: dict[str, Any] = {}
+
+
+def preview_request_transport(frame: dict, transport: Any = None) -> Any:
+    """Bind vault follow-ups to the window that opened the target; retain no script."""
+    params = frame.get("params") or {}
+    if frame.get("method") != "preview.act" or params.get("action") != "vault":
+        return transport
+    vault = params.get("vault") or {}
+    rid, sid = frame["id"], str(params.get("session_id") or "")
+    with _lock:
+        if vault.get("operation") == "open":
+            _preview_openers[rid] = sid
+        else:
+            key = (sid, str(vault.get("target") or ""))
+            transport = transport if transport is not None else _preview_owners.get(key)
+            if transport is None:
+                raise ValueError("Preview window is no longer available")
+            if len(_preview_pins) >= _MAX_RECEIPTS:
+                raise ValueError("Too many pending preview requests")
+            _preview_pins[rid] = transport
+            if vault.get("operation") == "close":
+                _preview_owners.pop(key, None)
+        while len(_preview_openers) > _MAX_RECEIPTS:
+            _preview_openers.pop(next(iter(_preview_openers)))
+    return transport
+
+
+def preview_response_allowed(frame: dict, transport: Any) -> bool:
+    with _lock:
+        return frame.get("id") not in _preview_pins or _preview_pins[frame["id"]] is transport
+
+
+def remember_preview_response(frame: dict, transport: Any) -> None:
+    """Capture only a successful open's opaque target and answering transport."""
+    result = frame.get("result")
+    if transport is None or not isinstance(result, dict):
+        return
+    value = result.get("value")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return
+    if not isinstance(value, dict) or value.get("success") is not True or not isinstance(value.get("target"), str):
+        return
+    with _lock:
+        sid = _preview_openers.pop(str(frame.get("id") or ""), None)
+        if sid is not None:
+            _preview_owners[(sid, value["target"])] = transport
+            while len(_preview_owners) > _MAX_RECEIPTS:
+                _preview_owners.pop(next(iter(_preview_owners)))
+
+
+def forget_preview_request(rid: str) -> Any:
+    with _lock:
+        _preview_openers.pop(rid, None)
+        return _preview_pins.pop(rid, None)
 
 
 def can_replay_request(method: str, params: dict) -> bool:
@@ -214,6 +274,9 @@ def forget(transport: Any) -> None:
     """Drop a disconnected transport's advertisement."""
     with _lock:
         _answering_clients.discard(transport)
+        for key, owner in list(_preview_owners.items()):
+            if owner is transport:
+                _preview_owners.pop(key)
 
 
 def answers_requests(transport: Any) -> bool:
@@ -230,7 +293,13 @@ def _unanswerable(method: str, sid: str) -> bool:
 
 
 def _emit_cancel(req: ServerRequest, reason: str) -> None:
-    _emit("request.cancel", req.sid, {"id": req.id, "method": req.method, "reason": reason})
+    forget_preview_request(req.id)
+    payload = {"id": req.id, "method": req.method, "reason": reason}
+    if req.transport is not None:
+        req.transport.write({"jsonrpc": "2.0", "method": "event", "params": {
+            "type": "request.cancel", "session_id": req.sid, "payload": payload}})
+    else:
+        _emit("request.cancel", req.sid, payload)
 
 
 def _register(req: ServerRequest) -> None:
@@ -247,6 +316,7 @@ def _register(req: ServerRequest) -> None:
         # Producer input can contain secure values: never echo validation details.
         raise ValueError("Invalid server request params") from None
     frame = req.frame()
+    req.transport = preview_request_transport(frame, req.transport)
     if not req.replayable:
         # Build the immediate wire frame first; pending state keeps only correlation
         # and cancellation metadata, never the secret-bearing expression.
@@ -460,6 +530,8 @@ def resolve_response(frame: dict, transport: Any = None, *, expected_sid: str | 
         code = error.get("code")
         logger.warning("server request %s (%s) answered with error code %s",
                        rid, req.method, code if type(code) is int else None)
+    if status == "accepted":
+        remember_preview_response(frame, transport)
     _deliver(req, status)
     return status != "expired"
 
@@ -734,4 +806,7 @@ def reset_for_tests() -> None:
         _open.clear()
         _terminal.clear()
         _receipts.clear()
+        _preview_openers.clear()
+        _preview_owners.clear()
+        _preview_pins.clear()
         _answering_clients.clear()
