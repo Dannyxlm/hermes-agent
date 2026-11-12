@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.tools.telegram_stub_errors import install_error_module
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +28,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _install_telegram_mock(monkeypatch: pytest.MonkeyPatch, bot_factory: MagicMock) -> None:
+    install_error_module(monkeypatch)
     parse_mode = SimpleNamespace(MARKDOWN_V2="MarkdownV2", HTML="HTML")
     constants_mod = SimpleNamespace(ParseMode=parse_mode)
     telegram_mod = SimpleNamespace(

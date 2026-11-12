@@ -419,7 +419,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
     except ImportError:
         return {"error": "python-telegram-bot not installed. Run: "
                 f"{install_hint('telegram')}"}
-    except Exception as e:
+    except Exception as e:  # health: allow BLE001 -- delivery boundary returns a sanitized error; raw tracebacks can expose bot credentials
         return _error(f"Telegram send failed: {e}")
 
 
