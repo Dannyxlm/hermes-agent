@@ -75,7 +75,7 @@ def test_legacy_vault_mirror_is_filtered_beside_an_ordinary_request(mirrored_ses
 def test_isolated_vault_followups_and_cancellation_never_fan_out(mirrored_session, monkeypatch):
     from types import SimpleNamespace
     from tui_gateway.transport import bind_transport, reset_transport
-    sid, session = mirrored_session
+    sid, _session = mirrored_session
     broadcast, owner_frames, forwarded = [], [], []
     owner = SimpleNamespace(write=lambda frame: owner_frames.append(frame) or True)
     phone = SimpleNamespace(write=lambda frame: pytest.fail("phone received a vault frame"))
