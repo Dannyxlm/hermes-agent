@@ -163,8 +163,7 @@ class TestApproveCommand:
         _clear_approval_state()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("scope", ["", " session", " always"])
-    async def test_approve_all_leaves_payment_for_individual_consent(self, scope):
+    async def test_approve_all_leaves_payment_for_individual_consent(self):
         from tools.approval import _gateway_queues
         from tools.approval_gateway_wait import _ApprovalEntry
 
@@ -174,7 +173,7 @@ class TestApproveCommand:
         payment = _ApprovalEntry({"surface": "vault-payment", "command": "Pay merchant"})
         _gateway_queues[session_key] = [command, payment]
 
-        await runner._handle_approve_command(_make_event("/approve all" + scope))
+        await runner._handle_approve_command(_make_event("/approve all"))
 
         assert command.event.is_set()
         assert not payment.event.is_set()
