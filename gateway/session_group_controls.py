@@ -60,6 +60,9 @@ _FIELDS = {
 
 async def dispatch_group_control(connection, method, params):
     authority, actor = connection.authority, connection.actor
+    if (method.startswith('groups.peer.')
+            and connection._identity.get('bootstrap_purpose') in {'team-room', 'session-wake'}):
+        raise RuntimeStoreError('permission_denied')
     capability = GROUP_METHODS.get(method, 'session:read')
     if capability not in actor.capabilities:
         raise RuntimeStoreError('permission_denied')

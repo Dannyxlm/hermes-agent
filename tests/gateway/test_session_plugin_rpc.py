@@ -90,6 +90,11 @@ async def test_plugin_method_is_gated_like_a_session_verb_and_leaves_with_its_pl
         assert await call(owner, session_id='s', n=3) == {'n': 3, 'session_id': 's'}
         assert (await call(owner, n=4))['n'] == 4
         assert (await call(reader, session_id='s', n=3))['data']['reason'] == 'permission_denied'
+        for purpose in ('team-room', 'session-wake'):
+            automation = AuthorityConnection(authority, object(), {
+                'user_id': 'owner', 'capabilities': ['session:control'], 'bootstrap_purpose': purpose})
+            assert (await call(automation, n=3))['data']['reason'] == 'permission_denied'
+            assert (await call(automation, session_id='s', n=3))['data']['reason'] == 'permission_denied'
         assert (await call(owner, session_id='local-x', n=3))['data']['reason'] == 'permission_denied'
         assert (await call(owner, session_id='s'))['data']['reason'] == 'plugin_rpc_failed'
         # NaN is not JSON: an error, never a frame the client's JSON.parse would drop unanswered.

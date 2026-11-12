@@ -35,6 +35,8 @@ async def resolve_plugin_rpc(connection, method):
 
 
 async def call_plugin_rpc(connection, ref, method, handler, params):
+    if connection._identity.get('bootstrap_purpose') in {'team-room', 'session-wake'}:
+        raise RuntimeStoreError('permission_denied')
     if ref.session_id is not None and not isinstance(ref.session_id, str):
         raise RuntimeStoreError('invalid_params', field='session_id')
     if ref.session_id:
