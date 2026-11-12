@@ -42,7 +42,7 @@ def _publish(outcome, captured=None):
     stream = _Stream()
     live = SimpleNamespace(controls=SimpleNamespace(snapshot=lambda *a: None), event_stream=stream)
     row = {'admission_id': 'adm-1', 'request_id': 'sub-1'}
-    _publish_completion(SimpleNamespace(runner=None), live, SimpleNamespace(session_id='s'), row,
+    _publish_completion(SimpleNamespace(runner=None, profile_id='owned'), live, SimpleNamespace(session_id='s'), row,
                         {'outcome': outcome}, 'partial reply', captured)
     (frame,) = stream.frames
     return frame
@@ -319,7 +319,7 @@ def test_automation_turn_the_owner_stop_interrupted_is_never_asked_to_resend(cau
     from agent.turn_failure_copy import AUTOMATION_INTERRUPTED_NOTICE
     stream = _Stream()
     live = SimpleNamespace(controls=SimpleNamespace(snapshot=lambda *a: None), event_stream=stream)
-    _publish_completion(SimpleNamespace(runner=None), live, SimpleNamespace(session_id='s'),
+    _publish_completion(SimpleNamespace(runner=None, profile_id='owned'), live, SimpleNamespace(session_id='s'),
                         {'admission_id': 'adm-1', 'request_id': 'sub-1', **row},
                         {'outcome': 'interrupted'}, '', _cause(cause))
     (frame,) = stream.frames

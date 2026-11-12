@@ -41,9 +41,13 @@ logger = logging.getLogger(__name__)
 
 SWEEP_S = 10.0
 HINT_MIN_INTERVAL_S = 0.25
-# Process-local, target-less hint for the single owner-lifetime worker. It carries no
-# profile/session authority: every pass rereads the profiles the owner still serves.
+BUSY_RECHECK_S, BUSY_RECHECK_FOR_S = 1.0, 900.0
+MAX_HINT_TARGETS = 1024
+# Advisory only: resolution and durable reads belong to the worker, never the publisher's lock.
 _changed = threading.Event()
+_hint_lock = threading.Lock()
+_targets: dict[tuple, float] = {}
+_full_hint = False
 EXCERPT = 600
 BACKOFF_S, BACKOFF_MAX_S = 60.0, 3600.0
 SUBMISSION_PREFIX = "thread_update:"  # not ts.REQUEST_PREFIX: the lead's own ledger isn't a thread's
@@ -51,9 +55,20 @@ RESENT = "\n\n(Sent again: the turn that first carried this update was cut off o
 MAX_RESENDS = 3
 
 
-def hint() -> None:
+def hint(home=None, session_id=None) -> None:
     """Request an early pass; safe under a stream lock (no reads, RPC or callbacks)."""
-    _changed.set()
+    global _full_hint
+    with _hint_lock:
+        if home is None or session_id is None:
+            _full_hint = True
+        else:
+            key = (home, session_id)
+            if key not in _targets and len(_targets) >= MAX_HINT_TARGETS:
+                _targets.clear()
+                _full_hint = True
+            else:
+                _targets.setdefault(key, time.monotonic())
+        _changed.set()
 
 
 def render(items: list[dict], still: list[str], profile: str) -> str:
@@ -212,16 +227,20 @@ def _busy(conn, lineage) -> bool:
                         "AND expires_at > ? LIMIT 1", [*ids, *ids, time.time()]).fetchone() is not None
 
 
-def _owner(home: Path, session_id: str, fn):
+def _owner(home: Path, session_id: str, fn, stages=None):
     """``fn(client, target)`` on a connection attached to the lead, where ``target`` is the id the owner
     attached (a compressed chat's tip, or a local chat's logical id) and the only one it takes writes for."""
     from tools.thread_tool import _run, _subject, _with_owner
+    stages = {} if stages is None else stages
+    stages['owner_start'] = time.monotonic()
     subject = _subject(home, session_id)
     if subject is None:
         raise RuntimeError("lead chat has no login principal")
 
     async def go(client):
+        stages['connected'] = time.monotonic()
         snap = await client.rpc("session.resume", session_id=session_id, omit_messages=True, defer_history=True)
+        stages['resumed'] = time.monotonic()
         return await fn(client, snap.get("session_id") or session_id)
     return _run(_with_owner(home, subject, go))
 
@@ -260,12 +279,43 @@ def admit_display(authority, actor, request) -> dict:
     return admit_client_display(params, thread_notice=True)
 
 
-def _submit(home: Path, tip: str, record: dict, profile: str) -> bool:
-    receipt = _owner(home, tip, lambda client, target: client.rpc(
-        "prompt.submit", session_id=target, submission_id=SUBMISSION_PREFIX + record["key"],
-        queued=True, finite=True, text=record["text"], display_kind="internal_notification",
-        turn_author={"id": f"bot:{profile}", "name": "Thread update", "is_bot": True}))
-    return bool(isinstance(receipt, dict) and receipt.get("admission_id"))
+def _submit(home: Path, tip: str, record: dict, profile: str, trace=None) -> bool:
+    trace = {} if trace is None else trace
+    trace['submit_start'] = time.monotonic()
+    admitted = False
+
+    async def submit(client, target):
+        trace['prompt_start'] = time.monotonic()
+        try:
+            return await client.rpc(
+                "prompt.submit", session_id=target, submission_id=SUBMISSION_PREFIX + record["key"],
+                queued=True, finite=True, text=record["text"], display_kind="internal_notification",
+                turn_author={"id": f"bot:{profile}", "name": "Thread update", "is_bot": True})
+        finally:
+            trace['receipt'] = time.monotonic()
+
+    try:
+        receipt = _owner(home, tip, submit, stages=trace)
+        admitted = bool(isinstance(receipt, dict) and receipt.get("admission_id"))
+        return admitted
+    finally:
+        _timing(root=trace.get('root', tip), record=record, trace=trace, admitted=admitted)
+
+
+def _timing(*, root, record, trace, admitted):
+    end = trace.get('receipt', time.monotonic())
+
+    def ms(start, finish=None):
+        a, b = trace.get(start), trace.get(finish) if finish else end
+        return '-' if a is None or b is None else f'{max(0.0, b - a) * 1000:.1f}'
+
+    logger.info(
+        'thread update submitted: lead=%s key=%s results=%d resend=%d admitted=%s trigger=%s '
+        'hint_age_ms=%s queue_ms=%s reads_ms=%s attach_ms=%s resume_ms=%s submit_ms=%s total_ms=%s',
+        root, record['key'], len(record['items']), record.get('resends', 0), 'yes' if admitted else 'no',
+        trace.get('trigger', 'sweep'), ms('hinted'), ms('pass_start', 'deliver_start'),
+        ms('deliver_start', 'submit_start'), ms('owner_start', 'connected'), ms('connected', 'resumed'),
+        ms('prompt_start'), ms('deliver_start'))
 
 
 def _clear(home: Path, tip: str, cut: dict) -> None:
@@ -281,14 +331,17 @@ def _finish(home: Path, root: str, record: dict, *, delivered: bool) -> None:
     _record_path(home, root).unlink(missing_ok=True)
 
 
-def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admission, busy: bool) -> bool:
+def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admission, busy: bool, trace=None) -> bool:
     """Carry a pending update one step. True when this step had the owner admit it."""
+    trace = {} if trace is None else trace
+    trace["pending"] = True
     if record.get("exhausted"):
         if record.get("cut"):
             _clear(home, tip, record["cut"])
         for admission_id, item_status in record["items"]:
             ts.mark_needs_lead(home, admission_id, item_status)
         _finish(home, root, record, delivered=False)
+        trace["pending"] = False
         return False
     if admission is None:
         if record.get("cut"):  # the resend's intent is saved; clear the turn it replaces first
@@ -296,10 +349,11 @@ def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admiss
             _save(home, root, {k: v for k, v in record.items() if k != "cut"})
             return False
         # Never admitted: refused, or lost before the owner took it. Same key, same payload.
-        return False if busy else _submit(home, tip, record, profile)
+        return False if busy else _submit(home, tip, record, profile, trace)
     status, outcome = admission["status"], admission["outcome"]
     if status == "terminal" and outcome != "cancelled":
         _finish(home, root, record, delivered=True)  # a turn carrying it ran (an interrupt is the reader's call)
+        trace["pending"] = False
     elif status == "unknown" or status == "terminal":
         # Cut off by a restart (nobody but this sweeper sent it), or cancelled before it ran: send it again.
         resends = record.get("resends", 0) + 1
@@ -317,8 +371,10 @@ def _advance(home: Path, profile: str, tip: str, root: str, record: dict, admiss
     return False
 
 
-def deliver(home: Path, profile: str, lead: str) -> bool:
+def deliver(home: Path, profile: str, lead: str, trace: dict | None = None) -> bool:
     """One lead chat: hand back what its threads settled, once it is idle. True when an update was admitted."""
+    trace = {} if trace is None else trace
+    trace["deliver_start"] = time.monotonic()
     with ts.reader(home) as conn:
         row = None if conn is None else conn.execute("SELECT archived FROM sessions WHERE id=?", (lead,)).fetchone()
         if row is None or row[0]:
@@ -328,8 +384,9 @@ def deliver(home: Path, profile: str, lead: str) -> bool:
         record = _load(home, root)
         admission = _admission(conn, lineage, record["key"]) if record else None
         busy = _busy(conn, lineage)
+        trace.update(root=root, lineage=lineage, busy=busy)
     if record is not None:
-        return _advance(home, profile, tip, root, record, admission, busy)
+        return _advance(home, profile, tip, root, record, admission, busy, trace)
     if busy:
         return False
     items, _working = ts.wake_state(home, profile, lineage)
@@ -340,7 +397,8 @@ def deliver(home: Path, profile: str, lead: str) -> bool:
     pairs = [[item["admission_id"], item["status"]] for item in claimed]
     record = {"key": _key(pairs), "items": pairs, "text": render(claimed, _still_working(profile, lineage, done), profile)}
     _save(home, root, record)  # before the submit: a lost answer is never permission for a second turn
-    return _submit(home, tip, record, profile)
+    trace['pending'] = True
+    return _submit(home, tip, record, profile, trace)
 
 
 class Sweeper:
@@ -350,9 +408,45 @@ class Sweeper:
         self._homes = homes  # () -> [Path]: the served profiles' homes
         self._retry: dict[tuple, tuple[float, float]] = {}  # (home, lead) -> (not before, backoff)
         self._pruned = 0.0
+        self._rechecks: dict[tuple, tuple[float, float, float | None]] = {}
 
-    def sweep(self, now: float | None = None) -> int:
+    def targeted(self, now=None, seen=None) -> int:
+        """Drain advisory targets, resolving only stores this owner still serves."""
+        with _hint_lock:
+            targets = dict(_targets)
+            _targets.clear()
+        if not targets:
+            return 0
         now = time.monotonic() if now is None else now
+        seen = {} if seen is None else seen
+        served = {Path(home).resolve() for home in self._homes()}
+        homes = ts.homes()
+        candidates = {}
+        for (home, sid), hinted in targets.items():
+            home = Path(home).resolve()
+            if home not in served:
+                continue
+            profile = ts.profile_of(home)
+            candidates.setdefault((home, profile, sid), (hinted, False))
+            with ts.reader(home) as conn:
+                launch = ts.launch_of(conn, profile, ts.lineage(conn, sid)) if conn is not None else None
+            if launch is None:
+                continue
+            parent_home = homes.get(launch['launcher_profile'])
+            if parent_home is None or Path(parent_home).resolve() not in served:
+                continue
+            key = (Path(parent_home).resolve(), launch['launcher_profile'], launch['launcher_session_id'])
+            previous = candidates.get(key, (hinted, False))
+            candidates[key] = (min(hinted, previous[0]), True)
+        delivered = 0
+        for (home, profile, lead), (hinted, child) in candidates.items():
+            delivered += self._one(home, profile, lead, now, seen=seen, child=child,
+                                   trace={'trigger': 'hint', 'hinted': hinted, 'pass_start': now})
+        return delivered
+
+    def sweep(self, now: float | None = None, *, seen=None) -> int:
+        now = time.monotonic() if now is None else now
+        seen = {} if seen is None else seen
         prune = time.time() - self._pruned > 86_400
         delivered = 0
         for home in self._homes():
@@ -360,46 +454,101 @@ class Sweeper:
             profile = ts.profile_of(home)
             if prune:
                 ts.prune_markers(home)
+            delivered += self.targeted(now, seen)
             for lead in leads(profile):
-                delivered += self._one(home, profile, lead, now)
+                delivered += self.targeted(now, seen)
+                delivered += self._one(home, profile, lead, now, seen=seen,
+                                       trace={'trigger': 'sweep', 'pass_start': now})
         if prune:
             self._pruned = time.time()
         return delivered
 
-    def _one(self, home: Path, profile: str, lead: str, now: float) -> bool:
-        not_before, backoff = self._retry.get((home, lead), (0.0, 0.0))
+    def _one(self, home: Path, profile: str, lead: str, now: float, *, seen=None, child=False, trace=None) -> bool:
+        key = (home, lead)
+        not_before, backoff = self._retry.get(key, (0.0, 0.0))
         if now < not_before:
             return False
+        if seen is not None:
+            if key in seen:
+                ok, previous = seen[key]
+                if trace is not None and trace.get('hinted') is not None:
+                    previous['hinted'] = min(previous.get('hinted') or trace['hinted'], trace['hinted'])
+                self._remember(key, ok, previous, child)
+                return False
+            seen[key] = (False, {})
+        trace = {} if trace is None else trace
+        ok = False
         try:
-            ok = deliver(home, profile, lead)
+            ok = deliver(home, profile, lead, trace=trace)
         except Exception:  # health: allow BLE001 -- one lead's failure must not stop the others' updates
             first = backoff == 0.0
             backoff = min(max(backoff * 2, BACKOFF_S), BACKOFF_MAX_S)
-            self._retry[(home, lead)] = (now + backoff, backoff)
+            self._retry[key] = (now + backoff, backoff)
             # The first failure in a row carries the traceback; repeats are one line until it recovers.
             logger.log(logging.WARNING if first else logging.INFO, "thread update for %s failed; retrying in %.0fs",
                        lead, backoff, exc_info=first)
-            return False
-        self._retry.pop((home, lead), None)
+        else:
+            self._retry.pop(key, None)
+        if seen is not None:
+            for sid in trace.get('lineage', (lead,)):
+                seen[(home, sid)] = (ok, trace)
+        self._remember(key, ok, trace, child)
         return ok
 
+    def _remember(self, key, ok, trace, child=False):
+        if ok or not (trace.get('busy') or trace.get('pending')):
+            self._rechecks.pop(key, None)
+        elif child or key in self._rechecks:
+            now = time.monotonic()
+            previous = self._rechecks.get(key)
+            if previous is None and len(self._rechecks) >= MAX_HINT_TARGETS:
+                return  # Durable periodic discovery remains the fallback.
+            expiry = previous[1] if previous else now + BUSY_RECHECK_FOR_S
+            hinted = previous[2] if previous else trace.get('hinted')
+            self._rechecks[key] = (now + BUSY_RECHECK_S, expiry, hinted)
+
+    def recheck(self, now=None, seen=None):
+        now = time.monotonic() if now is None else now
+        served = {Path(home).resolve() for home in self._homes()}
+        for key, (due, expiry, hinted) in list(self._rechecks.items()):
+            home, lead = key
+            if now >= expiry or home not in served:
+                self._rechecks.pop(key, None)
+            elif now >= due:
+                self._one(home, ts.profile_of(home), lead, now, seen=seen,
+                          trace={'trigger': 'recheck', 'hinted': hinted, 'pass_start': now})
+                if key in self._rechecks:
+                    retry_at = self._retry.get(key, (0.0, 0.0))[0]
+                    self._rechecks[key] = (max(time.monotonic() + BUSY_RECHECK_S, retry_at), expiry, hinted)
+
     def run(self, stop_event: threading.Event, interval: float = SWEEP_S) -> None:
+        global _full_hint
         next_periodic = time.monotonic() + interval
         not_before = 0.0
         while not stop_event.is_set():
-            _changed.wait(max(0.0, next_periodic - time.monotonic()))
-            # Burst hints coalesce into one pass, including hints arriving during a scan.
-            # Waiting on stop here keeps shutdown prompt even during the rate limit.
+            next_recheck = min((min(due, expiry) for due, expiry, _ in self._rechecks.values()),
+                               default=next_periodic)
+            _changed.wait(max(0.0, min(next_periodic, next_recheck) - time.monotonic()))
+            # Waiting on stop keeps shutdown prompt even during the rate limit.
             if stop_event.wait(max(0.0, not_before - time.monotonic())):
                 return
-            _changed.clear()
+            with _hint_lock:
+                _changed.clear()
+                full = _full_hint or time.monotonic() >= next_periodic
+                _full_hint = False
+            seen = {}
             try:
-                self.sweep()
+                if full:
+                    self.sweep(seen=seen)
+                    next_periodic = time.monotonic() + interval
+                else:
+                    self.targeted(seen=seen)
+                self.recheck(seen=seen)
             except Exception:  # health: allow BLE001 -- the owner's only thread-update loop must outlive a bad read
                 logger.warning("thread update sweep failed", exc_info=True)
-            now = time.monotonic()
-            not_before = now + HINT_MIN_INTERVAL_S
-            next_periodic = now + interval
+                if full:
+                    next_periodic = time.monotonic() + interval
+            not_before = time.monotonic() + HINT_MIN_INTERVAL_S
 
 
 def start(stop_event: threading.Event, homes) -> threading.Thread:

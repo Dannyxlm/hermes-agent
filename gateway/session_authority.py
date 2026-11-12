@@ -484,7 +484,7 @@ class SessionAuthority:
         wake_bot_receipts(self, ref.session_id)
         if handle.execution_state != 'running' and not pending:
             from gateway.thread_wake import hint
-            hint()  # advisory: the sweeper still checks durable admissions and leases
+            hint(self.profile_id, ref.session_id)  # advisory: the sweeper still checks durable admissions and leases
 
     def _schedule(self, ref):
         from gateway.session_retirement import restore_retired
@@ -504,7 +504,7 @@ class SessionAuthority:
             if sid in self.sessions:
                 self._schedule(SessionRef(self.profile_id, sid))
         from gateway.thread_wake import hint
-        hint()  # execution.finish committed before the worker RPC calls this
+        hint(self.profile_id, session_id)  # execution.finish committed before the worker RPC calls this
 
     def _pause(self, ref, reason):
         """The FIFO stopped without claiming its head. Committed rows stay queued for a later
