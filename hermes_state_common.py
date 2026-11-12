@@ -633,6 +633,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     pricing_date TEXT NOT NULL,
     source_url TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_usage_events_chat_time ON usage_events(chat_id, occurred_at);
 

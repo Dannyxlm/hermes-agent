@@ -132,12 +132,23 @@ class SessionPruneParams(Params):
 
     filters: dict[str, JsonValue] | None = None
     never_active_days: float | None = None
+    session_ids: list[str] | None = None
+    sweep_idle_seconds: float | None = None
 
 
 class SessionPruneResult(Result):
     deleted: int
     routing_deleted: int | None = None
     skipped: int | None = None
+    deleted_ids: list[str] | None = None
+    skipped_ids: list[str] | None = None
+    messages_deleted: int | None = None
+    in_progress_ids: list[str] | None = None
+    remaining: int | None = None
+    has_more: bool | None = None
+    interrupted: bool | None = None
+    closed: int | None = None
+    closed_ids: list[str] | None = None
 
 
 canonical_method("session.prune", params=SessionPruneParams, result=SessionPruneResult,

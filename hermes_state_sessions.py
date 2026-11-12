@@ -513,6 +513,8 @@ class SessionSessionsMixin(SessionActivityMixin):
         The guard compares against the parent's started_at, not its current ended_at: a parent that was
         reopened and re-ended later still owns reset children from its earlier boundaries."""
         def _do(conn):
+            from hermes_state_mutation_retirement import require_not_retired
+            require_not_retired(conn, session_id)
             self._retire_undrained_queue_rows_conn(conn, session_id)
             conn.execute(
                 "UPDATE sessions AS child SET model_config = json_set("

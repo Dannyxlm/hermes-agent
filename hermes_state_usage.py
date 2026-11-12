@@ -334,6 +334,8 @@ class SessionUsageMixin:
         usage_timestamp: Optional[float]=None, turn_id: Optional[str]=None,
         usage_events: Optional[list[dict]]=None,
     ) -> None:
+        from hermes_state_mutation_retirement import require_not_retired
+        require_not_retired(conn, session_id)
         usage = {k: v for k, v in locals().items() if k in _MODEL_USAGE_FIELDS}
         sql = _TOKEN_UPDATE_ABSOLUTE_SQL if absolute else _TOKEN_UPDATE_DELTA_SQL
         has_usage = bool(input_tokens or output_tokens or cache_read_tokens or cache_write_tokens or reasoning_tokens
@@ -447,6 +449,8 @@ class SessionUsageMixin:
         from hermes_state_worker_lifecycle import insert_session_row_in_transaction
 
         def _write(conn):
+            from hermes_state_mutation_retirement import require_not_retired
+            require_not_retired(conn, session_id)
             if conn.execute("SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone() is None:
                 insert_session_row_in_transaction(self, conn, session_id, "unknown")
             elif own_profile := self._own_profile_name():

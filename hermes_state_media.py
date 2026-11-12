@@ -18,14 +18,15 @@ def retire_media(conn, payload, request_id=''):
                      (key, json.dumps(reference)))
 
 
-def retire_spillover(conn, session_ids):
+def retire_spillover(conn, session_ids=(), *, message_ids=None):
     """Record the spillover archives the doomed sessions' messages point at, inside the delete
     transaction (the pointers vanish with the rows), as durable candidates (#126351)."""
     from hermes_state_common import _id_chunks, _placeholders
     from tools.tool_result_storage import SPILLOVER_SQL_FILTER, spillover_names_in_text
-    for chunk in _id_chunks(list(session_ids)):
+    column, ids = ('session_id', session_ids) if message_ids is None else ('id', message_ids)
+    for chunk in _id_chunks(list(ids)):
         for content, api_content in conn.execute(
-                f"SELECT content, api_content FROM messages WHERE session_id IN ({_placeholders(chunk)})"
+                f"SELECT content, api_content FROM messages WHERE {column} IN ({_placeholders(chunk)})"
                 f" AND {SPILLOVER_SQL_FILTER}", chunk).fetchall():
             conn.executemany('INSERT OR IGNORE INTO state_meta(key,value) VALUES(?,?)',
                              [(SPILLOVER_PREFIX + n, json.dumps(n)) for n in spillover_names_in_text(content, api_content)])

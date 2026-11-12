@@ -70,6 +70,8 @@ def _epoch(conn, epoch):
 
 
 def _session(conn, session_id):
+    from hermes_state_mutation_retirement import require_not_retired
+    require_not_retired(conn, session_id)
     row = conn.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
     if row is None:
         raise RuntimeStoreError('not_found')
@@ -532,9 +534,8 @@ def mutate_runtime_session(db, *, epoch: int, principal_id: str, session_id: str
         replay = replay_mutation_receipt(conn, key, digest)
         if replay is not None:
             return replay, None
-        session = conn.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
-        if session is None and operation != 'import':
-            raise RuntimeStoreError('not_found')
+        session = (conn.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
+                   if operation == 'import' else _session(conn, session_id))
         revision = session['runtime_revision'] if session else 0
         if revision != expected_revision:
             raise RuntimeStoreError('revision_conflict')

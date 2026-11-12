@@ -142,7 +142,8 @@ class SessionMaintenanceMixin:
     def _guarded_ids(self, conn, ids: Iterable[str]) -> set:
         """Ids in *ids* protected by a live turn lease / compression lock. Idle compression-ended
         parents are closed, not live, so they are not guarded (prune and delete share this)."""
-        return {sid for sid in ids if self._write_guards_reject(conn, sid, allow_closed_compression_parent=True)}
+        return {sid for sid in ids if self._write_guards_reject(
+            conn, sid, allow_closed_compression_parent=True, allow_retired=True)}
 
     def _write_guards_reject(self, conn, sid: str, **kwargs) -> bool:
         """True when a live turn lease / compression lock protects ``sid``; expired or
@@ -363,7 +364,8 @@ class SessionMaintenanceMixin:
 
     def prune_sessions(self, older_than_days: Optional[float] = 90, source: str | None = None,
                        sessions_dir: Optional[Path] = None, exclude_active_write_guards: bool = False,
-                       deleted_ids: Optional[list] = None, **filters) -> int:
+                       deleted_ids: Optional[list] = None, *, session_ids: Optional[Iterable[str]] = None,
+                       message_cap: Optional[int] = None, **filters) -> int | dict[str, Any]:
         """Delete ended sessions inactive for ``older_than_days`` (an explicit ``started_before`` /
         ``last_active_before`` overrides it; None = no implicit bound) matching the filters.
         Children outside the window are orphaned (parent NULLed), not cascade-deleted.  With
@@ -372,21 +374,39 @@ class SessionMaintenanceMixin:
         or compression lock while expired/dead holders are reclaimed and fenced.  A compression
         ancestor is deleted only together with every continuation after it (``whole_lineages``).
         ``deleted_ids`` (the owning gateway) receives the removed ids, so it can retire their
-        in-memory routes and live sessions after the commit."""
+        in-memory routes and live sessions after the commit.
+
+        With ``message_cap`` or ``session_ids``, return a progress dict instead of the legacy
+        integer: ``deleted``, ``deleted_ids``, ``skipped_ids``, ``messages_deleted``,
+        ``in_progress_ids``, ``remaining`` and ``has_more``. A capped call performs ONE write
+        transaction; an oversized conversation is fenced first and its rows survive until its
+        last message chunk. Repeat with the same frozen filters/ids while ``has_more``; aggregate
+        deleted ids separately from skipped ids (already deleted requested ids are now unknown).
+        These explicit calls defer global cleanup: call ``finish_prune_sessions`` once at the end.
+        Without either option the historical unbounded integer/cleanup contract is unchanged."""
+        if message_cap is not None or session_ids is not None:
+            from hermes_state_prune import prune_batch
+            result = prune_batch(self, older_than_days, source, sessions_dir, exclude_active_write_guards,
+                                 session_ids, message_cap if message_cap is not None else 2**63 - 2, filters)
+            if deleted_ids is not None:
+                deleted_ids.extend(result['deleted_ids'])
+            return result
         if filters.get("include_open"):
             # Deletion is not reversible, so the ended-session guard is structural here: the
             # archive-only escape hatch (#139597) must never reach the delete path.
             raise ValueError("prune_sessions() never deletes open sessions: include_open is archive-only")
         where, where_params = self._prune_where(older_than_days, source, filters, whole_lineages=True)
+        candidates = [row[0] for row in self._read_all(f'SELECT s.id FROM sessions s WHERE {where}', where_params)]
+        check_where, check_params = self._prune_where(older_than_days, source, {**filters, 'include_pinned': True})
         removed_ids: list[str] = []
+        routes = self._read_all('SELECT scope,session_key,entry_json FROM gateway_routing')
         def _do(conn):
-            cursor = conn.execute(f"SELECT s.id FROM sessions s WHERE {where}", where_params)
-            session_ids = {row["id"] for row in cursor.fetchall()}
-            if exclude_active_write_guards:
-                session_ids -= self._guarded_ids(conn, session_ids)
-            from hermes_state_mutation_retirement import prune_retired_tombstones, retire_prunable
-            session_ids = retire_prunable(conn, sorted(session_ids))
-            prune_retired_tombstones(conn)  # every prune pass also reclaims expired deletion tombstones
+            from hermes_state_prune import recheck_unbounded
+            from hermes_state_mutation_retirement import retire_prunable
+            session_ids = recheck_unbounded(self, conn, candidates, check_where, check_params,
+                                           include_pinned=bool(filters.get('include_pinned')),
+                                           guards=exclude_active_write_guards)
+            session_ids = retire_prunable(conn, session_ids, routes=routes)
             if not session_ids:
                 return 0
             # Batched: a cron-heavy store prunes tens of thousands of ids in one call.
@@ -396,18 +416,21 @@ class SessionMaintenanceMixin:
                 conn.execute(f"DELETE FROM messages WHERE session_id IN ({ph})", chunk)
                 conn.execute(f"DELETE FROM sessions WHERE id IN ({ph})", chunk)
                 removed_ids.extend(chunk)
-            self._delete_unreferenced_system_prompts(conn)
             return len(session_ids)
         count = self._execute_write(_do)
         if count:
             emit_session_deleted(self, removed_ids, reason="prune", sessions_dir=sessions_dir)
-        from hermes_state_media import collect_retired_media
-        collect_retired_media(self)
+        self.finish_prune_sessions()
         for sid in removed_ids:
             self._remove_session_files(sessions_dir, sid)
         if deleted_ids is not None:
             deleted_ids.extend(removed_ids)
         return count
+
+    def finish_prune_sessions(self, *, prompt_batch_size: int = 100) -> dict[str, int]:
+        """Run prompt/tombstone/media collection once after a capped prune loop (also after interruption)."""
+        from hermes_state_prune import finish_prune
+        return finish_prune(self, prompt_batch_size)
 
     def _page_pragmas(self, names: tuple[str, ...], fail_msg: str) -> Optional[list]:
         """Integer PRAGMAs over the existing connection (never a byte probe); None + debug log on failure."""

@@ -202,6 +202,21 @@ def _policy_target(raw):
     return entry.get('session_id') if isinstance(entry, dict) else None
 
 
+def local_policy_rows(conn, session_ids):
+    """Policies found by indexed current target and by the physical segment's logical owner."""
+    targets = list(session_ids)
+    rows = dict(conn.execute(
+        "SELECT key,value FROM state_meta WHERE key GLOB 'gateway.local_policy.v1:*' AND json_valid(value) "
+        "AND json_extract(value,'$.entry.session_id') IN (SELECT value FROM json_each(?))",
+        (json.dumps(targets),)))
+    for sid in targets:
+        owner = local_lineage_owner(conn, sid)
+        row = conn.execute('SELECT key,value FROM state_meta WHERE key=?', (POLICY_PREFIX + owner,)).fetchone()
+        if row:
+            rows[row[0]] = row[1]
+    return rows
+
+
 def retire_local_receipts(conn, session_ids):
     """Deletion fence half for owner receipts. A local creation policy carries the launch request
     (``request_json``: a cron fire's job and raw prompt), so it goes exactly when its route does:
@@ -211,9 +226,7 @@ def retire_local_receipts(conn, session_ids):
     targets = set(session_ids)
     if not targets:
         return
-    # Prefix scans (GLOB uses the key index), not one LIKE per id: a prune retires thousands.
-    gone = [key for key, value in conn.execute('SELECT key,value FROM state_meta WHERE key GLOB ?',
-                                               (POLICY_PREFIX + '*',))
+    gone = [key for key, value in local_policy_rows(conn, targets).items()
             if _policy_target(value) in targets]
     gone += [key for key, value in conn.execute('SELECT key,value FROM state_meta WHERE key GLOB ?',
                                                 (API_DECLARED_PREFIX + '*',)) if value in targets]

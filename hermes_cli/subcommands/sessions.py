@@ -43,6 +43,20 @@ def _add_refresh_prompts(sessions_subparsers) -> None:
     _flag(refresh, "--json", help="Machine-readable output")
 
 
+def _add_prune_retention_args(sessions_prune):
+    sessions_prune.add_argument("--ids-file", metavar="PATH",
+        help="Only delete exact session IDs from this UTF-8 file, one per line (intersected with filters)")
+    sessions_prune.add_argument("--timeout", type=float, default=600, metavar="SECONDS",
+        help="Gateway RPC time budget in seconds (default: 600; a disconnected owner keeps pruning)")
+    _flag(sessions_prune, "--json", help="Print one JSON result object (including dry-run candidates)")
+    _flag(sessions_prune, "--sweep-stale-open",
+        help="Close stale open sessions before pruning; requires --source and --idle-threshold")
+    sessions_prune.add_argument("--idle-threshold", metavar="AGE",
+        help="With --sweep-stale-open, close sessions idle this long (e.g. 30d); pinned/live leases stay")
+    _flag(sessions_prune, "--include-archived",
+        help="Also delete archived sessions (excluded by default)")
+
+
 def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     """Attach the ``sessions`` subcommand to ``subparsers``."""
     sessions_parser = subparsers.add_parser(
@@ -140,8 +154,7 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
         sessions_prune, "Delete sessions older than AGE — days if bare number, or a duration "
         "like '5h'/'2d'/'1w', or an ISO timestamp (bare prune with no filters "
         "defaults to 90 days; any filter matches all ages)")
-    _flag(sessions_prune, "--include-archived",
-        help="Also delete archived sessions (excluded by default)")
+    _add_prune_retention_args(sessions_prune)
     _flag(sessions_prune, "--include-pinned",
         help="Also delete pinned sessions (excluded by default — pin is a keep flag)")
     _flag(sessions_prune, "--never-active",

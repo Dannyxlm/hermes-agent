@@ -184,7 +184,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
     def _check_transcript_write_guards(self, conn, session_id: str, compression_lock_holder: Optional[str],
         turn_lease_holder: Optional[str] = None, turn_lease_ttl_seconds: float = 300.0,
         reject_active_turn_lease: bool = False, reject_active_compression_lock: bool = False,
-        allow_closed_compression_parent: bool = False) -> None:
+        allow_closed_compression_parent: bool = False, allow_retired: bool = False) -> None:
         """Transcript-write admission checks, run INSIDE the write txn by every writer. Ordinary appends do
         NOT check compression_locks: the lock only stops two COMPRESSIONS colliding and archive_and_compact()
         commits against a watermark, so concurrent appends are safe (blocking them killed turns during slow
@@ -198,14 +198,12 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin):
         """
         from hermes_state import SessionCompressionInProgressError
         from hermes_state_errors import CompressionSessionClosedError, SessionTurnLeaseLostError
-        # NOTE (#75316 redesign): appends do NOT check compression_locks. The lock's job is to stop two
-        # COMPRESSIONS colliding, not to fence ordinary transcript writes. Concurrent appends during a
-        # compression are safe by construction: archive_and_compact() commits against a watermark captured
-        # at compression start and clones every row that arrived after it back into the live transcript, in
-        # the same write transaction. Blocking appends here was the root cause of a whole symptom family —
-        # turns dying as session_persistence_failed while a slow provider summary held the lease (#74568,
-        # #77386), including stale locks from dead PIDs blocking writes for the full TTL. Keep that narrow
-        # fence opt-in so ordinary appends retain the watermark behavior.
+        if not allow_retired:
+            from hermes_state_mutation_retirement import require_not_retired
+            require_not_retired(conn, session_id)
+        # Appends deliberately ignore compression locks: archive_and_compact()'s watermark
+        # preserves concurrent arrivals. Only destructive mutations opt in, avoiding false
+        # persistence failures during slow summaries or stale compressor leases (#75316).
         if reject_active_compression_lock:
             active_lock = conn.execute(_COMPRESSION_LOCK_ROW_SQL, (session_id,)).fetchone()
             if active_lock is not None:
