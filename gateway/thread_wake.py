@@ -15,7 +15,8 @@ one is sent again too, at most ``MAX_RESENDS`` times. Exhausted results remain u
 visible as ``needs_lead`` in thread list/read, and recoverable with an explicit admission read/wait.
 If the owner never admitted it (refused, or the receipt
 was lost), it resubmits the identical payload under the same key, which the owner replays rather than running
-twice. A failing lead backs off.
+twice. A failing lead backs off. Targeted hints interleave at lead boundaries within a full pass;
+child completions that find a busy lead get a bounded, targeted recheck until it becomes idle.
 
 Because the owner and its ledger do the work, the update reaches the chat whether or not an app is open, and
 survives a dashboard or gateway restart (claims, records and markers are on disk). A lead that is mid-turn is
@@ -46,7 +47,7 @@ MAX_HINT_TARGETS = 1024
 # Advisory only: resolution and durable reads belong to the worker, never the publisher's lock.
 _changed = threading.Event()
 _hint_lock = threading.Lock()
-_targets: dict[tuple, float] = {}
+_targets: dict[tuple, tuple[float, float]] = {}  # (home, session) -> (first hint, last hint)
 _full_hint = False
 EXCERPT = 600
 BACKOFF_S, BACKOFF_MAX_S = 60.0, 3600.0
@@ -67,7 +68,9 @@ def hint(home=None, session_id=None) -> None:
                 _targets.clear()
                 _full_hint = True
             else:
-                _targets.setdefault(key, time.monotonic())
+                now = time.monotonic()
+                first, _ = _targets.get(key, (now, now))
+                _targets[key] = (first, now)
         _changed.set()
 
 
@@ -408,6 +411,7 @@ class Sweeper:
         self._homes = homes  # () -> [Path]: the served profiles' homes
         self._retry: dict[tuple, tuple[float, float]] = {}  # (home, lead) -> (not before, backoff)
         self._pruned = 0.0
+        # (home, lead) -> (next due, expiry, first hint); all times are monotonic.
         self._rechecks: dict[tuple, tuple[float, float, float | None]] = {}
 
     def targeted(self, now=None, seen=None) -> int:
@@ -423,26 +427,30 @@ class Sweeper:
         served = {Path(home).resolve() for home in self._homes()}
         homes = ts.homes()
         candidates = {}
-        for (home, sid), hinted in targets.items():
-            home = Path(home).resolve()
-            if home not in served:
-                continue
-            profile = ts.profile_of(home)
-            candidates.setdefault((home, profile, sid), (hinted, False))
-            with ts.reader(home) as conn:
-                launch = ts.launch_of(conn, profile, ts.lineage(conn, sid)) if conn is not None else None
-            if launch is None:
-                continue
-            parent_home = homes.get(launch['launcher_profile'])
-            if parent_home is None or Path(parent_home).resolve() not in served:
-                continue
-            key = (Path(parent_home).resolve(), launch['launcher_profile'], launch['launcher_session_id'])
-            previous = candidates.get(key, (hinted, False))
-            candidates[key] = (min(hinted, previous[0]), True)
+        for (home, sid), (first, last) in targets.items():
+            try:
+                home = Path(home).resolve()
+                if home not in served:
+                    continue
+                profile = ts.profile_of(home)
+                resolved = [((home, profile, sid), False)]
+                with ts.reader(home) as conn:
+                    launch = ts.launch_of(conn, profile, ts.lineage(conn, sid)) if conn is not None else None
+                if launch is not None:
+                    parent_home = homes.get(launch['launcher_profile'])
+                    if parent_home is not None and Path(parent_home).resolve() in served:
+                        resolved.append(((Path(parent_home).resolve(), launch['launcher_profile'],
+                                          launch['launcher_session_id']), True))
+                for key, child in resolved:
+                    previous = candidates.get(key, (first, last, False))
+                    candidates[key] = (min(first, previous[0]), max(last, previous[1]), child or previous[2])
+            except Exception as exc:  # health: allow BLE001 -- one bad target must not drop the drained batch
+                logger.warning("thread update target %s failed to resolve: %s", sid, exc)
         delivered = 0
-        for (home, profile, lead), (hinted, child) in candidates.items():
+        for (home, profile, lead), (first, last, child) in candidates.items():
             delivered += self._one(home, profile, lead, now, seen=seen, child=child,
-                                   trace={'trigger': 'hint', 'hinted': hinted, 'pass_start': pass_start})
+                                   trace={'trigger': 'hint', 'hinted': first, 'hinted_last': last,
+                                          'pass_start': pass_start})
         return delivered
 
     def sweep(self, now: float | None = None, *, seen=None) -> int:
@@ -469,18 +477,21 @@ class Sweeper:
         not_before, backoff = self._retry.get(key, (0.0, 0.0))
         if now < not_before:
             return False
+        trace = {} if trace is None else trace
         if seen is not None:
             if key in seen:
                 ok, previous = seen[key]
-                hinted = trace.get('hinted') if trace is not None else None
+                hinted = trace.get('hinted')
                 # A later hint signals state this earlier read could not have observed.
-                if hinted is None or previous.get('deliver_start', 0.0) >= hinted:
+                # The sweep still gets its own visit after an earlier busy/no-result read.
+                already_seen = (ok or 'submit_start' in previous) if hinted is None else (
+                    previous.get('deliver_start', 0.0) >= trace.get('hinted_last', hinted))
+                if already_seen:
                     if hinted is not None:
                         previous['hinted'] = min(previous.get('hinted') or hinted, hinted)
                     self._remember(key, ok, previous, child)
                     return False
             seen[key] = (False, {})
-        trace = {} if trace is None else trace
         ok = False
         try:
             ok = deliver(home, profile, lead, trace=trace)
@@ -513,15 +524,26 @@ class Sweeper:
 
     def recheck(self, now=None, seen=None):
         now = time.monotonic() if now is None else now
-        served = {Path(home).resolve() for home in self._homes()}
-        for key, (due, expiry, hinted) in list(self._rechecks.items()):
-            home, lead = key
-            if now >= expiry or home not in served:
-                self._rechecks.pop(key, None)
-            elif now >= due:
-                self._one(home, ts.profile_of(home), lead, now, seen=seen,
-                          trace={'trigger': 'recheck', 'hinted': hinted, 'pass_start': now})
+        due = {key: entry for key, entry in self._rechecks.items() if now >= min(entry[:2])}
+        if not due:
+            return
+        try:
+            served = {Path(home).resolve() for home in self._homes()}
+            for key, (_, expiry, hinted) in due.items():
+                home, lead = key
+                if now >= expiry or home not in served:
+                    self._rechecks.pop(key, None)
+                else:
+                    self._one(home, ts.profile_of(home), lead, now, seen=seen,
+                              trace={'trigger': 'recheck', 'hinted': hinted, 'pass_start': now})
+        finally:
+            # Discovery can fail before _one; do not hot-loop the same due entries.
+            for key in due:
                 if key in self._rechecks:
+                    _, expiry, hinted = self._rechecks[key]
+                    if now >= expiry:
+                        self._rechecks.pop(key, None)
+                        continue
                     retry_at = self._retry.get(key, (0.0, 0.0))[0]
                     self._rechecks[key] = (max(time.monotonic() + BUSY_RECHECK_S, retry_at), expiry, hinted)
 

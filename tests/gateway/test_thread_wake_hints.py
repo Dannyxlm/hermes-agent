@@ -627,3 +627,134 @@ def test_targeted_refused_submit_logs_one_unadmitted_attempt(home, owner, settle
     assert 'admitted=no' in lines[0]
     assert 'trigger=hint' in lines[0]
     assert 'exact child answer' not in lines[0]
+
+
+@pytest.mark.parametrize('target', ['parent', 'child'])
+def test_coalesced_idle_hint_revisits_read_between_hints(home, owner, settlement, monkeypatch, target):
+    others = idle_leads(settlement, count=2)
+    row = claimed(settlement, 'child')
+    with monkeypatch.context() as external:
+        external.setattr(wake, 'hint', lambda *args: None)
+        complete(settlement, row)
+    settlement.db._write_sql('INSERT INTO session_turn_leases VALUES (?,?,?,?)',
+                             ('parent', 'external-test', time.time(), time.time() + 60))
+    original = wake.deliver
+
+    def scripted(home_, profile, lead, *args, **kwargs):
+        if lead == others[0]:
+            # Queue an old self-hint too: a child mapping must retain the newest hint.
+            wake.hint(str(home), 'parent')
+            wake.hint(str(home), target)
+        elif lead == others[1]:
+            settlement.db._write_sql('DELETE FROM session_turn_leases WHERE conversation_id=?', ('parent',))
+            wake.hint(str(home), target)
+        return original(home_, profile, lead, *args, **kwargs)
+
+    monkeypatch.setattr(wake, 'deliver', scripted)
+    for sid in (others[0], 'parent', others[1]):
+        wake.hint(str(home), sid)
+    sweeper, seen = wake.Sweeper(lambda: [home]), {}
+    sweeper.targeted(seen=seen)
+    assert owner.submits() == []  # The lead was read between the queued busy and idle hints.
+    sweeper.targeted(seen=seen)
+    assert len(owner.submits()) == 1, 'coalesced idle hint was swallowed by the earlier busy read'
+
+
+def test_sweep_revisits_busy_target_after_unhinted_lease_release(home, owner, settlement, monkeypatch):
+    others = idle_leads(settlement, count=2)
+    row = claimed(settlement, 'child')
+    with monkeypatch.context() as external:
+        external.setattr(wake, 'hint', lambda *args: None)
+        complete(settlement, row)
+    settlement.db._write_sql('INSERT INTO session_turn_leases VALUES (?,?,?,?)',
+                             ('parent', 'external-test', time.time(), time.time() + 60))
+    original = wake.deliver
+    calls = []
+
+    def scripted(home_, profile, lead, *args, **kwargs):
+        calls.append(lead)
+        if lead == others[0]:
+            wake.hint(str(home), 'parent')
+        elif lead == others[1]:
+            # A different process releases the lease without sending a hint.
+            settlement.db._write_sql('DELETE FROM session_turn_leases WHERE conversation_id=?', ('parent',))
+        return original(home_, profile, lead, *args, **kwargs)
+
+    monkeypatch.setattr(wake, 'deliver', scripted)
+    wake.Sweeper(lambda: [home]).sweep()
+    assert calls.index('parent') < calls.index(others[1])
+    assert len(owner.submits()) == 1, 'sweep skipped its own visit after the earlier busy targeted read'
+
+
+@pytest.mark.parametrize('full', [False, True])
+@pytest.mark.parametrize('failure', ['reader', 'lineage', 'launch_of'])
+def test_bad_target_does_not_drop_other_targets_or_sweep(home, owner, settlement, monkeypatch, full, failure,
+                                                       caplog):
+    others = idle_leads(settlement, count=1)
+    row = claimed(settlement, 'child')
+    wake.hint(str(home), 'bad')
+    complete(settlement, row)
+    original = getattr(ts, failure)
+    calls = []
+    deliver = wake.deliver
+
+    def observed(home_, profile, lead, *args, **kwargs):
+        calls.append(lead)
+        return deliver(home_, profile, lead, *args, **kwargs)
+
+    def failed(*args):
+        if (failure == 'lineage' and args[-1] == 'bad'
+                or failure == 'launch_of' and 'bad' in args[-1]):
+            raise RuntimeError('one target cannot be resolved')
+        return original(*args)
+
+    @contextlib.contextmanager
+    def failed_reader(path):
+        # The first reader belongs to the first (bad) target; subsequent stores are healthy.
+        monkeypatch.setattr(ts, 'reader', original)
+        raise RuntimeError('one target cannot be resolved')
+        yield  # Make the failure occur at context entry, like an unreadable store.
+
+    monkeypatch.setattr(ts, failure, failed_reader if failure == 'reader' else failed)
+    monkeypatch.setattr(wake, 'deliver', observed)
+    sweeper = wake.Sweeper(lambda: [home])
+    (sweeper.sweep if full else sweeper.targeted)()
+    assert len(owner.submits()) == 1, 'unrelated completion was lost with the bad target'
+    if full:
+        assert others[0] in calls, 'bad target aborted the remaining full-pass leads'
+    assert any('bad' in record.getMessage() and record.levelname == 'WARNING' for record in caplog.records)
+
+
+@pytest.mark.parametrize('failure', ['homes', 'profile'])
+def test_failed_busy_recheck_waits_before_retry(home, owner, settlement, monkeypatch, failure):
+    row = claimed(settlement, 'child')
+    settlement.db._write_sql('INSERT INTO session_turn_leases VALUES (?,?,?,?)',
+                             ('parent', 'external-test', time.time(), time.time() + 60))
+    complete(settlement, row)
+    sweeper = wake.Sweeper(lambda: [home])
+    sweeper.targeted()
+    due = next(iter(sweeper._rechecks.values()))[0]
+    clock, attempts = [due], []
+    profile = ts.profile_of(home)
+    monkeypatch.setattr(wake.time, 'monotonic', lambda: clock[0])
+
+    def failed(*args):
+        attempts.append(clock[0])
+        raise RuntimeError('discovery unavailable')
+
+    if failure == 'homes':
+        monkeypatch.setattr(sweeper, '_homes', failed)
+    else:
+        monkeypatch.setattr(ts, 'profile_of', failed)
+    for offset in (0.0, 0.25, 0.5, 0.75):
+        clock[0] = due + offset * wake.BUSY_RECHECK_S
+        with contextlib.suppress(RuntimeError):
+            sweeper.recheck()
+    assert len(attempts) == 1, 'failed discovery retried faster than the busy-recheck interval'
+    with monkeypatch.context() as recovered:
+        recovered.setattr(sweeper, '_homes', lambda: [home])
+        recovered.setattr(ts, 'profile_of', lambda home: profile)
+        settlement.db._write_sql('DELETE FROM session_turn_leases WHERE conversation_id=?', ('parent',))
+        clock[0] = due + wake.BUSY_RECHECK_S
+        sweeper.recheck()
+    assert len(owner.submits()) == 1
