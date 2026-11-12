@@ -136,3 +136,23 @@ def test_legacy_room_stop_remains_roomwide(room, monkeypatch):
         "room_id": "room-1", "cancel_id": "legacy-stop"}})
     assert response["result"] == {"cancelled": 2}
     assert calls == ["room"]
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_exact_deferred_stop_requires_member_confirmation(room, confirmed):
+    lease = driver.acquire_lease(room, room_id="room-1", gateway_id="gateway-a", authority_epoch=1,
+                                process_generation="fixture-process", ttl_seconds=30, clock=lambda: 100)
+    attempt = driver.start_task(room, identity(), lease, expected_cancel_generation=0, clock=lambda: 100)
+    driver.mark_attempt_indeterminate(room, attempt, lease, clock=lambda: 100)
+    driver.defer_indeterminate_task(room, identity(), lease,
+        expected_execution_generation=attempt.execution_generation, expected_cancel_generation=0,
+        reason="unconfirmed_outcome", clock=lambda: 100)
+    service = service_for(room)
+    confirmations = []
+    service.runtime.confirm_deferred_stop = lambda rid, task: confirmations.append((rid, task["identity"])) or confirmed
+    result = service.runtime.cancel_exact(identity(), cancel_id="stop-1",
+                                         **guards(expected_execution_generation=attempt.execution_generation))
+    assert confirmations == [("room-1", identity())]
+    assert result["status"] == ("cancelled" if confirmed else "deferred")
+    assert result["cancel_generation"] == int(confirmed)
+    assert driver.get_task(room, identity("sibling"))["status"] == "queued"

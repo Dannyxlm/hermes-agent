@@ -270,7 +270,17 @@ class HostedRoomRuntime:
         expected_authority_gateway_id: str, expected_authority_epoch: int,
     ) -> dict[str, Any]:
         """Cancel exactly the selected attempt; never re-route to a newer execution generation."""
+        before = state.get_task(self.db_path, identity)
+        deferred_confirmed = False
+        if before["status"] == "deferred":
+            if (before["execution_generation"] != expected_execution_generation
+                    or before["cancel_generation"] != expected_cancel_generation):
+                raise state.StaleTaskError("task attempt changed before Stop confirmation")
+            if self.confirm_deferred_stop is None or not self.confirm_deferred_stop(identity.room_id, before):
+                return before
+            deferred_confirmed = True
         result = state.cancel_task_exact(self.db_path, identity, cancel_id=cancel_id, clock=self.clock,
+            deferred_confirmed=deferred_confirmed,
             expected_execution_generation=expected_execution_generation,
             expected_cancel_generation=expected_cancel_generation,
             expected_authority_gateway_id=expected_authority_gateway_id,

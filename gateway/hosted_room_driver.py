@@ -852,6 +852,7 @@ def cancel_task_exact(
     db_path: DbPath, identity: TaskIdentity, *, cancel_id: Any,
     expected_execution_generation: int, expected_cancel_generation: int,
     expected_authority_gateway_id: str, expected_authority_epoch: int, clock: Clock,
+    deferred_confirmed: bool = False,
 ) -> dict[str, Any]:
     """Fence one user-selected task and room authority in the cancellation transaction.
 
@@ -879,6 +880,8 @@ def cancel_task_exact(
         _require_cancel_generation(row, expected_cancel_generation)
         if row["status"] not in {"queued", "deferred", "running", "indeterminate"}:
             raise InvalidTaskTransitionError(f"cannot request exact stop in state '{row['status']}'")
+        if row["status"] == "deferred" and not deferred_confirmed:
+            raise StaleTaskError("deferred task needs member Stop confirmation")
         direct = row["status"] in {"queued", "deferred"}
         sql = (_CANCEL_QUEUED_SQL if direct else _BEGIN_STOP_SQL) + " AND execution_generation=?"
         set_params = ((expected_cancel_generation + 1, cancel_id, now, now) if direct
