@@ -8,10 +8,11 @@ everything that arrived after it. Here those projections run off the serial lane
 
 Which methods qualify is read from their handlers, not their names: every handler a socket can reach
 for the method (the session authority's, and the legacy sidecar's, reached directly on a dashboard
-socket or through the authority's fallback) only projects state that already exists. None of them
+socket or through the authority's fallback) is safe to run beside later controls. Some projections
+perform idempotent backfill or route publication (notably ``session.transcript``). None of them
 changes the connection (``client.capabilities`` sets this socket's frame policy), subscribes or
 attaches (``session.resume``), leaves a cursor the next request spends (``session.events.since`` on
-the authority keeps the replay position ``session.resume`` consumes), or writes a store.
+the authority keeps the replay position ``session.resume`` consumes), or performs an ordered user mutation.
 
 Ordering stays the serial lane's. The dispatcher still takes frames in arrival order and hands a
 read over only once every frame that arrived before it has been dispatched, so a read issued after a
