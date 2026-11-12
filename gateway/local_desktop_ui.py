@@ -229,6 +229,10 @@ def _read_block(turn, agent, method, timeout):
 def _preview_action(turn, agent, payload) -> str:
     """main's ``_preview_action_request`` ladder: a short probe until the renderer has answered once,
     then the full deadline; an unanswered probe fails fast for a cooldown instead of stacking waits."""
+    if payload.get("action") == "vault":
+        # This bridge fans out to session viewers, not one pinned Desktop window.
+        return json.dumps({"success": False, "error":
+            "Vault operations require a pinned Desktop preview connection; this session bridge does not support them."})
     session_id = turn._approval_owner[1]
     now = time.monotonic()
     with _lock:
