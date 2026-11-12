@@ -1,5 +1,5 @@
 import type { SharedControl } from '@hermes/shared/gateway-canonical'
-import type { ForwardedPendingSubmission, ProjectInfo, SubagentStatus, ToolLabel } from '@hermes/shared/gateway-events'
+import type { ProjectInfo, SubagentStatus, ToolLabel } from '@hermes/shared/gateway-events'
 import type { SessionInfo, SlashCategory } from '@hermes/shared/gateway-types'
 
 export interface ActiveTool {
@@ -200,16 +200,6 @@ export interface McpServerStatus {
   tools: number
   transport: string
 }
-
-/** One durable-FIFO admission row. The legacy `session.info` fanout carries the generated
- *  `ForwardedPendingSubmission` shape; the canonical snapshot projection (`pendingSubmissions`
- *  in `@hermes/shared/gateway-canonical`) adds the owner ref as `target_*` and the receipt `outcome`. */
-export type PendingSubmissionRow = Pick<ForwardedPendingSubmission, 'admission_id' | 'status' | 'user'> &
-  Partial<Pick<ForwardedPendingSubmission, 'controls' | 'execution_generation' | 'input_id'>> & {
-    outcome?: string | null
-    target_profile_home?: string
-    target_session_id?: string
-  }
 
 export type { ProjectInfo }
 

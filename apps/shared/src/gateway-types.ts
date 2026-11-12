@@ -2,6 +2,7 @@
 import type { UsageModelData } from './billing-types.js'
 import type {
   ConnectionRequestPayload,
+  ForwardedPendingSubmission,
   GatewayEvent,
   GatewayEventMap,
   InflightTurn,
@@ -11,23 +12,28 @@ import type {
 } from './gateway-events.js'
 import type { HermesSkin } from './skin.js'
 
+/** Pending receipts also arrive from legacy snapshots without canonical owner stamps. */
+export type PendingSubmissionRow = Pick<ForwardedPendingSubmission, 'admission_id' | 'status' | 'user'> &
+  Partial<Pick<ForwardedPendingSubmission, 'controls' | 'execution_generation' | 'input_id'>> & {
+    outcome?: string | null
+    target_profile_home?: string
+    target_session_id?: string
+  }
+
+// SessionLiveInfo has an index signature: Omit would erase its named field types.
+type SessionLiveInfoBase = {
+  [K in keyof SessionLiveInfo as K extends 'pending_submissions' ? never : K]: SessionLiveInfo[K]
+}
+
 /** The gateway's `session.info` / resume `info` block — generated from `tui_gateway/contracts`,
  *  plus the canonical-authority fields the legacy contract does not carry yet
  *  (`gateway/session_events.py` owner stamps and the durable admission FIFO). */
-export interface SessionInfo extends SessionLiveInfo {
+export interface SessionInfo extends SessionLiveInfoBase {
   execution_epoch?: string
   execution_generation?: number
   execution_state?: string
   install_warning?: string
-  pending_submissions?: Array<{
-    admission_id: string
-    input_id?: string
-    target_session_id: string
-    target_profile_home: string
-    status: string
-    user: string
-    outcome?: string | null
-  }>
+  pending_submissions?: PendingSubmissionRow[] | null
 }
 
 export interface SlashCategory {

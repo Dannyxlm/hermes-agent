@@ -65,7 +65,7 @@ from hermes_cli.plugins_state import (
     _plugin_relative_segments, _plugin_settings_entry, save_plugin_setting,
 )
 # PluginContext lives in plugins_context.py; this facade stays its public import path.
-from hermes_cli.plugins_context import PluginContext as _PluginContext, _UNSET, _ignore_after_abandoned_load
+from hermes_cli.plugins_context import PluginContext, _UNSET, _ignore_after_abandoned_load
 
 
 def get_bundled_plugins_dir() -> Path:
@@ -231,51 +231,6 @@ class LoadedPlugin:
     error: Optional[str] = None
     # Bundled platform recorded as a not-yet-imported loader (see _register_deferred_platform).
     deferred: bool = False
-
-
-class PluginContext(_PluginContext):
-    """Native staged-registration context with the fork's typed native-MCP result contract.
-
-    Keep the upstream context implementation authoritative; only the MCP extension lives here.
-    """
-
-    def call_mcp(
-        self, server: str, tool: str, arguments: Optional[dict[str, Any]] = None,
-        timeout: float = 30, *, skip_if_busy: bool = False,
-    ) -> dict[str, Any]:
-        """Call ``tool`` on MCP ``server`` synchronously through :mod:`tools.mcp_tool`'s native client
-        (same trust gates, breaker, reconnect — never a parallel connection). Servers not in
-        ``plugins.entries.<plugin_id>.mcp_allowlist`` raise ``PermissionError`` (default-deny). ``timeout``
-        clamps to 1–600s; results over ~64KB are truncated with a marker. A failure's ``error`` text and
-        ``_meta`` keep only generic typed fields; its ``structuredContent`` is passed through as sent.
-
-        This is a per-server grant, deliberately not ambient authority over every configured server.
-        TODO(#64228): swap the per-server allowlist for the declared capability model once it lands
-        (per-tool grants, expiry, ro/rw).
-        """
-        if server not in self._mcp_allowlist(self.plugin_id):
-            raise PermissionError(
-                f"Plugin {self.manifest.name!r} is not allowed to call MCP "
-                f"server {server!r}. Add it to "
-                f"plugins.entries.{self.plugin_id}.mcp_allowlist in config.yaml "
-                f"to grant access (default is no MCP access)."
-            )
-        try:
-            timeout = float(timeout)
-        except (TypeError, ValueError):
-            timeout = 30.0
-        timeout = max(1.0, min(timeout, 600.0))
-        from tools.mcp_tool_handlers import _make_tool_handler
-        raw = _make_tool_handler(server, tool, timeout, skip_if_busy=skip_if_busy, typed_errors=True)(dict(arguments or {}))
-        logger.debug("Plugin %s called MCP %s/%s (timeout=%ss, %d chars returned)",
-                     self.manifest.name, server, tool, timeout, len(raw or ""))
-        return self._mcp_envelope(raw)
-
-    @classmethod
-    def _mcp_envelope(cls, raw: Any) -> dict[str, Any]:
-        """Normalize native results without losing typed failures or metadata."""
-        from hermes_cli.plugins_mcp import mcp_envelope
-        return mcp_envelope(raw, cls._MCP_RESULT_CHAR_CAP)
 
 
 

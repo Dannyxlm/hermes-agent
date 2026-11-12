@@ -54,7 +54,8 @@ def test_phone_authority_read_send_gates_and_epoch_contract(phone, meeting):
     caps = _result(rpc('groups.capabilities'))
     assert caps['driver'] is True
     assert set(caps['features']) == {
-        'authority_epoch', 'room_identity', 'monotonic_log', 'idempotent_send', 'replayable_disband'}
+        'authority_epoch', 'room_identity', 'monotonic_log', 'idempotent_send', 'replayable_disband',
+        'peer_renewal_horizon'}
     assert 'groups.send' in caps['methods']
     room = _create(rpc, meeting=meeting)
     state = _result(rpc('groups.state', room_id=room['room_id']))['room']
