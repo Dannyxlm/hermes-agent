@@ -1220,7 +1220,8 @@ class GatewaySlashCommandsMixin(
         choices = {_APPROVE_CHOICE_BY_ARG[a] for a in args if a in _APPROVE_CHOICE_BY_ARG}
         choice = "always" if "always" in choices else "session" if "session" in choices else "once"
         # Exactly the approvals the sender was checked against, never "the oldest" again.
-        count = sum(resolve_gateway_approval(session_key, choice, request_id=rid) for rid in request_ids)
+        count = sum(resolve_gateway_approval(session_key, choice, request_id=rid,
+                                             resolve_all="all" in args) for rid in request_ids)
         if not count:
             return t("gateway.approve.no_pending")
         confirmation_text = t(f"gateway.approve.{choice}_{'plural' if count > 1 else 'singular'}", count=count)

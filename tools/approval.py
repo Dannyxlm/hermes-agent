@@ -162,7 +162,8 @@ def resolve_gateway_approval(session_key: str, choice: str,
                              expected_revision: Optional[int] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
-    *resolve_all* approves pending non-payments; bulk denial still includes payments.
+    *resolve_all* marks bulk consent, even when *request_id* narrows the target:
+    it approves pending non-payments; bulk denial still includes payments.
     Payments need individual consent. Otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
     relayed to the agent in the BLOCKED message. *auth* is the device authentication a native
@@ -179,9 +180,11 @@ def resolve_gateway_approval(session_key: str, choice: str,
             if not targets:
                 return 0
         elif resolve_all:
-            targets = [entry for entry in queue if choice == "deny" or _consent_kind(entry.data) != "payment"]
+            targets = list(queue)
         else:
             targets = [queue[0]]
+        if resolve_all and choice != "deny":
+            targets = [entry for entry in targets if _consent_kind(entry.data) != "payment"]
         if expected_epoch is not None or expected_revision is not None:
             if (not request_id or resolve_all or len(targets) != 1 or type(expected_revision) is not int
                     or expected_revision < 1 or not isinstance(expected_epoch, str)
