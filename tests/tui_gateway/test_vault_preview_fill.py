@@ -87,6 +87,7 @@ def test_key_button_refuses_another_origin_before_resolving_the_password(login, 
 @pytest.mark.parametrize("relayed", [False, True])
 def test_preview_vault_request_is_live_only_and_still_resolves(monkeypatch, relayed):
     from tui_gateway import server_requests
+    from tui_gateway.transport import bind_transport, reset_transport
 
     server = srv
 
@@ -98,7 +99,7 @@ def test_preview_vault_request_is_live_only_and_still_resolves(monkeypatch, rela
     monkeypatch.setattr(server, "_session_uses_compute_host", lambda _session: relayed)
     def respond(_sid, params, *, start_if_missing):
         assert start_if_missing is False
-        resolved = server_requests.resolve_response(params["frame"])
+        resolved = server_requests.resolve_response(params["frame"], transport=owner)
         return {"type": "respond.ack", "response": {"result": {"status": "ok" if resolved else "expired"}}}
 
     monkeypatch.setattr(server, "_get_compute_host_supervisor", lambda: types.SimpleNamespace(respond=respond))
@@ -112,15 +113,36 @@ def test_preview_vault_request_is_live_only_and_still_resolves(monkeypatch, rela
             assert expression not in json.dumps(session["_compute_host_open_request"])
         assert server._open_requests(sid) == []
         answer = {"id": frame["id"], "result": {"value": '{"success": true}'}}
-        resolve = server._relay_compute_host_response if relayed else server_requests.resolve_response
-        assert resolve(answer)
+        if relayed:
+            assert server._relay_compute_host_response(answer)
+        else:
+            assert server_requests.resolve_response(answer, transport=owner)
 
-    monkeypatch.setattr(server_requests, "_write", deliver)
+    class Window:
+        relaying = False
+
+        def write(self, frame):
+            if not self.relaying:
+                self.relaying = True
+                try:
+                    deliver(frame)
+                finally:
+                    self.relaying = False
+            return True
+
+    owner = Window()
+    server_requests.preview_request_transport({"id": "preview-opener", "method": "preview.act", "params": {
+        "session_id": sid, "action": "vault", "vault": {"operation": "open"}}})
+    server_requests.remember_preview_response({"id": "preview-opener", "result": {
+        "value": json.dumps({"success": True, "target": "bound-page"})}}, owner)
+    token = bind_transport(owner)
     try:
         result = server._ask("preview.act", sid, {
             "action": "vault", "vault": {"operation": "evaluate", "target": "bound-page", "expression": expression},
         }, timeout=30)
     finally:
+        reset_transport(token)
+        server.unregister_live_transport(owner)
         server._sessions.pop(sid, None)
     assert json.loads(result) == {"success": True}
     assert server._open_requests(sid) == []
