@@ -104,7 +104,7 @@ def test_a_split_unit_that_stalls_after_one_task_finished_lists_only_the_stalled
             max_async_children=2, runner=runner, progress_fn=lambda: ((0, None), False))
         assert res["status"] == "dispatched"
         failed = wait_until(lambda: ad.failed_delegations_for_session("ui-1"), timeout=5)
-        assert [(r["task_index"], r["goal"], r["status"]) for r in failed] == [(2, "C goal", "stalled")]
+        assert [(r["task_index"], r["goal"], r["status"]) for r in failed] == [(2, "C goal", "unknown")]
     finally:
         gate.set()
         while not process_registry.completion_queue.empty():

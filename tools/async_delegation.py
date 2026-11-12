@@ -1098,12 +1098,14 @@ def dispatch_async_delegation_batch(
 # ── Finalization + completion events ────────────────────────────────────────
 def _keep_finished_children(record: dict[str, Any], result: Any, status: str) -> Any:
     """A batch unit that stalled or whose runner raised has no per-task results: children that already
-    finished (``record_unit_child``) keep theirs, and only the rest take the unit's status."""
+    finished (``record_unit_child``) keep theirs. A stalled child's outcome is unknown;
+    a runner failure still marks unfinished children as errors."""
     finished = record.get("_finished_children")  # only batch units record children
     if not finished or result.get("results"):
         return result
     indexes = record.get("task_indexes") or range(len(record.get("goals") or []))
-    return {**result, "results": [finished.get(i) or {"task_index": i, "status": status, "summary": None,
+    child_status = "unknown" if status == "stalled" else status
+    return {**result, "results": [finished.get(i) or {"task_index": i, "status": child_status, "summary": None,
                                                       "error": result.get("error")} for i in indexes]}
 
 
