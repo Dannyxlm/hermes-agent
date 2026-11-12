@@ -274,6 +274,14 @@ def test_a_command_near_the_argument_limit_is_left_alone(monkeypatch):
     command = "kill -0 $$ #" + "x" * 130000
     assert host_stop_guard.guard_shell_command(command, shell="/bin/bash") == command
 
+    # The background path adds its own prefix (`set +m; `, a worker-log wrapper) after the guard.
+    stem = "kill -0 $$ #"
+    prefix = len(host_stop_guard.guard_shell_command(stem, shell="/bin/bash")) - len(stem)
+    near = stem + "x" * (131072 - 500 - prefix - len(stem))
+    assert host_stop_guard.guard_shell_command(near, shell="/bin/bash") == near
+    clear = stem + "x" * (131072 - 2000 - prefix - len(stem))
+    assert host_stop_guard.guard_shell_command(clear, shell="/bin/bash") != clear
+
 
 @pytest.mark.platforms("linux", "macos")
 def test_the_session_bootstrap_is_not_guarded(tmp_path, monkeypatch):

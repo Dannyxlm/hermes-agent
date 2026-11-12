@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 # The word, not the substring: `skills` paths and `pkill` must not switch the guard on.
 _KILL_WORD = re.compile(r"(?<![A-Za-z0-9_])kill(?![A-Za-z0-9_])")
 # Linux refuses a single argument of 128 KiB (MAX_ARG_STRLEN); never push a command over it.
-_MAX_ARGUMENT_BYTES = 131072
+# The margin covers what the background path prepends after the guard.
+_MAX_ARGUMENT_BYTES = 131072 - 1024
 
 
 def _protected_targets() -> set[int]:
