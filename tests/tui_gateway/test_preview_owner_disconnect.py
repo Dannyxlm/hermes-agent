@@ -92,3 +92,22 @@ def test_raising_sink_does_not_discard_later_host_frames(tmp_path):
     sup._proc = proc
     sup._drain_stdout(proc)
     assert delivered == [later]
+
+
+def test_raising_sink_does_not_skip_crashed_turns_or_respawn(tmp_path, monkeypatch):
+    delivered, completed, respawned = [], [], []
+
+    def sink(message):
+        delivered.append(message["params"]["session_id"])
+        raise ValueError("synthetic sink failure")
+
+    sup = HostSupervisor(rpc_sink=sink, registry_path=tmp_path / "registry.json", autostart=False)
+    proc = SimpleNamespace(wait=lambda: 1)
+    sup._proc = proc
+    sup._pending_turns = {"r1": ("s1", completed.append), "r2": ("s2", completed.append)}
+    monkeypatch.setattr(sup, "_remove_registry", lambda: None)
+    monkeypatch.setattr(sup, "_maybe_respawn_after_crash", lambda: respawned.append(True))
+    sup._wait_for_exit(proc)
+    assert delivered == ["s1", "s2"]
+    assert [frame["request_id"] for frame in completed] == ["r1", "r2"]
+    assert respawned == [True]

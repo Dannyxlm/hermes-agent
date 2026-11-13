@@ -510,8 +510,9 @@ class HostSupervisor:
             self._pending_turns = {}
         failure = {"reason": reason, "message": message}
         for request_id, (sid, cb) in pending.items():
-            self.rpc_sink({"jsonrpc": "2.0", "method": "event",
-                           "params": {"type": "error", "session_id": sid, "payload": dict(failure)}})
+            _call_logged(self.rpc_sink, {"jsonrpc": "2.0", "method": "event",
+                         "params": {"type": "error", "session_id": sid, "payload": dict(failure)}},
+                         "compute host RPC sink failed")
             if cb is not None:
                 frame = {"type": "turn.error", "sid": sid, "request_id": request_id, **failure}
                 _call_logged(cb, frame, "compute host error callback failed")
