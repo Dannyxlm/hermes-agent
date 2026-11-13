@@ -7,8 +7,7 @@ docs of config.yaml.
 from hermes_cli.config_defaults_auxiliary import _aux
 from hermes_cli.config_defaults_vault import DEFAULT_VAULT_CONFIG
 from hermes_cli.config_defaults_kanban import DEFAULT_KANBAN_CONFIG
-
-
+from agent.account_router.scorer import DEFAULT_POLICY as DEFAULT_ACCOUNT_ROUTER_CONFIG
 #: Image every container terminal backend (docker/modal/daytona, the singularity plugin) uses unless the
 #: user pins one. LEGACY_SANDBOX_IMAGES are the plain defaults that preceded the desktop stack
 #: (the 3.14 pin shipped between the two without a migration); a saved config still holding one
@@ -30,6 +29,7 @@ DEFAULT_CONFIG = {
     # of switching the turn to a fallback model.
     "fallback": {"min_switch_reset_seconds": 0},
     "credential_pool_strategies": {},
+    "account_router": DEFAULT_ACCOUNT_ROUTER_CONFIG,
     "toolsets": ["hermes-cli"],
     # journal_mode: SQLite journal mode for every Hermes DB. "wal" default; use "delete" on
     # weak-fsync/shared filesystems where WAL is not crash-safe (macOS virtiofs, NFS, SMB).

@@ -284,6 +284,8 @@ def test_account_primary_cas_uses_native_store(client, provider, display_name):
     assert changed.status_code == 200, changed.text
     section2 = next(p for p in changed.json()['providers'] if p['id'] == provider)
     assert section2['primary_id'] == 'second'
+    from agent.account_router.snapshot import read_snapshot
+    assert read_snapshot(home/'state'/'account_router.json')['pins'][provider]['entry_id'] == 'second'
     assert section2['revision'] != section['revision']
     assert c.post(P+'/provider/accounts/primary', json=body).status_code == 409
     saved = json.loads(path.read_text())

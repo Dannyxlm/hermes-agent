@@ -115,16 +115,10 @@ AUTH_TYPE_API_KEY = "api_key"
 SOURCE_MANUAL = "manual"
 SOURCE_MANUAL_DEVICE_CODE = f"{SOURCE_MANUAL}:device_code"
 
-STRATEGY_FILL_FIRST = "fill_first"
-STRATEGY_ROUND_ROBIN = "round_robin"
-STRATEGY_RANDOM = "random"
-STRATEGY_LEAST_USED = "least_used"
-SUPPORTED_POOL_STRATEGIES = {
-    STRATEGY_FILL_FIRST,
-    STRATEGY_ROUND_ROBIN,
-    STRATEGY_RANDOM,
-    STRATEGY_LEAST_USED,
-}
+from agent.credential_pool_strategy import (
+    STRATEGY_FILL_FIRST, STRATEGY_ROUND_ROBIN, STRATEGY_RANDOM, STRATEGY_LEAST_USED,
+    STRATEGY_SMART, SUPPORTED_POOL_STRATEGIES, get_pool_strategy,
+)
 
 # Cooldowns before retrying an exhausted credential. Transient 401s cool down
 # briefly so single-key setups recover; 429/402/other take an hour.
@@ -559,16 +553,6 @@ def _get_custom_provider_config(pool_key: str) -> Optional[dict[str, Any]]:
         return None
     suffix = pool_key[len(CUSTOM_POOL_PREFIX):]
     return next((entry for norm_name, entry in _iter_custom_providers() if norm_name == suffix), None)
-
-
-def get_pool_strategy(provider: str) -> str:
-    """Return the configured selection strategy for a provider."""
-    config = _load_config_safe()
-    strategies = config.get("credential_pool_strategies") if config else None
-    if not isinstance(strategies, dict):
-        return STRATEGY_FILL_FIRST
-    strategy = str(strategies.get(provider, "") or "").strip().lower()
-    return strategy if strategy in SUPPORTED_POOL_STRATEGIES else STRATEGY_FILL_FIRST
 
 
 def _keyed_custom_pool_matches(
@@ -2170,6 +2154,14 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             self._entries = [e for e in self._entries if e.id not in pruned_ids]
         if cleared_any:
             self._persist(removed_ids=entries_to_prune)
+        if self._strategy == STRATEGY_SMART:
+            try:
+                from agent.account_router.router import reorder
+                ordered = reorder(self.provider, model, available)
+                if len(ordered) == len(available) and {id(e) for e in ordered} == {id(e) for e in available}:
+                    available = ordered
+            except Exception:
+                logger.debug("Account router unavailable; retaining static order", exc_info=True)
         return available, pending_refresh
 
     def _log_no_available_entries(self) -> None:

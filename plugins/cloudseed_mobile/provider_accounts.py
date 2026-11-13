@@ -218,6 +218,8 @@ def set_primary(body):
                 after = _pool_state(provider, profile_id, home, auth)[0]
                 if not after or after[0].id != selected.id:
                     raise AccountControlError("Hermes could not confirm the saved account order.", 409)
+            from agent.account_router.snapshot import pin
+            pin(provider, selected.id, path=home / "state" / "account_router.json")
         if changed:
             _invalidate_usage(home, provider)
             # Native CredentialPool.move_entry persists the order generation.
