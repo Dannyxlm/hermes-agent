@@ -4,7 +4,7 @@ Extends the exit-code semantics table in ``terminal_tool`` with a bounded scan o
 output mapped to ONE short, actionable recovery hint. Rules: only fires on non-zero exit; first
 match wins, patterns ordered by observed production frequency; scans only the first
 ``_SCAN_CHARS`` so hints key on error headers, not deep context; hints state the *next action*
-in 1-2 sentences; pure function, no I/O or config reads.
+in 1-2 sentences. Timeout hints resolve the current foreground cap; output-pattern rules do no I/O.
 """
 
 from __future__ import annotations
@@ -76,7 +76,6 @@ _OUTPUT_HINTS: list[Callable[[str, str], Optional[str]]] = [
 _EXIT_CODE_HINTS: dict[int, str] = {
     126: "Exit 126: the file was found but is not executable — `chmod +x` it or invoke it via its interpreter (e.g. `bash script.sh`).",
     137: "Exit 137: the process was SIGKILLed — usually out-of-memory or an external kill. Reduce memory use or check `dmesg | tail` before retrying.",
-    124: "Exit 124: the command hit its timeout. Raise timeout= (foreground max 600s) or run it with background=true and notify_on_complete=true.",
 }
 
 
@@ -157,4 +156,12 @@ def annotate_failure(command: str, exit_code: int, output: str) -> Optional[str]
                 return hint
         except Exception:
             continue
+    if exit_code == 124:
+        from tools.terminal_tool import _effective_foreground_cap
+
+        return (
+            "Exit 124: the command hit its timeout. Raise timeout= "
+            f"(foreground max {_effective_foreground_cap()}s) or run it with "
+            "background=true and notify_on_complete=true."
+        )
     return _EXIT_CODE_HINTS.get(exit_code)

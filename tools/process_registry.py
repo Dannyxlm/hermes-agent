@@ -30,7 +30,7 @@ from hermes_cli._subprocess_compat import windows_hide_flags
 from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
 from hermes_cli.config import get_hermes_home
-
+from tools.environments.host_stop_guard import guard_shell_command
 from tools.process_registry_notifications import (
     format_process_notification, heartbeat_output_tail, is_child_process_notification, should_surface_notification)
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
@@ -1016,7 +1016,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         # the rewriter makes it ``A && { B & }`` (#68915). Lazy: terminal_tool imports this module.
         from tools.terminal_tool_sudo import _rewrite_compound_background as _rewrite_bg
 
-        safe_command = _append_dropped_path_entries(_rewrite_bg(command), self._spawn_env(env_vars).get("PATH", "") if restore_login_path else "")
+        safe_command = guard_shell_command(_append_dropped_path_entries(_rewrite_bg(command), self._spawn_env(env_vars).get("PATH", "") if restore_login_path else ""), shell=_find_shell())
         session = self._new_session(command, task_id, owner_task_id, session_key, _resolve_safe_cwd(cwd or os.getcwd()),
                                     persist_on_release=persist_on_release)
         try:

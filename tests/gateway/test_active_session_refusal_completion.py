@@ -13,7 +13,7 @@ def test_refused_turn_publishes_completion_with_its_reason():
     live = SimpleNamespace(controls=SimpleNamespace(snapshot=lambda *a: None), event_stream=stream)
     refusal = ActiveSessionRefusal('Too many active sessions.', MAX_CONCURRENT_SESSIONS)
 
-    _publish_completion(SimpleNamespace(runner=None), live, SimpleNamespace(session_id='s'),
+    _publish_completion(SimpleNamespace(runner=None, profile_id='owned'), live, SimpleNamespace(session_id='s'),
                         {'admission_id': 'a1', 'request_id': 'r1'}, {'outcome': 'failed'}, refusal, None)
 
     [frame] = received

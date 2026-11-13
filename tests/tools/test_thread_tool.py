@@ -855,10 +855,10 @@ def test_the_sweep_serves_every_lead_and_backs_off_one_that_fails(home, owner, m
     assert thread_wake.leads("default") == ["compressed", "gone", "other", "parent"]  # t3 idle past the window
     real = thread_wake.deliver
 
-    def flaky(home_, profile, lead):
+    def flaky(home_, profile, lead, **kwargs):
         if lead == "other":
             raise RuntimeError("owner unreachable")
-        return real(home_, profile, lead)
+        return real(home_, profile, lead, **kwargs)
 
     monkeypatch.setattr(thread_wake, "deliver", flaky)
     sweeper = thread_wake.Sweeper(lambda: [home])
@@ -878,7 +878,7 @@ def test_the_sweeper_sweeps_until_stopped():
     class Counting(Sweeper):
         swept = 0
 
-        def sweep(self, now=None):
+        def sweep(self, now=None, **kwargs):
             Counting.swept += 1
             if Counting.swept >= 2:
                 swept_twice.set()
