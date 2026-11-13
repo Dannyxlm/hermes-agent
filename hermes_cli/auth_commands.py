@@ -508,8 +508,8 @@ def auth_priority_command(args) -> None:
         if moved is None:
             raise SystemExit(f'No credential matching "{getattr(args, "target", None)}" for provider {provider}.')
         if requested == 0 and provider in {"anthropic", "openai-codex", "xai-oauth"}:
-            from agent.account_router.snapshot import pin
-            pin(provider, moved.id)
+            from agent.account_router.snapshot import pin_best_effort
+            pin_best_effort(provider, moved.id, strategy=get_pool_strategy(provider))
     _report_priority(provider, pool, moved, requested, "Set", "to")
 
 

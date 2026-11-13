@@ -44,12 +44,11 @@ def refresh(providers):
                     meters.append(future.result())
                 except Exception:  # health: allow BLE001 -- transport bodies/bearers must never enter logs; record unknown instead
                     unknown += 1  # Never print a transport exception: it may contain a body/token.
-                    from agent.account_router.types import AccountMeter
-                    meters.append(AccountMeter(provider, entry.id, None, (), time.time(), "usage_api"))
+                    # Retain last-known windows and their original age on a failed probe.
             merge_meters(snapshot_path(provider), meters, policy=policy,
                          entry_ids={provider: [e.id for e in entries]},
                          labels={provider: {e.id: e.label for e in entries}})
-            result.append({"provider": provider, "updated": len(meters) - unknown, "unknown": unknown})
+            result.append({"provider": provider, "updated": len(meters), "unknown": unknown})
     return result
 
 

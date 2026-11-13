@@ -35,9 +35,9 @@ def _epoch(value) -> float | None:
 
 def _percent(value) -> float | None:
     # JSON strings are not usage numbers; header strings are decoded separately.
-    if not usage._is_finite_num(value) or not 0 <= value <= 100:
+    if not usage._is_finite_num(value) or value < 0:
         return None
-    return float(value)
+    return min(100.0, float(value))
 
 
 def _kind(seconds, fallback: str) -> str:

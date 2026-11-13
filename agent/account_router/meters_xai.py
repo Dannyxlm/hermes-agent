@@ -47,8 +47,10 @@ def _window(payload: dict) -> MeterWindow:
     # Proto3 omits zero-valued fields. Only a VALID period end permits the
     # omitted-percent => zero interpretation; explicit null stays unknown.
     used = config.get("creditUsagePercent", 0 if reset is not None else None)
-    if not usage._is_finite_num(used) or not 0 <= used <= 100:
+    if not usage._is_finite_num(used) or used < 0:
         used = None
+    else:
+        used = min(100, used)
     return MeterWindow(
         kind="weekly" if period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY" else "period",
         used_pct=used, resets_at=reset,

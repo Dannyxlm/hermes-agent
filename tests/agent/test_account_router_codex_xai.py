@@ -90,7 +90,7 @@ def test_codex_session_and_unrecognized_duration(monkeypatch, codex_entry):
     assert result.extras == {"banked_resets": 0, "credits": None}
 
 
-@pytest.mark.parametrize("bad", [None, True, "25", -1, 101, float("nan"), float("inf"), {}])
+@pytest.mark.parametrize("bad", [None, True, "25", -1, float("nan"), float("inf"), {}])
 def test_codex_invalid_percent_is_unknown_not_free(monkeypatch, codex_entry, bad):
     monkeypatch.setattr(usage, "_get_json", Mock(return_value={"rate_limit": {
         "secondary_window": {"used_percent": bad, "reset_at": NOW},
@@ -155,7 +155,7 @@ def test_xai_omitted_zero_without_valid_end_is_unknown(monkeypatch, xai_entry, e
     assert xai.fetch(xai_entry).windows == (MeterWindow("weekly", None, None),)
 
 
-@pytest.mark.parametrize("bad", [None, True, "25", -1, 101, float("nan"), float("inf"), {}])
+@pytest.mark.parametrize("bad", [None, True, "25", -1, float("nan"), float("inf"), {}])
 def test_xai_invalid_explicit_percent_is_unknown(monkeypatch, xai_entry, bad):
     monkeypatch.setattr(usage, "_get_json", Mock(side_effect=[billing(bad), {}]))
     assert xai.fetch(xai_entry).windows == (MeterWindow("weekly", None, END_EPOCH),)
@@ -212,7 +212,7 @@ def test_codex_headers_relative_reset_and_short_window():
         MeterWindow("session", 0, NOW + 90), MeterWindow("period", 10, None))
 
 
-@pytest.mark.parametrize("bad", ["nan", "inf", "-1", "101", "oops"])
+@pytest.mark.parametrize("bad", ["nan", "inf", "-1", "oops"])
 def test_codex_invalid_header_percent_never_looks_unused(bad):
     assert codex.parse_headers({"x-codex-primary-used-percent": bad}, now=NOW) == (
         MeterWindow("session", None, None),)

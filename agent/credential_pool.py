@@ -2408,9 +2408,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 return None, pending_refresh
 
             below_cap = [e for e in available if self._active_leases.get(e.id, 0) < self._max_concurrent]
+            positions = {entry.id: i for i, entry in enumerate(available)}
             chosen = min(
                 below_cap or available,
-                key=lambda entry: (self._active_leases.get(entry.id, 0), entry.priority),
+                key=lambda entry: (self._active_leases.get(entry.id, 0),
+                                   positions[entry.id] if self._strategy == STRATEGY_SMART else entry.priority),
             )
             self._active_leases[chosen.id] = self._active_leases.get(chosen.id, 0) + 1
             self._current_id = chosen.id

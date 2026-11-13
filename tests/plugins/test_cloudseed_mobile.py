@@ -254,9 +254,10 @@ def test_account_display_missing_label_is_generic():
     assert _safe_entry_label(entry, 7) == 'Account 7'
 
 
+@pytest.mark.parametrize('broken_pin', [False, True])
 @pytest.mark.parametrize('strategy', ['fill_first', 'smart'])
 @pytest.mark.parametrize('provider, display_name', [('openai-codex', 'Codex'), ('xai-oauth', 'Grok')])
-def test_account_primary_cas_uses_native_store(client, provider, display_name, strategy):
+def test_account_primary_cas_uses_native_store(client, provider, display_name, strategy, broken_pin):
     import json
     from hermes_cli.config_backend import write_config_key
     c, home = client
@@ -282,13 +283,21 @@ def test_account_primary_cas_uses_native_store(client, provider, display_name, s
     assert accounts[1]['label'] == 'Account 2'  # email-shaped label never shown
     assert 'synthetic@example.invalid' not in response.text
     assert 'synthetic-private-label' not in response.text
+    if broken_pin:
+        (home/'state').mkdir(exist_ok=True)
+        (home/'state'/'account_router.json').write_text('{not json')
     body = {'provider': provider, 'account_id': 'second', 'profile_id': 'default', 'revision': section['revision']}
     changed = c.post(P+'/provider/accounts/primary', json=body)
     assert changed.status_code == 200, changed.text
     section2 = next(p for p in changed.json()['providers'] if p['id'] == provider)
     assert section2['primary_id'] == 'second'
     from agent.account_router.snapshot import read_snapshot
-    assert read_snapshot(home/'state'/'account_router.json')['pins'][provider]['entry_id'] == 'second'
+    if broken_pin:
+        assert (home/'state'/'account_router.json').read_text() == '{not json'
+    elif strategy == 'smart':
+        assert read_snapshot(home/'state'/'account_router.json')['pins'][provider]['entry_id'] == 'second'
+    else:
+        assert not (home/'state'/'account_router.json').exists()
     assert section2['revision'] != section['revision']
     assert c.post(P+'/provider/accounts/primary', json=body).status_code == 409
     saved = json.loads(path.read_text())

@@ -197,7 +197,8 @@ hermes config set credential_pool_strategies.anthropic smart
 ```
 
 Refresh uses at most four workers and five-second HTTP timeouts. Failed probes
-record unknown, never zero usage. Schedule `hermes auth router refresh` externally
+report unknown and retain the previous meter until it ages out; they never replace
+known limits with an empty fresh reading. Schedule `hermes auth router refresh` externally
 if desired (for example every ten minutes); enabling `smart` does not create a job.
 Anthropic unified allowance headers also update the serving account asynchronously,
 with at most one header write per account per minute. Selection never performs
@@ -211,13 +212,20 @@ capped top is bypassed immediately. New healthy-account decisions wait for a
 refresh/header update, so processes do not start independent dwell clocks.
 
 `hermes auth priority <provider> <target> 0` and the Accounts “Use now” control
-also pin that account for six hours. A pin wins while that account is available
+also pin that account for six hours when its strategy is `smart`. A pin failure
+never fails an already-saved order change, and other strategies write no pin state.
+A pin wins while that account is available
 for the requested model; it never blocks another model when the account is benched.
 Pin expiry hands control back to the shared decision.
 
 Tune `account_router.pin_hours`, `min_dwell_minutes`, `switch_margin`, `cap_pct`,
-`max_meter_age_minutes` (default 30), or `plan_units.<provider>.<plan>` with
-`hermes config set`. Policy hot-reloads independently of frozen model settings.
+`max_meter_age_minutes` (default 30), `session_units_floor` (default 5), or
+`plan_units.<provider>.<plan>` with `hermes config set`. For a fresh known session
+window, urgency is multiplied by `min(1, session_remaining × plan_units / session_units_floor)`.
+This reduces long-context churn onto small plans without suppressing their unused
+allowance when larger plans have little urgency. Unknown/expired session readings
+do not penalize urgency; expired caps are not treated as current exhaustion.
+Policy hot-reloads independently of frozen model settings.
 Default Anthropic plan units are Pro/default=1, Max 5×=5 and Max 20×=20. Codex
 `plus=1`, `prolite=10`, `pro=20` are configurable **heuristics**, not verified weekly
 token quotas. Legacy Grok `GrokPro` and `XPremiumPlus` both use 1 because their

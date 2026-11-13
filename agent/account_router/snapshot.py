@@ -1,7 +1,7 @@
 """Profile/pool-owner scoped, atomic sidecar transactions and mtime-cached reads."""
 from __future__ import annotations
 
-import copy
+import logging
 import json
 import threading
 import time
@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .types import AccountMeter, MeterWindow
 
+logger = logging.getLogger(__name__)
 _cache = {}
 _cache_lock = threading.RLock()
 _holders = {}
@@ -23,6 +24,16 @@ def _version(path):
         return None
 
 
+def _read_json(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("Expected a JSON object")
+    return data
+
+
 def _cached_json(path):
     path = Path(path)
     version = _version(path)
@@ -30,9 +41,7 @@ def _cached_json(path):
         cached = _cache.get(path)
         if cached is not None and cached[0] == version:
             return cached[1]
-        data = json.loads(path.read_text(encoding="utf-8-sig")) if version is not None else {}
-        if not isinstance(data, dict):
-            raise ValueError("Expected a JSON object")
+        data = _read_json(path) if version is not None else {}
         # Bound retention across short-lived profiles in a multiplex gateway.
         if len(_cache) >= 128:
             _cache.clear()
@@ -53,8 +62,8 @@ def snapshot_path(provider):
     return home / "state" / "account_router.json"
 
 
-def read_snapshot(path):
-    state = _cached_json(path)
+def read_snapshot(path, *, cached=True):
+    state = _cached_json(path) if cached else _read_json(path)
     if state and state.get("version") != 1:
         raise ValueError("Unsupported account router snapshot")
     return state
@@ -74,47 +83,66 @@ def _transaction(path, change):
     with _cache_lock:
         holder = _holders.setdefault(path, threading.local())
     with _file_lock(path.with_suffix(".lock"), holder, 5, "Account router snapshot busy"):
-        state = copy.deepcopy(read_snapshot(path))
+        state = read_snapshot(path, cached=False)
         state.setdefault("version", 1)
         if change(state) is False:
             return state
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_json_write(path, state, mode=0o600, allow_nan=False)
+        with _cache_lock:
+            _cache.pop(path, None)
     return state
 
 
-def merge_meters(path, meters, *, policy, now=None, entry_ids=None, labels=None, partial=False):
-    """Monotonic merge under one lock; header deltas preserve untouched window ages."""
-    from .router import update_decisions
+def _merge_meter(previous, meter, *, partial):
+    """Each window keeps its own observation time, even across out-of-order sources."""
     from .scorer import window_key
+    if previous is None:
+        raw = asdict(meter)
+        raw["extras"]["window_fetched_at"] = {window_key(w): meter.fetched_at for w in meter.windows}
+        raw["extras"]["header_captured_at" if partial else "usage_fetched_at"] = meter.fetched_at
+        return raw
+    usage_at = previous.extras.get("usage_fetched_at", previous.fetched_at if previous.source == "usage_api" else 0)
+    if not partial and meter.fetched_at < usage_at:
+        return asdict(previous)  # A newer complete fetch already superseded absent windows too.
+    old_stamps = previous.extras.get("window_fetched_at", {})
+    stamps = {window_key(w): old_stamps.get(window_key(w), previous.fetched_at) for w in previous.windows}
+    windows = {window_key(w): w for w in previous.windows
+               if partial or stamps[window_key(w)] > meter.fetched_at}
+    for window in meter.windows:
+        key = window_key(window)
+        if stamps.get(key, 0) <= meter.fetched_at:
+            windows[key] = window
+            stamps[key] = meter.fetched_at
+    extras = dict(previous.extras)
+    plan = previous.plan
+    if not partial:
+        extras.update(meter.extras)
+        extras["usage_fetched_at"] = meter.fetched_at
+        plan = meter.plan
+    if partial:
+        extras["header_captured_at"] = meter.fetched_at
+    extras["window_fetched_at"] = {key: stamps[key] for key in windows}
+    latest = max(previous.fetched_at, meter.fetched_at)
+    source = meter.source if meter.fetched_at >= previous.fetched_at else previous.source
+    return asdict(AccountMeter(meter.provider, meter.entry_id, plan, tuple(windows.values()), latest, source, extras))
+
+
+def merge_meters(path, meters, *, policy, now=None, entry_ids=None, labels=None, partial=False):
+    """Merge windows by observation time; full fetches retain only newer stored windows."""
+    from .router import update_decisions
     now = time.time() if now is None else now
     def change(state):
         providers = set()
         for meter in meters:
             rows = state.setdefault("meters", {}).setdefault(meter.provider, {})
             old = rows.get(meter.entry_id)
-            if old and old["fetched_at"] > meter.fetched_at:
-                continue
             if partial and old and meter.fetched_at - old.get("extras", {}).get("header_captured_at", 0) < 60:
                 continue
-            if partial and old:
-                previous = decode_meters(state, meter.provider)[meter.entry_id]
-                windows = {window_key(w): w for w in previous.windows}
-                stamps = dict(previous.extras.get("window_fetched_at", {}))
-                stamps.update({window_key(w): previous.fetched_at for w in previous.windows
-                               if window_key(w) not in stamps})
-                windows.update({window_key(w): w for w in meter.windows})
-                stamps.update({window_key(w): meter.fetched_at for w in meter.windows})
-                meter = AccountMeter(meter.provider, meter.entry_id, previous.plan, tuple(windows.values()),
-                                     meter.fetched_at, meter.source,
-                                     {**previous.extras, "window_fetched_at": stamps,
-                                      "header_captured_at": meter.fetched_at})
-            elif partial:
-                meter = AccountMeter(meter.provider, meter.entry_id, meter.plan, meter.windows,
-                                     meter.fetched_at, meter.source, {"header_captured_at": meter.fetched_at})
-            raw = asdict(meter)
-            if old and not partial and old.get("extras", {}).get("header_captured_at"):
-                raw["extras"]["header_captured_at"] = old["extras"]["header_captured_at"]
+            previous = decode_meters(state, meter.provider).get(meter.entry_id)
+            raw = _merge_meter(previous, meter, partial=partial)
+            if raw == old:
+                continue
             rows[meter.entry_id] = raw
             providers.add(meter.provider)
         if not providers:
@@ -140,3 +168,13 @@ def pin(provider, entry_id, *, path=None, now=None, policy=None):
         state.setdefault("pins", {})[provider] = {"entry_id": entry_id,
                                                   "until": now + policy.get("pin_hours", 6) * 3600}
     return _transaction(snapshot_path(provider) if path is None else path, change)
+
+
+def pin_best_effort(provider, entry_id, *, strategy, path=None):
+    """A failed advisory pin must never fail an already-saved operator preference."""
+    if strategy != "smart":
+        return
+    try:
+        pin(provider, entry_id, path=path)
+    except Exception:
+        logger.debug("Account router pin unavailable; account order was saved", exc_info=True)

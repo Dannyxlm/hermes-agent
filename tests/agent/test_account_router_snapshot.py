@@ -53,8 +53,14 @@ def test_header_delta_does_not_launder_old_scoped_window(tmp_path):
     assert merged["a"].plan == api.plan
     assert rank("anthropic", "claude-fable-5", ["a"], merged, NOW+2000, {})[0][1] is None
     assert rank("anthropic", "claude-opus-4", ["a"], merged, NOW+2000, {})[0][1] > 0
-    merge_meters(path, [m("a", 80)], now=NOW+2001, policy={})
-    assert decode_meters(read_snapshot(path), "anthropic")["a"].fetched_at == NOW+2000
+    refreshed = replace(m("a", 60, NOW+1999), plan="default_claude_max_5x", windows=(
+        MeterWindow("weekly", 95, NOW+86400, "fable"), MeterWindow("weekly", 60, NOW+86400)))
+    merge_meters(path, [refreshed], now=NOW+2001, policy={})
+    merged = decode_meters(read_snapshot(path), "anthropic")["a"]
+    assert merged.fetched_at == NOW+2000
+    assert merged.plan == "default_claude_max_5x"
+    assert {(w.model_scope, w.used_pct) for w in merged.windows} == {("fable", 95), (None, 10)}
+    assert merged.extras["window_fetched_at"]["weekly/fable"] == NOW+1999
 
 
 def test_profile_ownership_and_mtime_cache(tmp_path, monkeypatch):

@@ -23,7 +23,7 @@ def _percent(value, *, fraction=False):
         value = float(value)
         if fraction:
             value *= 100
-        return value if math.isfinite(value) and 0 <= value <= 100 else None
+        return min(100, value) if math.isfinite(value) and value >= 0 else None
     except (ValueError, TypeError):
         return None
 
