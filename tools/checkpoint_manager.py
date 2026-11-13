@@ -1003,8 +1003,13 @@ class CheckpointManager:
         index_file = _index_path(store, dir_hash)
 
         # Stage the current tree so the name-only diff sees new files too.
-        _run_git(_stage_all_args(store.parent, abs_dir), store, abs_dir,
-                 timeout=_GIT_TIMEOUT * 2, index_file=index_file)
+        clear_stale_index_lock(index_file)
+        staged, _, stage_error = _run_git(
+            _stage_all_args(store.parent, abs_dir), store, abs_dir,
+            timeout=_GIT_TIMEOUT * 2, index_file=index_file,
+        )
+        if not staged:
+            return {"success": False, "error": f"Could not stage current files: {stage_error}"}
         ok, names_out, err = _run_git(
             ["diff", "--name-only", "-z", commit_hash, "--cached",
              *_exclude_store_args(store.parent, abs_dir)],
@@ -1185,8 +1190,13 @@ class CheckpointManager:
         index_file = _index_path(store, dir_hash)
 
         # Stage current state into the per-project index to compare.
-        _run_git(_stage_all_args(store.parent, abs_dir), store, abs_dir,
-                 timeout=_GIT_TIMEOUT * 2, index_file=index_file)
+        clear_stale_index_lock(index_file)
+        staged, _, stage_error = _run_git(
+            _stage_all_args(store.parent, abs_dir), store, abs_dir,
+            timeout=_GIT_TIMEOUT * 2, index_file=index_file,
+        )
+        if not staged:
+            return {"success": False, "error": f"Could not stage current files: {stage_error}"}
 
         # A checkpoint taken before the store was excluded may still contain it; never
         # report the store as a change against such a checkpoint.

@@ -168,7 +168,13 @@ def clear_stale_index_lock(index_file: Path) -> list[str]:
     that a Git writer has finished.
     """
     index_file = Path(index_file)
-    return _sweep_locks(index_file.parent, (index_file.name + ".lock",), None)
+    lock_name = index_file.name + ".lock"
+    try:
+        if not (index_file.parent / lock_name).is_file():
+            return []
+    except OSError:
+        return []
+    return _sweep_locks(index_file.parent, (lock_name,), None)
 
 
 def clear_stale_object_store_locks(git_dir: Path) -> list[str]:
