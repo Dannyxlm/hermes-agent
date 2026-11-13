@@ -25,10 +25,10 @@ DEFAULT_CONFIG = {
     "model": "",
     "providers": {},
     "fallback_providers": [],
-    # min_switch_reset_seconds: opt-in (0 = off). When a rate-limited primary declares a reset
-    # sooner than this many seconds, stay on it (the retry backoff rides out the window) instead
-    # of switching the turn to a fallback model.
-    "fallback": {"min_switch_reset_seconds": 0},
+    # Both opt-in (0 = off): min_switch_reset_seconds keeps a soon-resetting primary instead
+    # of switching models. retry_once_max_wait_seconds benches the last usable pool row on
+    # its first 429 if the declared reset is further away, allowing eager fallback.
+    "fallback": {"min_switch_reset_seconds": 0, "retry_once_max_wait_seconds": 0},
     "credential_pool_strategies": {},
     "toolsets": ["hermes-cli"],
     # journal_mode: SQLite journal mode for every Hermes DB. "wal" default; use "delete" on
