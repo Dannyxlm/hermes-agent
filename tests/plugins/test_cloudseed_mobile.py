@@ -254,10 +254,13 @@ def test_account_display_missing_label_is_generic():
     assert _safe_entry_label(entry, 7) == 'Account 7'
 
 
+@pytest.mark.parametrize('strategy', ['fill_first', 'smart'])
 @pytest.mark.parametrize('provider, display_name', [('openai-codex', 'Codex'), ('xai-oauth', 'Grok')])
-def test_account_primary_cas_uses_native_store(client, provider, display_name):
+def test_account_primary_cas_uses_native_store(client, provider, display_name, strategy):
     import json
+    from hermes_cli.config_backend import write_config_key
     c, home = client
+    write_config_key(home/'config.yaml', 'credential_pool_strategies.' + provider, strategy)
     store = {'credential_pool': {provider: [
         {'id': 'first', 'label': 'synthetic-private-label', 'source': 'manual', 'priority': 0, 'auth_type': 'oauth', 'access_token': 'fixture-only-not-a-token'},
         {'id': 'second', 'label': 'synthetic@example.invalid', 'source': 'manual', 'priority': 1, 'auth_type': 'oauth', 'access_token': 'fixture-only-other'},

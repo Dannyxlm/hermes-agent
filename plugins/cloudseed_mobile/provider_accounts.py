@@ -106,7 +106,7 @@ def _pool_state(provider, profile_id, home, auth):
     reason = None
     if borrowed:
         reason = "These accounts are shared from the root profile. Open the root profile to change their order."
-    elif strategy != "fill_first":
+    elif strategy not in {"fill_first", "smart"}:
         reason = "This provider does not use fill first. Change its strategy in Hermes before choosing a primary account."
     elif not entries:
         reason = "No saved accounts. Add an account in Hermes first."
