@@ -42,6 +42,9 @@ def _request(callback: PreviewCallback, operation: str, **params) -> dict:
         answer = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:  # health: allow BLE001 -- IPC/guest exception text can echo the evaluated script
         return _unavailable()
+    if isinstance(answer, dict) and answer.get("error_type") == "preview_vault_unsupported":
+        return {"success": False, "error_type": "preview_vault_unsupported", "error":
+                "The in-app browser cannot take saved logins in this session. Use the managed browser instead."}
     return answer if isinstance(answer, dict) and answer.get("success") is True else _unavailable()
 
 
@@ -80,6 +83,8 @@ def run_preview_vault(callback: PreviewCallback | None, operation: Callable[[], 
         return json.dumps(_unavailable())
     if not target:
         opened = _request(callback, "open")
+        if opened.get("success") is not True:
+            return json.dumps(opened)
         target = str(opened.get("target") or "")
         if not target:
             return json.dumps(_unavailable())

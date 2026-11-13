@@ -40,3 +40,25 @@ def test_canonical_preview_vault_never_fans_out(operation):
     assert second.frames == []
     assert result["success"] is False
     assert "pinned" in result["error"].lower()
+
+
+def test_canonical_refusal_tells_agent_to_use_managed_browser():
+    from tools.browser_vault_preview import run_preview_vault
+
+    called = []
+    result = json.loads(run_preview_vault(
+        lambda payload: ui._preview_action(None, None, payload), lambda: called.append(True)))
+    assert called == []
+    assert result["success"] is False
+    assert result["error_type"] == "preview_vault_unsupported"
+    assert "managed browser" in result["error"]
+    assert "retry" not in result["error"].lower()
+
+
+def test_unsupported_error_uses_fixed_text_not_bridge_payload():
+    from tools.browser_vault_preview import run_preview_vault
+
+    result = json.loads(run_preview_vault(lambda payload: {
+        "success": False, "error_type": "preview_vault_unsupported", "error": "SYNTHETIC-SECRET"}, lambda: None))
+    assert "managed browser" in result["error"]
+    assert "SYNTHETIC-SECRET" not in json.dumps(result)
