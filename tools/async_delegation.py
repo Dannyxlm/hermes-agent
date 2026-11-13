@@ -242,11 +242,16 @@ def merge_completion_children(event, result, task, partial):
     """A terminal batch incorporates child facts committed before this transaction."""
     if not task.get('is_batch') or not partial.get('partial'):
         return
-    recorded = {r['task_index']: r for r in partial.get('results', []) if type(r.get('task_index')) is int}
-    incoming = {r['task_index']: r for r in result.get('results', []) if type(r.get('task_index')) is int}
-    # Forced settlement's snapshot can contain placeholders for children committed since then.
-    # The transaction's child facts win; an ordinary runner result keeps its existing precedence.
-    recorded = (incoming | recorded) if event.get('status') in ('stalled', 'error') else (recorded | incoming)
+    recorded = {r['task_index']: r for r in partial.get('results', [])
+                if type(r.get('task_index')) is int}
+    for entry in result.get('results', []):
+        if type(entry.get('task_index')) is not int:
+            continue
+        incoming = dict(entry)
+        placeholder = incoming.pop('_completion_placeholder', False)
+        index = incoming['task_index']
+        if not placeholder or index not in recorded:
+            recorded[index] = incoming
     indexes = task.get('task_indexes') or list(range(len(task.get('goals') or [])))
     children = [recorded.get(i) or {'task_index': i, 'status': 'unknown', 'summary': None,
                                    'error': event.get('error')} for i in indexes]
@@ -1109,6 +1114,7 @@ def _keep_finished_children(record: dict[str, Any], result: Any, status: str) ->
     indexes = record.get("task_indexes") or range(len(record.get("goals") or []))
     child_status = "unknown" if status == "stalled" else status
     return {**result, "results": [finished.get(i) or {"task_index": i, "status": child_status, "summary": None,
+                                                      "_completion_placeholder": True,
                                                       "error": result.get("error")} for i in indexes]}
 
 
