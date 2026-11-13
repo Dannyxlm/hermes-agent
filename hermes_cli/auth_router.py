@@ -22,8 +22,9 @@ def _entries(provider):
 
 def _fetch(entry):
     # Late imports keep status usable without provider-specific dependencies.
-    from agent.account_router import meters_anthropic
-    fetchers = {"anthropic": meters_anthropic.fetch}
+    from agent.account_router import meters_anthropic, meters_codex, meters_xai
+    fetchers = {"anthropic": meters_anthropic.fetch, "openai-codex": meters_codex.fetch,
+                "xai-oauth": meters_xai.fetch}
     if entry.provider not in fetchers:
         raise ValueError("No meter fetcher for this provider")
     return fetchers[entry.provider](entry)
@@ -46,7 +47,8 @@ def refresh(providers):
                     from agent.account_router.types import AccountMeter
                     meters.append(AccountMeter(provider, entry.id, None, (), time.time(), "usage_api"))
             merge_meters(snapshot_path(provider), meters, policy=policy,
-                         entry_ids={provider: [e.id for e in entries]})
+                         entry_ids={provider: [e.id for e in entries]},
+                         labels={provider: {e.id: e.label for e in entries}})
             result.append({"provider": provider, "updated": len(meters) - unknown, "unknown": unknown})
     return result
 

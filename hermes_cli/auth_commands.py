@@ -878,7 +878,8 @@ _STRATEGY_DESCRIPTIONS = {
     STRATEGY_FILL_FIRST: "Use first key until exhausted, then next",
     STRATEGY_ROUND_ROBIN: "Cycle through keys evenly",
     STRATEGY_LEAST_USED: "Always pick the least-used key",
-    STRATEGY_RANDOM: "Random selection"}
+    STRATEGY_RANDOM: "Random selection",
+    "smart": "Spend subscription allowance before reset (run auth router refresh first)"}
 
 
 def _interactive_strategy() -> None:
@@ -890,7 +891,7 @@ def _interactive_strategy() -> None:
     print()
     for i, s in enumerate(strategies, 1):
         print(f"  {i}. {s:15s} — {_STRATEGY_DESCRIPTIONS[s]}{' ←' if s == current else ''}")
-    raw = _ask("\nStrategy [1-4]: ")
+    raw = _ask(f"\nStrategy [1-{len(strategies)}]: ")
     if not raw:
         return
     try:

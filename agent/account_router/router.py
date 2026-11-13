@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 from .scorer import DEFAULT_POLICY, rank, scope_key
@@ -24,7 +25,8 @@ def decide(provider, model, ids, meters, previous, now, policy):
     rows = rank(provider, model, ids, meters, now, policy)
     order = [row[0] for row in rows]
     if not order or all(row[1] is None for row in rows):
-        return {"order": ids, "decided_at": previous.get("decided_at", now)}
+        changed = next(iter(previous.get("order", [])), None) != next(iter(ids), None)
+        return {"order": ids, "decided_at": now if changed else previous.get("decided_at", now)}
     old = next(iter(previous.get("order", [])), None)
     scores = {id: score for id, score, _ in rows}
     held = old in order and scores[old] != 0
@@ -69,6 +71,12 @@ def reorder(provider, model, entries):
 
 
 def update_decisions(state, provider, ids, meters, now, policy, labels=None):
+    saved_labels = state.setdefault("labels", {}).setdefault(provider, {})
+    for id, label in (labels or {}).items():
+        if (isinstance(label, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9 ._()-]{0,39}", label)
+                and not label.lower().startswith(("sk-", "bearer "))
+                and (len(label) <= 20 or " " in label)):
+            saved_labels[id] = label
     decisions = state.setdefault("decisions", {}).setdefault(provider, {})
     scopes = {"all", "fable", "opus", "sonnet"} if provider == "anthropic" else {"all"}
     for scope in sorted(scopes):
@@ -79,6 +87,6 @@ def update_decisions(state, provider, ids, meters, now, policy, labels=None):
         new = next(iter(decision["order"]), None)
         decisions[scope] = decision
         if old != new:
-            labels = labels or {}
+            labels = saved_labels
             logger.info("account router: %s/%s top %s -> %s (%s)", provider, scope,
                         labels.get(old, old), labels.get(new, new), "allowance urgency / dwell")

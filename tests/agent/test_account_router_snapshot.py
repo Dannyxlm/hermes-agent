@@ -77,6 +77,25 @@ def test_profile_ownership_and_mtime_cache(tmp_path, monkeypatch):
     assert read_snapshot(path) is not cached
 
 
+def test_fresh_session_cap_is_not_hidden_by_stale_weekly():
+    from agent.account_router.scorer import rank
+    meter = AccountMeter("anthropic", "a", "default_claude_ai",
+                         (MeterWindow("weekly", 20, NOW+86400), MeterWindow("session", 100, NOW+18000)),
+                         NOW+2000, "headers", {"window_fetched_at": {"weekly/all": NOW}})
+    assert rank("anthropic", None, ["a"], {"a": meter}, NOW+2000, {})[0][1] == 0
+
+
+def test_header_throttle_is_enforced_in_shared_store(tmp_path):
+    path = tmp_path / "router.json"
+    merge_meters(path, [m("a", 10)], now=NOW, policy={}, partial=True)
+    before = path.stat().st_mtime_ns
+    merge_meters(path, [m("a", 20, NOW+59)], now=NOW+59, policy={}, partial=True)
+    assert path.stat().st_mtime_ns == before
+    assert decode_meters(read_snapshot(path), "anthropic")["a"].windows[0].used_pct == 10
+    merge_meters(path, [m("a", 30, NOW+60)], now=NOW+60, policy={}, partial=True)
+    assert decode_meters(read_snapshot(path), "anthropic")["a"].windows[0].used_pct == 30
+
+
 def test_policy_hot_reload_ignores_frozen_model_config(tmp_path, monkeypatch):
     from agent.account_router.router import load_policy
     from hermes_cli.config_backend import write_config_key

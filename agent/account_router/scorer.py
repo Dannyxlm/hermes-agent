@@ -10,7 +10,10 @@ DEFAULT_POLICY = {
     "cap_pct": 98, "max_meter_age_minutes": 30,
     "plan_units": {"anthropic": {"default_claude_ai": 1, "default_claude_max_5x": 5,
                                   "default_claude_max_20x": 20},
-                   "openai-codex": {}, "xai-oauth": {}},
+                   # Relative allowance heuristics, not verified weekly token quotas.
+                   "openai-codex": {"plus": 1, "prolite": 10, "pro": 20},
+                   # Legacy billing tier labels do not establish a relative quota ratio.
+                   "xai-oauth": {"GrokPro": 1, "XPremiumPlus": 1}},
 }
 
 
@@ -34,10 +37,11 @@ def _score(provider, scope, meter, now, policy) -> tuple[float | None, str]:
         return None, "unknown or stale meter"
     windows = [w for w in meter.windows if w.model_scope is None or w.model_scope == scope]
     stamps = meter.extras.get("window_fetched_at", {})
-    if any(now - stamps.get(window_key(w), meter.fetched_at) > age for w in windows):
-        return None, "stale window"
-    if any(_finite(w.used_pct) and w.used_pct >= policy.get("cap_pct", 98) for w in windows):
+    fresh = [w for w in windows if now - stamps.get(window_key(w), meter.fetched_at) <= age]
+    if any(_finite(w.used_pct) and w.used_pct >= policy.get("cap_pct", 98) for w in fresh):
         return 0.0, "applicable allowance capped"
+    if len(fresh) != len(windows):
+        return None, "stale window"
     periods = [w for w in windows if w.kind in ("weekly", "period")]
     if not periods or any(not _finite(w.used_pct) or not 0 <= w.used_pct <= 100
                           or not _finite(w.resets_at) or w.resets_at <= now for w in periods):
