@@ -160,6 +160,17 @@ def clear_stale_git_locks(repo_root: Path, *, min_age_seconds: Optional[int] = N
     )
 
 
+def clear_stale_index_lock(index_file: Path) -> list[str]:
+    """Recover an alternate index's abandoned lock (for example a checkpoint index).
+
+    The caller serializes operations on its store. Keep the normal age floor AND
+    fail-closed live-git guard; neither an old file nor an absent open fd proves
+    that a Git writer has finished.
+    """
+    index_file = Path(index_file)
+    return _sweep_locks(index_file.parent, (index_file.name + ".lock",), None)
+
+
 def clear_stale_object_store_locks(git_dir: Path) -> list[str]:
     """``OBJECT_STORE_LOCK_NAMES`` only, under ``git_dir`` itself (a linked worktree's or submodule's
     common dir), for repos Hermes does not own: index.lock / HEAD.lock there are the user's git's."""
