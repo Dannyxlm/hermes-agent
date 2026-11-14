@@ -733,7 +733,7 @@ def _prune_never_active_keyed(db, args):
         from hermes_cli.gateway_client import GatewayClientError
         from hermes_cli.sessions_owner import owner_prune, report_owner_failure
         try:
-            result = owner_prune(owner, never_active_days=days)
+            result = owner_prune(owner, never_active_days=days, timeout=getattr(args, 'timeout', 600))
         except (GatewayClientError, OSError, TimeoutError) as exc:
             return report_owner_failure(exc)
         deleted, routing_deleted, skipped = result["deleted"], result["routing_deleted"], result["skipped"]
@@ -765,63 +765,44 @@ def _note_pinned_skipped(db, filters, action):
 
 
 def _cmd_prune_or_archive(db, args, action):
-    prune = action == "prune"
-    if prune and getattr(args, "never_active", False):
-        return _prune_never_active_keyed(db, args)
+    if action == "prune":
+        if getattr(args, "never_active", False):
+            if (getattr(args, 'ids_file', None) is not None or getattr(args, 'sweep_stale_open', False)
+                    or getattr(args, 'idle_threshold', None) is not None or getattr(args, 'json', False)):
+                error = '--never-active cannot be combined with --ids-file, --sweep-stale-open, --idle-threshold or --json'
+                print(json.dumps({'error': error}) if getattr(args, 'json', False) else f'Error: {error}')
+                return 1
+            return _prune_never_active_keyed(db, args)
+        from hermes_cli.sessions_prune import cmd_prune
+        return cmd_prune(db, args)
     from hermes_cli.session_filters import build_prune_filters, describe_filters, format_epoch
-    # Bare `prune` keeps the historical "older than 90 days" default. ANY filter — including --source —
-    # suppresses the implicit cutoff (`prune --source cron` matches ALL cron sessions); the preview +
-    # confirmation below is the safety net.
-    if prune and not _any_filter_args(args):
-        args.older_than = "90"
     try:
         filters = build_prune_filters(args)
     except ValueError as e:
         print(f"Error: {e}")
         return 1
-    if not prune and not any(v for k, v in filters.items() if k != "older_than_days"):
+    if not any(v for k, v in filters.items() if k != "older_than_days"):
         print("Refusing to archive every ended session: pass at least one "
               "filter (e.g. --newer-than 5h, --source cli, --title codex).")
         return 1
-
-    # Prune skips archived rows unless --include-archived; archive only targets not-yet-archived rows.
-    filters["archived"] = None if prune and getattr(args, "include_archived", False) else False
-    filters["include_pinned"] = getattr(args, "include_pinned", False)
-    # Archive flips a compression lineage as a unit, matched through its tip (an old ancestor alone
-    # never qualifies); the preview must show the same rows the archive will touch.
-    filters["lineage_tips_only"] = not prune
-    # Desktop sessions never set ended_at, so the shared ended-only selector hides them from archive
-    # entirely (#139597); --include-open opts in for archive only — pruning is not reversible.
-    include_open = not prune and getattr(args, "include_open", False)
+    filters.update(archived=False, include_pinned=False, lineage_tips_only=True)
+    include_open = getattr(args, "include_open", False)
     if include_open:
         filters["include_open"] = True
-    if not filters["include_pinned"]:
-        _note_pinned_skipped(db, filters, action)
-    # Prune deletes a compression lineage only as a unit; the preview must list the rows it deletes.
-    candidates = db.list_prune_candidates(**filters, whole_lineages=prune)
-    # Archive expands each matched tip to its compression lineage, so a direct-open count would
-    # misdescribe its effect.
-    skipped_open = db.count_open_prune_matches(**filters) if (prune or not include_open) else 0
-    if skipped_open and prune:
-        print(f"Note: {skipped_open} open session{'' if skipped_open == 1 else 's'} also match these filters but "
-              "will be skipped because prune only deletes ended sessions. Use `hermes sessions delete <id>` "
-              "to remove one explicitly.")
-    elif skipped_open:
+    _note_pinned_skipped(db, filters, action)
+    candidates = db.list_prune_candidates(**filters, whole_lineages=False)
+    skipped_open = db.count_open_prune_matches(**filters) if not include_open else 0
+    if skipped_open:
         print(f"Note: {skipped_open} matching session{'' if skipped_open == 1 else 's'} still open — "
-              "skipped because archive defaults to ended sessions. Use --include-open to archive "
-              "them too.")
+              "skipped because archive defaults to ended sessions. Use --include-open to archive them too.")
     if not candidates:
         print(f"No sessions match ({describe_filters(filters)}).")
         return
-    # Candidates are oldest-activity-first; show the span so a long-lived but recently used
-    # conversation cannot look old merely by creation date.
-    _span = (
-        f"oldest activity {format_epoch(candidates[0].get('last_active'))}, "
-        f"newest activity {format_epoch(candidates[-1].get('last_active'))}"
-    )
+    span = (f"oldest activity {format_epoch(candidates[0].get('last_active'))}, "
+            f"newest activity {format_epoch(candidates[-1].get('last_active'))}")
     if args.dry_run or not args.yes:
         shown = candidates if args.dry_run else candidates[:15]
-        print(f"{len(candidates)} session(s) match ({describe_filters(filters)}; {_span}):")
+        print(f"{len(candidates)} session(s) match ({describe_filters(filters)}; {span}):")
         for s in shown:
             model = (s.get("model") or "-").split("/")[-1][:24]
             print(f"  {s['id']}  {format_epoch(s.get('last_active')):<17} {s['source']:<10} {model:<24} "
@@ -829,25 +810,13 @@ def _cmd_prune_or_archive(db, args, action):
         if len(candidates) > len(shown):
             print_truncated(len(candidates) - len(shown))
         if args.dry_run:
-            print(f"Dry run — nothing {'deleted' if prune else 'archived'}.")
+            print("Dry run — nothing archived.")
             return
-    verb = "Delete" if prune else "Archive"
     if not args.yes and (refused := _confirm_or_exit_code(
-            f"{verb} these {len(candidates)} session(s) ({_span})? [y/N] ")) is not None:
+            f"Archive these {len(candidates)} session(s) ({span})? [y/N] ")) is not None:
         return refused
-    if prune and getattr(args, "owner_endpoint", None) is not None:
-        # The live gateway owns the store: it deletes, through the housekeeping retirement path.
-        from hermes_cli.gateway_client import GatewayClientError
-        from hermes_cli.sessions_owner import owner_prune, report_owner_failure
-        try:
-            print(f"Pruned {owner_prune(args.owner_endpoint, filters=filters)['deleted']} session(s).")
-        except (GatewayClientError, OSError, TimeoutError) as exc:
-            return report_owner_failure(exc)
-    elif prune:
-        print(f"Pruned {db.prune_sessions(sessions_dir=_sessions_dir(), exclude_active_write_guards=True, **filters)} session(s).")
-    else:
-        print(f"Archived {db.archive_sessions(**filters)} session(s). They're hidden from listings "
-              "but fully recoverable (nothing was deleted).")
+    print(f"Archived {db.archive_sessions(**filters)} session(s). They're hidden from listings "
+          "but fully recoverable (nothing was deleted).")
 
 
 # -- titles / pins -----------------------------------------------------------
@@ -1388,8 +1357,11 @@ _DB_HANDLERS = {
 }
 
 
-def _print_empty_store(action: str, args) -> None:
+def _print_empty_store(action: str, args) -> int | None:
     """A profile that never created state.db: report empty instead of opening a writer that creates it."""
+    if action == 'prune':
+        from hermes_cli.sessions_prune import cmd_prune
+        return cmd_prune(None, args)
     if action == "stats":
         print("Total sessions: 0\nTotal messages: 0")
     elif action == "pinned":
@@ -1422,7 +1394,7 @@ def cmd_sessions(args, sessions_parser=None):
         # deletes. No gateway: the local prune below, behind the holder scan, as before.
         from hermes_cli.sessions_owner import live_owner
         args.owner_endpoint = live_owner()
-        observational = args.owner_endpoint is not None
+        observational = args.owner_endpoint is not None or getattr(args, 'dry_run', False)
     # A served-profile process has no single default home: pass the store path explicitly.
     path = get_hermes_home() / "state.db"
     try:

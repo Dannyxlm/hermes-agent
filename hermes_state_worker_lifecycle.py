@@ -233,13 +233,10 @@ def insert_session_row_in_transaction(
     validated before entry; this helper never opens or commits a DB.
     """
     from hermes_state_sessions import _UPSERT_KEEP_EXISTING_SQL
-    from hermes_state_mutation_retirement import RETIRED_PREFIX
-    # A delayed constructor/accounting backfill must not recreate a deleted session
-    # beside its durable tombstone (the exact delete retry would then report a stale
-    # success while a fresh delete collides with the existing marker).
-    if (conn.execute('SELECT 1 FROM sessions WHERE id=?', (session_id,)).fetchone() is None
-            and conn.execute('SELECT 1 FROM state_meta WHERE key=?', (RETIRED_PREFIX + session_id,)).fetchone()):
-        raise RuntimeStoreError('not_found')
+    from hermes_state_mutation_retirement import require_not_retired
+    # A large prune keeps its fenced row until the last message chunk; a delayed constructor
+    # or accounting backfill must not make that shrinking transcript active again.
+    require_not_retired(conn, session_id)
     if not (profile_name or "").strip():
         profile_name = self._own_profile_name()
     system_prompt_hash = self._store_system_prompt(conn, system_prompt)

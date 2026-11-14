@@ -201,6 +201,8 @@ class SessionCompressionMixin:
             return None
 
         def _do(conn):
+            from hermes_state_mutation_retirement import require_not_retired
+            require_not_retired(conn, session_id)
             row = conn.execute(_ENDED_ROW_SQL, (session_id,)).fetchone()
             if row is None or row["ended_at"] is None:
                 return None

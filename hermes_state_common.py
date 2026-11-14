@@ -633,6 +633,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     pricing_date TEXT NOT NULL,
     source_url TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_usage_events_chat_time ON usage_events(chat_id, occurred_at);
 
@@ -694,6 +695,22 @@ CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+-- New/repointed receipts must invalidate a read-side prune projection. A database-wide
+-- data_version would also invalidate it for every unrelated chat write or route save.
+CREATE TRIGGER IF NOT EXISTS prune_receipts_insert AFTER INSERT ON state_meta
+WHEN NEW.key GLOB 'gateway.mutation.v1.*' OR NEW.key GLOB 'gateway.api.conversation.v1.*'
+     OR NEW.key GLOB 'legacy_queue_receipt:*'
+BEGIN
+    INSERT INTO state_meta(key,value) VALUES('maintenance.prune.receipts_version.v1', '1')
+    ON CONFLICT(key) DO UPDATE SET value=CAST(state_meta.value AS INTEGER)+1;
+END;
+CREATE TRIGGER IF NOT EXISTS prune_receipts_update AFTER UPDATE OF key,value ON state_meta
+WHEN (NEW.key GLOB 'gateway.mutation.v1.*' OR NEW.key GLOB 'gateway.api.conversation.v1.*'
+      OR NEW.key GLOB 'legacy_queue_receipt:*') AND (NEW.key IS NOT OLD.key OR NEW.value IS NOT OLD.value)
+BEGIN
+    INSERT INTO state_meta(key,value) VALUES('maintenance.prune.receipts_version.v1', '1')
+    ON CONFLICT(key) DO UPDATE SET value=CAST(state_meta.value AS INTEGER)+1;
+END;
 -- Family needs only physical target, logical owner and principal. Frozen policies can be
 -- large: a key-prefix scan reparses every policy even for a single-session lineage read.
 CREATE INDEX IF NOT EXISTS idx_state_meta_local_target

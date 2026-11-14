@@ -640,3 +640,31 @@ class TestSweepOrphanedSessions:
         _make_session(db, "stale-tui", source="tui", started_at=stale, message_at=stale)
         assert db.sweep_orphaned_sessions(max_idle_seconds=0) == []
         assert db.get_session("stale-tui")["ended_at"] is None
+
+
+@pytest.mark.parametrize('resume', [False, True])
+def test_operator_swept_tool_ages_from_close_and_remains_resumable(db, monkeypatch, tmp_path, resume):
+    import asyncio
+    from hermes_state_prune_runner import prune_preview, run_prune_batches
+    stale = time.time() - 45 * 86400
+    for sid, source in [('machine', 'tool'), ('human', 'telegram')]:
+        _make_session(db, sid, source=source, started_at=stale, message_at=stale)
+        _set_last_activity(db, sid, stale)
+    filters = {'older_than_days': 30, 'source': 'tool'}
+    result = asyncio.run(run_prune_batches(db, filters, sessions_dir=tmp_path / 'sessions',
+                                          sweep_idle_seconds=30 * 86400))
+    assert result['closed_ids'] == ['machine'] and result['deleted'] == 0
+    closed = db.get_session('machine')['ended_at']
+    assert db.get_session('human')['ended_at'] is None
+    assert prune_preview(db, filters)['candidates'] == []
+    if resume:
+        db.reopen_session('machine')
+        db.append_message('machine', 'user', 'resumed')
+    monkeypatch.setattr(time, 'time', lambda: closed + 29 * 86400)
+    assert prune_preview(db, filters)['candidates'] == []
+    monkeypatch.setattr(time, 'time', lambda: closed + 31 * 86400)
+    preview = prune_preview(db, filters)
+    assert {row['id'] for row in preview['candidates']} == (set() if resume else {'machine'})
+    result = asyncio.run(run_prune_batches(db, filters, sessions_dir=tmp_path / 'sessions'))
+    assert result['deleted'] == (0 if resume else 1)
+    assert db.get_session('human')['ended_at'] is None

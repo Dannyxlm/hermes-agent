@@ -6450,11 +6450,22 @@ export interface SessionMutateResult {
 export interface SessionPruneParams {
   filters?: Record<string, unknown> | null
   never_active_days?: number | null
+  session_ids?: string[] | null
+  sweep_idle_seconds?: number | null
 }
 export interface SessionPruneResult {
   deleted: number
   routing_deleted?: number | null
   skipped?: number | null
+  deleted_ids?: string[] | null
+  skipped_ids?: string[] | null
+  messages_deleted?: number | null
+  in_progress_ids?: string[] | null
+  remaining?: number | null
+  has_more?: boolean | null
+  interrupted?: boolean | null
+  closed?: number | null
+  closed_ids?: string[] | null
 }
 export interface CommandObserveParams {
   session_id: string
