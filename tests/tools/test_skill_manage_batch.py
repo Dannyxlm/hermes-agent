@@ -114,6 +114,47 @@ class TestSkillManageBatch(unittest.TestCase):
             {"action": "patch", "old_string": "Step 1.", "new_string": "Recovered."},
         ])["success"])
 
+    def test_raising_write_cleans_its_adopted_directory(self):
+        from pathlib import Path
+
+        root = Path(self.home) / "skills"
+        real_write = self.smt.atomic_write_text
+        for after_write in (False, True):
+            with self.subTest(after_write=after_write):
+                name = f"adopted-{int(after_write)}"
+                skill_dir = root / name
+                skill_dir.mkdir()
+
+                def fail_write(target, *args, **kwargs):
+                    if target.name == "blocked.md":
+                        if after_write:
+                            real_write(target, *args, **kwargs)
+                        raise OSError("synthetic write failure")
+                    return real_write(target, *args, **kwargs)
+
+                with patch.object(self.smt, "atomic_write_text", side_effect=fail_write):
+                    result = self._call(name, [
+                        {"action": "create", "content": SK.format(n=name)},
+                        {"action": "write_file", "file_path": "references/blocked.md", "file_content": "x"},
+                    ])
+                self.assertFalse(result["success"])
+                self.assertIn("all touched skills rolled back", result["error"])
+                self.assertFalse(skill_dir.exists())
+                self.assertTrue(self._call(name, [
+                    {"action": "create", "content": SK.format(n=name)},
+                ])["success"])
+
+    def test_raised_operation_keeps_local_traceback(self):
+        self._call("probe", [{"action": "create", "content": SK.format(n="probe")}])
+        with patch.object(self.smt, "atomic_write_text", side_effect=OSError("synthetic private detail")), \
+                self.assertLogs("tools.skill_manager_tool", level="WARNING") as captured:
+            result = self._call("probe", [
+                {"action": "patch", "old_string": "Step 1.", "new_string": "changed"},
+            ])
+        self.assertFalse(result["success"])
+        self.assertNotIn("synthetic private detail", json.dumps(result))
+        self.assertTrue(any(record.exc_info for record in captured.records))
+
     def test_failed_create_batch_removes_partial_skill(self):
         r = self._call("fresh", [
             {"action": "create", "content": SK.format(n="fresh")},
