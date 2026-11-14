@@ -1,3 +1,4 @@
+import type { CuratorStatusResponse } from '@/types/curator'
 import type {
   ActionResponse,
   ActionStatusResponse,
@@ -6,7 +7,6 @@ import type {
   AudioTranscriptionResponse,
   AudioTtsLeaseResponse,
   BackendUpdateCheckResponse,
-  CuratorStatusResponse,
   DebugShareResponse,
   ElevenLabsVoicesResponse,
   MemoryProviderConfig,

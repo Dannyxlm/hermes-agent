@@ -43,11 +43,13 @@ def _prompt_preview(db, content, display_kind, summary):
 def _snapshot(db):
     # The count and page must see the same compaction/rewind generation.
     with db._read_ctx() as conn:
-        conn.execute("BEGIN")
+        began = not conn.in_transaction  # reuse an outer transcript_read_snapshot without ending it
+        if began:
+            conn.execute("BEGIN")
         try:
             yield conn
         finally:
-            if conn.in_transaction:
+            if began and conn.in_transaction:
                 conn.execute("ROLLBACK")
 
 

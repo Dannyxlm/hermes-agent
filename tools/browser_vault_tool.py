@@ -63,9 +63,12 @@ _PAGE_FILL_FAILED = {"hermes_vault_eval_failed": True}
 
 
 def _page_backend(task_id: str):
-    """The plugin browser holding this task's live page (e.g. Camofox), or None for the CDP session."""
+    """The page this operation runs on when it is not the task's CDP session: the Desktop in-app browser
+    page pinned for a ``target='preview'`` operation, else the plugin browser holding this task's live page
+    (e.g. Camofox), else None."""
     from agent.browser_page_registry import backend_for_task
-    return backend_for_task(task_id)
+    from tools.browser_vault_preview import active_page
+    return active_page() or backend_for_task(task_id)
 
 
 def _page_eval(backend: Any, task_id: str, expression: str, *, secret: bool) -> dict[str, Any]:
@@ -186,7 +189,8 @@ def _eval_js_secret(task_id: str, expression: str) -> dict[str, Any]:
     # human-length prompt (enter_code waits for the user's code); a takeover during that wait must
     # refuse here, before the credential lands in a page the human is now typing into. The outer
     # epoch check only discards the result, and a fill is a side effect, not a result.
-    if _bot_desktop_browser_session(task_id):
+    from tools.browser_vault_preview import active_page
+    if active_page() is None and _bot_desktop_browser_session(task_id):
         from tools.bot_desktop import lease as _bd_lease
         try:
             _bd_lease.assert_agent_may_act()
@@ -547,7 +551,7 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
 
 
 @plugin_errors_as_refusal
-def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
+def browser_vault_fill(handle: str, task_id: Optional[str] = None, *, with_identifier: bool = False) -> str:
     """Fill the current page's password field from a vault handle.
 
     Password-only: the identifier is agent-visible metadata (see
@@ -589,7 +593,7 @@ def browser_vault_fill(handle: str, task_id: Optional[str] = None) -> str:
         refusal = snapshot_refusal(backend, handle, meta, page_origin)
         if refusal is not None:
             return json.dumps(refusal)
-        return _fill_bound_page(backend, handle, meta, page_origin, effective_task_id)
+        return _fill_bound_page(backend, handle, meta, page_origin, effective_task_id, with_identifier)
 
 
 def _checkout_changed(before, after):
@@ -611,48 +615,79 @@ def _resolve_fill_values(backend, handle, kind, classified):
     return secret, fills
 
 
-def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, effective_task_id: str) -> str:
+def _identifier_fill(classified: list, password_fill: list[dict[str, Any]], identifier: str) -> list[dict[str, Any]]:
+    """The username/email/phone control for a user-chosen login (the Desktop key button fills both fields;
+    the agent types the identifier itself). Prefers a control in the password field's form; on an
+    identifier-only step (no password field yet) it is the whole fill."""
+    fields = [c for c in classified if c.token in ("username", "email", "tel")]
+    if not identifier or not fields:
+        return []
+    anchor = password_fill[0]["index"] if password_fill else None
+    form = next((c.control.form_index for c in classified if c.control.index == anchor), None)
+    best = min(fields, key=lambda c: (c.control.form_index != form, -c.score, c.control.index))
+    return [{"index": best.control.index, "token": best.token, "value": identifier}]
+
+
+def _inspect_fill_controls(effective_task_id: str, kind: str, classify):
+    """(nonce, classified controls) or (None, error-json), bound to this fresh inspection."""
+    from agent.vault_login_classifier import ClassifiedLoginControl, LoginControl, build_inspection_js
+    nonce = secrets.token_hex(8)
+    inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
+    if not inspect.get("success"):
+        return None, json.dumps(
+            {"success": False, "error": f"Could not inspect page inputs: {inspect.get('error', 'eval failed')}"})
+    raw_controls = _parse_json_result(inspect.get("result"))
+    if isinstance(raw_controls, str):
+        raw_controls = _parse_json_result(raw_controls)
+    if not isinstance(raw_controls, list):
+        return None, json.dumps({"success": False, "error": "Page input inspection returned no usable controls."})
+    found: list[ClassifiedLoginControl] = []
+    for raw in raw_controls:
+        if not isinstance(raw, dict):
+            continue
+        result = classify(LoginControl.from_dict(raw))
+        if result is not None:
+            found.append(result)
+    if not found:
+        return None, json.dumps({"success": False, "error": f"No {kind} form fields were found on the current page."})
+    return nonce, found
+
+
+def _reinspect_approved_payment(effective_task_id: str, kind: str, classify, page_origin: str,
+                               payment: dict, receipt: dict, with_receipt):
+    """Fresh controls after approval, or an error receipt if origin/checkout facts no longer match."""
+    # The human wait can be minutes: the page may have navigated or re-rendered since the first look.
+    if _current_page_origin(effective_task_id) != page_origin:
+        return None, json.dumps({"success": False, "error_type": "origin_changed", "payment": receipt,
+                                "error": f"Refused: the page left {page_origin} while the user was approving. Nothing was written."})
+    nonce, classified = _inspect_fill_controls(effective_task_id, kind, classify)
+    if nonce is None:
+        out = json.loads(classified)
+        out["payment"] = receipt
+        return None, json.dumps(out)
+    # Same-origin cart edits invalidate the approved snapshot just as navigation does.
+    # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
+    current_summary = _checkout_summary(effective_task_id)
+    if _checkout_changed(payment, current_summary):
+        return None, with_receipt({
+            "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
+            "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
+                     "Ask the user for a fresh payment request; never replay this approval."})
+    return nonce, classified
+
+
+def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, effective_task_id: str,
+                     with_identifier: bool = False) -> str:
     """Inspect the page, resolve the item's secret and write it; runs inside the backend's fill_context
-    after the origin guard passed."""
+    after the origin guard passed. ``with_identifier`` also writes the login's (non-secret) identifier."""
     from agent.redact import register_vault_redaction_value
-    from agent.vault_login_classifier import (
-        ClassifiedLoginControl,
-        LoginControl,
-        build_fill_js,
-        build_inspection_js,
-        classify_checkout_control,
-        classify_login_control,
-    )
+    from agent.vault_login_classifier import build_fill_js, classify_checkout_control, classify_login_control
     from agent.vault_backends import UnlockRequired
     from agent.vault_store import VaultError, scrub_secret_from_text
 
     # ── Inspect + classify page controls ────────────────────────────────────
     classify = classify_login_control if meta.kind == "login" else classify_checkout_control
-
-    def inspect_controls():
-        """(nonce, classified controls) or (None, error-json). The nonce binds a fill to THIS inspection."""
-        nonce = secrets.token_hex(8)
-        inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
-        if not inspect.get("success"):
-            return None, json.dumps(
-                {"success": False, "error": f"Could not inspect page inputs: {inspect.get('error', 'eval failed')}"})
-        raw_controls = _parse_json_result(inspect.get("result"))
-        if isinstance(raw_controls, str):
-            raw_controls = _parse_json_result(raw_controls)
-        if not isinstance(raw_controls, list):
-            return None, json.dumps({"success": False, "error": "Page input inspection returned no usable controls."})
-        found: list[ClassifiedLoginControl] = []
-        for raw in raw_controls:
-            if not isinstance(raw, dict):
-                continue
-            result = classify(LoginControl.from_dict(raw))
-            if result is not None:
-                found.append(result)
-        if not found:
-            return None, json.dumps({"success": False, "error": f"No {meta.kind} form fields were found on the current page."})
-        return nonce, found
-
-    nonce, classified = inspect_controls()
+    nonce, classified = _inspect_fill_controls(effective_task_id, meta.kind, classify)
     if nonce is None:
         return classified
 
@@ -676,27 +711,16 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
                           "The user did not confirm filling this payment card. Do not retry; ask them instead."),
                 "payment": _payment_receipt(payment, "expired" if expired else "declined", details, filled=False)})
         receipt = _payment_receipt(payment, "approved", details, filled=False)
-        # The human wait can be minutes: the page may have navigated or re-rendered since the first look.
-        if _current_page_origin(effective_task_id) != page_origin:
-            return json.dumps({"success": False, "error_type": "origin_changed", "payment": receipt,
-                               "error": f"Refused: the page left {page_origin} while the user was approving. Nothing was written."})
-        nonce, classified = inspect_controls()
+        nonce, classified = _reinspect_approved_payment(
+            effective_task_id, meta.kind, classify, page_origin, payment, receipt, with_receipt)
         if nonce is None:
-            out = json.loads(classified)
-            out["payment"] = receipt
-            return json.dumps(out)
-        # Same-origin cart edits invalidate the approved snapshot just as navigation does.
-        # Re-read only non-secret page facts; never re-use the human's approval after a mismatch.
-        current_summary = _checkout_summary(effective_task_id)
-        if _checkout_changed(payment, current_summary):
-            return with_receipt({
-                "success": False, "error_type": "payment_changed", "fresh_request_needed": True,
-                "error": "The checkout changed or could not be re-read after approval. Nothing was filled. "
-                         "Ask the user for a fresh payment request; never replay this approval."})
+            return classified
 
     # ── Resolve secret and fill (secret never enters any logged string) ─────
     try:
         secret, fills = _resolve_fill_values(backend, handle, meta.kind, classified)
+        if meta.kind == "login" and with_identifier:
+            fills += _identifier_fill(classified, fills, str(meta.identifier or ""))
     except UnlockRequired:
         out = {"success": False, "error_type": "unlock_required",
                "error": f"{backend.display_name} locked again; call browser_vault action=unlock."}
@@ -962,6 +986,9 @@ BROWSER_VAULT_SCHEMA = {
             "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
             "label": {"type": "string", "description": "save_login only: short site name (default: the host)."},
             "reason": {"type": "string", "description": "request_signin only: why the owner needs to sign in (no credentials)."},
+            "target": {"type": "string", "enum": ["browser", "preview"],
+                       "description": "fill / save_login / enter_code: 'preview' = the Desktop in-app browser "
+                                      "page beside the chat, 'browser' = the managed automation browser."},
         },
         "required": ["action"],
     },
@@ -1007,6 +1034,15 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
     if action not in page_ops:
         return json.dumps({"success": False, "error": f"Unknown action {action!r}; use list, fill, save_login, "
                                                        "enter_code or unlock."})
+    target = args.get("target") or "browser"
+    if target == "preview":
+        # The in-app browser is not the Bot Desktop browser; its window owns the page and refuses a
+        # changed tab or document itself. Never retried on another browser.
+        from tools.browser_vault_preview import run_preview_vault
+        return run_preview_vault(kwargs.get("preview_callback"), page_ops[action])
+    if target != "browser":
+        return json.dumps({"success": False, "error_type": "invalid_target",
+                           "error": "target must be 'browser' or 'preview'."})
     return _fenced_page_op(tid, page_ops[action])
 
 

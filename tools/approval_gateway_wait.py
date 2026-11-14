@@ -63,7 +63,8 @@ class _ApprovalNotice(dict):
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("acknowledged", "auth", "cancelled", "data", "event", "expired", "observers", "reason", "result", "settle")
+    __slots__ = ("acknowledged", "auth", "authority", "cancelled", "card_deny_only", "data", "event", "expired", "observers",
+                 "reason", "result", "settle")
 
     def __init__(self, data: dict, *, timeout_seconds: float | None = None):
         from agent.deadline import clamp_timeout
@@ -87,6 +88,18 @@ class _ApprovalEntry:
                 choices.append("always")
         offered = data.get("choices", choices + ["deny"])
         self.data["choices"] = [choice for choice in choices + ["deny"] if choice in offered]
+        # True: a card tap may only deny until a renderer proves its card shows the whole command (#62359).
+        self.card_deny_only = False
+        # Who may answer (gateway.approval_actor): the turn's user, plus ``approvals.approvers`` read
+        # here in the turn's profile scope (the click callbacks that check it run off-turn). Kept off
+        # ``data`` so the prompt and replay payloads sent to clients stay exactly what was raised.
+        approvers = _ctx._get_approval_config().get("approvers")
+        # ``chat_type`` picks the admin scope (DM or group) every surface checks against. The requester is
+        # the turn's ACTOR (who asked): USER_ID is the route, empty in a shared observed group.
+        self.authority = {"requester_id": _ctx._session_env("HERMES_SESSION_ACTOR_ID"),
+                          "requester_name": _ctx._session_env("HERMES_SESSION_ACTOR_NAME"),
+                          "chat_type": _ctx._session_env("HERMES_SESSION_CHAT_TYPE"),
+                          "approvers": ["*"] if approvers is None else approvers}
         self.acknowledged = False
         # Surface hook run once when the wait ends by ANY path (answer, timeout, interrupt, /approve from
         # another client): the tui_gateway withdraws its open server→client request through it.
@@ -102,6 +115,15 @@ class _ApprovalEntry:
         self.cancelled: str | None = None
         # The prompt timed out unanswered; followers woken by its event adopt that timeout.
         self.expired = False
+
+
+def _same_answerers(leader: dict, follower: dict) -> bool:
+    """A follower adopts its leader's answer only when the same people may give it: the default
+    (``approvers: ["*"]``, anyone admitted) or the same requester. Otherwise another requester's
+    deny (or grant) would answer this wait without its own requester's say."""
+    if "*" in (follower.get("approvers") or []) and "*" in (leader.get("approvers") or []):
+        return True
+    return leader.get("requester_id") == follower.get("requester_id") and leader.get("approvers") == follower.get("approvers")
 
 
 def _poll_event(event: _ApprovalEvent, session_key: str, *, interrupt_log: str,
@@ -239,6 +261,8 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             entry = _ApprovalEntry(data)
         else:
             entry = _ApprovalEntry(data, timeout_seconds=timeout_seconds)
+        # Mark before publication on every iteration, including a follower's fresh once-only wait.
+        entry.card_deny_only = True
         with _approval._lock:
             leader = None
             if can_coalesce and not preparing_terminal_approval():
@@ -249,7 +273,8 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
                                and e.data.get("surface", "gateway") == surface
                                and e.event.deadline_monotonic > time.monotonic()
                                and e.data.get("command") == approval_data.get("command")
-                               and list(e.data.get("pattern_keys") or []) == keys), None)
+                               and list(e.data.get("pattern_keys") or []) == keys
+                               and _same_answerers(e.authority, entry.authority)), None)
             if leader is None:
                 _enqueue()
                 break
@@ -310,6 +335,12 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             # while carrying process-local timing outside the serialized body.
             notify_cb(_ApprovalNotice(entry.data, entry.event.deadline_monotonic))
             approval_published()
+            # Bounded delivery trace (#138133): the notifier completed without raising, which is
+            # the last record the wait side has of the prompt until it settles. Correlation only —
+            # never the command text or chat identifiers.
+            logger.info(
+                "Approval prompt handed to gateway notifier (request_id=%s, session=%s, surface=%s)",
+                entry.data.get("request_id"), session_key, surface)
         except Exception as exc:
             logger.warning("Gateway approval notify failed: %s", exc)
             _drop_entry("notify_failed")
@@ -333,6 +364,11 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         resolved = state != "timeout" or choice is not None
         extra = {"cancelled": cancelled} if cancelled else {}
         human.outcome = _hook_choice(resolved, choice, extra)
+        # Bounded settle trace (#138133): without this, a timeout that nobody answered leaves no
+        # gateway-side record of how the wait ended — only the BLOCKED text the agent sees.
+        logger.info(
+            "Approval wait ended (state=%s, resolved=%s, choice=%s, request_id=%s, session=%s)",
+            state, resolved, choice, entry.data.get("request_id"), session_key)
         decision = _finish(payload, resolved, choice, entry.reason, **extra)
         if entry.auth and choice is not None and not cancelled:
             decision["auth"] = entry.auth

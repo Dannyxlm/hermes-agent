@@ -61,7 +61,8 @@ def test_prefetch_receives_the_brief_and_turn_start_keeps_the_message():
 
     agent = SimpleNamespace(_memory_manager=Manager(), _user_turn_count=1, session_id="child-1",
                             _emit_status=lambda *_: None)
-    assert _memory_turn_start_and_prefetch(agent, message, {"id": "bot:default", "name": "Ava", "is_bot": True}) == "recalled"
+    author = {"id": "bot:default", "name": "Ava", "is_bot": True}
+    assert _memory_turn_start_and_prefetch(agent, message, author, "") == "recalled"
     assert calls["prefetch"] == BRIEF
     assert calls["turn_start"] == message
 
@@ -80,5 +81,5 @@ def test_header_only_follow_up_skips_recall():
 
     agent = SimpleNamespace(_memory_manager=Manager(), _user_turn_count=2, session_id="child-1",
                             _emit_status=lambda *_: None)
-    assert _memory_turn_start_and_prefetch(agent, f"{_header(caller)}\n\nok") == ""
+    assert _memory_turn_start_and_prefetch(agent, f"{_header(caller)}\n\nok", None, "") == ""
     assert called == []
