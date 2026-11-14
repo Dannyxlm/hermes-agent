@@ -11,7 +11,7 @@ from pydantic import Field, RootModel
 
 from .base import JsonValue, Params, Result, WireEnum
 from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
-                     Usage)
+                     UndoRollbackHint, Usage)
 from .connectors_operation import ConnectionRequestPayload
 from .registry import method
 
@@ -568,6 +568,8 @@ class SessionUndoParams(SessionParams):
 
 class SessionUndoResult(Result):
     removed: int
+    # Present only when checkpoints are on and the undone turns changed files (``rollback.list``'s field).
+    undo_hint: UndoRollbackHint | None = None
 
 
 method("session.undo", params=SessionUndoParams, result=SessionUndoResult,

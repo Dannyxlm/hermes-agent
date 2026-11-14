@@ -54,7 +54,8 @@ def test_phone_authority_read_send_gates_and_epoch_contract(phone, meeting):
     caps = _result(rpc('groups.capabilities'))
     assert caps['driver'] is True
     assert set(caps['features']) == {
-        'authority_epoch', 'room_identity', 'monotonic_log', 'idempotent_send', 'replayable_disband'}
+        'authority_epoch', 'room_identity', 'monotonic_log', 'idempotent_send', 'replayable_disband',
+        'peer_renewal_horizon'}
     assert 'groups.send' in caps['methods']
     room = _create(rpc, meeting=meeting)
     state = _result(rpc('groups.state', room_id=room['room_id']))['room']
@@ -106,9 +107,14 @@ def test_phone_expected_authority_is_validated_and_stale_sends_do_not_append(pho
     for expectation in invalid + stale:
         reply = rpc('groups.send', room_id=room['room_id'], event_id='rejected',
                     payload={'thread_id': 'main', 'text': '@peer do not run'}, **expectation)
-        assert reply['error']['message'] == ('invalid_params' if expectation in invalid else 'authority_conflict')
-    assert not _result(rpc('groups.log', room_id=room['room_id']))['events']
-    assert not ran
+        error = reply['error']
+        assert error['code'] == 4001
+        assert error['data']['reason'] == ('invalid_params' if expectation in invalid else 'authority_conflict')
+        assert error['message'] == ('invalid_params' if expectation in invalid else 'stale hosted room authority')
+        if expectation in stale:
+            assert error['data']['admitted'] is False
+        assert not _result(rpc('groups.log', room_id=room['room_id']))['events']
+        assert not ran
     # Backward compatibility: old callers need not supply either expected coordinate.
     _result(rpc('groups.send', room_id=room['room_id'], event_id='old-client', payload={'thread_id': 'main', 'text': '@peer hello'}))
 
@@ -129,6 +135,9 @@ def test_phone_expected_authority_fences_a_change_between_read_and_append(phone,
     reply = rpc('groups.send', room_id=room['room_id'], event_id='raced', payload={'thread_id': 'main', 'text': '@peer do not run'},
                 expected_authority_gateway_id=room['authority_gateway_id'],
                 expected_authority_epoch=room['authority_epoch'])
-    assert reply['error']['message'] == 'authority_conflict'
+    assert reply['error']['code'] == 4001
+    assert reply['error']['data']['reason'] == 'authority_conflict'
+    assert reply['error']['data']['admitted'] is False
+    assert reply['error']['message'] == 'stale hosted room authority'
     assert not _result(rpc('groups.log', room_id=room['room_id']))['events']
     assert not ran

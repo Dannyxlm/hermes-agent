@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-import agent.redact as redact
+from agent import redact
 from agent.redact import redact_sensitive_text, redact_terminal_output
 
 # Opaque, prefix-less: no vendor pattern can catch these, only a name or exact-value rule.

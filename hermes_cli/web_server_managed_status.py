@@ -190,3 +190,23 @@ def _write_managed_update_marker(
                 except OSError:
                     pass
             os.close(parent_fd)
+
+
+def _managed_update_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _managed_update_train_enabled() -> bool:
+    """Require an explicit deployment opt-in for candidate requests."""
+    return os.environ.get("HERMES_MANAGED_UPDATE_TRAIN_ENABLED", "").strip() == "1"
+
+
+def _managed_candidate_request_matches(
+    payload: Optional[dict[str, Any]], source: dict[str, Any]
+) -> bool:
+    return bool(
+        payload
+        and payload.get("schema_version") == "hermes-update-candidate-request.v1"
+        and payload.get("tracked_upstream") == source.get("tracked_upstream")
+        and payload.get("upstream_head") == source.get("upstream_head")
+    )

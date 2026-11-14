@@ -10,7 +10,8 @@ from .base import JsonValue, Params, Result
 from .common import ProfileParams, TranscriptMessage
 from .connectors_operation import ConnectionRequestPayload
 from .sessions import OpenRequestEntry, TodoState
-from .canonical import AdmissionStatus, CanonicalSessionRef, PromptResponseResult, SessionInventoryFields
+from .canonical import (AdmissionStatus, CanonicalClientLabel, CanonicalSessionRef, PromptResponseResult,
+                        SessionInventoryFields)
 from .registry import canonical_method
 
 
@@ -25,6 +26,14 @@ class CanonicalLaunchParams(ProfileParams):
     launch_kind: str | None = None
     launch_id: str | None = None
     parent_launch_id: str | None = None
+
+
+class CanonicalClientIdentity(Params):
+    """A client naming itself: ``name`` matches ``[a-z0-9][a-z0-9._-]{0,63}``, ``version`` is 1-64
+    printable ASCII without spaces. Attribution only (owners advertising ``session-client-v1``)."""
+
+    name: str
+    version: str | None = None
 
 
 class CanonicalCreateParams(CanonicalLaunchParams):
@@ -62,6 +71,8 @@ class CanonicalCreateParams(CanonicalLaunchParams):
     # A shell-launched client's allowlisted environment (HERMES_* behaviour values, toolchain PATH/venv),
     # applied to this session only; never echoed in ``launch_request``.
     client_env: dict[str, str] | None = None
+    # The creating client's self-declared label, echoed as ``session.info.client``; no policy reads it.
+    client: CanonicalClientIdentity | None = None
 
 
 class CanonicalResumeParams(CanonicalLaunchParams):
@@ -132,11 +143,15 @@ class CanonicalSnapshotInfo(SessionInventoryFields):
     cwd: str | None = None
     edit_approval_policy: Literal['ask', 'workspace_session', 'session'] | None = None
     launch_request: dict[str, JsonValue] | None = None
+    # ``session.info``'s ``client``: create and resume return the same projection.
+    client: CanonicalClientLabel | None = None
     reasoning_effort: str | None = None
     reasoning_effort_wire: str | None = None
     service_tier: str | None = None
     fast: bool | None = None
     title: str | None = None
+    # SQLite stores 0/1; the wire is a JSON boolean so Desktop's ``archived === true`` probe matches.
+    archived: bool | None = None
     started_at: float | None = None
     last_active_at: float | None = None
     yolo: bool | None = None
@@ -181,6 +196,12 @@ class CanonicalListParams(ProfileParams):
     limit: int = 200
     title: str | None = None
     include_hidden: bool = False
+    # Only conversations of this folder, judged on each conversation's first row by the classic CLI's
+    # ``hermes -c`` rule (``hermes_state_sessions.workspace_key``): its git repo root equals this, or
+    # (no root recorded) its cwd is this folder or under it. Pass the caller's repo root (else its cwd).
+    workspace: str | None = None
+    # Each row also carries the picker fields below (off by default: a live-list poll does not pay for them).
+    picker: bool = False
 
 
 class CanonicalSessionListRow(Result):
@@ -194,6 +215,18 @@ class CanonicalSessionListRow(Result):
     model: str | None = None
     resolved_id: str | None = None
     root_title: str | None = None
+    # Picker fields, only with ``picker: true`` (``gateway/session_picker_fields.py``). From the
+    # conversation's first row: ``cwd`` and ``workspace`` (its ``workspace_key``, the row the filter
+    # reads). From its current segment (the compression tip, as the stored listing projects it): the
+    # first prompt there (``preview``), the newest reply (``last_reply``, shortened as ``preview`` is;
+    # a compaction handoff is no reply), ``git_branch``, ``last_active_at`` and ``pinned``.
+    preview: str | None = None
+    last_reply: str | None = None
+    cwd: str | None = None
+    git_branch: str | None = None
+    workspace: str | None = None
+    last_active_at: float | None = None
+    pinned: bool | None = None
 
 
 class CanonicalListResult(Result):

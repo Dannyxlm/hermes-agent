@@ -149,6 +149,12 @@ def test_off_by_default_writes_nothing(monkeypatch, tmp_path):
     assert not (tmp_path / "logs" / "codex_request_shape.key").exists()
 
 
+def test_read_records_retains_first_record_with_utf8_bom(tmp_path):
+    path = tmp_path / "shape.jsonl"
+    path.write_text('{"sequence": 1}\ninvalid\n[]\n{"sequence": 2}\n', encoding="utf-8-sig")
+    assert shape.read_records(path) == [{"sequence": 1}, {"sequence": 2}]
+
+
 def test_ring_size_reads_agent_config_and_clamps(monkeypatch):
     from hermes_cli import config
 

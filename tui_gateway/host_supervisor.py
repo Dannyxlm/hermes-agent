@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_constants import get_hermes_home
+from hermes_cli._startup_fast import project_root_str
 from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ def append_log_record(path: str | Path, record: str) -> None:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(project_root_str())
 
 
 def _check_output(argv: list[str], **kwargs: Any) -> str:
@@ -484,7 +485,7 @@ class HostSupervisor:
             logger.debug("compute host heartbeat: %s", frame)
         elif ftype == "rpc":
             if isinstance(frame.get("message"), dict):
-                self.rpc_sink(frame["message"])
+                _call_logged(self.rpc_sink, frame["message"], "compute host RPC sink failed")
         elif ftype in ("turn.end", "turn.error"):
             with self._lock:
                 pending = self._pending_turns.pop(request_id, None)
@@ -509,8 +510,9 @@ class HostSupervisor:
             self._pending_turns = {}
         failure = {"reason": reason, "message": message}
         for request_id, (sid, cb) in pending.items():
-            self.rpc_sink({"jsonrpc": "2.0", "method": "event",
-                           "params": {"type": "error", "session_id": sid, "payload": dict(failure)}})
+            _call_logged(self.rpc_sink, {"jsonrpc": "2.0", "method": "event",
+                         "params": {"type": "error", "session_id": sid, "payload": dict(failure)}},
+                         "compute host RPC sink failed")
             if cb is not None:
                 frame = {"type": "turn.error", "sid": sid, "request_id": request_id, **failure}
                 _call_logged(cb, frame, "compute host error callback failed")

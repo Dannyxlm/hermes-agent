@@ -255,7 +255,7 @@ class ComputeHost:
                 response = {"jsonrpc": "2.0", "id": request_id, "result": {"cancelled": withdrawn}}
             else:
                 response_frame = params.get("frame") if isinstance(params.get("frame"), dict) else params
-                resolved = server_requests.resolve_response(response_frame)
+                resolved = server_requests.resolve_response(response_frame, self._transport)
                 response = {"jsonrpc": "2.0", "id": request_id, "result": {"status": "ok" if resolved else "expired"}}
             self._reply("respond.ack", sid, request_id, response=response)
         self._guarded(frame, "respond.error", body)

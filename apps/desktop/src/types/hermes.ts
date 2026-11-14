@@ -767,6 +767,9 @@ export interface SessionMessage {
   display_kind?:
     | 'async_delegation_complete'
     | 'auto_continue'
+    // A safety-refused turn the backend dropped from the model's context but
+    // retained for display (agent/turn_failure_copy.py CONTENT_REFUSED_DISPLAY_KIND).
+    | 'content_refused'
     | 'failed_turn'
     | 'hidden'
     | 'model_switch'
@@ -877,6 +880,10 @@ export interface SessionResumeResult extends SessionWriteCapability {
   message_count: number
   messages: SessionMessage[]
   messages_omitted?: boolean
+  /** Canonical snapshot only: every admission the owner has not finished (queued, started, or `unknown` after a
+   *  crash). `info.pending_submissions` is derived from it, and a forwarding owner's `session.info` sends a partial
+   *  list under that name. */
+  pending?: unknown
   resumed: string
   running?: boolean
   session_id: string
@@ -1954,17 +1961,6 @@ export interface MemoryStatusResponse {
     status: MemoryProviderStatus
   }[]
   builtin_files: { memory: number; user: number }
-}
-
-/** `GET /api/curator` — background skill-curator status. */
-export interface CuratorStatusResponse {
-  enabled: boolean
-  paused: boolean
-  interval_hours: number | null
-  last_run_at: string | null
-  min_idle_hours: number | null
-  stale_after_days: number | null
-  archive_after_days: number | null
 }
 
 /** `POST /api/ops/debug-share` — shareable diagnostics upload result. */
