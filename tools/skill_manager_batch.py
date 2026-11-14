@@ -202,7 +202,8 @@ def _rollback(snapshots, find_skill, results):
     notes = []
     for nm, (pre_dir, snap, dir_pre_existed) in snapshots.items():
         written = [posixpath.normpath(r["file_path"].lstrip("/")) for r in results
-                   if r["name"] == nm and r["action"] == "write_file" and r["file_path"]]
+                   if r["name"] == nm and r["action"] == "write_file"
+                   and isinstance(r["file_path"], str) and r["file_path"]]
         try:
             post = find_skill(nm)
             _restore_snapshot(pre_dir, snap, Path(post["path"]) if post else None,
@@ -277,14 +278,24 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
         review_token = _smt._skill_review_batch.set(True)
         try:
             for i, op in enumerate(operations):
-                raw = _smt._skill_manage_from({**op, "name": names[i], "operations": None},
-                                              task_id=task_id, session_id=session_id)
+                rollback_results = results
                 try:
-                    parsed = json.loads(raw)
-                except Exception:
-                    parsed = {"success": False, "error": "unparseable op result"}
+                    raw = _smt._skill_manage_from({**op, "name": names[i], "operations": None},
+                                                  task_id=task_id, session_id=session_id)
+                except Exception as exc:
+                    logger.warning("skill_manage operation %d raised; rolling back batch", i, exc_info=True)
+                    # A raising handler can leave its own file or parent directories behind.
+                    rollback_results = [*results, {"name": names[i], "action": op["action"],
+                                                  "file_path": op.get("file_path")}]
+                    # Do not expose the failing operation's potentially private message.
+                    parsed = {"success": False, "error": f"operation raised {type(exc).__name__}"}
+                else:
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        parsed = {"success": False, "error": "unparseable op result"}
                 if not parsed.get("success"):
-                    note, rollback_failed = _rollback(snapshots, _smt._find_skill, results)
+                    note, rollback_failed = _rollback(snapshots, _smt._find_skill, rollback_results)
                     fail = {  # key order is wire-visible
                         "success": False,
                         "error": (f"operations[{i}] ({op['action']} on '{names[i]}') failed: "
