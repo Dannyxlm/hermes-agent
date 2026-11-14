@@ -54,3 +54,110 @@ def test_cancel_after_the_write_is_emitted_once(wire):
     assert server_requests.cancel("s1") == 1
     pending("resolved")
     assert [event for event, _ in wire] == ["request", "request.cancel"]
+
+
+class _Socket:
+    def __init__(self):
+        self.frames: list[dict] = []
+
+    def write(self, frame):
+        self.frames.append(frame)
+        return True
+
+
+def test_a_pinned_request_goes_to_and_is_settled_only_by_the_socket_that_asked(wire):
+    asker, bystander = _Socket(), _Socket()
+    params = {"action": "vault", "vault": {"operation": "close", "target": "t"}}
+    out: list = []
+    worker = threading.Thread(target=lambda: out.append(
+        server_requests.send("preview.act", "", params, timeout=10, transport=asker)))
+    worker.start()
+    for _ in range(1000):
+        if asker.frames:
+            break
+        threading.Event().wait(0.01)
+    rid = asker.frames[0]["id"]
+    assert wire == [] and bystander.frames == []  # never broadcast
+
+    forged = {"id": rid, "result": {"value": "from another window"}}
+    assert not server_requests.resolve_response(forged, bystander)
+    assert not server_requests.resolve_pinned_response(forged, bystander)
+    assert server_requests.open_request_count() == 1
+
+    assert server_requests.resolve_pinned_response({"id": rid, "result": {"value": "ok"}}, asker)
+    worker.join(timeout=10)
+    assert out == [{"value": "ok"}]
+    assert wire == []  # cancellation is pinned too, never emitted on stdio
+
+
+def test_agent_vault_followups_are_pinned_to_the_opening_window(wire, monkeypatch):
+    import json
+    owner, phone = _Socket(), _Socket()
+    broadcast = []
+
+    def reply(frame):
+        if frame.get("method") != "preview.act":
+            return
+        operation = frame["params"]["vault"]["operation"]
+        if operation != "open":
+            assert not server_requests.resolve_response({"id": frame["id"], "result": {"value": "forged"}}, phone)
+        value = json.dumps({"success": True, "target": "window-target"})
+        assert server_requests.resolve_response({"id": frame["id"], "result": {"value": value}}, owner)
+
+    def fanout(frame):
+        broadcast.append(frame)
+        reply(frame)
+
+    def pinned(frame):
+        owner.frames.append(frame)
+        reply(frame)
+
+    monkeypatch.setattr(server_requests, "_write", fanout)
+    monkeypatch.setattr(owner, "write", pinned)
+    for operation in ("open", "evaluate", "close"):
+        vault = {"operation": operation}
+        if operation != "open":
+            vault["target"] = "window-target"
+        if operation == "evaluate":
+            vault["expression"] = "synthetic-secret-script"
+        assert server_requests.send("preview.act", "s1", {"action": "vault", "vault": vault}, timeout=1)
+    assert [frame["params"]["vault"]["operation"] for frame in broadcast] == ["open"]
+    assert [frame["params"]["vault"]["operation"] for frame in owner.frames if frame["method"] == "preview.act"] == ["evaluate", "close"]
+
+
+def _answer_with_error(code, message):
+    result: list = []
+    asker = threading.Thread(target=lambda: result.append(server_requests.send("sudo", "s1", {}, timeout=10)))
+    asker.start()
+    from tests.waiting import wait_until
+    request = wait_until(lambda: server_requests.open_requests("s1"))[0]
+    server_requests.resolve_response({"jsonrpc": "2.0", "id": request["id"], "error": {"code": code, "message": message}})
+    asker.join(timeout=10)
+    return result
+
+
+def test_vault_target_from_another_session_or_disconnected_window_is_not_broadcast(wire):
+    owner = _Socket()
+    opener = {"id": "open", "method": "preview.act", "params": {
+        "session_id": "s1", "action": "vault", "vault": {"operation": "open"}}}
+    server_requests.preview_request_transport(opener)
+    server_requests.remember_preview_response({"id": "open", "result": {
+        "value": '{"success":true,"target":"target"}'}}, owner)
+    params = {"action": "vault", "vault": {"operation": "evaluate", "target": "target", "expression": "secret"}}
+    with pytest.raises(ValueError, match="no longer available"):
+        server_requests.send("preview.act", "other-session", params, timeout=1)
+    server_requests.forget(owner)
+    with pytest.raises(ValueError, match="no longer available"):
+        server_requests.send("preview.act", "s1", params, timeout=1)
+    assert wire == [] and owner.frames == []
+
+
+@pytest.mark.parametrize("code", [-32603, -32601])
+def test_an_error_answer_is_logged_with_its_code(wire, caplog, code):
+    """A handler failure is visible without logging client text that may echo a secure answer."""
+    secret = "synthetic-secure-answer-never-log"
+    with caplog.at_level("WARNING", logger="tui_gateway.server_requests"):
+        assert _answer_with_error(code, secret) == [None]
+
+    assert any(str(code) in r.getMessage() and "sudo" in r.getMessage() for r in caplog.records)
+    assert secret not in caplog.text

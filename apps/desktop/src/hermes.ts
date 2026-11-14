@@ -32,6 +32,8 @@ export * from './api/system'
 export * from './api/toolsets'
 export * from './api/webapp-access'
 
+export type { CuratorStatusResponse } from './types/curator'
+
 export type {
   ActionResponse,
   ActionStatusResponse,
@@ -59,7 +61,6 @@ export type {
   CronJobCreatePayload,
   CronJobSchedule,
   CronJobUpdates,
-  CuratorStatusResponse,
   CustomEndpoint,
   CustomEndpointsResponse,
   CustomEndpointUpdate,

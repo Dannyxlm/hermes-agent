@@ -194,6 +194,9 @@ export interface ClientSessionState {
   streamTurnId?: null | string
   /** Exact admission observed on the accepted message.start; absent on legacy/local starts. */
   streamExecutionControl?: (Required<Pick<GatewayEvent, 'admission_id' | 'execution_generation'>> & { ownerKey: string }) | null
+  /** The owner admission the live turn executes, from its frames' execution stamp (`admission_id`). The in-flight
+   *  journal stores it so a reopen can ask the owner whether that exact execution is still pending. */
+  turnAdmissionId?: null | string
   /** Newest row on screen when that message.start arrived: rows above it are
    *  earlier turns, even when an interim seal left them marked `interim`. */
   turnAnchorId?: null | string

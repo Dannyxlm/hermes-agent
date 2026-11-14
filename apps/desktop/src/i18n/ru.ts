@@ -29,6 +29,11 @@ import { ruUpdateChannel } from './ru_update_channel'
 
 export const ruOverrides = {
   family: familyTranslations.ru,
+  gatewayGroupOpen: {
+    opening: "Открываем групповой чат…",
+    lookupFailed: "Не удалось найти эту группу на шлюзе. Попробуйте ещё раз.",
+    missing: "Этот групповой чат больше не существует."
+  },
   catalog: ruCatalog,
   connectors: ruConnectors.connectors,
   sharedMetrics: ruSharedMetrics,
@@ -1338,6 +1343,13 @@ export const ruOverrides = {
       clearDirFailed: 'Не удалось очистить папку по умолчанию'
     },
     toolsets: {
+      browserRealProfile: {
+        reimportSignins: 'Импортировать входы заново',
+        signinsImportedTitle: 'Входы во встроенном браузере',
+        signinsImported: count => `Встроенный браузер вошёл с cookie из профиля браузера: ${count}.`,
+        signinsRemote: 'Этот бэкенд работает на другом компьютере, поэтому его профиль браузера не импортируется во встроенный браузер.',
+        signinsFailed: 'Не удалось импортировать входы во встроенный браузер',
+      },
       loadingConfig: 'Загрузка конфигурации',
       savedTitle: 'Учётные данные сохранены',
       savedMessage: key => `${key} обновлён.`,
@@ -3593,6 +3605,7 @@ export const ruOverrides = {
       readAloud: 'Зачитать вслух',
       copyFullResponse: 'Копировать весь ответ',
       readAloudFullResponseHint: 'Shift+клик: прочитать весь ответ',
+      contentRefusedNotice: 'Это сообщение отклонено фильтром безопасности модели — попробуйте другой запрос.',
       editMessage: 'Изменить сообщение',
       expandMessage: 'Развернуть сообщение',
       scrollToBottom: 'Прокрутить вниз',

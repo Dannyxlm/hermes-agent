@@ -918,6 +918,8 @@ def _cmd_undo(rid, params, session, name, arg):
     _tui_model_friction("undo", session, turns_undone)
     turn_word = "turn" if turns_undone == 1 else "turns"
     notice = f"↶ Undid {turns_undone} {turn_word} ({rewound_count} message(s)). Edit and resubmit, or send a new message."
+    if hint := _tools_mod("tui_gateway.checkpoints").undo_rollback_hint_for(session, live_view, active):
+        notice += "\n" + hint["text"]
     return _ok(rid, {"type": "prefill", "message": target_text, "notice": notice})
 
 
@@ -1118,7 +1120,8 @@ def _(rid, params: dict) -> dict:
                     worker = _SlashWorker(
                         session["session_key"], getattr(session.get("agent"), "model", _resolve_model()),
                         profile_home=session.get("profile_home"),
-                        provider=getattr(session.get("agent"), "provider", None) or None)
+                        provider=getattr(session.get("agent"), "provider", None) or None,
+                        base_url=getattr(session.get("agent"), "base_url", None) or None)
                     _attach_worker(sid, session, worker)
                 except Exception as e:
                     return _err(rid, 5030, f"slash worker start failed: {e}")
@@ -1187,13 +1190,16 @@ def _(rid, params: dict, session) -> dict:
         if reason := _container_checkpoint_refusal(session, mgr, cwd):
             return {"success": False, "error": reason}
         # A whole-tree restore keeps the user's hand-edits unless ``all`` (main's --all), as on the owner.
-        result = mgr.restore(cwd, _resolve_checkpoint_hash(mgr, cwd, target), file_path=file_path or None,
+        commit = _resolve_checkpoint_hash(mgr, cwd, target)
+        taken = _tools_mod("tools.checkpoint_undo_hint").checkpoint_taken_at(cwd, commit)
+        result = mgr.restore(cwd, commit, file_path=file_path or None,
                              safe=not file_path and params.get("all") is not True)
         if result.get("success") and not file_path:
             removed = 0
             with session["history_lock"]:
-                _history, user_indices = _user_turn_indices(session)
-                if user_indices:
+                history, user_indices = _user_turn_indices(session)
+                # Not a turn /undo kept: only one that made or followed this checkpoint.
+                if _tools_mod("tools.checkpoint_undo_hint").rollback_rewinds_newest_turn(history, user_indices, taken):
                     try:
                         removed = _rewind_active_session_history(session, len(user_indices) - 1)[2]
                     except Exception as exc:
@@ -1734,38 +1740,6 @@ def _plugin_rows() -> list[dict]:
     return out
 
 
-# Latest ``on_plugin_loaded`` summaries by plugin name — the TUI server's own subscription, so an
-# install/toggle/update result reports what the load actually activated (#87770). One listener per manager.
-_plugin_activations: dict = {}
-_plugin_activation_subscribed: set = set()
-
-
-def _ensure_plugin_activation_listener() -> None:
-    from hermes_cli.plugins import get_plugin_manager
-    manager = get_plugin_manager()
-    if manager.scope_key in _plugin_activation_subscribed:
-        return
-    _plugin_activation_subscribed.add(manager.scope_key)
-
-    def _on_loaded(summaries) -> None:
-        for entry in summaries:
-            _plugin_activations[entry["name"]] = entry
-            _plugin_activations[entry["key"]] = entry
-    manager.on_plugin_loaded(_on_loaded)
-
-
-def _with_activation(result: dict, name: str) -> dict:
-    """Fill ``activation`` from this process's listener when the core returned none (the core's own
-    copy carries ``live_now``, which the listener's load-time summary cannot)."""
-    if result.get("activation"):
-        return result
-    for key in (name, result.get("plugin_name"), result.get("name")):
-        if key and key in _plugin_activations:
-            result["activation"] = _plugin_activations[key]
-            break
-    return result
-
-
 def _plugins_list(rid, params):
     rows = _plugin_rows()
     user_count = sum(1 for r in rows if r["source"] != "bundled")
@@ -1792,10 +1766,13 @@ def _plugins_toggle(rid, params):
         "name": key, "plugin": row}, key))
 
 
-def _source_moved_data(result: dict) -> dict | None:
-    """The structured marker of an install refused because the source left the reviewed commit: the
-    client re-inspects on ``reason``, never on the message, which echoes text a git server controls."""
-    return {"reason": "source_moved"} if result.get("source_moved") else None
+def _refusal_data(result: dict) -> dict | None:
+    """The structured marker of an install refused because the source left the reviewed commit (the
+    client re-inspects) or because a plugin of that name is installed (the client offers Force): the
+    client acts on ``reason``, never on the message, which echoes text a git server controls."""
+    if result.get("source_moved"):
+        return {"reason": "source_moved"}
+    return {"reason": "exists"} if result.get("exists") else None
 
 
 def _plugins_install(rid, params):
@@ -1811,7 +1788,7 @@ def _plugins_install(rid, params):
         ref=str(params.get("ref") or "").strip() or None,
         inspected_sha=str(params.get("inspected_sha") or "").strip() or None)
     if not result.get("ok"):
-        return _err(rid, 5026, result.get("error") or "install failed", data=_source_moved_data(result))
+        return _err(rid, 5026, result.get("error") or "install failed", data=_refusal_data(result))
     return _ok(rid, _with_activation(result, str(result.get("plugin_name") or "")) if result.get("enabled") else result)
 
 
@@ -1837,7 +1814,7 @@ def _plugins_install_desktop(rid, params):
     result = _tools_mod("hermes_cli.desktop_plugin_install").install_desktop_plugin(
         ident, ref=params.get("ref"), catalog_name=catalog_name or None, force=bool(params.get("force")))
     if not result.get("ok"):
-        return _err(rid, 5026, result.get("error") or "desktop install failed", data=_source_moved_data(result))
+        return _err(rid, 5026, result.get("error") or "desktop install failed", data=_refusal_data(result))
     return _ok(rid, result)
 
 
@@ -2011,4 +1988,6 @@ def _(rid, params: dict) -> dict:
 
 def register(server) -> None:
     """Rebind this module's helpers + handlers onto ``server`` and register the handlers."""
+    from . import methods_tools_activation
+    methods_tools_activation.register(server)
     bind_module(globals(), server, skip=("_",))

@@ -117,3 +117,26 @@ def test_skipped_batch_answer_preserves_owner_fence(isolated_registry):
     assert requests.lock_answer(req.id, "b", "Blue", expected_sid="own") == []
     assert req.result == {"answers": {"a": None, "b": "Blue"}, "outcome": "submitted"}
     assert req.event.is_set()
+
+
+def test_pinned_vault_reply_retains_socket_and_runtime_owner_fences(isolated_registry):
+    from types import SimpleNamespace
+
+    frames, _ = isolated_registry
+    owner = SimpleNamespace(write=frames.append)
+    req = requests.ServerRequest("own", "preview.act", {
+        "action": "vault", "vault": {"operation": "evaluate", "target": "tab", "expression": "synthetic-secret"}},
+        timeout=30)
+    req.transport = owner
+    requests._register(req)
+    assert req.params == {} and requests.open_requests("own") == []
+    response = {"id": req.id, "result": {"value": "ok"}}
+    assert not requests.resolve_response(response, object(), expected_sid="own")
+    with pytest.raises(PermissionError):
+        requests.resolve_response(response, owner, expected_sid="foreign")
+    assert not req.event.is_set()
+    # A pinned NOT_SHOWN is an immediate refusal, not a unanimous-window vote.
+    assert requests.resolve_response({"id": req.id, "error": {"code": requests.NOT_SHOWN_CODE}},
+                                     owner, expected_sid="own", expected_method="preview.act")
+    assert req.event.is_set() and not req.answered and req.result is None
+    assert requests.open_request_count() == 0

@@ -75,13 +75,13 @@ ALLOWED_RAW_SPAWN_ENV_FILES = {
 def _iter_source_files():
     for d in SCAN_DIRS:
         root = REPO_ROOT / d
-        if root.is_dir():
-            # Bundled plugins can ship their own tests; those are not spawn sites in the product.
-            yield from (path for path in root.rglob("*.py") if "tests" not in path.relative_to(root).parts)
+        assert root.is_dir(), f"{d}/ is gone: update SCAN_DIRS, or this guard scans nothing there"
+        # Bundled plugins can ship their own tests; those are not spawn sites in the product.
+        yield from (path for path in root.rglob("*.py") if "tests" not in path.relative_to(root).parts)
     for f in SCAN_ROOT_FILES:
         p = REPO_ROOT / f
-        if p.is_file():
-            yield p
+        assert p.is_file(), f"{f} is gone: update SCAN_ROOT_FILES, or this guard scans nothing there"
+        yield p
 
 
 def _raw_spawn_env_sites():

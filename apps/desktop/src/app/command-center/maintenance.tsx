@@ -5,7 +5,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   type ActionResponse,
-  type CuratorStatusResponse,
   type DebugShareResponse,
   getActionStatus,
   getCuratorStatus,
@@ -25,6 +24,7 @@ import { cn } from '@/lib/utils'
 import { upsertDesktopActionTask } from '@/store/activity'
 import { confirm } from '@/store/confirm'
 import { notify, notifyError } from '@/store/notifications'
+import type { CuratorStatusResponse } from '@/types/curator'
 import type { ActionStatusResponse } from '@/types/hermes'
 
 import { MemoryLayersSummary } from '../settings/memory/memory-layers'
