@@ -277,12 +277,18 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
         review_token = _smt._skill_review_batch.set(True)
         try:
             for i, op in enumerate(operations):
-                raw = _smt._skill_manage_from({**op, "name": names[i], "operations": None},
-                                              task_id=task_id, session_id=session_id)
                 try:
-                    parsed = json.loads(raw)
-                except Exception:
-                    parsed = {"success": False, "error": "unparseable op result"}
+                    raw = _smt._skill_manage_from({**op, "name": names[i], "operations": None},
+                                                  task_id=task_id, session_id=session_id)
+                except Exception as exc:  # health: allow BLE001 -- rollback boundary; messages may contain private data
+                    # Raised I/O failures must take the same rollback path as returned
+                    # errors. Do not expose exception messages (paths or private data).
+                    parsed = {"success": False, "error": f"operation raised {type(exc).__name__}"}
+                else:
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        parsed = {"success": False, "error": "unparseable op result"}
                 if not parsed.get("success"):
                     note, rollback_failed = _rollback(snapshots, _smt._find_skill, results)
                     fail = {  # key order is wire-visible

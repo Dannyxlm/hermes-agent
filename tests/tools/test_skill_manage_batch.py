@@ -78,6 +78,42 @@ class TestSkillManageBatch(unittest.TestCase):
         self.assertIn("Step 1.", content)       # patch undone
         self.assertNotIn("Step ONE.", content)
 
+    def test_write_exception_rolls_back_prior_ops(self):
+        from pathlib import Path
+
+        self._call("probe", [{"action": "create", "content": SK.format(n="probe")}])
+        root = Path(self.home) / "skills"
+        real_write = self.smt.atomic_write_text
+
+        def deny_blocked_file(target, *args, **kwargs):
+            if target.name == "blocked.md":
+                raise PermissionError("synthetic private failure detail")
+            return real_write(target, *args, **kwargs)
+
+        with patch.object(self.smt, "atomic_write_text", side_effect=deny_blocked_file):
+            r = self._call("probe", [
+                {"action": "patch", "old_string": "Step 1.", "new_string": "Step ONE."},
+                {"name": "fresh", "action": "create", "content": SK.format(n="fresh")},
+                {"action": "write_file", "file_path": "references/blocked.md", "file_content": "x"},
+                {"name": "later", "action": "create", "content": SK.format(n="later")},
+            ])
+        self.assertFalse(r["success"])
+        self.assertEqual(r["failed_index"], 2)
+        self.assertEqual(r["completed_before_failure"], 2)
+        self.assertIn("PermissionError", r["error"])
+        self.assertNotIn("synthetic private failure detail", r["error"])
+        self.assertEqual((root / "probe" / "SKILL.md").read_text(encoding="utf-8-sig"),
+                         SK.format(n="probe"))
+        self.assertFalse((root / "probe" / "references").exists())
+        self.assertFalse((root / "fresh").exists())
+        self.assertFalse((root / "later").exists())
+        self.assertFalse(self.smt._skill_gate_bypass.get())
+        self.assertFalse(self.smt._skill_review_batch.get())
+        # Context/lock cleanup permits a later independent mutation.
+        self.assertTrue(self._call("probe", [
+            {"action": "patch", "old_string": "Step 1.", "new_string": "Recovered."},
+        ])["success"])
+
     def test_failed_create_batch_removes_partial_skill(self):
         r = self._call("fresh", [
             {"action": "create", "content": SK.format(n="fresh")},
