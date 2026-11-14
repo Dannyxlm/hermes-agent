@@ -490,7 +490,7 @@ def _report_priority(provider: str, pool, moved, requested: int, verb: str, prep
         print(f"note: requested priority {requested}; effective priority is {moved.priority} "
               f"because {reason}.", file=sys.stderr)
     strategy = get_pool_strategy(provider)
-    if strategy != STRATEGY_FILL_FIRST:
+    if strategy not in {STRATEGY_FILL_FIRST, "smart"}:
         print(f"note: {provider} uses the {strategy} strategy; priority only orders "
               f"fill_first selection.", file=sys.stderr)
 
@@ -503,9 +503,13 @@ def auth_priority_command(args) -> None:
     if matched is None or index is None:
         raise SystemExit(f"{error} Provider: {provider}.")
     requested = int(args.priority)
-    moved = pool.move_entry(matched.id, requested)
-    if moved is None:
-        raise SystemExit(f'No credential matching "{getattr(args, "target", None)}" for provider {provider}.')
+    with auth_mod._auth_store_lock():
+        moved = pool.move_entry(matched.id, requested)
+        if moved is None:
+            raise SystemExit(f'No credential matching "{getattr(args, "target", None)}" for provider {provider}.')
+        if requested == 0 and provider in {"anthropic", "openai-codex", "xai-oauth"}:
+            from agent.account_router.snapshot import pin_best_effort
+            pin_best_effort(provider, moved.id, strategy=get_pool_strategy(provider))
     _report_priority(provider, pool, moved, requested, "Set", "to")
 
 
@@ -874,7 +878,8 @@ _STRATEGY_DESCRIPTIONS = {
     STRATEGY_FILL_FIRST: "Use first key until exhausted, then next",
     STRATEGY_ROUND_ROBIN: "Cycle through keys evenly",
     STRATEGY_LEAST_USED: "Always pick the least-used key",
-    STRATEGY_RANDOM: "Random selection"}
+    STRATEGY_RANDOM: "Random selection",
+    "smart": "Spend subscription allowance before reset (run auth router refresh first)"}
 
 
 def _interactive_strategy() -> None:
@@ -886,7 +891,7 @@ def _interactive_strategy() -> None:
     print()
     for i, s in enumerate(strategies, 1):
         print(f"  {i}. {s:15s} — {_STRATEGY_DESCRIPTIONS[s]}{' ←' if s == current else ''}")
-    raw = _ask("\nStrategy [1-4]: ")
+    raw = _ask(f"\nStrategy [1-{len(strategies)}]: ")
     if not raw:
         return
     try:
@@ -913,7 +918,11 @@ def auth_upgrade_command(args) -> None:
         raise SystemExit(code)
 
 
+from hermes_cli.auth_router import auth_router_command
+
+
 _AUTH_ACTIONS = {
+    "router": auth_router_command,
     "add": auth_add_command, "list": auth_list_command, "remove": auth_remove_command,
     "reset": auth_reset_command, "priority": auth_priority_command, "refresh": auth_refresh_command, "status": auth_status_command,
     "logout": auth_logout_command, "upgrade": auth_upgrade_command}

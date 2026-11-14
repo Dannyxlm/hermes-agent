@@ -17,7 +17,7 @@ CREATE_FIELDS = frozenset({'request_id', 'source', 'cwd', 'model', 'toolsets',
                            'yolo', 'safe_mode', 'ignore_user_config',
                            'skills', 'checkpoints', 'accept_hooks', 'pass_session_id', 'follow_profile_config',
                            'service_tier', 'cwd_explicit', 'run_budget', 'verbose', 'row_cwd', 'client_env',
-                           'started_by_session', 'started_by_profile', 'launch_title', 'launch_kind', 'launch_id', 'parent_launch_id'})
+                           'client', 'started_by_session', 'started_by_profile', 'launch_title', 'launch_kind', 'launch_id', 'parent_launch_id'})
 # Sections a ``follow_profile_config`` session re-reads from the owning profile's CURRENT config each
 # turn (main's Bot Chat row), credentials included: a frozen key never crosses a profile route change.
 FOLLOW_SECTIONS = ('model', 'providers', 'custom_providers', 'fallback_providers', 'fallback_model', 'model_aliases',
@@ -456,6 +456,10 @@ def build_policy(params, config, *, private_secrets=None, profile_terminal=True,
         cwd = _profile_workspace_cwd(get_hermes_home()) or cwd
     from gateway.session_local_editor import validate_editor
     validate_editor(source, params.get('editor'))
+    if 'client' in params:  # a self-declared label kept in the request as sent; no decision below reads it
+        from gateway.session_client import client_problem
+        if problem := client_problem(params['client']):
+            _refuse('client', problem)
     launch_skills(params)
     config = present_sections(json.loads(json.dumps(config)))
     picked_route = {'model', 'provider', 'base_url'} & set(_without_auto_pick(params))

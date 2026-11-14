@@ -19,7 +19,7 @@ import os
 import threading
 import uuid
 import time
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 from utils import env_var_enabled, is_truthy_value
 from agent.i18n import t
@@ -52,7 +52,7 @@ _YOLO_MODE_FROZEN: bool = is_truthy_value(os.getenv("HERMES_YOLO_MODE", ""))
 
 # --- Per-session approval state (thread-safe) -----------------------------------------------------------------------
 
-_lock = threading.Lock()
+_lock = threading.RLock()  # re-entrant: a card settle checks and resolves under one hold
 # Queue-only surfaces use the same envelope from creation through exact settlement.
 _gateway_approval_epoch = uuid.uuid4().hex
 _pending: dict[str, dict] = {}
@@ -162,7 +162,8 @@ def resolve_gateway_approval(session_key: str, choice: str,
                              expected_revision: Optional[int] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
-    *resolve_all* approves pending non-payments; bulk denial still includes payments.
+    *resolve_all* marks bulk consent, even when *request_id* narrows the target:
+    it approves pending non-payments; bulk denial still includes payments.
     Payments need individual consent. Otherwise the oldest
     (FIFO) or the one matching *request_id*. *reason* is the ``/deny <reason>`` free text,
     relayed to the agent in the BLOCKED message. *auth* is the device authentication a native
@@ -179,9 +180,11 @@ def resolve_gateway_approval(session_key: str, choice: str,
             if not targets:
                 return 0
         elif resolve_all:
-            targets = [entry for entry in queue if choice == "deny" or _consent_kind(entry.data) != "payment"]
+            targets = list(queue)
         else:
             targets = [queue[0]]
+        if resolve_all and choice != "deny":
+            targets = [entry for entry in targets if _consent_kind(entry.data) != "payment"]
         if expected_epoch is not None or expected_revision is not None:
             if (not request_id or resolve_all or len(targets) != 1 or type(expected_revision) is not int
                     or expected_revision < 1 or not isinstance(expected_epoch, str)
@@ -212,15 +215,47 @@ def resolve_gateway_approval(session_key: str, choice: str,
     return len(targets)
 
 
-def resolve_gateway_approval_card(session_key: str, choice: str, request_id: Optional[str]) -> int:
+def _card_target(session_key: str, request_id: Optional[str]):
+    """The entry a card tap resolves: its own request, never another. Caller holds ``_lock``."""
+    if not request_id:
+        return None
+    return next((e for e in _gateway_queues.get(session_key) or [] if e.data.get("request_id") == request_id), None)
+
+
+def restrict_gateway_approval_card_to_deny(session_key: str, request_id: Optional[str], restricted: bool = True) -> None:
+    """Mark a pending request whose card could not show the whole command: a card tap may only deny it.
+    Every request starts marked; ``restricted=False`` lifts the mark once its card shows the whole command."""
+    with _lock:
+        entry = _card_target(session_key, request_id)
+        if entry is not None:
+            entry.card_deny_only = restricted
+
+
+def resolve_gateway_approval_card(session_key: str, choice: str, request_id: Optional[str], *,
+                                  actor_id: Any = None, admin_ids: Iterable[str] = (), extra: Any = None) -> int:
     """Resolve the approval a native button card was rendered for.
 
-    With the card's request id only that request can resolve: a card whose request already
-    settled (timed out, answered by ``/approve``) resolves nothing instead of the next queued
-    approval in the same session. A card sent without an id keeps the FIFO behaviour."""
-    if request_id:
+    Only the card's own request can resolve: a card whose request already settled (timed out, answered
+    by ``/approve``) resolves nothing instead of the next queued approval in the same session. A tap
+    without a request id (a card from an older build) cannot say which request it was rendered for, so
+    it resolves nothing; typed ``/approve`` stays the way to answer one. A request stays Deny-only from
+    its creation until its card shows the whole command, so a forged or early approve tap resolves
+    nothing.
+
+    With *actor_id* the clicker's authority (``gateway.approval_actor.may_answer``, with the platform
+    *extra* / *admin_ids*) is checked against that same entry. The Deny-only check, the authority check
+    and the settle are one critical section."""
+    if not request_id:
+        return 0
+    with _lock:  # re-entrant: the settle below takes it again
+        target = _card_target(session_key, request_id)
+        if target is not None and choice != "deny" and target.card_deny_only:
+            return 0
+        if target is not None and actor_id is not None:
+            from gateway.approval_actor import may_answer
+            if not may_answer(target.authority, actor_id, admin_ids, extra):
+                return 0
         return resolve_gateway_approval(session_key, choice, request_id=request_id)
-    return resolve_gateway_approval(session_key, choice)
 
 
 def withdraw_gateway_approval(session_key: str, request_id: str, cause: str) -> bool:
@@ -244,6 +279,12 @@ def list_gateway_approvals(session_key: str) -> list[dict]:
     """Return replay-safe snapshots of unresolved approvals for one session."""
     with _lock:
         return [dict(entry.data) for entry in _gateway_queues.get(session_key, [])]
+
+
+def list_gateway_approval_authority(session_key: str) -> list[dict]:
+    """Per unresolved approval: its ``request_id`` and who may answer it (requester, approvers)."""
+    with _lock:
+        return [{"request_id": e.data.get("request_id"), **e.authority} for e in _gateway_queues.get(session_key, [])]
 
 
 def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:

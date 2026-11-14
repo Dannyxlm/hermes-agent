@@ -16,47 +16,68 @@ def provenance(monkeypatch):
     return values
 
 
-def test_standalone_intake_clears_tools_environment_and_binds_child(tmp_path, monkeypatch, provenance):
-    from hermes_cli import oneshot, runtime_provider, mcp_startup
-    import run_agent
-    db = SessionDB(tmp_path / 'state.db')
-    observed = []
+@pytest.mark.asyncio
+async def test_gateway_launch_intake_clears_tools_environment_and_binds_child(tmp_path, monkeypatch, provenance):
+    from contextlib import asynccontextmanager
 
-    class Agent:
-        def __init__(self, **kwargs):
+    from gateway.session_controls import AuthorityConnection
+    from hermes_cli import gateway_chat, launch_provenance
+    from hermes_cli._parser import build_top_level_parser
+    from hermes_cli.gateway_chat_view import GatewayChatView
+    from tests.gateway.test_local_source_labels import _authority
+
+    monkeypatch.setattr(launch_provenance, '_pending', {})
+    authority, _ = await _authority(tmp_path, monkeypatch)
+    conn = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
+    calls, observed, children = [], [], []
+
+    class Peer:
+        async def rpc(self, method, **params):
             assert not set(provenance) & os.environ.keys()
-            self.session_id = kwargs.get('session_id') or 'child'
-            self._session_db = kwargs['session_db']
-        def _ensure_db_session(self):
-            self._session_db.create_session(self.session_id, 'oneshot')
-        def run_conversation(self, *a, **k):
-            self._ensure_db_session()
-            with db._read_ctx() as conn:
-                observed.extend(dict(r) for r in conn.execute('SELECT * FROM work_launches'))
-            return {'completed': True, 'final_response': 'fixture'}
-        def shutdown_memory_provider(self, *a):
-            pass
-        def close(self):
-            pass
+            calls.append((method, params))
+            reply = await conn.dispatch({'id': len(calls), 'method': method, 'params': params})
+            assert 'result' in reply, reply
+            return reply['result']
 
-    monkeypatch.setattr(run_agent, 'AIAgent', Agent)
-    monkeypatch.setattr(oneshot, '_create_session_db_for_oneshot', lambda: db)
-    monkeypatch.setattr(oneshot, '_close_agent', lambda *a: None)
-    monkeypatch.setattr(mcp_startup, 'ensure_mcp_discovery_before_agent_build', lambda **k: None)
-    monkeypatch.setattr(runtime_provider, 'resolve_runtime_with_fallback', lambda *a, **k: ({'provider': 'fixture'}, None))
+    @asynccontextmanager
+    async def connected():
+        assert not set(provenance) & os.environ.keys()
+        yield Peer()
+
+    async def rendered(self, query, *, oneshot):
+        assert query == 'fixture' and oneshot
+        assert self.unattended and self.close_on_finite
+        assert not set(provenance) & os.environ.keys()
+        children.append(self.session_id)
+        # The real create transaction must persist the launch before any execution.
+        with authority.db._read_ctx() as db:
+            observed.extend(dict(row) for row in db.execute('SELECT * FROM work_launches'))
+        return 0
+
+    monkeypatch.setattr(gateway_chat, 'connect_gateway', connected)
+    monkeypatch.setattr(GatewayChatView, 'run', rendered)
+    args = build_top_level_parser()[0].parse_args(['-z', 'fixture', '--in', str(tmp_path)])
     try:
-        answer, _ = oneshot._run_agent('fixture', model='fixture', use_config_toolsets=False)
-        assert answer == 'fixture'
+        assert await gateway_chat.run_gateway_chat(args) == 0
+        create = next(params for method, params in calls if method == 'session.create')
+        assert create['source'] == 'oneshot'
+        assert {key: create[key] for key in launch_provenance.FIELDS if key in create} == dict(
+            started_by_session='parent', started_by_profile='launcher',
+            launch_title='short task', launch_id='stable-launch')
         assert len(observed) == 1
         row = observed[0]
+        assert row['launch_id'] == 'stable-launch'
         assert row['launcher_profile'] == 'launcher'
         assert row['launcher_session_id'] == 'parent'
-        assert row['child_session_id'] == 'child'
+        assert row['child_session_id'] == children[0]
         assert row['title'] == 'short task'
         assert row['kind'] == 'teammate'
-        assert db.get_session('child')['parent_session_id'] is None
+        child = authority.db.get_session(children[0])
+        assert child['source'] == 'oneshot'
+        assert child['parent_session_id'] is None
     finally:
-        db.close()
+        await conn.close()
+        authority.db.close()
 
 
 def test_cli_flags_are_accepted_and_override_environment(provenance):

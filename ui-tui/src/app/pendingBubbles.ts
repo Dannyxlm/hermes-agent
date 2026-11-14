@@ -1,4 +1,4 @@
-import type { PendingSubmissionRow } from '../types.js'
+import type { PendingSubmissionRow } from '@hermes/shared/gateway-types'
 
 export type PendingRow = PendingSubmissionRow
 

@@ -177,6 +177,60 @@ credential_pool_strategies:
 | `round_robin` | Cycle through keys evenly, rotating after each selection |
 | `least_used` | Always pick the key with the lowest request count |
 | `random` | Random selection among healthy keys |
+| `smart` (opt-in) | Prefer subscription allowance that would expire unused, with a shared sticky top account |
+
+### Subscription allowance routing (`smart`)
+
+For Anthropic, Codex and Grok OAuth pools, `smart` ranks saved usage meters by
+remaining allowance × relative plan size ÷ hours until the binding weekly/period
+reset. Anthropic model-family windows apply only to that family; a Fable cap does
+not cap Opus. Session or weekly usage at 98% sorts last, but never removes a
+credential or changes existing cooldowns. Unknown/stale meters retain static
+relative priority behind positive known scores and ahead of capped rows. When
+every meter is unknown/stale, the static order is used.
+
+```bash
+hermes auth router refresh                     # read-only usage APIs; no token refresh or inference
+hermes auth router status --provider anthropic
+hermes auth router status --json
+hermes config set credential_pool_strategies.anthropic smart
+```
+
+Refresh uses at most four workers and five-second HTTP timeouts. Failed probes
+report unknown and retain the previous meter until it ages out; they never replace
+known limits with an empty fresh reading. Schedule `hermes auth router refresh` externally
+if desired (for example every ten minutes); enabling `smart` does not create a job.
+Anthropic unified allowance headers also update the serving account asynchronously,
+with at most one header write per account per minute. Selection never performs
+network I/O or writes routing state.
+
+The shared snapshot is `$HERMES_HOME/state/account_router.json`. Profiles that
+inherit a provider pool use the root pool owner’s snapshot. Refresh/header writers
+persist the decided top and dwell time under a cross-process lock. A healthy top
+changes only after 120 minutes and a 25% score improvement; an unavailable or
+capped top is bypassed immediately. New healthy-account decisions wait for a
+refresh/header update, so processes do not start independent dwell clocks.
+
+`hermes auth priority <provider> <target> 0` and the Accounts “Use now” control
+also pin that account for six hours when its strategy is `smart`. A pin failure
+never fails an already-saved order change, and other strategies write no pin state.
+A pin wins while that account is available
+for the requested model; it never blocks another model when the account is benched.
+Pin expiry hands control back to the shared decision.
+
+Tune `account_router.pin_hours`, `min_dwell_minutes`, `switch_margin`, `cap_pct`,
+`max_meter_age_minutes` (default 30), `session_units_floor` (default 5), or
+`plan_units.<provider>.<plan>` with `hermes config set`. For a fresh known session
+window, urgency is multiplied by `min(1, session_remaining × plan_units / session_units_floor)`.
+This reduces long-context churn onto small plans without suppressing their unused
+allowance when larger plans have little urgency. Unknown/expired session readings
+do not penalize urgency; expired caps are not treated as current exhaustion.
+Policy hot-reloads independently of frozen model settings.
+Default Anthropic plan units are Pro/default=1, Max 5×=5 and Max 20×=20. Codex
+`plus=1`, `prolite=10`, `pro=20` are configurable **heuristics**, not verified weekly
+token quotas. Legacy Grok `GrokPro` and `XPremiumPlus` both use 1 because their
+relative subscription allowance is not established. Unknown plan names use 1.
+The strategy remains `fill_first` unless explicitly changed.
 
 ### Demoting a healthy credential {#demoting-a-healthy-credential}
 

@@ -278,13 +278,14 @@ class TestOutboundRedaction:
         REMOTE peer, so a private subset here silently drops every prefix later added to agent/redact.py.
         Corpus: one synthetic token per registered prefix pattern, built from the pattern's literal prefix."""
         from agent import redact as R
+        from agent.redact_pattern_structure import _extract_literal_prefix
 
         bodies = ("Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0", "QQ7ZP2MX9VLK4NRT", "b-Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0",
                   ".Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0", "1-Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0",
                   "Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0.Qq7zP2mX9vLk4nRt8wYb1cDf6gHj3sA0")
         tokens = []
         for pattern in R._PREFIX_PATTERNS + R._plugin_patterns():
-            prefix = R._extract_literal_prefix(pattern)
+            prefix = _extract_literal_prefix(pattern)
             token = next((prefix + body for body in bodies if re.fullmatch(pattern, prefix + body)), None)
             assert token, f"could not synthesize a token for {pattern!r}"
             tokens.append(token)

@@ -47,6 +47,11 @@ class RateLimitCreditsMixin:
         if not headers:
             return
         try:
+            from agent.account_router.meters_anthropic import capture_headers
+            capture_headers(self, headers)
+        except Exception:
+            logger.debug("Account router header capture unavailable", exc_info=True)
+        try:
             from agent.rate_limit_tracker import parse_rate_limit_headers
             state = parse_rate_limit_headers(headers, provider=self.provider)
             if state is not None:

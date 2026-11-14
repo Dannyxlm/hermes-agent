@@ -115,16 +115,10 @@ AUTH_TYPE_API_KEY = "api_key"
 SOURCE_MANUAL = "manual"
 SOURCE_MANUAL_DEVICE_CODE = f"{SOURCE_MANUAL}:device_code"
 
-STRATEGY_FILL_FIRST = "fill_first"
-STRATEGY_ROUND_ROBIN = "round_robin"
-STRATEGY_RANDOM = "random"
-STRATEGY_LEAST_USED = "least_used"
-SUPPORTED_POOL_STRATEGIES = {
-    STRATEGY_FILL_FIRST,
-    STRATEGY_ROUND_ROBIN,
-    STRATEGY_RANDOM,
-    STRATEGY_LEAST_USED,
-}
+from agent.credential_pool_strategy import (
+    STRATEGY_FILL_FIRST, STRATEGY_ROUND_ROBIN, STRATEGY_RANDOM, STRATEGY_LEAST_USED,
+    STRATEGY_SMART, SUPPORTED_POOL_STRATEGIES, get_pool_strategy,
+)
 
 # Cooldowns before retrying an exhausted credential. Transient 401s cool down
 # briefly so single-key setups recover; 429/402/other take an hour.
@@ -559,16 +553,6 @@ def _get_custom_provider_config(pool_key: str) -> Optional[dict[str, Any]]:
         return None
     suffix = pool_key[len(CUSTOM_POOL_PREFIX):]
     return next((entry for norm_name, entry in _iter_custom_providers() if norm_name == suffix), None)
-
-
-def get_pool_strategy(provider: str) -> str:
-    """Return the configured selection strategy for a provider."""
-    config = _load_config_safe()
-    strategies = config.get("credential_pool_strategies") if config else None
-    if not isinstance(strategies, dict):
-        return STRATEGY_FILL_FIRST
-    strategy = str(strategies.get(provider, "") or "").strip().lower()
-    return strategy if strategy in SUPPORTED_POOL_STRATEGIES else STRATEGY_FILL_FIRST
 
 
 def _keyed_custom_pool_matches(
@@ -2170,6 +2154,14 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             self._entries = [e for e in self._entries if e.id not in pruned_ids]
         if cleared_any:
             self._persist(removed_ids=entries_to_prune)
+        if self._strategy == STRATEGY_SMART:
+            try:
+                from agent.account_router.router import reorder
+                ordered = reorder(self.provider, model, available)
+                if len(ordered) == len(available) and {id(e) for e in ordered} == {id(e) for e in available}:
+                    available = ordered
+            except Exception:
+                logger.debug("Account router unavailable; retaining static order", exc_info=True)
         return available, pending_refresh
 
     def _log_no_available_entries(self) -> None:
@@ -2179,7 +2171,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         if last is not None and (now - last) < NO_AVAILABLE_ENTRIES_LOG_THROTTLE_SECONDS:
             return
         self._last_no_entries_log_at = now
-        logger.info("credential pool: no available entries (all exhausted or empty)")
+        logger.info("credential pool %s: no available entries (all exhausted or empty)", self.provider)
 
     def _select_unlocked(
         self, *, refresh: bool = True, count: bool = True, model: Optional[str] = None,
@@ -2219,13 +2211,13 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         self._current_id = entry.id
         return entry, pending_refresh
 
-    def peek(self) -> Optional[PooledCredential]:
-        with self._lock:
+    def peek(self, *, model: Optional[str] = None) -> Optional[PooledCredential]:
+        with self._lock:  # the current entry, else the first available; with ``model``: the current one if available
             current = self._current_unlocked()
-            if current is not None:
+            if current is not None and model is None:
                 return current
-            available, _pending = self._available_entries()
-            return available[0] if available else None
+            available = self._available_entries(model=model)[0]
+            return next((e for e in available if current and e.id == current.id), next(iter(available), None))
 
     def reclaim(self, credential_id: str, *, model: Optional[str] = None) -> Optional[PooledCredential]:
         """Entry *credential_id* once its cooldown has lifted (cleared and token-refreshed the way
@@ -2416,9 +2408,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 return None, pending_refresh
 
             below_cap = [e for e in available if self._active_leases.get(e.id, 0) < self._max_concurrent]
+            positions = {entry.id: i for i, entry in enumerate(available)}
             chosen = min(
                 below_cap or available,
-                key=lambda entry: (self._active_leases.get(entry.id, 0), entry.priority),
+                key=lambda entry: (self._active_leases.get(entry.id, 0),
+                                   positions[entry.id] if self._strategy == STRATEGY_SMART else entry.priority),
             )
             self._active_leases[chosen.id] = self._active_leases.get(chosen.id, 0) + 1
             self._current_id = chosen.id

@@ -678,7 +678,7 @@ def read_records(path: Path | None = None) -> list[dict]:
     path = path or ring_path()
     records = []
     with suppress(FileNotFoundError):
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
             with suppress(ValueError):
                 value = json.loads(line)
                 if isinstance(value, dict):

@@ -162,6 +162,26 @@ class TestApproveCommand:
     def setup_method(self):
         _clear_approval_state()
 
+    @pytest.mark.asyncio
+    async def test_approve_all_leaves_payment_for_individual_consent(self):
+        from tools.approval import _gateway_queues
+        from tools.approval_gateway_wait import _ApprovalEntry
+
+        runner = _make_runner()
+        session_key = runner._session_key_for_source(_make_source())
+        command = _ApprovalEntry({"command": "cmd1"})
+        payment = _ApprovalEntry({"surface": "vault-payment", "command": "Pay merchant"})
+        _gateway_queues[session_key] = [command, payment]
+
+        await runner._handle_approve_command(_make_event("/approve all"))
+
+        assert command.event.is_set()
+        assert not payment.event.is_set()
+        assert payment.result is None
+        assert _gateway_queues[session_key] == [payment]
+        await runner._handle_approve_command(_make_event("/approve"))
+        assert payment.result == "once"
+
 
     @pytest.mark.asyncio
     async def test_approve_all_resolves_multiple(self):
