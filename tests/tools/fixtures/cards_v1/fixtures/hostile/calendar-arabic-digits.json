@@ -1,0 +1,49 @@
+{
+ "v": 1,
+ "kind": "flight",
+ "variant": "hero",
+ "title": "Montréal to Kigali",
+ "source": {
+  "label": "KLM · Thu Jan 14",
+  "origin": "tool"
+ },
+ "note": "Leave Thursday; land Friday evening. All times are local.",
+ "data": {
+  "connectionCode": "AMS",
+  "connection": "3 h 45 in Amsterdam · same terminal",
+  "legs": [
+   {
+    "number": "KL 672",
+    "from": "YUL",
+    "to": "AMS",
+    "departure": "17:55",
+    "arrival": "06:40",
+    "dayOffset": 1,
+    "duration": "6 h 45",
+    "date": "Thu Jan 14"
+   },
+   {
+    "number": "KL 535",
+    "from": "AMS",
+    "to": "KGL",
+    "departure": "10:25",
+    "arrival": "19:50",
+    "dayOffset": 0,
+    "duration": "8 h 25",
+    "date": "Fri Jan 15"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "open"
+  },
+  {
+   "type": "add_to_calendar",
+   "title": "KL 672 to Amsterdam",
+   "start": "٢٠٢٧-٠١-١٤T17:55:00-05:00",
+   "end": "2027-01-15T06:40:00+01:00",
+   "location": "YUL"
+  }
+ ]
+}

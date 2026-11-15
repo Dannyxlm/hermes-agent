@@ -1,0 +1,9 @@
+{
+ "v": 1,
+ "kind": "page",
+ "title": "A mini page",
+ "alt": "A page Ava wrote.",
+ "data": {
+  "html": "<p>hi</p>"
+ }
+}

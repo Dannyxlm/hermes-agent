@@ -1,0 +1,7 @@
+{
+ "kind": "link",
+ "title": "media:~/notes.txt",
+ "data": {
+  "url": "https://example.com/notes"
+ }
+}

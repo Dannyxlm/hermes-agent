@@ -1,0 +1,41 @@
+{
+ "v": 1,
+ "kind": "chart",
+ "variant": "detail",
+ "title": "Orders by week",
+ "data": {
+  "type": "line",
+  "headline": "142",
+  "comparison": "Up 9% on last month",
+  "tone": "good",
+  "x": [
+   "W1",
+   "W2",
+   "W3",
+   "W4",
+   "W5"
+  ],
+  "series": [
+   {
+    "name": "This year",
+    "values": [
+     120,
+     131,
+     null,
+     138,
+     142
+    ]
+   },
+   {
+    "name": "Last year",
+    "values": [
+     101,
+     110,
+     108,
+     115,
+     119
+    ]
+   }
+  ]
+ }
+}

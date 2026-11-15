@@ -123,12 +123,13 @@ def _(rid, params):
                      "atomic_stream_snapshot", "rich_stream_snapshot", "display_history", "chunked_recovery",
                      "video_upload", "session_change_cursor", "inbox_silent_push", "push_alert_policy",
                      "push_to_start", "activity_content_v2", "prompt_origin", "attachment_operations",
-                     "read_through"],
+                     "read_through", "cards"],
         "feature_versions": {"rich_stream_snapshot": 1, "inbox_summaries": 2, "widget_inbox": 1,
                              "display_history": 1, "chunked_recovery": 1, "video_upload": 1,
                              "session_change_cursor": 1, "inbox_silent_push": 1,
                              "activity_content": 2, "push_alert_policy": 1, "push_to_start": 1,
-                             "artifact_versions": 1, "attachment_operations": 1, "scoped_approval_response": 1},
+                             "artifact_versions": 1, "attachment_operations": 1, "scoped_approval_response": 1,
+                             "cards": 1},
         "max_history_limit": 100, "max_roster_limit": 100, "video_upload": _video_upload_limits()})
 
 

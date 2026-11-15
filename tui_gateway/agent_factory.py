@@ -490,6 +490,8 @@ _TOOL_LIFECYCLE_UI_TOOLS = frozenset({
     "image_generate", "manage_catalog", "delegate_task", "setup_beat", "set_theme",
     # File edits are the turn's deliverable — the diff card the user reviews.
     "edit_file", "patch", "write_file",
+    # A Paper card is the reply's object itself: the app draws it from tool.start/tool.complete.
+    "show_card",
 })
 
 
@@ -646,6 +648,7 @@ def _make_agent(
         return synthetic
     from agent.onboarding_session import onboarding_toolsets
     from run_agent import AIAgent
+    from tui_gateway.cards_capability import with_cards_toolset
     # MCP discovery runs in a daemon thread (a dead server can't freeze the shell); the agent snapshots its tool
     # list once, so briefly wait for in-flight discovery. Dashboard /api/ws uses mcp_startup; TUI stdio uses entry.
     for _mod in ("hermes_cli.mcp_startup", "tui_gateway.entry"):
@@ -673,7 +676,7 @@ def _make_agent(
         reasoning_config=(
             reasoning_config_override if reasoning_config_override is not None else _load_reasoning_config(str(model or ""))),
         service_tier=service_tier_override if service_tier_override is not None else _load_service_tier(),
-        enabled_toolsets=onboarding_toolsets(_load_enabled_toolsets(platform),
+        enabled_toolsets=onboarding_toolsets(with_cards_toolset(_load_enabled_toolsets(platform), session),
                                              session_db if session_db is not None else _get_db(), session_id or key),
         disabled_toolsets=_load_disabled_toolsets(),
         # OpenRouter provider_routing prefs (gateway + CLI parity).

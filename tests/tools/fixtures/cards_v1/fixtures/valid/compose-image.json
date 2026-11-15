@@ -1,0 +1,25 @@
+{
+ "kind": "compose",
+ "title": "Before and after",
+ "alt": "The redesigned landing page: shorter headline, one button.",
+ "data": {
+  "hero": {
+   "type": "image",
+   "file": "/synthetic/cards/landing-after.png",
+   "aspect": "wide"
+  },
+  "blocks": [
+   {
+    "type": "image",
+    "file": "/synthetic/cards/landing-before.png",
+    "aspect": "wide",
+    "caption": "Before"
+   },
+   {
+    "type": "text",
+    "text": "Shorter headline, one button.",
+    "emphasis": "caption"
+   }
+  ]
+ }
+}

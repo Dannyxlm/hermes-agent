@@ -1,0 +1,26 @@
+{
+ "v": 1,
+ "kind": "document",
+ "variant": "hero",
+ "title": "Lease renewal – 4127 rue Clark",
+ "source": {
+  "label": "Sample lease · PDF",
+  "origin": "tool"
+ },
+ "note": "Clause 7 adds $86. [[as_document]]",
+ "data": {
+  "file": "/synthetic/cards/lease-renewal.pdf",
+  "quote": "The monthly rent will increase from $2,150 to $2,236 beginning July 1, 2027.",
+  "page": 2,
+  "pages": 3
+ },
+ "actions": [
+  {
+   "type": "open_file"
+  },
+  {
+   "type": "ask",
+   "text": "Is $86 within the usual range?"
+  }
+ ]
+}

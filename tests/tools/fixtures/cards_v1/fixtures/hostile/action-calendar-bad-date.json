@@ -1,0 +1,44 @@
+{
+ "v": 1,
+ "kind": "flight",
+ "variant": "hero",
+ "title": "Bad date",
+ "source": {
+  "label": "KLM · Thu Jan 14",
+  "origin": "tool"
+ },
+ "note": "Leave Thursday; land Friday evening. All times are local.",
+ "data": {
+  "connectionCode": "AMS",
+  "connection": "3 h 45 in Amsterdam · same terminal",
+  "legs": [
+   {
+    "number": "KL 672",
+    "from": "YUL",
+    "to": "AMS",
+    "departure": "17:55",
+    "arrival": "06:40",
+    "dayOffset": 1,
+    "duration": "6 h 45",
+    "date": "Thu Jan 14"
+   },
+   {
+    "number": "KL 535",
+    "from": "AMS",
+    "to": "KGL",
+    "departure": "10:25",
+    "arrival": "19:50",
+    "dayOffset": 0,
+    "duration": "8 h 25",
+    "date": "Fri Jan 15"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "add_to_calendar",
+   "title": "x",
+   "start": "next thursday"
+  }
+ ]
+}

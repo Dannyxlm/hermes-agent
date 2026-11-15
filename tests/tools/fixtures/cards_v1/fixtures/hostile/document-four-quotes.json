@@ -1,0 +1,47 @@
+{
+ "v": 1,
+ "kind": "document",
+ "variant": "hero",
+ "title": "Lease renewal, 4127 Saint-Denis",
+ "source": {
+  "label": "Lease · PDF · from Marc Tremblay",
+  "origin": "external"
+ },
+ "note": "It's clean. Three things to know.",
+ "data": {
+  "file": "/synthetic/cards/lease-renewal.pdf",
+  "pages": 12,
+  "quotes": [
+   {
+    "label": "Rent",
+    "text": "$2,236 a month",
+    "page": 2
+   },
+   {
+    "label": "Term",
+    "text": "Jul 1, 2027 to Jun 30, 2028",
+    "page": 1
+   },
+   {
+    "label": "Say no by",
+    "text": "March 31",
+    "page": 7,
+    "tone": "caution"
+   },
+   {
+    "label": "Pets",
+    "text": "Not allowed",
+    "page": 4
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "open_file"
+  },
+  {
+   "type": "ask",
+   "text": "What happens if I say no?"
+  }
+ ]
+}

@@ -14902,6 +14902,28 @@
         "title": "CapabilityEntry",
         "type": "object"
       },
+      "CardsCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "v": {
+            "title": "V",
+            "type": "integer"
+          },
+          "kinds": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Kinds",
+            "type": "array"
+          }
+        },
+        "required": [
+          "v"
+        ],
+        "title": "CardsCapability",
+        "type": "object"
+      },
       "CatalogAppState": {
         "description": "The desktop app a catalog plugin drives, from its ``hermes_platform`` declaration.",
         "enum": [
@@ -15594,6 +15616,17 @@
             "default": false,
             "title": "Desktop Local",
             "type": "boolean"
+          },
+          "cards": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardsCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "title": "ClientCapabilitiesParams",
@@ -15623,6 +15656,11 @@
             "default": false,
             "title": "Canonical Clarify Batch",
             "type": "boolean"
+          },
+          "cards": {
+            "default": 0,
+            "title": "Cards",
+            "type": "integer"
           }
         },
         "required": [
@@ -57330,6 +57368,19 @@
             ],
             "default": null,
             "title": "Todos"
+          },
+          "card": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Card"
           }
         },
         "required": [

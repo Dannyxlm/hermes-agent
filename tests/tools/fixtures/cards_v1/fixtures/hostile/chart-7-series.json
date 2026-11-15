@@ -1,0 +1,53 @@
+{
+ "kind": "chart",
+ "data": {
+  "x": [
+   "a"
+  ],
+  "series": [
+   {
+    "name": "S0",
+    "values": [
+     0
+    ]
+   },
+   {
+    "name": "S1",
+    "values": [
+     1
+    ]
+   },
+   {
+    "name": "S2",
+    "values": [
+     2
+    ]
+   },
+   {
+    "name": "S3",
+    "values": [
+     3
+    ]
+   },
+   {
+    "name": "S4",
+    "values": [
+     4
+    ]
+   },
+   {
+    "name": "S5",
+    "values": [
+     5
+    ]
+   },
+   {
+    "name": "S6",
+    "values": [
+     6
+    ]
+   }
+  ]
+ },
+ "title": "Busy"
+}

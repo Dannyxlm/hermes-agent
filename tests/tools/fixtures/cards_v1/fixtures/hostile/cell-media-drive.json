@@ -1,0 +1,18 @@
+{
+ "kind": "table",
+ "title": "Files",
+ "data": {
+  "columns": [
+   {
+    "title": "Name"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "MEDIA:C:\\reports\\q4.pdf"
+    ]
+   }
+  ]
+ }
+}

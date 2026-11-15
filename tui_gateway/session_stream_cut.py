@@ -22,6 +22,21 @@ def _tail(text, limit):
     return text.encode("utf-8")[-limit:].decode("utf-8", errors="ignore")
 
 
+def _carry_card(part, payload):
+    """A ``show_card`` part carries its card whole (the arguments, ≤16 KB by contract), never only
+    the 4 KB ``args_text`` tail, so a reconnect rebuilds the card itself."""
+    card = payload.get("args")
+    if part["name"] != "show_card" or "card" in part or not isinstance(card, dict):
+        return
+    from tools.cards.validate import MAX_CARD_BYTES, card_bytes  # measured as the validator measures it
+    try:
+        fits = len(card_bytes(card)) <= MAX_CARD_BYTES
+    except ValueError:  # tool.start precedes validation: a NaN card is refused, never carried
+        return
+    if fits:
+        part["card"] = copy.deepcopy(card)
+
+
 def _rich_event(session, stream, event, payload):
     parts = stream["parts"]
     if event in {"message.delta", "message.interim", "tool.start", "tool.complete"}:
@@ -61,6 +76,7 @@ def _rich_event(session, stream, event, payload):
                 if len(value.encode("utf-8")) > MAX_DISPLAY_BYTES:
                     stream["parts_incomplete"] = True
                 part[key] = _tail(value, MAX_DISPLAY_BYTES)
+        _carry_card(part, payload)
         if "args_text" not in part and isinstance(payload.get("args"), dict):
             value = json.dumps(payload["args"], ensure_ascii=False)
             part["args_text"] = _tail(value, MAX_DISPLAY_BYTES)

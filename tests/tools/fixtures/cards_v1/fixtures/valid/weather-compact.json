@@ -1,0 +1,10 @@
+{
+ "v": 1,
+ "kind": "weather",
+ "variant": "compact",
+ "title": "Kigali now",
+ "data": {
+  "headline": "24°",
+  "condition": "partly_cloudy"
+ }
+}

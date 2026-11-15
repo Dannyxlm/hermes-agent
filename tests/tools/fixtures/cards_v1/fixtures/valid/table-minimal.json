@@ -1,0 +1,29 @@
+{
+ "kind": "table",
+ "title": "Two numbers",
+ "data": {
+  "columns": [
+   {
+    "title": "Item"
+   },
+   {
+    "title": "Count",
+    "type": "number"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "Open findings",
+     57
+    ]
+   },
+   {
+    "cells": [
+     "Shown today",
+     3
+    ]
+   }
+  ]
+ }
+}

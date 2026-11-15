@@ -1,0 +1,65 @@
+{
+ "v": 1,
+ "kind": "table",
+ "variant": "sheet",
+ "title": "Card balances",
+ "source": {
+  "label": "Card balances · today",
+  "origin": "tool"
+ },
+ "note": "Amex is due first: $2,184.20 by Nov 28.",
+ "data": {
+  "columns": [
+   {
+    "title": "Card"
+   },
+   {
+    "title": "Balance",
+    "type": "money"
+   },
+   {
+    "title": "Due",
+    "type": "date"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "Amex Cobalt",
+     2184.2,
+     "2026-11-28"
+    ],
+    "tone": "caution"
+   },
+   {
+    "cells": [
+     "TD Visa Infinite",
+     640.12,
+     "2026-12-04"
+    ]
+   },
+   {
+    "cells": [
+     "Tangerine Mastercard",
+     588.0,
+     "2026-12-11"
+    ]
+   }
+  ],
+  "totals": [
+   "Owed · 3 cards",
+   3412.32,
+   null
+  ],
+  "count": 3,
+  "file": "/synthetic/cards/card-balances.csv"
+ },
+ "actions": [
+  {
+   "type": "open"
+  },
+  {
+   "type": "open_file"
+  }
+ ]
+}

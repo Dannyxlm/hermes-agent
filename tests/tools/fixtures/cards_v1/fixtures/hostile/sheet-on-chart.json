@@ -1,0 +1,18 @@
+{
+ "kind": "chart",
+ "variant": "sheet",
+ "data": {
+  "x": [
+   "a"
+  ],
+  "series": [
+   {
+    "name": "S",
+    "values": [
+     1
+    ]
+   }
+  ]
+ },
+ "title": "Sheet chart"
+}

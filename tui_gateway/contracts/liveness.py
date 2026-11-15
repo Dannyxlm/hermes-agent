@@ -34,6 +34,11 @@ method("gateway.capabilities", params=PingParams, result=GatewayCapabilitiesResu
        doc="What THIS build enforces (a client withholds a feature unless advertised).")
 
 
+class CardsCapability(Params):
+    v: int
+    kinds: list[str] = []
+
+
 class ClientCapabilitiesParams(Params):
     #: The client answers server→client requests (clarify, approval, sudo, …) — with a result or a -32601
     #: error for methods it has no handler for. A WebSocket client that never says so is treated as a
@@ -48,6 +53,10 @@ class ClientCapabilitiesParams(Params):
     #: private control socket; it is what makes the welcome trial and first-run onboarding available
     #: in a gateway that also serves the CLI, the TUI and bots.
     desktop_local: bool = False
+    #: The client draws Paper cards (``show_card``) of contract version ``v`` and these ``kinds``.
+    #: Send it as its own call, only when ``mobile.capabilities.feature_versions.cards`` is 1: an
+    #: older backend refuses the unknown key (4000). ``null`` withdraws it.
+    cards: CardsCapability | None = None
 
 
 class ClientCapabilitiesResult(Result):
@@ -65,6 +74,8 @@ class ClientCapabilitiesResult(Result):
     #: one card per question. An older owner refuses the unknown key, so a client declares it only when
     #: this is true. (The legacy sidecar always asks the batch at once and is never sent the key.)
     canonical_clarify_batch: bool = False
+    #: Card contract version this backend offers to card-drawing clients now (0 = cards are off).
+    cards: int = 0
 
 
 method("client.capabilities", params=ClientCapabilitiesParams, result=ClientCapabilitiesResult,

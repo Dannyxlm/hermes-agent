@@ -320,6 +320,7 @@ def _refresh_live_sessions(home=None, *, preserve_prefix: bool = False,
     (``agent/plugin_live_notes.py``)."""
     from agent.onboarding_session import carry_onboarding_toolset
     from hermes_constants import hermes_home_key
+    from tui_gateway.cards_capability import carry_cards_toolset
     want = hermes_home_key(home) if home is not None else None
     with _sessions_lock:
         live = [(sid, sess) for sid, sess in _sessions.items() if sess.get("agent") is not None and (
@@ -329,7 +330,8 @@ def _refresh_live_sessions(home=None, *, preserve_prefix: bool = False,
         agent = sess["agent"]
         try:
             with _session_profile_runtime_scope(sess):
-                enabled = carry_onboarding_toolset(_load_enabled_toolsets(getattr(agent, "platform", None)), agent)
+                enabled = carry_cards_toolset(carry_onboarding_toolset(
+                    _load_enabled_toolsets(getattr(agent, "platform", None)), agent), agent)
                 disabled = _load_disabled_toolsets()
                 refresh(agent, enabled_override=enabled, disabled_override=disabled,
                         quiet_mode=True, preserve_prefix=preserve_prefix)

@@ -1,0 +1,37 @@
+{
+ "v": 1,
+ "kind": "route",
+ "variant": "hero",
+ "title": "Airport to the hotel",
+ "source": {
+  "label": "Apple Maps",
+  "origin": "tool"
+ },
+ "note": "The hotel is in Old Montréal. Allow extra time at rush hour.",
+ "data": {
+  "stops": [
+   {
+    "name": "YUL · Montréal airport",
+    "lat": 45.4577,
+    "lon": -73.7499
+   },
+   {
+    "name": "Hôtel William Gray",
+    "lat": 45.5075,
+    "lon": -73.554
+   }
+  ],
+  "duration": "24 min by car",
+  "distance": "21 km",
+  "mode": "drive"
+ },
+ "actions": [
+  {
+   "type": "directions"
+  },
+  {
+   "type": "ask",
+   "text": "What about the 747 bus?"
+  }
+ ]
+}

@@ -2547,12 +2547,18 @@ export interface ClientCapabilitiesParams {
   server_requests?: boolean
   session_change_cursor?: boolean
   desktop_local?: boolean
+  cards?: CardsCapability | null
+}
+export interface CardsCapability {
+  v: number
+  kinds?: string[]
 }
 export interface ClientCapabilitiesResult {
   server_requests: string[]
   declines_not_shown?: boolean
   session_change_cursor?: number
   canonical_clarify_batch?: boolean
+  cards?: number
 }
 /** Client→server method params / server→client request params. Unknown keys are rejected. */
 export type Params = Record<string, never>
@@ -3169,6 +3175,7 @@ export interface StreamToolPart {
   error?: boolean | null
   inline_diff?: string | null
   todos?: unknown[] | null
+  card?: Record<string, unknown> | null
 }
 /** ``session_auto_continue._inflight_snapshot``: the live (or retained failed) turn a reconnecting client rebuilds its bubbles from. */
 export interface InflightTurn {

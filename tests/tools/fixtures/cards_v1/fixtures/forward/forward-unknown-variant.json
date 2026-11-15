@@ -1,0 +1,21 @@
+{
+ "v": 1,
+ "kind": "chart",
+ "variant": "radial",
+ "title": "Spending, radial",
+ "data": {
+  "x": [
+   "A",
+   "B"
+  ],
+  "series": [
+   {
+    "name": "S",
+    "values": [
+     1,
+     2
+    ]
+   }
+  ]
+ }
+}

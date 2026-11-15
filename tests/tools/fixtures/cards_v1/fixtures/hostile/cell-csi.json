@@ -1,0 +1,59 @@
+{
+ "v": 1,
+ "kind": "table",
+ "variant": "hero",
+ "title": "Three ways to Kigali",
+ "source": {
+  "label": "Fare comparison",
+  "origin": "tool"
+ },
+ "note": "KLM has the comfortable connection and gets you in Friday evening.",
+ "data": {
+  "columns": [
+   {
+    "title": "Airline"
+   },
+   {
+    "title": "Time"
+   },
+   {
+    "title": "Fare",
+    "type": "money",
+    "currency": "CAD"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "KLM31m",
+     "18 h 55",
+     1482
+    ],
+    "secondary": "via Amsterdam",
+    "badge": "Ava’s pick",
+    "highlight": true
+   },
+   {
+    "cells": [
+     "Qatar",
+     "22 h 10",
+     1395
+    ],
+    "secondary": "via Doha"
+   },
+   {
+    "cells": [
+     "Brussels",
+     "19 h 40",
+     1610
+    ],
+    "secondary": "via Brussels"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "open"
+  }
+ ]
+}

@@ -1,0 +1,31 @@
+{
+ "v": 1,
+ "kind": "route",
+ "variant": "compact",
+ "title": "Montréal, Amsterdam, Kigali",
+ "source": {
+  "label": "Ava",
+  "origin": "ava"
+ },
+ "data": {
+  "mode": "flight",
+  "stops": [
+   {
+    "name": "YUL",
+    "lat": 45.4577,
+    "lon": -73.7499
+   },
+   {
+    "name": "AMS",
+    "lat": 52.3105,
+    "lon": 4.7683
+   },
+   {
+    "name": "KGL",
+    "lat": -1.9686,
+    "lon": 30.1395
+   }
+  ],
+  "duration": "21 h 45 door to door"
+ }
+}

@@ -356,7 +356,7 @@ _PRIMARY_ARGS = {
     "browser_click": "ref", "browser_type": "text", "image_generate": "prompt", "text_to_speech": "text",
     "vision_analyze": "question", "skill_view": "name", "skills_list": "category", "cronjob_manage": "action",
     "execute_code": "code", "browser_exec": "code", "delegate_task": "goal",
-    "skill_manage": "name",
+    "skill_manage": "name", "show_card": "title",
 }
 _FALLBACK_PREVIEW_KEYS = ("query", "text", "command", "path", "name", "prompt", "code", "goal")
 
