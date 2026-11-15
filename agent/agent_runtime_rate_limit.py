@@ -1,5 +1,6 @@
 """Rate-limit credential recovery, shared by every pooled provider."""
 
+import math
 import time
 
 from agent.credential_pool import (
@@ -9,6 +10,23 @@ from agent.credential_pool import (
 
 _USAGE_LIMIT_REASON_TOKENS = ("usage_limit_reached", "gousagelimit")
 _USAGE_LIMIT_MESSAGE_TOKENS = ("usage limit reached", "usage limit has been reached")
+
+
+def _retry_once_wait_exceeded(context):
+    """Opt out of retry-once only for a known reset beyond the hot-reloaded policy."""
+    from agent.fallback_cooldown import _provider_reset_delay
+    from hermes_cli.config import load_config_readonly
+
+    try:
+        threshold = float(load_config_readonly().get("fallback", {}).get("retry_once_max_wait_seconds") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if not math.isfinite(threshold) or threshold <= 0:
+        return False
+    # Extraction already applies body-reset / Retry-After precedence. bench_until can carry
+    # a longer quota window for rotation; it must not turn a near retry into a far one.
+    delay = _provider_reset_delay(context.get("reset_at"))
+    return delay is not None and delay > threshold
 
 
 def recover_rate_limit(
@@ -33,7 +51,7 @@ def recover_rate_limit(
         t in str(context.get("message") or "").lower() for t in _USAGE_LIMIT_MESSAGE_TOKENS
     )
     pre_exhausted = getattr(current, "last_status", None) == STATUS_EXHAUSTED
-    if not free and not (has_retried_429 or usage_limit or pre_exhausted):
+    if not free and not (has_retried_429 or usage_limit or pre_exhausted or _retry_once_wait_exceeded(context)):
         return False, True
     kwargs = {}
     if free:
