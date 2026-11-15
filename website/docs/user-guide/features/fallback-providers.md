@@ -49,6 +49,13 @@ fallback:
 | Key | Default | Effect |
 |-----|---------|--------|
 | `fallback.min_switch_reset_seconds` | `0` (off) | A rate-limited primary whose declared reset is sooner than this many seconds is not swapped for a fallback; the retry backoff waits out the window instead. |
+| `fallback.retry_once_max_wait_seconds` | `0` (off) | With no usable alternate pool account, skip the first-429 retry when the provider-declared reset is further away than this many seconds. Bench the failing account until its reset so eager fallback can activate immediately. Anthropic benches remain model-scoped. A reset within the threshold (including equality), an unknown reset, or `0` keeps the existing retry-once behavior. |
+
+For example, `hermes config set fallback.retry_once_max_wait_seconds 120` lets a
+pooled account retry once for a reset up to two minutes away, but benches it on the
+first 429 for longer windows. This does not cap the retry sleep or change how reset
+hints are parsed: an explicit body reset still takes precedence over Retry-After.
+The key is re-read on each first-429 decision, without restarting the agent.
 
 Gemini fallback entries accept `gemini`, `google`, `google-gemini`, and
 `google-ai-studio`. On Google's native API endpoint, all use the native Gemini

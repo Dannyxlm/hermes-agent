@@ -1221,6 +1221,8 @@ def _(rid, params: dict, session) -> dict:
         if reason := _container_checkpoint_refusal(session, mgr, cwd):
             return _err(rid, 5022, reason)
         r = mgr.diff(cwd, _resolve_checkpoint_hash(mgr, cwd, target))
+        if not r.get("success"):
+            return _err(rid, 5022, r.get("error") or "Checkpoint diff failed")
         raw = r.get("diff", "")[:4000]
         payload = {"stat": r.get("stat", ""), "diff": raw}
         if rendered := render_diff(raw, session.get("cols", 80)):

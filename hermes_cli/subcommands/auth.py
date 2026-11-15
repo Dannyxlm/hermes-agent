@@ -69,4 +69,11 @@ def build_auth_parser(subparsers, *, cmd_auth: Callable) -> None:
     auth_upgrade.add_argument(
         "--no-browser", action="store_true", help="Do not auto-open a browser for sign-in")
     auth_upgrade.add_argument("--timeout", type=float, help="Network timeout in seconds")
+    router = auth_subparsers.add_parser("router", help="Smart subscription routing meters and decisions")
+    actions = router.add_subparsers(dest="router_action", required=True)
+    for name in ("refresh", "status"):
+        command = actions.add_parser(name)
+        command.add_argument("--provider", choices=["anthropic", "openai-codex", "xai-oauth"])
+        if name == "status":
+            command.add_argument("--json", action="store_true", help="Print structured, secret-free status")
     auth_parser.set_defaults(func=cmd_auth)
