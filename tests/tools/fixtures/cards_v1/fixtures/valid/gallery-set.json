@@ -1,0 +1,55 @@
+{
+ "v": 1,
+ "kind": "gallery",
+ "variant": "hero",
+ "title": "Saturday on the mountain",
+ "source": {
+  "label": "12 photos",
+  "origin": "tool"
+ },
+ "data": {
+  "images": [
+   {
+    "file": "/synthetic/cards/mountain-01.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-02.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-03.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-04.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-05.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-06.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-07.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-08.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-09.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-10.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-11.jpg"
+   },
+   {
+    "file": "/synthetic/cards/mountain-12.jpg"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "open"
+  }
+ ]
+}

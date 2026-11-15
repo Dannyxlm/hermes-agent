@@ -1,0 +1,9 @@
+{
+ "v": 2,
+ "kind": "route",
+ "title": "A version 2 card",
+ "alt": "Still readable as words.",
+ "data": {
+  "unknown": true
+ }
+}

@@ -1,0 +1,14 @@
+{
+ "v": 1,
+ "kind": "planetarium",
+ "title": "A new kind from a future Ava",
+ "alt": "The phone does not know this visual form yet. Your flight still leaves YUL at 17:55 Thursday.",
+ "data": {
+  "anything": "ignored"
+ },
+ "actions": [
+  {
+   "type": "open"
+  }
+ ]
+}

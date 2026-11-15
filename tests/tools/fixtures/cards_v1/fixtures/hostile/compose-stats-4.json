@@ -1,0 +1,107 @@
+{
+ "v": 1,
+ "kind": "compose",
+ "variant": "hero",
+ "title": "Four stats",
+ "source": {
+  "label": "Ava",
+  "origin": "ava"
+ },
+ "note": "A comfortable layover. You’ll be at the hotel Friday evening.",
+ "alt": "Leave home Thu 14:30; YUL 17:55 to AMS 06:40 Friday. Connect 3 h 45. AMS 10:25 to KGL 19:50. Door to door 21 h 45.",
+ "data": {
+  "hero": {
+   "type": "map",
+   "route": {
+    "mode": "flight",
+    "stops": [
+     {
+      "name": "YUL",
+      "lat": 45.4577,
+      "lon": -73.7499
+     },
+     {
+      "name": "AMS",
+      "lat": 52.3105,
+      "lon": 4.7683
+     },
+     {
+      "name": "KGL",
+      "lat": -1.9686,
+      "lon": 30.1395
+     }
+    ]
+   }
+  },
+  "blocks": [
+   {
+    "type": "stats",
+    "items": [
+     {
+      "label": "Door to door",
+      "value": "21 h 45"
+     },
+     {
+      "label": "Layover",
+      "value": "3 h 45",
+      "tone": "good"
+     },
+     {
+      "label": "Kigali time",
+      "value": "+7 h"
+     },
+     {
+      "label": "More",
+      "value": "1"
+     }
+    ]
+   },
+   {
+    "type": "timeline",
+    "items": [
+     {
+      "time": "Thu 14:30",
+      "title": "Leave home",
+      "detail": "Car booked",
+      "state": "done"
+     },
+     {
+      "time": "Thu 17:55",
+      "title": "KL 672 to Amsterdam",
+      "detail": "Seat 14A",
+      "state": "next"
+     },
+     {
+      "time": "Fri 10:25",
+      "title": "KL 535 to Kigali"
+     },
+     {
+      "time": "Fri 19:50",
+      "title": "Land in Kigali"
+     }
+    ]
+   },
+   {
+    "type": "rows",
+    "items": [
+     {
+      "label": "Passport",
+      "value": "Valid to 2031",
+      "tone": "good",
+      "glyph": "checkmark.circle"
+     },
+     {
+      "label": "Visa",
+      "value": "On arrival, 30 days"
+     }
+    ]
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "ask",
+   "text": "What should I pack?"
+  }
+ ]
+}

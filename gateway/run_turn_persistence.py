@@ -259,6 +259,15 @@ class GatewayTurnPersistenceMixin:
         display_reasoning = escape_code_fences_for_display(display_reasoning)
         return t("gateway.reasoning.block", reasoning=display_reasoning, response=response)
 
+    def _hmwa_trailing_lines(self, agent_result, history, source, _turn_seconds, _intentional_silence):
+        """What follows the reply on a messaging surface: each Paper card's plain words (``alt``, one
+        paragraph per card, links intact; the app draws the card itself, local viewers read the tool
+        call) and then the runtime footer. Streamed turns send it as one trailing message."""
+        from tools.cards.fallback import turn_card_text
+        cards = "" if _intentional_silence or source.platform == Platform.LOCAL else turn_card_text(agent_result, history)
+        footer = self._hmwa_runtime_footer_line(agent_result, source, _turn_seconds)
+        return "\n\n".join(part for part in (cards, footer) if part)
+
     def _hmwa_runtime_footer_line(self, agent_result, source, _turn_seconds):
         """Runtime-metadata footer for the FINAL message of the turn; off by default
         (display.runtime_footer.enabled=false). Never on a finite (`-z`, `chat -q`) turn: its reply is

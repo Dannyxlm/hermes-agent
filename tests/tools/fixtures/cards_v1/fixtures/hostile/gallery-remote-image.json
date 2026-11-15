@@ -1,0 +1,11 @@
+{
+ "kind": "gallery",
+ "data": {
+  "images": [
+   {
+    "file": "https://tracker.example/pixel.gif"
+   }
+  ]
+ },
+ "title": "Tracking pixel"
+}

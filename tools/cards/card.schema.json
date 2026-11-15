@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes.local/contracts/cards/v1/card.schema.json",
+  "title": "Ava card v1",
+  "description": "The arguments of one show_card tool call. Data, never code: no field is a size, colour, font, radius, padding or duration, and no action has an effect on the server. Closed where a4 says closed (kind, variant, action type, tone, block type, column type, glyph); open everywhere else, so a v1 reader keeps unknown fields as raw values and ignores them. The server validates with this schema plus the checks listed in README.md (cross-field rules, total bytes, file references); a reader renders a card only when the tool result says ok:true.",
+  "type": "object",
+  "required": ["kind", "title"],
+  "properties": {
+    "v": {"const": 1, "description": "Schema version. Absent means 1."},
+    "kind": {"enum": ["table", "flight", "route", "place", "weather", "chart", "document", "link", "gallery", "compose"]},
+    "variant": {"$ref": "#/$defs/variant"},
+    "title": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80},
+    "source": {
+      "type": "object",
+      "required": ["label"],
+      "properties": {
+        "label": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80},
+        "origin": {"enum": ["ava", "tool", "external"], "description": "Display only. No code path decides anything from it."}
+      }
+    },
+    "note": {"$ref": "#/$defs/text", "maxLength": 240},
+    "alt": {"$ref": "#/$defs/text", "minLength": 1, "maxLength": 1200, "description": "Plain words, complete on their own. Required for compose; the server derives it for the other kinds when absent and returns it in the receipt."},
+    "data": {"type": "object"},
+    "actions": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/action"}}
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "table"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/table"}}}},
+    {"if": {"properties": {"kind": {"const": "flight"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/flight"}}}},
+    {"if": {"properties": {"kind": {"const": "route"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/route"}}}},
+    {"if": {"properties": {"kind": {"const": "place"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/place"}}}},
+    {"if": {"properties": {"kind": {"const": "weather"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/weather"}}}},
+    {"if": {"properties": {"kind": {"const": "chart"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/chart"}}}},
+    {"if": {"properties": {"kind": {"const": "document"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/document"}}}},
+    {"if": {"properties": {"kind": {"const": "link"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/link"}}}},
+    {"if": {"properties": {"kind": {"const": "gallery"}}, "required": ["kind"]}, "then": {"required": ["data"], "properties": {"data": {"$ref": "#/$defs/gallery"}}}},
+    {"if": {"properties": {"kind": {"const": "compose"}}, "required": ["kind"]}, "then": {"required": ["data", "alt"], "properties": {"data": {"$ref": "#/$defs/compose"}}}},
+    {"if": {"required": ["variant"], "properties": {"variant": {"const": "sheet"}}}, "then": {"properties": {"kind": {"const": "table"}}}}
+  ],
+  "$defs": {
+    "line": {"type": "string", "pattern": "^[^\\u0000-\\u001f\\u007f\\u202a-\\u202e\\u2066-\\u2069]*$", "description": "One line of plain text: no control characters, no bidi overrides."},
+    "text": {"type": "string", "pattern": "^[^\\u0000-\\u0009\\u000b-\\u001f\\u007f\\u202a-\\u202e\\u2066-\\u2069]*$", "description": "Plain text that may contain line breaks (\\n) but no other control characters or bidi overrides."},
+    "short": {"$ref": "#/$defs/line", "maxLength": 40},
+    "label": {"$ref": "#/$defs/line", "maxLength": 60},
+    "detail": {"$ref": "#/$defs/line", "maxLength": 120},
+    "tone": {"enum": ["neutral", "good", "caution"]},
+    "variant": {"enum": ["hero", "compact", "detail", "sheet"], "description": "sheet is table-only. A reader treats an unknown variant as the kind's default (hero)."},
+    "number": {"type": "number", "minimum": -1e12, "maximum": 1e12},
+    "lat": {"type": "number", "minimum": -90, "maximum": 90},
+    "lon": {"type": "number", "minimum": -180, "maximum": 180},
+    "file": {
+      "type": "string", "minLength": 2, "maxLength": 1024,
+      "pattern": "^/(?!.*(^|/)\\.\\.(/|$))[^\\u0000-\\u001f\\u007f]*$",
+      "description": "Absolute path of a file on our server, the same kind of path a MEDIA: line carries. The server checks it exists, is a regular file, and is readable under the read guard; the app fetches it with the session's credentials through its existing media and file loaders."
+    },
+    "https_url": {
+      "type": "string", "maxLength": 2048,
+      "pattern": "^https://[^/@\\s\\\\]+(/[^\\s]*)?$",
+      "description": "https only, no user info (no '@' before the path), no whitespace."
+    },
+    "glyph": {
+      "enum": ["airplane", "bag", "bed.double", "bell", "bicycle", "bolt", "building.2", "calendar", "car", "cart", "chart.bar", "chart.line.uptrend.xyaxis", "checkmark.circle", "clock", "cloud", "cloud.rain", "creditcard", "cup.and.saucer", "doc", "doc.text", "dollarsign.circle", "envelope", "exclamationmark.triangle", "figure.walk", "flag", "folder", "fork.knife", "gift", "globe", "heart", "house", "key", "leaf", "link", "lock", "map", "mappin", "moon", "person", "person.2", "phone", "photo", "snowflake", "star", "suitcase", "sun.max", "tram", "xmark.circle"],
+      "description": "SF Symbol name from a fixed allow-list."
+    },
+    "cell": {"oneOf": [{"$ref": "#/$defs/line", "maxLength": 120}, {"$ref": "#/$defs/number"}, {"type": "null"}]},
+    "table": {
+      "type": "object",
+      "required": ["columns", "rows"],
+      "properties": {
+        "columns": {"type": "array", "minItems": 1, "maxItems": 12, "items": {
+          "type": "object", "required": ["title"],
+          "properties": {
+            "title": {"$ref": "#/$defs/label", "minLength": 1},
+            "type": {"enum": ["text", "number", "money", "percent", "date", "delta", "status"], "description": "Default text. money/percent/number/delta format numeric cells; a string cell is shown as written."},
+            "currency": {"type": "string", "pattern": "^[A-Z]{3}$", "description": "ISO 4217, money columns only. Default CAD."}
+          }
+        }},
+        "rows": {"type": "array", "maxItems": 60, "items": {
+          "type": "object", "required": ["cells"],
+          "properties": {
+            "cells": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/cell"}},
+            "secondary": {"$ref": "#/$defs/detail"},
+            "badge": {"$ref": "#/$defs/line", "maxLength": 32},
+            "tone": {"$ref": "#/$defs/tone"},
+            "highlight": {"type": "boolean"}
+          }
+        }},
+        "totals": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/cell"}},
+        "count": {"type": "integer", "minimum": 0, "maximum": 1000000, "description": "Total rows in the full sheet when rows is only the first part."},
+        "file": {"$ref": "#/$defs/file", "description": "CSV or XLSX holding the full sheet."}
+      }
+    },
+    "flight": {
+      "type": "object",
+      "required": ["legs"],
+      "properties": {
+        "legs": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
+          "type": "object", "required": ["from", "to", "departure", "arrival"],
+          "properties": {
+            "number": {"$ref": "#/$defs/line", "maxLength": 20},
+            "from": {"$ref": "#/$defs/short", "minLength": 1},
+            "to": {"$ref": "#/$defs/short", "minLength": 1},
+            "departure": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 24, "description": "Local time as shown, e.g. 17:55."},
+            "arrival": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 24},
+            "dayOffset": {"type": "integer", "minimum": -1, "maximum": 3, "description": "Arrival day relative to departure day."},
+            "duration": {"$ref": "#/$defs/line", "maxLength": 32},
+            "date": {"$ref": "#/$defs/line", "maxLength": 24}
+          }
+        }},
+        "connection": {"$ref": "#/$defs/detail"},
+        "connectionCode": {"$ref": "#/$defs/line", "maxLength": 12}
+      }
+    },
+    "stop": {
+      "type": "object", "required": ["name", "lat", "lon"],
+      "properties": {"name": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80}, "lat": {"$ref": "#/$defs/lat"}, "lon": {"$ref": "#/$defs/lon"}}
+    },
+    "route": {
+      "type": "object",
+      "required": ["stops"],
+      "properties": {
+        "stops": {"type": "array", "minItems": 2, "maxItems": 12, "items": {"$ref": "#/$defs/stop"}},
+        "mode": {"enum": ["drive", "walk", "transit", "cycle", "flight"], "description": "Default drive. flight draws a geodesic arc and asks no directions."},
+        "duration": {"$ref": "#/$defs/short"},
+        "distance": {"$ref": "#/$defs/short"}
+      }
+    },
+    "place": {
+      "type": "object",
+      "required": ["name", "lat", "lon"],
+      "properties": {
+        "name": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80},
+        "lat": {"$ref": "#/$defs/lat"},
+        "lon": {"$ref": "#/$defs/lon"},
+        "address": {"$ref": "#/$defs/line", "maxLength": 160},
+        "detail": {"$ref": "#/$defs/detail"}
+      }
+    },
+    "chart": {
+      "type": "object",
+      "required": ["x", "series"],
+      "properties": {
+        "type": {"enum": ["line", "bar", "area", "point"], "description": "Default bar."},
+        "headline": {"$ref": "#/$defs/label"},
+        "comparison": {"$ref": "#/$defs/detail"},
+        "tone": {"$ref": "#/$defs/tone"},
+        "unit": {"$ref": "#/$defs/line", "maxLength": 12},
+        "x": {"type": "array", "minItems": 1, "maxItems": 400, "items": {"$ref": "#/$defs/short"}},
+        "series": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
+          "type": "object", "required": ["name", "values"],
+          "properties": {
+            "name": {"$ref": "#/$defs/label", "minLength": 1},
+            "values": {"type": "array", "maxItems": 400, "items": {"oneOf": [{"$ref": "#/$defs/number"}, {"type": "null"}]}}
+          }
+        }},
+        "reference": {"type": "object", "required": ["value"], "properties": {"value": {"$ref": "#/$defs/number"}, "label": {"$ref": "#/$defs/short"}}}
+      }
+    },
+    "weather": {
+      "type": "object",
+      "required": ["headline"],
+      "properties": {
+        "headline": {"$ref": "#/$defs/short", "minLength": 1, "description": "Now, e.g. 4°."},
+        "condition": {"enum": ["clear", "partly_cloudy", "cloudy", "rain", "snow", "storm", "fog", "wind"]},
+        "comparison": {"$ref": "#/$defs/detail"},
+        "range": {"$ref": "#/$defs/line", "maxLength": 80},
+        "chart": {"$ref": "#/$defs/chart", "description": "The day by hour."},
+        "days": {"type": "array", "maxItems": 10, "items": {
+          "type": "object", "required": ["day"],
+          "properties": {"day": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 12}, "high": {"$ref": "#/$defs/short"}, "low": {"$ref": "#/$defs/short"}, "condition": {"enum": ["clear", "partly_cloudy", "cloudy", "rain", "snow", "storm", "fog", "wind"]}}
+        }}
+      }
+    },
+    "document": {
+      "type": "object",
+      "required": ["file"],
+      "properties": {
+        "file": {"$ref": "#/$defs/file"},
+        "quote": {"$ref": "#/$defs/text", "maxLength": 300},
+        "page": {"type": "integer", "minimum": 1, "maximum": 10000, "description": "Page the quote is on."},
+        "pages": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {"$ref": "#/$defs/https_url"},
+        "description": {"$ref": "#/$defs/text", "maxLength": 240},
+        "image": {"$ref": "#/$defs/file", "description": "A picture already saved on our server; the phone never loads the page's own image."}
+      }
+    },
+    "gallery": {
+      "type": "object",
+      "required": ["images"],
+      "properties": {
+        "images": {"type": "array", "minItems": 1, "maxItems": 24, "items": {
+          "type": "object", "required": ["file"],
+          "properties": {"file": {"$ref": "#/$defs/file"}, "caption": {"$ref": "#/$defs/detail"}}
+        }}
+      }
+    },
+    "hero": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"enum": ["image", "map", "chart"]}},
+      "allOf": [
+        {"if": {"required": ["type"], "properties": {"type": {"const": "image"}}}, "then": {"required": ["file"], "properties": {"file": {"$ref": "#/$defs/file"}, "aspect": {"enum": ["wide", "square", "tall"]}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "map"}}}, "then": {"properties": {"route": {"$ref": "#/$defs/route"}, "place": {"$ref": "#/$defs/place"}}, "oneOf": [{"required": ["route"], "not": {"required": ["place"]}}, {"required": ["place"], "not": {"required": ["route"]}}]}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "chart"}}}, "then": {"required": ["chart"], "properties": {"chart": {"$ref": "#/$defs/chart"}}}}
+      ]
+    },
+    "block": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"enum": ["text", "stats", "rows", "meter", "spark", "list", "timeline", "quote", "chips", "image"]}},
+      "allOf": [
+        {"if": {"required": ["type"], "properties": {"type": {"const": "text"}}}, "then": {"required": ["text"], "properties": {"text": {"$ref": "#/$defs/text", "minLength": 1, "maxLength": 400}, "emphasis": {"enum": ["body", "lead", "caption"]}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "stats"}}}, "then": {"required": ["items"], "properties": {"items": {"type": "array", "minItems": 2, "maxItems": 3, "items": {
+          "type": "object", "required": ["label", "value"],
+          "properties": {"label": {"$ref": "#/$defs/label", "minLength": 1}, "value": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 48}, "unit": {"$ref": "#/$defs/line", "maxLength": 12}, "delta": {"$ref": "#/$defs/line", "maxLength": 24}, "tone": {"$ref": "#/$defs/tone"}}
+        }}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "rows"}}}, "then": {"required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+          "type": "object", "required": ["label", "value"],
+          "properties": {"label": {"$ref": "#/$defs/label", "minLength": 1}, "value": {"$ref": "#/$defs/detail"}, "glyph": {"$ref": "#/$defs/glyph"}, "tone": {"$ref": "#/$defs/tone"}}
+        }}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "meter"}}}, "then": {"required": ["label", "value"], "properties": {"label": {"$ref": "#/$defs/label", "minLength": 1}, "value": {"type": "number", "minimum": 0, "maximum": 1}, "caption": {"$ref": "#/$defs/detail"}, "tone": {"$ref": "#/$defs/tone"}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "spark"}}}, "then": {"required": ["label", "points"], "properties": {"label": {"$ref": "#/$defs/label", "minLength": 1}, "value": {"$ref": "#/$defs/line", "maxLength": 48}, "points": {"type": "array", "minItems": 2, "maxItems": 60, "items": {"$ref": "#/$defs/number"}}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "list"}}}, "then": {"required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
+          "type": "object", "required": ["title"],
+          "properties": {"title": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80}, "detail": {"$ref": "#/$defs/detail"}, "trailing": {"$ref": "#/$defs/short"}, "glyph": {"$ref": "#/$defs/glyph"}, "checked": {"type": "boolean"}}
+        }}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "timeline"}}}, "then": {"required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
+          "type": "object", "required": ["time", "title"],
+          "properties": {"time": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 24}, "title": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80}, "detail": {"$ref": "#/$defs/detail"}, "state": {"enum": ["done", "next"]}}
+        }}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "quote"}}}, "then": {"required": ["text"], "properties": {"text": {"$ref": "#/$defs/text", "minLength": 1, "maxLength": 300}, "by": {"$ref": "#/$defs/line", "maxLength": 80}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "chips"}}}, "then": {"required": ["items"], "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"$ref": "#/$defs/short", "minLength": 1}}}}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "image"}}}, "then": {"required": ["file"], "properties": {"file": {"$ref": "#/$defs/file"}, "aspect": {"enum": ["wide", "square", "tall"]}, "caption": {"$ref": "#/$defs/detail"}}}}
+      ]
+    },
+    "compose": {
+      "type": "object",
+      "required": ["blocks"],
+      "properties": {
+        "hero": {"$ref": "#/$defs/hero"},
+        "blocks": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"$ref": "#/$defs/block"}}
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"enum": ["open", "directions", "open_in_maps", "add_to_calendar", "open_file", "open_url", "ask"]}},
+      "allOf": [
+        {"if": {"required": ["type"], "properties": {"type": {"enum": ["open", "directions", "open_in_maps", "open_file"]}}}, "then": {"properties": {"type": true}, "additionalProperties": false}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "ask"}}}, "then": {"required": ["text"], "properties": {"type": true, "text": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 120}}, "additionalProperties": false}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "open_url"}}}, "then": {"properties": {"type": true, "url": {"$ref": "#/$defs/https_url"}}, "additionalProperties": false}},
+        {"if": {"required": ["type"], "properties": {"type": {"const": "add_to_calendar"}}}, "then": {"required": ["title", "start"], "properties": {
+          "type": true,
+          "title": {"$ref": "#/$defs/line", "minLength": 1, "maxLength": 80},
+          "start": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?(Z|[+-]\\d{2}:\\d{2})$"},
+          "end": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?(Z|[+-]\\d{2}:\\d{2})$"},
+          "location": {"$ref": "#/$defs/line", "maxLength": 160}
+        }, "additionalProperties": false}}
+      ]
+    },
+    "receipt": {
+      "description": "The show_card tool result. A reader renders the call's arguments as a card only when ok is true; alt is the server's words for the card (derived when the call left it out).",
+      "oneOf": [
+        {"type": "object", "required": ["ok", "card_id", "alt"], "properties": {"ok": {"const": true}, "card_id": {"type": "string"}, "alt": {"type": "string"}, "warnings": {"type": "array", "items": {"type": "string"}}}},
+        {"type": "object", "required": ["ok", "error", "errors"], "properties": {"ok": {"const": false}, "error": {"type": "string"}, "errors": {"type": "array", "items": {"type": "object", "required": ["path", "message"], "properties": {"path": {"type": "string"}, "message": {"type": "string"}}}}}}
+      ]
+    }
+  }
+}

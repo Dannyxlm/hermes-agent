@@ -1,0 +1,17 @@
+{
+ "kind": "chart",
+ "data": {
+  "x": [
+   "a"
+  ],
+  "series": [
+   {
+    "name": "S",
+    "values": [
+     1e+30
+    ]
+   }
+  ]
+ },
+ "title": "Huge"
+}

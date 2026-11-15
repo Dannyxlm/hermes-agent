@@ -1,0 +1,71 @@
+{
+ "v": 1,
+ "kind": "weather",
+ "variant": "hero",
+ "title": "Montréal · Saturday",
+ "source": {
+  "label": "Sample forecast",
+  "origin": "tool"
+ },
+ "note": "Do the passport photos before the rain.",
+ "data": {
+  "headline": "4°",
+  "condition": "cloudy",
+  "comparison": "Rain from 15:00",
+  "range": "High 7° · low 2°",
+  "chart": {
+   "type": "line",
+   "unit": "°",
+   "x": [
+    "08",
+    "10",
+    "12",
+    "14",
+    "15",
+    "16",
+    "18",
+    "20"
+   ],
+   "series": [
+    {
+     "name": "Temperature",
+     "values": [
+      4,
+      5,
+      6,
+      7,
+      7,
+      6,
+      5,
+      4
+     ]
+    }
+   ]
+  },
+  "days": [
+   {
+    "day": "Sat",
+    "high": "7°",
+    "low": "2°",
+    "condition": "rain"
+   },
+   {
+    "day": "Sun",
+    "high": "5°",
+    "low": "-1°",
+    "condition": "snow"
+   },
+   {
+    "day": "Mon",
+    "high": "3°",
+    "low": "-4°",
+    "condition": "clear"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "open"
+  }
+ ]
+}

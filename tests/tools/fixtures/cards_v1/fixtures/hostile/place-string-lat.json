@@ -1,0 +1,9 @@
+{
+ "kind": "place",
+ "data": {
+  "name": "x",
+  "lat": "45.5",
+  "lon": -73.5
+ },
+ "title": "String latitude"
+}

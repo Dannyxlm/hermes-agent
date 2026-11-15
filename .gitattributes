@@ -37,3 +37,7 @@ docker/entrypoint.sh text eol=lf
 *.html  text eol=lf
 *.svg   text eol=lf
 *.ps1   text eol=crlf
+
+# Card contract v1: the app tests the same bytes against SHA256SUMS, so never convert line endings.
+tests/tools/fixtures/cards_v1/** -text
+tools/cards/card.schema.json -text

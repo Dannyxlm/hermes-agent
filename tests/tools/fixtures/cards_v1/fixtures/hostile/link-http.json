@@ -1,0 +1,7 @@
+{
+ "kind": "link",
+ "title": "Plain http",
+ "data": {
+  "url": "http://example.com"
+ }
+}

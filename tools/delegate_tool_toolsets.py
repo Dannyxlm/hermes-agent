@@ -19,6 +19,7 @@ DELEGATE_BLOCKED_TOOLS = frozenset(
         "send_message",  # no cross-platform side effects
         "cronjob_manage",  # no scheduling more work in the parent's name
         "thread",  # no opening or messaging the user's chats from an isolated child
+        "show_card",  # a child's reply is a summary for its parent, not something the user's app draws
     ]
 )
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]

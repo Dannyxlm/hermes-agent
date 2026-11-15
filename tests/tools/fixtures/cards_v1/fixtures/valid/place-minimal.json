@@ -1,0 +1,9 @@
+{
+ "kind": "place",
+ "title": "Meeting point",
+ "data": {
+  "name": "Place des Arts",
+  "lat": 45.5085,
+  "lon": -73.5668
+ }
+}

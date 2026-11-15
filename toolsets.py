@@ -155,6 +155,10 @@ TOOLSETS = {
     # never do (DELEGATE_BLOCKED_TOOLS). Platform-gated toolsets load eagerly (tools/tool_search.py).
     "threads": _ts("Lead threads: open, message, wait on and read the user's own chats", ["thread"],
                    platforms=frozenset({"cli", "tui", "desktop"})),
+    # Local chats only, and only for an agent built while a client that draws cards was attached
+    # (tui_gateway/agent_factory.py folds it in; cards.enabled gates the tool itself).
+    "cards": _ts("Paper cards drawn by the Hermes app under a reply (show_card)", ["show_card"],
+                 platforms=frozenset({"tui", "desktop", "local", "mobile", "gui"})),
     "kanban": _ts(
         "Kanban multi-agent coordination — only active when the agent is spawned by "
         "the kanban dispatcher (HERMES_KANBAN_TASK env set). The dispatcher runs "

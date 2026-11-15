@@ -1,0 +1,73 @@
+{
+ "v": 1,
+ "kind": "compose",
+ "variant": "hero",
+ "title": "Seven",
+ "source": {
+  "label": "Ava",
+  "origin": "ava"
+ },
+ "note": "A comfortable layover. You’ll be at the hotel Friday evening.",
+ "alt": "Leave home Thu 14:30; YUL 17:55 to AMS 06:40 Friday. Connect 3 h 45. AMS 10:25 to KGL 19:50. Door to door 21 h 45.",
+ "data": {
+  "hero": {
+   "type": "map",
+   "route": {
+    "mode": "flight",
+    "stops": [
+     {
+      "name": "YUL",
+      "lat": 45.4577,
+      "lon": -73.7499
+     },
+     {
+      "name": "AMS",
+      "lat": 52.3105,
+      "lon": 4.7683
+     },
+     {
+      "name": "KGL",
+      "lat": -1.9686,
+      "lon": 30.1395
+     }
+    ]
+   }
+  },
+  "blocks": [
+   {
+    "type": "text",
+    "text": "Block 0"
+   },
+   {
+    "type": "text",
+    "text": "Block 1"
+   },
+   {
+    "type": "text",
+    "text": "Block 2"
+   },
+   {
+    "type": "text",
+    "text": "Block 3"
+   },
+   {
+    "type": "text",
+    "text": "Block 4"
+   },
+   {
+    "type": "text",
+    "text": "Block 5"
+   },
+   {
+    "type": "text",
+    "text": "Block 6"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "ask",
+   "text": "What should I pack?"
+  }
+ ]
+}

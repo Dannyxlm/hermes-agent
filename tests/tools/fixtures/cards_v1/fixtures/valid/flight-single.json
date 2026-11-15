@@ -1,0 +1,18 @@
+{
+ "v": 1,
+ "kind": "flight",
+ "variant": "compact",
+ "title": "Back to Montréal",
+ "data": {
+  "legs": [
+   {
+    "number": "AC 829",
+    "from": "KGL",
+    "to": "YUL",
+    "departure": "21:10",
+    "arrival": "07:35",
+    "dayOffset": 1
+   }
+  ]
+ }
+}

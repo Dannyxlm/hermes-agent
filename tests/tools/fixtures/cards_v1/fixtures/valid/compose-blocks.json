@@ -1,0 +1,88 @@
+{
+ "v": 1,
+ "kind": "compose",
+ "variant": "detail",
+ "title": "This week, in short",
+ "alt": "Revenue $18.4k (+12%). 3 of 5 launch tasks done. Next: send the deck Thursday.",
+ "data": {
+  "hero": {
+   "type": "chart",
+   "chart": {
+    "type": "area",
+    "x": [
+     "Mon",
+     "Tue",
+     "Wed",
+     "Thu",
+     "Fri"
+    ],
+    "series": [
+     {
+      "name": "Revenue",
+      "values": [
+       3.1,
+       3.4,
+       3.9,
+       3.8,
+       4.2
+      ]
+     }
+    ]
+   }
+  },
+  "blocks": [
+   {
+    "type": "text",
+    "text": "A good week. The new offer carried most of it.",
+    "emphasis": "lead"
+   },
+   {
+    "type": "meter",
+    "label": "Launch checklist",
+    "value": 0.6,
+    "caption": "3 of 5 done",
+    "tone": "good"
+   },
+   {
+    "type": "spark",
+    "label": "Sign-ups",
+    "value": "41",
+    "points": [
+     4,
+     6,
+     5,
+     9,
+     8,
+     9
+    ]
+   },
+   {
+    "type": "list",
+    "items": [
+     {
+      "title": "Send the deck",
+      "detail": "Thursday",
+      "glyph": "envelope"
+     },
+     {
+      "title": "Book the venue",
+      "checked": true
+     }
+    ]
+   },
+   {
+    "type": "quote",
+    "text": "This is the first launch that felt calm.",
+    "by": "Sample customer"
+   },
+   {
+    "type": "chips",
+    "items": [
+     "Launch",
+     "Q4",
+     "Calm"
+    ]
+   }
+  ]
+ }
+}

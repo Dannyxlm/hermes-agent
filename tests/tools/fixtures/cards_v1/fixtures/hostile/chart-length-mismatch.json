@@ -1,0 +1,20 @@
+{
+ "kind": "chart",
+ "data": {
+  "x": [
+   "a",
+   "b",
+   "c"
+  ],
+  "series": [
+   {
+    "name": "S",
+    "values": [
+     1,
+     2
+    ]
+   }
+  ]
+ },
+ "title": "Short series"
+}

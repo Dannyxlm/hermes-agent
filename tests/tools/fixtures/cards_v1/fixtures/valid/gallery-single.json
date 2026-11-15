@@ -1,0 +1,14 @@
+{
+ "v": 1,
+ "kind": "gallery",
+ "variant": "compact",
+ "title": "The new logo",
+ "data": {
+  "images": [
+   {
+    "file": "/synthetic/cards/logo.png",
+    "caption": "Final, on paper"
+   }
+  ]
+ }
+}

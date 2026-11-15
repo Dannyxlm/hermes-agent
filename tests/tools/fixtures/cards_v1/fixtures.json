@@ -1,0 +1,528 @@
+{
+ "v": 1,
+ "fixtures": [
+  {
+   "file": "fixtures/valid/table-hero.json",
+   "expect": "accept",
+   "kind": "table",
+   "about": "hero: typed money column, highlighted row with badge, no alt (server derives)"
+  },
+  {
+   "file": "fixtures/valid/table-sheet.json",
+   "expect": "accept",
+   "kind": "table",
+   "about": "sheet variant: totals row, null total cell, date column, file-backed full sheet with open_file"
+  },
+  {
+   "file": "fixtures/valid/table-minimal.json",
+   "expect": "accept",
+   "kind": "table",
+   "about": "required fields only; v omitted (means 1)"
+  },
+  {
+   "file": "fixtures/valid/flight-hero.json",
+   "expect": "accept",
+   "kind": "flight",
+   "about": "two legs with a connection, add_to_calendar action"
+  },
+  {
+   "file": "fixtures/valid/flight-single.json",
+   "expect": "accept",
+   "kind": "flight",
+   "about": "compact variant, one leg, no source/note/actions"
+  },
+  {
+   "file": "fixtures/valid/route-hero.json",
+   "expect": "accept",
+   "kind": "route",
+   "about": "drive route, directions + ask"
+  },
+  {
+   "file": "fixtures/valid/route-flight.json",
+   "expect": "accept",
+   "kind": "route",
+   "about": "flight-mode arc across three stops, negative latitude"
+  },
+  {
+   "file": "fixtures/valid/place-hero.json",
+   "expect": "accept",
+   "kind": "place",
+   "about": "one pin with address and detail"
+  },
+  {
+   "file": "fixtures/valid/place-minimal.json",
+   "expect": "accept",
+   "kind": "place",
+   "about": "required fields only"
+  },
+  {
+   "file": "fixtures/valid/weather-hero.json",
+   "expect": "accept",
+   "kind": "weather",
+   "about": "now, the day by hour, three days"
+  },
+  {
+   "file": "fixtures/valid/weather-compact.json",
+   "expect": "accept",
+   "kind": "weather",
+   "about": "headline only"
+  },
+  {
+   "file": "fixtures/valid/chart-bar.json",
+   "expect": "accept",
+   "kind": "chart",
+   "about": "bar with reference line and caution tone"
+  },
+  {
+   "file": "fixtures/valid/chart-line.json",
+   "expect": "accept",
+   "kind": "chart",
+   "about": "two series, one gap (null)"
+  },
+  {
+   "file": "fixtures/valid/document-hero.json",
+   "expect": "accept",
+   "kind": "document",
+   "about": "pull quote with page, open_file"
+  },
+  {
+   "file": "fixtures/valid/document-minimal.json",
+   "expect": "accept",
+   "kind": "document",
+   "about": "file only"
+  },
+  {
+   "file": "fixtures/valid/link-hero.json",
+   "expect": "accept",
+   "kind": "link",
+   "about": "link with saved picture; open_url takes data.url"
+  },
+  {
+   "file": "fixtures/valid/link-minimal.json",
+   "expect": "accept",
+   "kind": "link",
+   "about": "url only"
+  },
+  {
+   "file": "fixtures/valid/gallery-set.json",
+   "expect": "accept",
+   "kind": "gallery",
+   "about": "twelve images"
+  },
+  {
+   "file": "fixtures/valid/gallery-single.json",
+   "expect": "accept",
+   "kind": "gallery",
+   "about": "one image with caption"
+  },
+  {
+   "file": "fixtures/valid/compose-trip.json",
+   "expect": "accept",
+   "kind": "compose",
+   "about": "map hero (route) + stats, timeline, rows"
+  },
+  {
+   "file": "fixtures/valid/compose-blocks.json",
+   "expect": "accept",
+   "kind": "compose",
+   "about": "chart hero + text, meter, spark, list, quote, chips (the six-block maximum)"
+  },
+  {
+   "file": "fixtures/valid/compose-image.json",
+   "expect": "accept",
+   "kind": "compose",
+   "about": "image hero + image block"
+  },
+  {
+   "file": "fixtures/valid/compose-place.json",
+   "expect": "accept",
+   "kind": "compose",
+   "about": "map hero (place) + rows; calendar action"
+  },
+  {
+   "file": "fixtures/valid/open-extra-fields.json",
+   "expect": "accept",
+   "kind": "route",
+   "about": "unknown optional fields in the envelope, source, data and a stop: accepted, a reader keeps them as raw values and ignores them"
+  },
+  {
+   "file": "fixtures/forward/forward-unknown-kind.json",
+   "expect": "reject",
+   "kind": "planetarium",
+   "about": "kind not in v1",
+   "reader": "fallback"
+  },
+  {
+   "file": "fixtures/forward/forward-v2.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "v other than 1",
+   "reader": "fallback"
+  },
+  {
+   "file": "fixtures/forward/forward-unknown-variant.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "variant not in v1",
+   "reader": "default-variant"
+  },
+  {
+   "file": "fixtures/forward/forward-draft.json",
+   "expect": "reject",
+   "kind": "draft",
+   "about": "draft/decision cards are not in v1 (3.17)",
+   "reader": "fallback"
+  },
+  {
+   "file": "fixtures/forward/forward-page.json",
+   "expect": "reject",
+   "kind": "page",
+   "about": "page kind is not in v1",
+   "reader": "fallback"
+  },
+  {
+   "file": "fixtures/forward/forward-music.json",
+   "expect": "reject",
+   "kind": "music",
+   "about": "music kind is not in v1",
+   "reader": "fallback"
+  },
+  {
+   "file": "fixtures/forward/forward-health.json",
+   "expect": "reject",
+   "kind": "health",
+   "about": "health kind is not in v1",
+   "reader": "fallback"
+  },
+  {
+   "file": "fixtures/hostile/action-send.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "no send action exists"
+  },
+  {
+   "file": "fixtures/hostile/action-call-tool.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "no tool-calling action"
+  },
+  {
+   "file": "fixtures/hostile/action-extra-field.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "actions are closed objects"
+  },
+  {
+   "file": "fixtures/hostile/action-three.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "at most two actions"
+  },
+  {
+   "file": "fixtures/hostile/action-directions-on-table.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "directions only on place and route"
+  },
+  {
+   "file": "fixtures/hostile/action-open-file-without-file.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "open_file needs a document or a table with data.file"
+  },
+  {
+   "file": "fixtures/hostile/action-open-url-missing.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "open_url outside a link card needs its own url"
+  },
+  {
+   "file": "fixtures/hostile/action-open-url-javascript.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "https only"
+  },
+  {
+   "file": "fixtures/hostile/action-open-url-userinfo.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "no user info in a url (the real host is evil.example)"
+  },
+  {
+   "file": "fixtures/hostile/action-open-url-twice.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "at most one open_url per card"
+  },
+  {
+   "file": "fixtures/hostile/action-ask-empty.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "ask carries the exact words"
+  },
+  {
+   "file": "fixtures/hostile/action-calendar-bad-date.json",
+   "expect": "reject",
+   "kind": "flight",
+   "about": "start is ISO 8601 with offset"
+  },
+  {
+   "file": "fixtures/hostile/link-http.json",
+   "expect": "reject",
+   "kind": "link",
+   "about": "link url is https only"
+  },
+  {
+   "file": "fixtures/hostile/link-data-url.json",
+   "expect": "reject",
+   "kind": "link",
+   "about": "link url is https only"
+  },
+  {
+   "file": "fixtures/hostile/title-bidi-override.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "bidi override characters are refused in every string"
+  },
+  {
+   "file": "fixtures/hostile/title-newline.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "title is one line"
+  },
+  {
+   "file": "fixtures/hostile/title-trailing-newline.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "a trailing newline is still a control character in a one-line field"
+  },
+  {
+   "file": "fixtures/hostile/title-control-char.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "control characters are refused"
+  },
+  {
+   "file": "fixtures/hostile/title-empty.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "title is required and non-empty"
+  },
+  {
+   "file": "fixtures/hostile/title-81.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "title at most 80 characters"
+  },
+  {
+   "file": "fixtures/hostile/note-241.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "note at most 240 characters"
+  },
+  {
+   "file": "fixtures/hostile/alt-1201.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "alt at most 1,200 characters"
+  },
+  {
+   "file": "fixtures/hostile/missing-kind.json",
+   "expect": "reject",
+   "kind": null,
+   "about": "kind is required"
+  },
+  {
+   "file": "fixtures/hostile/v-string.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "v is the integer 1"
+  },
+  {
+   "file": "fixtures/hostile/not-an-object.json",
+   "expect": "reject",
+   "kind": null,
+   "about": "the card is an object"
+  },
+  {
+   "file": "fixtures/hostile/data-missing.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "typed kinds need data"
+  },
+  {
+   "file": "fixtures/hostile/oversize-16k.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "16 KB of JSON per card"
+  },
+  {
+   "file": "fixtures/hostile/deep-nesting.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "nesting deeper than 12 levels is refused"
+  },
+  {
+   "file": "fixtures/hostile/table-13-columns.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "at most 12 columns inline"
+  },
+  {
+   "file": "fixtures/hostile/table-61-rows.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "at most 60 rows inline; more goes by file"
+  },
+  {
+   "file": "fixtures/hostile/table-cell-count.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "each row has one cell per column"
+  },
+  {
+   "file": "fixtures/hostile/table-column-type.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "column types are a closed list"
+  },
+  {
+   "file": "fixtures/hostile/chart-401-points.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "at most 400 points in total"
+  },
+  {
+   "file": "fixtures/hostile/chart-7-series.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "at most six series"
+  },
+  {
+   "file": "fixtures/hostile/chart-length-mismatch.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "each series has one value per x"
+  },
+  {
+   "file": "fixtures/hostile/chart-huge-number.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "numbers are bounded to ±1e12"
+  },
+  {
+   "file": "fixtures/hostile/route-lat-200.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "latitude in −90…90"
+  },
+  {
+   "file": "fixtures/hostile/route-one-stop.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "a route has at least two stops (one is a place)"
+  },
+  {
+   "file": "fixtures/hostile/route-nan.json",
+   "expect": "reject",
+   "kind": null,
+   "about": "NaN is not JSON; a reader's decoder refuses it, the server refuses non-finite numbers"
+  },
+  {
+   "file": "fixtures/hostile/place-string-lat.json",
+   "expect": "reject",
+   "kind": "place",
+   "about": "coordinates are numbers"
+  },
+  {
+   "file": "fixtures/hostile/gallery-25.json",
+   "expect": "reject",
+   "kind": "gallery",
+   "about": "at most 24 images"
+  },
+  {
+   "file": "fixtures/hostile/gallery-remote-image.json",
+   "expect": "reject",
+   "kind": "gallery",
+   "about": "images are files on our server, never web urls"
+  },
+  {
+   "file": "fixtures/hostile/file-relative.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "file references are absolute"
+  },
+  {
+   "file": "fixtures/hostile/file-dotdot.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "no .. segments"
+  },
+  {
+   "file": "fixtures/hostile/compose-missing-alt.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "compose needs its own alt"
+  },
+  {
+   "file": "fixtures/hostile/compose-7-blocks.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "at most six blocks"
+  },
+  {
+   "file": "fixtures/hostile/compose-unknown-block.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "block types are a closed list"
+  },
+  {
+   "file": "fixtures/hostile/compose-reserved-tone.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "tones are neutral, good, caution; Ava's amber and the needs-you ember cannot be asked for"
+  },
+  {
+   "file": "fixtures/hostile/compose-unknown-hero.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "hero is image, map or chart"
+  },
+  {
+   "file": "fixtures/hostile/compose-meter-9000.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "meter value in 0…1"
+  },
+  {
+   "file": "fixtures/hostile/compose-stats-4.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "stats carries two or three items"
+  },
+  {
+   "file": "fixtures/hostile/compose-glyph.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "glyphs come from the allow-list"
+  },
+  {
+   "file": "fixtures/hostile/sheet-on-chart.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "sheet is a table variant"
+  },
+  {
+   "file": "fixtures/hostile/source-origin.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "origin is ava, tool or external"
+  },
+  {
+   "file": "fixtures/hostile/spike-compose-stress.json",
+   "expect": "reject",
+   "kind": "compose",
+   "about": "the a5 spike's compose-stress payload, verbatim (oversized values, unknown block, 11 blocks, meter 9000, reserved tones)"
+  }
+ ]
+}

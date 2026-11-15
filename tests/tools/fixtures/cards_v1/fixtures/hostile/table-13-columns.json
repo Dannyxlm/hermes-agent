@@ -1,0 +1,78 @@
+{
+ "v": 1,
+ "kind": "table",
+ "variant": "hero",
+ "title": "Wide",
+ "source": {
+  "label": "Fare comparison",
+  "origin": "tool"
+ },
+ "note": "KLM has the comfortable connection and gets you in Friday evening.",
+ "data": {
+  "columns": [
+   {
+    "title": "C0"
+   },
+   {
+    "title": "C1"
+   },
+   {
+    "title": "C2"
+   },
+   {
+    "title": "C3"
+   },
+   {
+    "title": "C4"
+   },
+   {
+    "title": "C5"
+   },
+   {
+    "title": "C6"
+   },
+   {
+    "title": "C7"
+   },
+   {
+    "title": "C8"
+   },
+   {
+    "title": "C9"
+   },
+   {
+    "title": "C10"
+   },
+   {
+    "title": "C11"
+   },
+   {
+    "title": "C12"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "0",
+     "1",
+     "2",
+     "3",
+     "4",
+     "5",
+     "6",
+     "7",
+     "8",
+     "9",
+     "10",
+     "11",
+     "12"
+    ]
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "open"
+  }
+ ]
+}

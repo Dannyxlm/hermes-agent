@@ -97,6 +97,8 @@ class StreamToolPart(Result):
     error: bool | None = None
     inline_diff: str | None = None
     todos: list[JsonValue] | None = None
+    #: ``show_card`` only: the whole card (the call's arguments); ``error`` false once accepted.
+    card: dict[str, JsonValue] | None = None
 
 
 class SessionStreamProjection(Result):

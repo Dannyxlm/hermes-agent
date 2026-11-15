@@ -1,0 +1,7 @@
+{
+ "kind": "link",
+ "title": "Data url",
+ "data": {
+  "url": "data:text/html,<script>alert(1)</script>"
+ }
+}

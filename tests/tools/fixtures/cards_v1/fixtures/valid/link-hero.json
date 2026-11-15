@@ -1,0 +1,21 @@
+{
+ "v": 1,
+ "kind": "link",
+ "variant": "hero",
+ "title": "Loft near the Lachine Canal",
+ "source": {
+  "label": "airbnb.com",
+  "origin": "external"
+ },
+ "note": "Fits your dates and has the desk you wanted.",
+ "data": {
+  "url": "https://www.airbnb.com/rooms/000000?check_in=2027-01-14",
+  "description": "Entire loft · 2 guests · self check-in",
+  "image": "/synthetic/cards/loft.jpg"
+ },
+ "actions": [
+  {
+   "type": "open_url"
+  }
+ ]
+}
