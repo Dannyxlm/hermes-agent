@@ -144,6 +144,10 @@ def _card_id(card: dict, session_id: str, tool_call_id: str) -> str:
 def show_card(card: Any, *, session_id: Optional[str] = None) -> str:
     from tools.cards.alt import card_alt
     from tools.cards.validate import KIND_SHAPES, unknown_field_warnings, validate_card
+    if not cards_enabled():  # a tool array pinned while cards were on still reaches here: the flag is the switch
+        off = "cards are off on this server; say it in words"
+        return json.dumps({"ok": False, "error": f"card refused: {off}", "errors": [{"path": "(card)", "message": off}]},
+                          ensure_ascii=False)
     problems = validate_card(card)
     if problems:
         kind = card.get("kind") if isinstance(card, dict) else None

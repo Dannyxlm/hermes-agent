@@ -716,8 +716,9 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
         _sync_agent_compression_with_config(sid, session)
     _sync_agent_fallback_with_config(sid, session)  # chain added after the chat opened reaches this turn
     _sync_bot_capabilities(sid, session)  # Bot Chat: adopt Settings->Capabilities edits
-    from tui_gateway.cards_capability import sync_cards_toolset
-    sync_cards_toolset(sid, session)  # a card-drawing client attached after the agent was built
+    if not st.one_turn_restore:  # a /model --once turn keeps its one-turn agent; cards arrive the turn after
+        from tui_gateway.cards_capability import sync_cards_toolset
+        sync_cards_toolset(sid, session)  # a card-drawing client attached after the agent was built
     _adopt_out_of_band_turns(session)
     st.agent = agent = session["agent"]
     _sync_agent_daybreak(agent)

@@ -122,3 +122,23 @@ def test_the_tool_schema_tells_the_model_the_rules(cards_on):
         assert rule in text
     kinds = schema["parameters"]["properties"]["kind"]["enum"]
     assert set(kinds) == {"table", "flight", "route", "place", "weather", "chart", "document", "link", "gallery", "compose"}
+
+
+def test_process_files_are_refused_like_read_file_refuses_them(cards_on, tmp_path):
+    """Review 3b: the card file check applies both of read_file's guards, through a symlink too."""
+    alias = tmp_path / "notes.txt"
+    alias.symlink_to("/proc/self/environ")
+    for path in ("/proc/self/environ", str(alias)):
+        receipt = _call({"kind": "document", "title": "Env", "data": {"file": path}})
+        assert receipt["ok"] is False and "not readable through Hermes" in receipt["errors"][0]["message"], path
+
+
+def test_a_thread_never_inherits_the_cards_toolset(monkeypatch):
+    """Review note 6: a thread from a narrow-toolset chat is pinned to its parent's toolsets; ``cards``
+    belongs to the parent's attached app, so it is never among them."""
+    from types import SimpleNamespace
+    from tools import thread_tool
+    monkeypatch.setattr(thread_tool, "_config", dict)
+    parent = SimpleNamespace(profile="default", toolsets=frozenset({"file", "terminal", "cards", "threads"}))
+    ceiling = thread_tool._toolset_ceiling(parent, "default")
+    assert ceiling is not None and "file" in ceiling and "cards" not in ceiling

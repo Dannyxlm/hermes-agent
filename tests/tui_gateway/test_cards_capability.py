@@ -81,7 +81,7 @@ def test_a_future_version_is_not_drawn(monkeypatch):
     assert not cards_capability.draws_cards(peer)
 
 
-def test_toolset_fold_in_follows_the_attached_clients():
+def test_toolset_fold_in_follows_the_attached_clients(cards_on):
     phone, desktop = Peer(), Peer()
     cards_capability.advertise(phone, {"v": 1, "kinds": KINDS})
     assert cards_capability.with_cards_toolset(["file"], {"transport": desktop}) == ["file"]
@@ -93,10 +93,38 @@ def test_toolset_fold_in_follows_the_attached_clients():
     assert cards_capability.with_cards_toolset(None, None) is None
 
 
-def test_a_tool_refresh_keeps_the_cards_the_agent_was_built_with():
+def test_flag_off_never_folds_cards_in_even_for_a_drawing_client():
+    invalidate_check_fn_cache()
+    phone = Peer()
+    cards_capability.advertise(phone, {"v": 1, "kinds": KINDS})
+    assert cards_capability.with_cards_toolset(["file"], {"transport": phone}) == ["file"]
+    assert cards_capability.carry_cards_toolset(["file"], SimpleNamespace(enabled_toolsets=["file", "cards"])) == ["file"]
+
+
+def test_a_tool_refresh_keeps_the_cards_the_agent_was_built_with(cards_on):
     built = SimpleNamespace(enabled_toolsets=["file", "cards"])
     assert cards_capability.carry_cards_toolset(["file"], built) == ["file", "cards"]
     assert cards_capability.carry_cards_toolset(["file"], SimpleNamespace(enabled_toolsets=["file"])) == ["file"]
+
+
+def test_the_snapshot_carries_every_card_the_validator_accepts():
+    """Measured as the validator measures (compact JSON): a card near 16 KB compact is still carried."""
+    from tools.cards.validate import MAX_CARD_BYTES, card_bytes, validate_card
+    rows = [{"cells": ["x" * 16 for _ in range(12)]} for _ in range(60)]  # 720 cells: 720 commas default spacing widens
+    card = {"kind": "table", "title": "Near the limit",
+            "data": {"columns": [{"title": f"C{n}"} for n in range(12)], "rows": rows}}
+    cells = [(row, index) for row in rows for index in range(12)]
+    while len(card_bytes(card)) < MAX_CARD_BYTES - 40:
+        row, index = cells.pop()
+        row["cells"][index] += "y" * 4
+    assert validate_card(card) == [] and len(json.dumps(card, ensure_ascii=False).encode()) > MAX_CARD_BYTES
+    session, seq = {}, iter(range(1, 10))
+
+    def frame(kind, payload):
+        return {"method": "event", "params": {"type": kind, "seq": next(seq), "payload": payload}}
+    project_event(session, frame("message.start", {}))
+    project_event(session, frame("tool.start", {"tool_id": "t", "name": "show_card", "args": card}))
+    assert session["_published_stream"]["parts"][0]["card"] == card
 
 
 @pytest.mark.parametrize(("platform", "advertised", "offered"), [

@@ -601,6 +601,78 @@
    "expect": "reject",
    "kind": "route",
    "about": "a stop's detail is one line"
+  },
+  {
+   "file": "fixtures/hostile/title-nel.json",
+   "expect": "reject",
+   "kind": "place",
+   "about": "U+0085 NEL (a C1 control) in a one-line field"
+  },
+  {
+   "file": "fixtures/hostile/cell-csi.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "U+009B CSI (a C1 control) in a table cell"
+  },
+  {
+   "file": "fixtures/hostile/title-line-separator.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "U+2028 LINE SEPARATOR breaks a one-line title into two"
+  },
+  {
+   "file": "fixtures/hostile/note-paragraph-separator.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "U+2029 PARAGRAPH SEPARATOR in a multi-line field (only \\n is allowed)"
+  },
+  {
+   "file": "fixtures/hostile/document-proc-environ.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "a process file read_file refuses (the server's file check applies read_file's guards)"
+  },
+  {
+   "file": "fixtures/hostile/cell-media-directive.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "a MEDIA: attachment directive copied from an email into a row; a card attaches nothing"
+  },
+  {
+   "file": "fixtures/hostile/note-as-document-directive.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "a [[as_document]] delivery directive in the note"
+  },
+  {
+   "file": "fixtures/hostile/alt-blank.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "an alt of spaces only"
+  },
+  {
+   "file": "fixtures/hostile/title-blank.json",
+   "expect": "reject",
+   "kind": "place",
+   "about": "a title of spaces only"
+  },
+  {
+   "file": "fixtures/hostile/calendar-not-a-date.json",
+   "expect": "reject",
+   "kind": "flight",
+   "about": "add_to_calendar start in the right shape but no real date and time"
+  },
+  {
+   "file": "fixtures/hostile/calendar-arabic-digits.json",
+   "expect": "reject",
+   "kind": "flight",
+   "about": "add_to_calendar start written with Arabic-Indic digits"
+  },
+  {
+   "file": "fixtures/hostile/document-page-past-float-pages.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "pages 3.0 (an integer to the schema) with a quote on page 7"
   }
  ]
 }

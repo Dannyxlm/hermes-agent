@@ -97,10 +97,10 @@ ALT = {
                     "Door to door 21 h 45.",
     "compose-blocks": "Revenue $18.4k (+12%). 3 of 5 launch tasks done. Next: send the deck Thursday.",
     "compose-image": "The redesigned landing page: shorter headline, one button.",
-    "compose-place": "Dinner Friday 19:30 at Joe Beef, 2491 Rue Notre-Dame O. Table for four, booked.",
+    "compose-place": "Dinner Friday 19:30 at Joe Beef, 2491 Rue Notre-Dame O. A table for four.",
     "open-extra-fields": "Open fields stay raw: YUL · Montréal airport → Hôtel William Gray, 24 min by car, 21 km.\n"
                          "https://maps.apple.com/?saddr=45.4577,-73.7499&daddr=45.5075,-73.554&dirflg=d",
-    "flight-stage": "Montréal to Kigali\nKLM · 18 h 55 · $1,482 (held to Friday)\nLeave home 15:10: 25 min to YUL by taxi\n"
+    "flight-stage": "Montréal to Kigali\nKLM · 18 h 55 · $1,482 (ends Friday)\nLeave home 15:10: 25 min to YUL by taxi\n"
                     "KL 672 Montréal (YUL) 17:55 → Amsterdam (AMS) 06:40 (+1), Thu Jan 14, 6 h 45, seat 23A, window\n"
                     "KL 535 Amsterdam (AMS) 10:25 → Kigali (KGL) 19:50, Fri Jan 15, 8 h 25, seat 31K, window\n"
                     "Kigali: Visa on arrival. 24° and dry.\nConnection: 3 h 45 in Amsterdam · same terminal",
@@ -130,6 +130,48 @@ REV3_REFUSALS = {
 def test_rev3_refusals_name_the_field(name):
     problems = validate_card(_load({"file": f"fixtures/hostile/{name}.json"}), file_problem=_synthetic_files)
     assert [(p.path, p.message) for p in problems] == [REV3_REFUSALS[name]]
+
+
+# Contract rev 4 (review fixes): each refusal names its field and why, once.
+REV4_REFUSALS = {
+    "title-nel": ("title", "contains control characters (it is one line)"),
+    "cell-csi": ("data.rows[0].cells[0]", "contains control characters (it is one line)"),
+    "title-line-separator": ("title", "contains control characters (it is one line)"),
+    "note-paragraph-separator": ("note", "contains control characters"),
+    "cell-media-directive": ("data.rows[0].secondary", "contains a MEDIA: or [[…]] delivery directive; a card attaches "
+                                                       "nothing, so write the words another way"),
+    "note-as-document-directive": ("note", "contains a MEDIA: or [[…]] delivery directive; a card attaches nothing, "
+                                           "so write the words another way"),
+    "alt-blank": ("alt", "is blank; write the words or leave it out"),
+    "title-blank": ("title", "is blank"),
+    "calendar-not-a-date": ("actions[1].start", "'2027-13-45T99:99Z' is not a real date and time"),
+    "calendar-arabic-digits": ("actions[1].start", "must be ISO 8601 with an offset, e.g. 2027-01-14T17:55:00-05:00"),
+    "document-page-past-float-pages": ("data.quotes[2].page", "is page 7; the document has 3"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REV4_REFUSALS))
+def test_rev4_refusals_name_the_field(name):
+    problems = validate_card(_load({"file": f"fixtures/hostile/{name}.json"}), file_problem=_synthetic_files)
+    assert [(p.path, p.message) for p in problems] == [REV4_REFUSALS[name]]
+
+
+def test_the_process_file_fixture_is_refused_by_the_real_file_check():
+    from tools.cards.validate import server_file_problem
+    problems = validate_card(_load({"file": "fixtures/hostile/document-proc-environ.json"}))
+    assert [(p.path, p.message) for p in problems] == [
+        ("data.file", "/proc/self/environ is not readable through Hermes (credential, device or process path)")]
+    assert server_file_problem("/proc/self/environ") is not None
+
+
+def test_no_valid_fixture_claims_an_effect():
+    """A card shows; nothing in a valid card says a thing was held, booked, paid, shared or signed in."""
+    import re
+    claims = re.compile(r"\b(held|hold|booked|paid|shared|signed in)\b", re.IGNORECASE)
+    for entry in (e for e in MANIFEST if e["expect"] == "accept"):
+        card = _load(entry)
+        assert not claims.search(json.dumps(card, ensure_ascii=False)), entry["file"]
+        assert not claims.search(card_alt(card)), entry["file"]
 
 
 def test_rev3_fields_are_drawn_not_warned_about():

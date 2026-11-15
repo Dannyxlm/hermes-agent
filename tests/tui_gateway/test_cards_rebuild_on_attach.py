@@ -67,7 +67,7 @@ def _advertise(monkeypatch, peer, cards):
     assert "error" not in reply, reply
 
 
-def _admit_turn(monkeypatch, session):
+def _admit_turn(monkeypatch, session, one_turn_restore=None):
     """Turn admission up to (and including) every turn-start sync; stop before history is snapshotted."""
     monkeypatch.setattr(server, "_profile_runtime_scope_tokens", lambda profile_home, **_kw: None)
     monkeypatch.setattr(server, "_wire_callbacks", lambda sid: None)
@@ -79,7 +79,7 @@ def _admit_turn(monkeypatch, session):
         raise _Admitted()
 
     monkeypatch.setattr(server, "_adopt_out_of_band_turns", stop)
-    st = server._TurnRun(agent=None, one_turn_restore=None, terminal_callback=None, receipt_committed=False)
+    st = server._TurnRun(agent=None, one_turn_restore=one_turn_restore, terminal_callback=None, receipt_committed=False)
     try:
         with pytest.raises(_Admitted):
             server._prepare_turn_input(SID, session, st, "hello", [])
@@ -165,3 +165,37 @@ def test_a_failed_rebuild_keeps_the_turn_and_is_not_retried_every_turn(monkeypat
     monkeypatch.setattr(server, "_make_agent", broken)
     assert _admit_turn(monkeypatch, session) is before  # this turn runs on the agent it had
     assert _admit_turn(monkeypatch, session) is before and builds == ["broken"]
+
+
+def test_the_rebuild_keeps_the_chats_live_settings(monkeypatch, home):
+    """Review finding 2: a resumed chat's stored effort and tier ride ``resume_runtime_overrides``, not
+    the session pins, and the memory-review callback is wired after a build, not by it."""
+    session, peer, builds = home
+    stored = {"reasoning_config_override": {"enabled": True, "effort": "high"}, "service_tier_override": "priority"}
+    session["resume_runtime_overrides"] = stored
+    before = server._make_agent(SID, "home-key", session_id="home-key", platform_override="desktop", **stored)
+    before._session_title_hint = "Bot Chat"
+    session["agent"] = before
+    server._wire_session_agent(SID, "home-key", before)
+    builds.clear()
+
+    def live(agent):
+        return {"review_cb": agent.background_review_callback is not None, "notifications": agent.memory_notifications,
+                "reasoning": agent.reasoning_config, "tier": agent.service_tier, "model": agent.model}
+
+    seen = live(before)
+    assert seen["review_cb"] and seen["reasoning"] == {"enabled": True, "effort": "high"} and seen["tier"] == "priority"
+    _advertise(monkeypatch, peer, {"v": 1, "kinds": KINDS})
+    after = _admit_turn(monkeypatch, session)
+    assert after is not before and _has_cards(after) and len(builds) == 1
+    assert live(after) == seen
+
+
+def test_a_model_once_turn_keeps_its_agent_and_cards_come_the_turn_after(monkeypatch, home):
+    """Review note 10: a ``/model --once`` turn runs on its one-turn agent; rebuilding it would drop the
+    once-model. The card rebuild waits for the next ordinary turn."""
+    session, peer, builds = home
+    _advertise(monkeypatch, peer, {"v": 1, "kinds": KINDS})
+    once = session["agent"]
+    assert _admit_turn(monkeypatch, session, one_turn_restore={"model": "the-usual"}) is once and not builds
+    assert _has_cards(_admit_turn(monkeypatch, session)) and len(builds) == 1

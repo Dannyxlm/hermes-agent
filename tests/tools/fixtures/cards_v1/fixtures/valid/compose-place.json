@@ -1,7 +1,7 @@
 {
  "kind": "compose",
  "title": "Dinner Friday",
- "alt": "Dinner Friday 19:30 at Joe Beef, 2491 Rue Notre-Dame O. Table for four, booked.",
+ "alt": "Dinner Friday 19:30 at Joe Beef, 2491 Rue Notre-Dame O. A table for four.",
  "data": {
   "hero": {
    "type": "map",
@@ -23,7 +23,7 @@
      },
      {
       "label": "Table",
-      "value": "Four, booked",
+      "value": "Four people",
       "glyph": "fork.knife",
       "tone": "good"
      }

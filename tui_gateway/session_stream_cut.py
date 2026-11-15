@@ -16,7 +16,6 @@ MAX_PARTS = 200
 MAX_PART_TEXT_BYTES = 64 * 1024
 MAX_PARTS_BYTES = 512 * 1024
 MAX_DISPLAY_BYTES = 4096
-MAX_CARD_BYTES = 16 * 1024  # tools/cards/validate.py: a show_card part carries its card whole
 
 
 def _tail(text, limit):
@@ -29,7 +28,12 @@ def _carry_card(part, payload):
     card = payload.get("args")
     if part["name"] != "show_card" or "card" in part or not isinstance(card, dict):
         return
-    if len(json.dumps(card, ensure_ascii=False).encode("utf-8")) <= MAX_CARD_BYTES:
+    from tools.cards.validate import MAX_CARD_BYTES, card_bytes  # measured as the validator measures it
+    try:
+        fits = len(card_bytes(card)) <= MAX_CARD_BYTES
+    except ValueError:  # tool.start precedes validation: a NaN card is refused, never carried
+        return
+    if fits:
         part["card"] = copy.deepcopy(card)
 
 

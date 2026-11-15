@@ -428,7 +428,8 @@ def _toolset_ceiling(caller: Caller, profile: str):
     if set(_get_platform_tools(_config(), "cli")) <= caller.toolsets | {"threads"}:
         return None
     # A client adds its own surface toolsets (desktop_ui, ...) to its sessions; create refuses them elsewhere.
-    return sorted(caller.toolsets - {"threads"} - CLIENT_SURFACE_TOOLSETS)
+    # ``cards`` is the parent's attached app drawing them, never the thread's (tui_gateway/cards_capability.py).
+    return sorted(caller.toolsets - {"threads", "cards"} - CLIENT_SURFACE_TOOLSETS)
 
 
 @contextlib.contextmanager

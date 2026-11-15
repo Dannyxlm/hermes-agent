@@ -1,0 +1,27 @@
+{
+ "v": 1,
+ "kind": "place",
+ "variant": "hero",
+ "title": "CaféOlimpico",
+ "source": {
+  "label": "Apple Maps",
+  "origin": "tool"
+ },
+ "note": "Ten minutes' walk from the hotel.",
+ "data": {
+  "name": "Café Olimpico",
+  "lat": 45.5228,
+  "lon": -73.6003,
+  "address": "124 Rue Saint-Viateur O, Montréal",
+  "detail": "Open until 23:00"
+ },
+ "actions": [
+  {
+   "type": "open_in_maps"
+  },
+  {
+   "type": "ask",
+   "text": "Anything quieter nearby?"
+  }
+ ]
+}

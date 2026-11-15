@@ -49,14 +49,18 @@ def with_cards_toolset(selection: list[str] | None, session: dict | None) -> lis
     """*selection* plus ``cards`` for a session a card-drawing client is attached to.
 
     ``None`` (every toolset) never includes a platform-gated toolset such as ``cards``, so it is
-    spelled out first; ``cards.enabled`` still gates the tool itself through its ``check_fn``."""
-    return _plus_cards(selection) if session_draws_cards(session) else selection
+    spelled out first. ``cards.enabled`` decides here, not only in the tool's ``check_fn``: a
+    session's tool pin carries a pinned tool forward whenever the selection names its toolset,
+    before ``check_fn`` is asked, so the flag must keep ``cards`` out of the selection to be an
+    off switch for a chat that already showed one."""
+    return _plus_cards(selection) if session_draws_cards(session) and offered_version() else selection
 
 
 def carry_cards_toolset(selection: list[str] | None, agent: Any) -> list[str] | None:
     """A tool refresh keeps the ``cards`` toolset the agent was built with (the tool array is part of
-    the cached prefix; who is attached now does not change it)."""
-    return _plus_cards(selection) if "cards" in (getattr(agent, "enabled_toolsets", None) or ()) else selection
+    the cached prefix; who is attached now does not change it), while ``cards.enabled`` is on."""
+    built_with = "cards" in (getattr(agent, "enabled_toolsets", None) or ())
+    return _plus_cards(selection) if built_with and offered_version() else selection
 
 
 def offered_version() -> int:
@@ -87,10 +91,11 @@ def sync_cards_toolset(sid: str, session: dict) -> bool:
     try:
         tokens = server._set_session_context(sid, cwd=server._session_cwd(session))
         try:
-            new_agent = server._rebuild_session_agent(sid, session, session_id=session["session_key"],
+            new_agent = server._rebuild_session_agent(sid, session, **_live_settings(agent), session_id=session["session_key"],
                                                       platform_override=server._session_source(session))
         finally:
             server._clear_session_context(tokens)
+        server._wire_session_agent(sid, session["session_key"], new_agent)  # memory-review summary, approvals
     except Exception:  # health: allow BLE001 -- the turn runs on the agent it has; cards wait for the next build
         logger.warning("cards toolset sync failed for %s", sid, exc_info=True)
         return False
@@ -98,3 +103,13 @@ def sync_cards_toolset(sid: str, session: dict) -> bool:
         new_agent._session_title_hint = agent._session_title_hint  # Bot Chat identity rides the prompt
     session["cards_synced_agent"] = id(new_agent)
     return True
+
+
+def _live_settings(agent: Any) -> dict:
+    """What the chat runs with now that a rebuild from config would lose: a resumed chat's stored
+    reasoning effort and service tier arrive through ``resume_runtime_overrides``, not the session
+    pins ``_rebuild_session_agent`` carries. ``""`` is "no tier", distinct from "read config"."""
+    kept = {"service_tier_override": getattr(agent, "service_tier", None) or ""}
+    if getattr(agent, "reasoning_config", None) is not None:
+        kept["reasoning_config_override"] = agent.reasoning_config
+    return kept

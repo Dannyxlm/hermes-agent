@@ -54,7 +54,7 @@ def test_only_this_turns_accepted_cards_speak():
     old = _turn(ROUTE)
     new = [{"role": "user", "content": "and the loft?"}, *_turn(LINK, refused=[{"kind": "route", "title": "bad"}])]
     result = {"messages": [*old, *new], "history_offset": len(old)}
-    assert [card["card_id"] for card in turn_cards(result["messages"])] == ["call-0", "call-0"]
+    assert [card["card_id"] for card in turn_cards(result["messages"][len(old):])] == ["call-0"]
     assert turn_card_text(result, old) == "Loft near the canal\nEntire loft, 2 guests\nhttps://www.airbnb.com/rooms/000000?check_in=2027-01-14"
     assert turn_card_text({"messages": _turn(ROUTE, LINK)}, []) == ROUTE_ALT + "\n\n" + cards_text([{"alt": LINK["alt"]}])
     assert turn_card_text({"messages": [{"role": "assistant", "content": REPLY}]}, []) == ""
@@ -63,6 +63,10 @@ def test_only_this_turns_accepted_cards_speak():
 @pytest.mark.asyncio
 async def test_real_card_turn_reaches_a_messaging_chat_as_words(monkeypatch, tmp_path, real_loop):
     (tmp_path / "config.yaml").write_text(yaml.safe_dump({"display": {"tool_progress": "off"}, "cards": {"enabled": True}}))
+    from hermes_constants import get_hermes_home
+    from tools.registry import invalidate_check_fn_cache
+    (get_hermes_home() / "config.yaml").write_text(yaml.safe_dump({"cards": {"enabled": True}}))  # the handler's gate
+    invalidate_check_fn_cache()
     agent = real_loop.agent
     agent.valid_tool_names.add("show_card")
     agent.tools.append({"type": "function", "function": SHOW_CARD_SCHEMA})
@@ -156,3 +160,72 @@ def test_telegram_renders_the_same_words_with_links_intact():
     rendered = re.sub(r"\\(.)", r"\1", to_markdown_v2(text))  # what Telegram shows after MarkdownV2 escapes
     assert MAPS in rendered and "https://www.airbnb.com/rooms/000000?check_in=2027-01-14" in rendered
     assert "YUL → Hôtel William Gray" in rendered and '{"' not in rendered
+
+
+def _rows(n, start=0):
+    """n accepted cards, ids call-{start}…, each its own little turn after a user row."""
+    rows = []
+    for i in range(start, start + n):
+        card = {**LINK, "title": f"Card {i}", "alt": f"Card {i}"}
+        rows += [{"role": "user", "content": f"q{i}"},
+                 {"role": "assistant", "content": "", "tool_calls": [{"id": f"call-{i}", "type": "function", "function": {
+                     "name": "show_card", "arguments": json.dumps(card)}}]},
+                 {"role": "tool", "tool_call_id": f"call-{i}", "content": json.dumps({"ok": True, "alt": card["alt"]})},
+                 {"role": "assistant", "content": "ok"}]
+    return rows
+
+
+@pytest.mark.parametrize("offset", [0, 999, None, "3"])
+def test_a_compacted_turn_speaks_only_its_own_cards(offset):
+    """Review 4b: after a mid-turn compaction the gateway reports history_offset 0 (or an offset that no
+    longer fits); the turn is then the messages from its last user row on."""
+    messages = _rows(7) + _rows(1, start=7)
+    result = {"messages": messages, **({"history_offset": offset} if offset is not None else {})}
+    assert turn_card_text(result, history=[{}] * 999 if offset is None else []) == "Card 7"
+
+
+def test_the_same_call_id_twice_counts_once():
+    rows = _rows(1) + _rows(1)
+    rows[-2]["content"] = json.dumps({"ok": True, "alt": "a different receipt"})
+    assert [c["alt"] for c in turn_cards(rows)] == ["Card 0"]
+
+
+@pytest.mark.parametrize("messages", [
+    [{"role": "assistant", "tool_calls": ["show_card", None, 3]}],
+    [{"role": "assistant", "tool_calls": "show_card"}],
+    [{"role": "assistant", "tool_calls": [{"id": "x", "function": "show_card"}]}, {"role": "tool", "tool_call_id": "x"}],
+    [None, "user", {"role": "tool", "tool_call_id": ["x"], "content": {"ok": True}}],
+])
+def test_odd_shapes_never_raise_into_a_reply(messages):
+    assert turn_card_text({"messages": messages, "history_offset": 0}, []) == ""
+
+
+def test_trailing_lines_survive_a_card_words_failure(monkeypatch):
+    from gateway.run_turn_persistence import GatewayTurnPersistenceMixin
+    from tools.cards import fallback
+
+    def broken(*_a):
+        raise RuntimeError("card words broke")
+
+    monkeypatch.setattr(fallback, "turn_card_text", broken)
+    runner = SimpleNamespace(_hmwa_runtime_footer_line=lambda *a: "— model · 3s")
+    assert GatewayTurnPersistenceMixin._hmwa_trailing_lines(
+        runner, {"messages": _turn(ROUTE)}, [], SimpleNamespace(platform=Platform.TELEGRAM), 3.0, False) == "— model · 3s"
+
+
+def test_card_words_never_become_an_attachment():
+    """Review 4a. Joined fields can form a directive the validator never saw in one field (a route titled
+    MEDIA whose first stop is named like a file), and an old receipt can carry one: the gateway's real
+    ``extract_media`` must find nothing in what the fallback sends."""
+    from gateway.platforms.base import BasePlatformAdapter
+    from tools.cards.alt import card_alt
+    from tools.cards.validate import validate_card
+    leak = "/synthetic/cards/lease-renewal.pdf"  # extract_media takes a path whether or not it exists
+    joined = {"kind": "route", "title": "MEDIA", "data": {"mode": "flight", "stops": [
+        {"name": leak, "lat": 45.5, "lon": -73.6}, {"name": "B", "lat": 45.6, "lon": -73.5}]}}
+    assert validate_card(joined) == []
+    assert BasePlatformAdapter.extract_media(f"MEDIA: {leak}")[0], "the gateway does attach a bare directive"
+    old_receipt = {"alt": f"Re: lease MEDIA:{leak} [[as_document]]"}
+    text = REPLY + "\n\n" + cards_text([{"alt": card_alt(joined)}, old_receipt])
+    media, cleaned = BasePlatformAdapter.extract_media(text)
+    assert media == [] and "lease-renewal.pdf" in cleaned

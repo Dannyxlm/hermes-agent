@@ -6,6 +6,7 @@ arguments, so every reader can draw those arguments as they are.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import math
 import re
@@ -21,8 +22,14 @@ MAX_DEPTH = 12
 MAX_CHART_VALUES = 400
 MAX_ERRORS = 8
 _BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
-_CONTROL_ONE_LINE = re.compile("[\u0000-\u001f\u007f]")
-_CONTROL_MULTILINE = re.compile("[\u0000-\u0009\u000b-\u001f\u007f]")
+_SURROGATE = re.compile("[\ud800-\udfff]")
+# What the messaging gateway would turn into an attachment or a delivery mode (gateway/platforms/base.py
+# ``extract_media``): a card shows, it never attaches. Matched case-insensitively, anywhere, as the gateway does.
+_DELIVERY_DIRECTIVE = re.compile(r"MEDIA:|\[\[(?:audio_as_voice|as_document)\]\]", re.IGNORECASE)
+# C0, DEL, C1 (U+0085 NEL, U+009B CSI) and the Unicode line/paragraph separators, which break a line
+# in SwiftUI text; a multi-line field keeps only \n.
+_CONTROL_ONE_LINE = re.compile("[\u0000-\u001f\u007f-\u009f\u2028\u2029]")
+_CONTROL_MULTILINE = re.compile("[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]")
 _ENVELOPE_KEYS = frozenset({"v", "kind", "variant", "title", "source", "note", "alt", "data", "actions"})
 _FILE_ACTION_KINDS = frozenset({"document"})
 _MAP_ACTIONS = frozenset({"directions", "open_in_maps"})
@@ -112,7 +119,7 @@ def _pattern_hint(error) -> str:
         return "must be an https:// link without user info or spaces"
     if pattern.startswith("^/"):
         return "must be an absolute path on this server without '..'"
-    if pattern.startswith("^\\d{4}"):
+    if pattern.startswith("^[0-9]{4}"):
         return "must be ISO 8601 with an offset, e.g. 2027-01-14T17:55:00-05:00"
     if pattern.startswith("^[A-Z]{3}"):
         return "must be a three-letter currency code, e.g. CAD"
@@ -183,7 +190,12 @@ def _text_problems(card: dict) -> list[CardProblem]:
             problems.append(CardProblem(_path(path), "must be a finite number"))
         elif isinstance(value, str):
             multiline = _multiline(path)
-            if _BIDI.search(value):
+            if _SURROGATE.search(value):
+                problems.append(CardProblem(_path(path), "contains an unpaired surrogate (not valid UTF-8 text)"))
+            elif _DELIVERY_DIRECTIVE.search(value):
+                problems.append(CardProblem(_path(path), "contains a MEDIA: or [[…]] delivery directive; a card "
+                                                         "attaches nothing, so write the words another way"))
+            elif _BIDI.search(value):
                 problems.append(CardProblem(_path(path), "contains bidi control characters"))
             elif (_CONTROL_MULTILINE if multiline else _CONTROL_ONE_LINE).search(value):
                 problems.append(CardProblem(_path(path), "contains control characters"
@@ -193,10 +205,30 @@ def _text_problems(card: dict) -> list[CardProblem]:
 
 def _semantic_problems(card: dict) -> list[CardProblem]:
     kind, data = card.get("kind"), card.get("data") if isinstance(card.get("data"), dict) else {}
-    problems = _KIND_RULES.get(kind or "", lambda _data: [])(data)
+    problems = [CardProblem(key, "is blank; write the words or leave it out" if key == "alt" else "is blank")
+                for key in ("title", "alt") if isinstance(card.get(key), str) and not card[key].strip()]
+    problems += _KIND_RULES.get(kind or "", lambda _data: [])(data)
     for path, chart in _charts(kind, data):
         problems += _chart_problems(path, chart)
     problems += _action_problems(card, kind, data)
+    problems += _calendar_problems(card)
+    return problems
+
+
+def _calendar_problems(card: dict) -> list[CardProblem]:
+    """The schema checks an add_to_calendar time's shape; this checks it is a real moment."""
+    problems = []
+    for index, action in enumerate(card.get("actions") if isinstance(card.get("actions"), list) else []):
+        if not (isinstance(action, dict) and action.get("type") == "add_to_calendar"):
+            continue
+        for key in ("start", "end"):
+            value = action.get(key)
+            if not isinstance(value, str):
+                continue
+            try:
+                _dt.datetime.fromisoformat(value)
+            except ValueError:
+                problems.append(CardProblem(f"actions[{index}].{key}", f"{_short(value)} is not a real date and time"))
     return problems
 
 
@@ -227,12 +259,12 @@ def _document_problems(data: dict) -> list[CardProblem]:
     if "quote" in data and "quotes" in data:
         return [CardProblem("data", "takes quotes or quote, not both")]
     pages = data.get("pages")
-    if not isinstance(pages, int):
-        return []
+    if not isinstance(pages, (int, float)) or isinstance(pages, bool) or pages != int(pages):
+        return []  # 3.0 is an integer to the schema, so it counts here too
     cited = [("data.page", data.get("page"))] + [(f"data.quotes[{index}].page", entry.get("page"))
                                                  for index, entry in enumerate(data.get("quotes") or [])]
-    return [CardProblem(path, f"is page {page}; the document has {pages}")
-            for path, page in cited if isinstance(page, int) and page > pages]
+    return [CardProblem(path, f"is page {page:g}; the document has {pages:g}")
+            for path, page in cited if isinstance(page, (int, float)) and not isinstance(page, bool) and page > pages]
 
 
 _KIND_RULES: dict[str, Callable[[dict], list[CardProblem]]] = {
@@ -323,10 +355,10 @@ def card_files(card: dict) -> list[tuple[str, str]]:
 def server_file_problem(path: str) -> Optional[str]:
     """Why the app could not fetch *path* from this server, or None when it can."""
     from agent.file_safety import get_read_block_error
+    from tools.file_tools import _is_blocked_device
     target = Path(path)
-    blocked = get_read_block_error(path)
-    if blocked:
-        return "is not readable through Hermes (credential or internal path)"
+    if get_read_block_error(path) or _is_blocked_device(path):  # read_file's two guards, in its order
+        return "is not readable through Hermes (credential, device or process path)"
     try:
         if not target.is_file():
             return "does not exist on this server" if not target.exists() else "is not a regular file"

@@ -1,16 +1,25 @@
 """Plain words for a card: what every surface that cannot draw it shows instead.
 
 Derived only from an accepted card, so every field is already typed and bounded. The words carry
-links (Apple Maps, the page) but never ``MEDIA:`` lines: a reader that falls back to ``alt`` draws it
-as text, and a card's files stay on the server (the messaging fallback sends words only).
+links (Apple Maps, the page) but never a ``MEDIA:`` directive (``defang``): a reader that falls back to
+``alt`` draws it as text, and a card's files stay on the server (the messaging fallback sends words only).
 """
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 MAX_ALT = 1200
+# The validator refuses these in any field, but derived words join fields ("MEDIA" + ": " + a stop name),
+# so the words are defanged once more on the way out: a colon after MEDIA never stays touching it.
+_DIRECTIVE = re.compile(r"(MEDIA)(:)|\[\[(audio_as_voice|as_document)\]\]", re.IGNORECASE)
+
+
+def defang(text: str) -> str:
+    """*text* with no ``MEDIA:`` attachment or ``[[…]]`` delivery directive left for a gateway to obey."""
+    return _DIRECTIVE.sub(lambda m: f"{m.group(1)} :" if m.group(1) else f"[{m.group(3)}]", text)
 _CURRENCY_SIGNS = {"CAD": "$", "USD": "US$", "EUR": "€", "GBP": "£", "AUD": "A$", "JPY": "¥", "RWF": "RF "}
 _MAPS_FLAG = {"drive": "d", "walk": "w", "transit": "r"}
 _CONDITION_WORDS = {"partly_cloudy": "partly cloudy"}
@@ -224,7 +233,7 @@ def _bounded(text: str) -> str:
 def card_alt(card: dict) -> str:
     """The card's own ``alt`` when it has one, else words derived from its data (compose always has
     its own: the schema requires it)."""
-    if card.get("alt"):
-        return card["alt"]
+    if isinstance(card.get("alt"), str) and card["alt"].strip():
+        return defang(card["alt"])
     builder = _BUILDERS.get(card.get("kind") or "")
-    return _bounded(builder(card)) if builder else card.get("title", "")
+    return defang(_bounded(builder(card)) if builder else card.get("title", ""))

@@ -263,8 +263,13 @@ class GatewayTurnPersistenceMixin:
         """What follows the reply on a messaging surface: each Paper card's plain words (``alt``, one
         paragraph per card, links intact; the app draws the card itself, local viewers read the tool
         call) and then the runtime footer. Streamed turns send it as one trailing message."""
-        from tools.cards.fallback import turn_card_text
-        cards = "" if _intentional_silence or source.platform == Platform.LOCAL else turn_card_text(agent_result, history)
+        cards = ""
+        if not _intentional_silence and source.platform != Platform.LOCAL:
+            try:  # every Telegram/iMessage reply passes here; card words are optional, the reply is not
+                from tools.cards.fallback import turn_card_text
+                cards = turn_card_text(agent_result, history)
+            except Exception as _cards_err:  # health: allow BLE001 -- never replace a reply with an error
+                logger.debug("card words skipped: %s", _cards_err, exc_info=True)
         footer = self._hmwa_runtime_footer_line(agent_result, source, _turn_seconds)
         return "\n\n".join(part for part in (cards, footer) if part)
 
