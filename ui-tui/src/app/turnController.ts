@@ -9,6 +9,7 @@ import {
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
 import { t } from '../i18n/runtime.js'
+import { acceptedCardAlt } from '../lib/cardWords.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
@@ -623,6 +624,29 @@ class TurnController {
       ...this.segmentMessages,
       { kind: 'diff', role: 'assistant', text: block, ...(tools.length && { tools }) }
     ]
+    patchTurnState({ streamSegments: this.segmentMessages })
+  }
+
+  // What a finished tool leaves in the turn under its trail line: a Paper card's words, a picture.
+  pushToolOutputSegments(payload: { image_path?: null | string; name: string; result?: unknown; tool_id: string }) {
+    if (payload.name === 'show_card') {
+      this.pushCardTextSegment(acceptedCardAlt(payload.result))
+    }
+
+    this.pushImageSegment(payload.image_path, payload.tool_id)
+  }
+
+  // A Paper card's words (its receipt's `alt`) at the card's place in the turn: the TUI draws no
+  // card, and the server adds the words only for messaging chats (tools/cards/fallback.py).
+  pushCardTextSegment(alt?: null | string) {
+    const text = alt?.trim()
+
+    if (!text || this.interrupted) {
+      return
+    }
+
+    this.flushStreamingSegment()
+    this.segmentMessages = [...this.segmentMessages, { role: 'assistant', text }]
     patchTurnState({ streamSegments: this.segmentMessages })
   }
 

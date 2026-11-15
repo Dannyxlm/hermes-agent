@@ -1,0 +1,73 @@
+{
+ "v": 1,
+ "kind": "flight",
+ "variant": "hero",
+ "title": "Montréal to Kigali",
+ "source": {
+  "label": "KLM · Thu Jan 14",
+  "origin": "tool"
+ },
+ "note": "Leaves after work Thursday, lands Friday evening. 18 h 55 door to door.",
+ "data": {
+  "airline": "KLM",
+  "total": "18 h 55",
+  "price": "$1,482",
+  "priceNote": "held to Friday",
+  "leave": {
+   "label": "Leave home",
+   "detail": "25 min to YUL by taxi"
+  },
+  "connectionCode": "AMS",
+  "connection": "3 h 45 in Amsterdam · same terminal",
+  "legs": [
+   {
+    "number": "KL 672",
+    "from": "YUL",
+    "fromName": "Montréal",
+    "to": "AMS",
+    "toName": "Amsterdam",
+    "departure": "17:55",
+    "arrival": "06:40",
+    "dayOffset": 1,
+    "duration": "6 h 45",
+    "date": "Thu Jan 14",
+    "detail": "seat 23A, window",
+    "fromLat": 45.4706,
+    "fromLon": -73.7408,
+    "toLat": 52.3105,
+    "toLon": 4.7683
+   },
+   {
+    "number": "KL 535",
+    "from": "AMS",
+    "fromName": "Amsterdam",
+    "to": "KGL",
+    "toName": "Kigali",
+    "departure": "10:25",
+    "arrival": "19:50",
+    "dayOffset": 0,
+    "duration": "8 h 25",
+    "date": "Fri Jan 15",
+    "detail": "seat 31K, window",
+    "arrivalDetail": "Visa on arrival. 24° and dry.",
+    "fromLat": 52.3105,
+    "fromLon": 4.7683,
+    "toLat": -1.9686,
+    "toLon": 30.1395
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "add_to_calendar",
+   "title": "KL 672 to Amsterdam",
+   "start": "2027-01-14T17:55:00-05:00",
+   "end": "2027-01-15T06:40:00+01:00",
+   "location": "YUL"
+  },
+  {
+   "type": "ask",
+   "text": "Show me the other fares"
+  }
+ ]
+}

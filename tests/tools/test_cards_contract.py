@@ -100,7 +100,42 @@ ALT = {
     "compose-place": "Dinner Friday 19:30 at Joe Beef, 2491 Rue Notre-Dame O. Table for four, booked.",
     "open-extra-fields": "Open fields stay raw: YUL · Montréal airport → Hôtel William Gray, 24 min by car, 21 km.\n"
                          "https://maps.apple.com/?saddr=45.4577,-73.7499&daddr=45.5075,-73.554&dirflg=d",
+    "flight-stage": "Montréal to Kigali\nKLM · 18 h 55 · $1,482 (held to Friday)\nLeave home 15:10: 25 min to YUL by taxi\n"
+                    "KL 672 Montréal (YUL) 17:55 → Amsterdam (AMS) 06:40 (+1), Thu Jan 14, 6 h 45, seat 23A, window\n"
+                    "KL 535 Amsterdam (AMS) 10:25 → Kigali (KGL) 19:50, Fri Jan 15, 8 h 25, seat 31K, window\n"
+                    "Kigali: Visa on arrival. 24° and dry.\nConnection: 3 h 45 in Amsterdam · same terminal",
+    "document-quotes": "Lease renewal, 4127 Saint-Denis · 12 pages\nRent: $2,236 a month (page 2)\n"
+                       "Term: Jul 1, 2027 to Jun 30, 2028 (page 1)\nSay no by: March 31 (page 7)",
+    "route-stop-detail": "Walk to Olimpico: Home → Café Olimpico, 31 min walk, 2.2 km.\n"
+                         "Café Olimpico: 124 Rue Saint-Viateur O · open till midnight\n"
+                         "https://maps.apple.com/?saddr=45.5191,-73.5836&daddr=45.5228,-73.6003&dirflg=w",
+    "chart-caption": "Card spending: $3,412 this month — 11% over your average.\nSpent: 2,890 (Jun) → 3,412 (Nov)",
 }
+
+# Contract rev 3: each new field's refusal names the field to repair, once.
+REV3_REFUSALS = {
+    "document-four-quotes": ("data.quotes", "has 4 items; at most 3"),
+    "document-quote-no-page": ("data.quotes[0]", "needs 'page'"),
+    "document-quote-and-quotes": ("data", "takes quotes or quote, not both"),
+    "document-quote-past-last-page": ("data.quotes[2].page", "is page 14; the document has 12"),
+    "flight-half-coordinate": ("data.legs[0]", "needs both toLat and toLon, or neither"),
+    "flight-city-too-long": ("data.legs[1].toName", "is 45 characters; at most 40"),
+    "flight-leave-no-time": ("data.leave", "needs 'time'"),
+    "chart-caption-too-long": ("data.caption", "is 124 characters; at most 120"),
+    "route-stop-detail-two-lines": ("data.stops[1].detail", "contains control characters (it is one line)"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(REV3_REFUSALS))
+def test_rev3_refusals_name_the_field(name):
+    problems = validate_card(_load({"file": f"fixtures/hostile/{name}.json"}), file_problem=_synthetic_files)
+    assert [(p.path, p.message) for p in problems] == [REV3_REFUSALS[name]]
+
+
+def test_rev3_fields_are_drawn_not_warned_about():
+    from tools.cards.validate import unknown_field_warnings
+    for name in ("flight-stage", "document-quotes", "route-stop-detail", "chart-caption"):
+        assert unknown_field_warnings(_load({"file": f"fixtures/valid/{name}.json"})) == [], name
 
 
 @pytest.mark.parametrize("entry", [e for e in MANIFEST if e["expect"] == "accept"], ids=lambda e: e["file"])

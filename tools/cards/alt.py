@@ -2,7 +2,7 @@
 
 Derived only from an accepted card, so every field is already typed and bounded. The words carry
 links (Apple Maps, the page) but never ``MEDIA:`` lines: a reader that falls back to ``alt`` draws it
-as text, and the messaging fallback attaches the card's files itself (``fallback.py``).
+as text, and a card's files stay on the server (the messaging fallback sends words only).
 """
 from __future__ import annotations
 
@@ -76,16 +76,36 @@ def _table(card: dict) -> str:
     return _lines(card["title"], body)
 
 
+def _airport(code: str, name: Optional[str]) -> str:
+    return f"{name} ({code})" if name else code
+
+
+def _flight_summary(data: dict) -> Optional[str]:
+    price = data.get("price")
+    if price and data.get("priceNote"):
+        price += f" ({data['priceNote']})"
+    return " · ".join(part for part in (data.get("airline"), data.get("total"), price) if part) or None
+
+
+def _flight_leave(data: dict) -> Optional[str]:
+    leave = data.get("leave")
+    if not leave:
+        return None
+    return f"{leave.get('label') or 'Leave'} {leave['time']}" + (f": {leave['detail']}" if leave.get("detail") else "")
+
+
 def _flight(card: dict) -> str:
     data = card["data"]
-    body = []
+    body = [_flight_summary(data), _flight_leave(data)]
     for leg in data["legs"]:
         day = leg.get("dayOffset") or 0
         arrival = leg["arrival"] + (f" (+{day})" if day > 0 else f" ({day})" if day < 0 else "")
-        parts = [leg.get("number"), f"{leg['from']} {leg['departure']} → {leg['to']} {arrival}"]
-        line = " ".join(part for part in parts if part)
-        extras = [part for part in (leg.get("date"), leg.get("duration")) if part]
+        route = f"{_airport(leg['from'], leg.get('fromName'))} {leg['departure']} → {_airport(leg['to'], leg.get('toName'))} {arrival}"
+        line = " ".join(part for part in (leg.get("number"), route) if part)
+        extras = [part for part in (leg.get("date"), leg.get("duration"), leg.get("detail")) if part]
         body.append(line + (f", {', '.join(extras)}" if extras else ""))
+        if leg.get("arrivalDetail"):
+            body.append(f"{leg.get('toName') or leg['to']}: {leg['arrivalDetail']}")
     if data.get("connection"):
         body.append(f"Connection: {data['connection']}")
     return _lines(card["title"], body)
@@ -104,8 +124,10 @@ def _route(card: dict) -> str:
     mode = data.get("mode") or "drive"
     line = " → ".join(stop["name"] for stop in data["stops"])
     facts = [fact for fact in (data.get("duration"), data.get("distance")) if fact]
+    about = [f"{stop['name']}: " + " · ".join(part for part in (stop.get("address"), stop.get("detail")) if part)
+             for stop in data["stops"] if stop.get("address") or stop.get("detail")]
     return _lines(f"{card['title']}: {line}" + (f", {', '.join(facts)}" if facts else "") + ".",
-                  [_maps_route(data["stops"], mode)])
+                  [*about, _maps_route(data["stops"], mode)])
 
 
 def _maps_place(place: dict) -> str:
@@ -153,7 +175,8 @@ def _chart_summary(chart: dict) -> list[str]:
 def _chart(card: dict) -> str:
     data = card["data"]
     head = card["title"]
-    lead = " — ".join(part for part in (data.get("headline"), data.get("comparison")) if part)
+    headline = " ".join(part for part in (data.get("headline"), data.get("caption")) if part)
+    lead = " — ".join(part for part in (headline, data.get("comparison")) if part)
     return _lines(f"{head}: {lead}." if lead else head, _chart_summary(data))
 
 
@@ -161,10 +184,10 @@ def _document(card: dict) -> str:
     data = card["data"]
     pages = data.get("pages")
     head = card["title"] + (f" · {pages} page{'s' if pages != 1 else ''}" if pages else "")
-    quote_line = None
-    if data.get("quote"):
-        quote_line = f"“{data['quote']}”" + (f" (page {data['page']})" if data.get("page") else "")
-    return _lines(head, [quote_line])
+    quotes = data.get("quotes") or ([{"text": data["quote"], "page": data.get("page")}] if data.get("quote") else [])
+    lines = [(f"{entry['label']}: {entry['text']}" if entry.get("label") else f"“{entry['text']}”")
+             + (f" (page {entry['page']})" if entry.get("page") else "") for entry in quotes]
+    return _lines(head, lines)
 
 
 def _link(card: dict) -> str:

@@ -1,0 +1,38 @@
+{
+ "v": 1,
+ "kind": "chart",
+ "variant": "hero",
+ "title": "Card spending",
+ "source": {
+  "label": "6 months",
+  "origin": "tool"
+ },
+ "data": {
+  "type": "bar",
+  "headline": "$3,412",
+  "caption": "this month",
+  "comparison": "11% over your average",
+  "tone": "caution",
+  "x": [
+   "Jun",
+   "Jul",
+   "Aug",
+   "Sep",
+   "Oct",
+   "Nov"
+  ],
+  "series": [
+   {
+    "name": "Spent",
+    "values": [
+     2890,
+     3120,
+     2740,
+     3350,
+     3010,
+     3412
+    ]
+   }
+  ]
+ }
+}

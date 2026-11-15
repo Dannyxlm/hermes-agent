@@ -31,14 +31,16 @@ _MAP_ACTIONS = frozenset({"directions", "open_in_maps"})
 KIND_SHAPES = {
     "table": '{"columns":[{"title","type?":"text|number|money|percent|date|delta|status","currency?"}] (1-12), '
              '"rows":[{"cells":[one per column],"secondary?","badge?","tone?","highlight?"}] (≤60), "totals?","count?","file?"}',
-    "flight": '{"legs":[{"number?","from","to","departure","arrival","dayOffset?","duration?","date?"}] (1-6), '
-              '"connection?","connectionCode?"}',
-    "route": '{"stops":[{"name","lat","lon"}] (2-12), "mode?":"drive|walk|transit|cycle|flight", "duration?","distance?"}',
+    "flight": '{"legs":[{"number?","from","to","departure","arrival","dayOffset?","duration?","date?","fromName?","toName?",'
+              '"detail?","arrivalDetail?","fromLat?","fromLon?","toLat?","toLon?"}] (1-6), "connection?","connectionCode?",'
+              '"airline?","total?","price?","priceNote?","leave?":{"time","label?","detail?"}}',
+    "route": '{"stops":[{"name","lat","lon","address?","detail?"}] (2-12), "mode?":"drive|walk|transit|cycle|flight", '
+             '"duration?","distance?"}',
     "place": '{"name","lat","lon","address?","detail?"}',
     "weather": '{"headline","condition?","comparison?","range?","chart?":<chart data>,"days?":[{"day","high?","low?","condition?"}]}',
-    "chart": '{"type?":"line|bar|area|point","headline?","comparison?","tone?","unit?","x":[labels],'
+    "chart": '{"type?":"line|bar|area|point","headline?","caption?","comparison?","tone?","unit?","x":[labels],'
              '"series":[{"name","values":[one per x]}] (1-6, ≤400 values in all),"reference?":{"value","label?"}}',
-    "document": '{"file":"/absolute/path","quote?","page?","pages?"}',
+    "document": '{"file":"/absolute/path","quotes?":[{"label?","text","page","tone?"}] (1-3) or "quote?","page?"; "pages?"}',
     "link": '{"url":"https://…","description?","image?":"/absolute/path"}',
     "gallery": '{"images":[{"file":"/absolute/path","caption?"}] (1-24)}',
     "compose": '{"hero?":{"type":"image","file"}|{"type":"map","route"|"place"}|{"type":"chart","chart"},'
@@ -165,13 +167,13 @@ def _too_deep(card: dict) -> Optional[CardProblem]:
 
 
 def _multiline(path: tuple) -> bool:
-    """The fields README rule 3 lets hold line breaks: alt, note, document.quote, link.description,
-    and the text of compose text and quote blocks."""
+    """The fields README rule 3 lets hold line breaks: alt, note, document.quote and quotes[].text,
+    link.description, and the text of compose text and quote blocks."""
     if len(path) == 1:
         return path[0] in ("alt", "note")
     if len(path) == 2 and path[0] == "data":
         return path[1] in ("quote", "description")
-    return len(path) == 4 and path[:2] == ("data", "blocks") and path[3] == "text"
+    return len(path) == 4 and path[0] == "data" and path[1] in ("blocks", "quotes") and path[3] == "text"
 
 
 def _text_problems(card: dict) -> list[CardProblem]:
@@ -190,21 +192,54 @@ def _text_problems(card: dict) -> list[CardProblem]:
 
 
 def _semantic_problems(card: dict) -> list[CardProblem]:
-    problems: list[CardProblem] = []
     kind, data = card.get("kind"), card.get("data") if isinstance(card.get("data"), dict) else {}
-    if kind == "table":
-        columns = len(data.get("columns") or [])
-        for index, row in enumerate(data.get("rows") or []):
-            cells = row.get("cells") if isinstance(row, dict) else None
-            if isinstance(cells, list) and len(cells) != columns:
-                problems.append(CardProblem(f"data.rows[{index}].cells", f"has {len(cells)} cells; the table has {columns} columns"))
-        totals = data.get("totals")
-        if isinstance(totals, list) and len(totals) != columns:
-            problems.append(CardProblem("data.totals", f"has {len(totals)} cells; the table has {columns} columns"))
+    problems = _KIND_RULES.get(kind or "", lambda _data: [])(data)
     for path, chart in _charts(kind, data):
         problems += _chart_problems(path, chart)
     problems += _action_problems(card, kind, data)
     return problems
+
+
+def _table_problems(data: dict) -> list[CardProblem]:
+    problems = []
+    columns = len(data.get("columns") or [])
+    for index, row in enumerate(data.get("rows") or []):
+        cells = row.get("cells") if isinstance(row, dict) else None
+        if isinstance(cells, list) and len(cells) != columns:
+            problems.append(CardProblem(f"data.rows[{index}].cells", f"has {len(cells)} cells; the table has {columns} columns"))
+    totals = data.get("totals")
+    if isinstance(totals, list) and len(totals) != columns:
+        problems.append(CardProblem("data.totals", f"has {len(totals)} cells; the table has {columns} columns"))
+    return problems
+
+
+def _flight_problems(data: dict) -> list[CardProblem]:
+    """A leg's arc end is a whole coordinate or nothing: half a point draws no arc."""
+    problems = []
+    for index, leg in enumerate(data.get("legs") or []):
+        for end in ("from", "to"):
+            if isinstance(leg, dict) and ((f"{end}Lat" in leg) != (f"{end}Lon" in leg)):
+                problems.append(CardProblem(f"data.legs[{index}]", f"needs both {end}Lat and {end}Lon, or neither"))
+    return problems
+
+
+def _document_problems(data: dict) -> list[CardProblem]:
+    if "quote" in data and "quotes" in data:
+        return [CardProblem("data", "takes quotes or quote, not both")]
+    pages = data.get("pages")
+    if not isinstance(pages, int):
+        return []
+    cited = [("data.page", data.get("page"))] + [(f"data.quotes[{index}].page", entry.get("page"))
+                                                 for index, entry in enumerate(data.get("quotes") or [])]
+    return [CardProblem(path, f"is page {page}; the document has {pages}")
+            for path, page in cited if isinstance(page, int) and page > pages]
+
+
+_KIND_RULES: dict[str, Callable[[dict], list[CardProblem]]] = {
+    "table": _table_problems,
+    "flight": _flight_problems,
+    "document": _document_problems,
+}
 
 
 def _charts(kind: Optional[str], data: dict):
@@ -319,7 +354,9 @@ def validate_card(card: Any, *, file_problem: Callable[[str], Optional[str]] = s
     if size > MAX_CARD_BYTES:
         return [CardProblem("(card)", f"is {size:,} bytes of JSON; at most {MAX_CARD_BYTES:,}. "
                                       "Put bulk data in a file and reference it")]
-    problems += _schema_problems(card)
+    said = {problem.path for problem in problems}  # the pattern error repeats a control-character finding
+    problems += [problem for problem in _schema_problems(card)
+                 if not (problem.path in said and problem.message.startswith("contains characters"))]
     if not problems:
         problems += _semantic_problems(card)
     if not problems:

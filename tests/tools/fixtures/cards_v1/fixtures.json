@@ -146,6 +146,30 @@
    "about": "unknown optional fields in the envelope, source, data and a stop: accepted, a reader keeps them as raw values and ignores them"
   },
   {
+   "file": "fixtures/valid/flight-stage.json",
+   "expect": "accept",
+   "kind": "flight",
+   "about": "rev 3: the stage's fields: city names, seat lines, arc coordinates, arrival line, airline, total, price with note, the leave-home step"
+  },
+  {
+   "file": "fixtures/valid/document-quotes.json",
+   "expect": "accept",
+   "kind": "document",
+   "about": "rev 3: quotes, three passages with label, page and a caution tone"
+  },
+  {
+   "file": "fixtures/valid/route-stop-detail.json",
+   "expect": "accept",
+   "kind": "route",
+   "about": "rev 3: a stop's address and detail line"
+  },
+  {
+   "file": "fixtures/valid/chart-caption.json",
+   "expect": "accept",
+   "kind": "chart",
+   "about": "rev 3: caption under the headline"
+  },
+  {
    "file": "fixtures/forward/forward-unknown-kind.json",
    "expect": "reject",
    "kind": "planetarium",
@@ -523,6 +547,60 @@
    "expect": "reject",
    "kind": "compose",
    "about": "the a5 spike's compose-stress payload, verbatim (oversized values, unknown block, 11 blocks, meter 9000, reserved tones)"
+  },
+  {
+   "file": "fixtures/hostile/document-four-quotes.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "quotes: four; at most three"
+  },
+  {
+   "file": "fixtures/hostile/document-quote-no-page.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "a quote without its page"
+  },
+  {
+   "file": "fixtures/hostile/document-quote-and-quotes.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "quote and quotes together"
+  },
+  {
+   "file": "fixtures/hostile/document-quote-past-last-page.json",
+   "expect": "reject",
+   "kind": "document",
+   "about": "quote on page 14 of a 12-page document"
+  },
+  {
+   "file": "fixtures/hostile/flight-half-coordinate.json",
+   "expect": "reject",
+   "kind": "flight",
+   "about": "toLat without toLon"
+  },
+  {
+   "file": "fixtures/hostile/flight-city-too-long.json",
+   "expect": "reject",
+   "kind": "flight",
+   "about": "toName over 40 characters"
+  },
+  {
+   "file": "fixtures/hostile/flight-leave-no-time.json",
+   "expect": "reject",
+   "kind": "flight",
+   "about": "leave step without its time"
+  },
+  {
+   "file": "fixtures/hostile/chart-caption-too-long.json",
+   "expect": "reject",
+   "kind": "chart",
+   "about": "caption over 120 characters"
+  },
+  {
+   "file": "fixtures/hostile/route-stop-detail-two-lines.json",
+   "expect": "reject",
+   "kind": "route",
+   "about": "a stop's detail is one line"
   }
  ]
 }

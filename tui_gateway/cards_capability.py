@@ -2,12 +2,16 @@
 
 Recorded on the transport object itself, so it lives and dies with the connection (no registry to
 forget on disconnect). A session's agent gets the ``cards`` toolset when any client attached to the
-session at build time advertised the version this server speaks; the tool list is then fixed for
-that agent's life (prompt caching), like every other toolset.
+session at build time advertised the version this server speaks. A long-lived chat (Home) whose
+agent was built before such a client attached is rebuilt once, at the next turn's admission
+(``sync_cards_toolset``): the tool array changes between turns, never inside one (prompt caching).
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 CARDS_VERSION = 1
 _ATTRIBUTE = "cards_capability"
@@ -59,3 +63,38 @@ def offered_version() -> int:
     """The card contract version this server offers right now: 1 with ``cards.enabled``, else 0."""
     from tools.cards.tool import cards_enabled
     return CARDS_VERSION if cards_enabled() else 0
+
+
+def sync_cards_toolset(sid: str, session: dict) -> bool:
+    """Turn admission: rebuild the session's agent once when a card-drawing client is attached and
+    the agent was built without ``show_card``. True when it rebuilt.
+
+    Runs where the Bot Chat capability sync runs (``prompt_turn._prepare_turn_input``), so the chat
+    is between turns and history (DB-backed, ``session["history"]``) carries over. One attempt per
+    agent: a rebuild that still lacks the tool (profile disabled it, platform gate) is not retried
+    every turn, and a client attaching again changes nothing once the agent has it."""
+    agent = session.get("agent")
+    toolsets = getattr(agent, "enabled_toolsets", None)
+    if agent is None or toolsets == [] or "cards" in (toolsets or ()):  # [] is an explicit zero-tool state
+        return False
+    if session.get("cards_synced_agent") == id(agent) or not session_draws_cards(session):
+        return False
+    from tools.cards.tool import cards_enabled
+    if not cards_enabled():
+        return False
+    from tui_gateway import server
+    session["cards_synced_agent"] = id(agent)
+    try:
+        tokens = server._set_session_context(sid, cwd=server._session_cwd(session))
+        try:
+            new_agent = server._rebuild_session_agent(sid, session, session_id=session["session_key"],
+                                                      platform_override=server._session_source(session))
+        finally:
+            server._clear_session_context(tokens)
+    except Exception:  # health: allow BLE001 -- the turn runs on the agent it has; cards wait for the next build
+        logger.warning("cards toolset sync failed for %s", sid, exc_info=True)
+        return False
+    if getattr(agent, "_session_title_hint", None):
+        new_agent._session_title_hint = agent._session_title_hint  # Bot Chat identity rides the prompt
+    session["cards_synced_agent"] = id(new_agent)
+    return True

@@ -1,0 +1,37 @@
+{
+ "v": 1,
+ "kind": "route",
+ "variant": "hero",
+ "title": "Walk to Olimpico",
+ "source": {
+  "label": "from home",
+  "origin": "tool"
+ },
+ "data": {
+  "mode": "walk",
+  "duration": "31 min walk",
+  "distance": "2.2 km",
+  "stops": [
+   {
+    "name": "Home",
+    "lat": 45.5191,
+    "lon": -73.5836
+   },
+   {
+    "name": "Café Olimpico",
+    "lat": 45.5228,
+    "lon": -73.6003,
+    "address": "124 Rue Saint-Viateur O",
+    "detail": "open till midnight"
+   }
+  ]
+ },
+ "actions": [
+  {
+   "type": "directions"
+  },
+  {
+   "type": "open_in_maps"
+  }
+ ]
+}
