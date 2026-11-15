@@ -229,3 +229,11 @@ def test_card_words_never_become_an_attachment():
     text = REPLY + "\n\n" + cards_text([{"alt": card_alt(joined)}, old_receipt])
     media, cleaned = BasePlatformAdapter.extract_media(text)
     assert media == [] and "lease-renewal.pdf" in cleaned
+
+
+def test_ordinary_media_words_go_out_as_written():
+    """Review delta D1: Danny's paid-media cards keep their words; the gateway attaches nothing for them."""
+    from gateway.platforms.base import BasePlatformAdapter
+    words = "Paid media: November results\nSocial media: what changed\nMedia: CBC News\nhttps://en.wikipedia.org/wiki/Media:Foo.ogg"
+    assert cards_text([{"alt": words}]) == words
+    assert BasePlatformAdapter.extract_media(REPLY + "\n\n" + words)[0] == []

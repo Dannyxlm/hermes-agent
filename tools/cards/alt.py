@@ -13,8 +13,10 @@ from urllib.parse import quote
 
 MAX_ALT = 1200
 # The validator refuses these in any field, but derived words join fields ("MEDIA" + ": " + a stop name),
-# so the words are defanged once more on the way out: a colon after MEDIA never stays touching it.
-_DIRECTIVE = re.compile(r"(MEDIA)(:)|\[\[(audio_as_voice|as_document)\]\]", re.IGNORECASE)
+# so the words are defanged once more on the way out, by the validator's rule: a colon after MEDIA is
+# moved off it only where a path or quoted name follows, so "Social media: what changed" reads as written.
+_DIRECTIVE = re.compile(r"(MEDIA)(:)(?=\s*(?:[`\"'~/]|[A-Za-z]:[/\\]))|\[\[(audio_as_voice|as_document)\]\]",
+                        re.IGNORECASE)
 
 
 def defang(text: str) -> str:

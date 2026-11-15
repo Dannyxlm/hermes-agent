@@ -8,9 +8,9 @@ Owner: server lane (`feat/hx317-showcard`). Changes go through the server lane a
 |---|---|
 | `card.schema.json` | JSON Schema (2020-12) for one card: the arguments of one `show_card` tool call. `$defs/receipt` is the tool result. |
 | `fixtures.json` | Manifest: every fixture with `expect` (`accept` / `reject`), its kind, what it covers, and for forward fixtures what a v1 reader does (`reader`). |
-| `fixtures/valid/*.json` | One card per kind and state (28). The server accepts each. |
+| `fixtures/valid/*.json` | One card per kind and state (30). The server accepts each. |
 | `fixtures/forward/*.json` | Cards a later version may send (7): unknown kind, `v: 2`, unknown variant, and the kinds not in v1 (`draft`, `page`, `music`, `health`). A v1 server refuses them; a v1 reader shows title + `alt` (`reader: fallback`) or the kind's default variant (`reader: default-variant`). |
-| `fixtures/hostile/*.json` | Cards the server must refuse (76), including the a5 spike's `compose-stress` payload verbatim. Two are deliberately not plain JSON objects: `not-an-object.json` (an array) and `route-nan.json` (a `NaN` literal). A reader that somehow receives one never shows JSON and never crashes. |
+| `fixtures/hostile/*.json` | Cards the server must refuse (79), including the a5 spike's `compose-stress` payload verbatim. Two are deliberately not plain JSON objects: `not-an-object.json` (an array) and `route-nan.json` (a `NaN` literal). A reader that somehow receives one never shows JSON and never crashes. |
 | `SHA256SUMS` | `sha256sum -c SHA256SUMS` from this folder. |
 
 File paths in fixtures live under `/synthetic/cards/`; they are sample paths for the synthetic app profile, not real files.
@@ -37,13 +37,14 @@ Everything else is open: an unknown field anywhere in the envelope, `source`, `d
 8. **`alt`** is required for `compose`. For every other kind the server derives it when absent.
 9. **Flight** arc ends are whole coordinates: `fromLat` with `fromLon`, `toLat` with `toLon`, or neither.
 10. **Document:** `quotes` or `quote`, not both. With `pages`, no `page` (top-level or in `quotes`) is past the last page.
-11. **No delivery directives:** no field contains `MEDIA:` (any case) or `[[audio_as_voice]]` / `[[as_document]]`. A messaging gateway would turn those into an attachment; a card shows, it never attaches. The server also defangs the derived `alt` (`MEDIA :`), since joined fields could form one.
+11. **No delivery directives:** no field contains `MEDIA:` (any case) followed, after optional spaces, by a quote, `~`, `/` or a drive letter (`C:\` or `C:/`), nor `[[audio_as_voice]]` / `[[as_document]]`. A messaging gateway would turn those into an attachment; a card shows, it never attaches. Ordinary words stay: "Paid media: November results", "Media: CBC News" and a wiki `Media:Foo.ogg` link are accepted. The server also defangs the derived `alt` by the same rule (`MEDIA :/…`), since joined fields could form one.
 12. **`add_to_calendar`** `start` and `end` are real moments (ASCII digits, a valid month, day and time), not only the right shape.
 
 ## Revisions
 
 All revisions are additive and optional: every earlier fixture is still valid and byte-identical, and a reader that ignores a new field still draws the card.
 
+- **rev 5** (review delta D1): rule 11 narrowed. `MEDIA:` is refused only before a path or quoted name, so "media:" in ordinary words is accepted. Two valid fixtures (`table-media-words`, `link-wiki-media`) and three hostile (`note-media-quoted`, `title-media-home`, `cell-media-drive`). The schema and every other fixture are byte-identical to rev 4.
 - **rev 4** (review fixes): one-line and multi-line text patterns also ban C1 controls and U+2028/U+2029; calendar times take ASCII digits only (`[0-9]`, not `\d`). Twelve hostile fixtures: `title-nel`, `cell-csi`, `title-line-separator`, `note-paragraph-separator`, `document-proc-environ`, `cell-media-directive`, `note-as-document-directive`, `alt-blank`, `title-blank`, `calendar-not-a-date`, `calendar-arabic-digits`, `document-page-past-float-pages`. Three valid fixtures changed words so no card claims something was held or booked: `flight-stage` `priceNote` "ends Friday"; `compose-trip` timeline detail "25 min to YUL by taxi"; `compose-place` "A table for four." / "Four people". Rules 11–12 added; rule 3 and 7 widened. Every other fixture is byte-identical to rev 3.
 - **rev 3** (the fields the approved stills draw): document `quotes: [{label?, text, page, tone?}]` (1–3, label ≤ 60, text ≤ 300); flight leg `fromName`, `toName` (≤ 40), `detail` (the seat line, ≤ 120), `arrivalDetail` (≤ 120), `fromLat`/`fromLon`/`toLat`/`toLon`; flight `airline` (≤ 40), `total` (≤ 24), `price` (≤ 24), `priceNote` (≤ 40), `leave: {time, label?, detail?}` (the step before the first leg); route stop `address` (≤ 160), `detail` (≤ 120); chart `caption` (≤ 120, the line under the headline). Asked by the cards lane: quotes, leg names/detail/coordinates, stop address/detail, caption. Added from `stage-trip`: `arrivalDetail`, `airline`, `total`, `price`, `priceNote`, `leave`. Fixtures: `flight-stage`, `document-quotes`, `route-stop-detail`, `chart-caption`, and nine hostile ones.
 - **rev 2:** compose `hero` is `{type: image|map|chart, …}`.

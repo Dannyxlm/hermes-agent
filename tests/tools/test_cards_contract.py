@@ -66,6 +66,9 @@ def test_hostile_and_forward_fixtures_are_refused_with_a_path(entry):
 
 
 ALT = {
+    "table-media-words": "Paid media: November results\nChannel · Spend\nSocial media: what changed · $4,200\n"
+                         "Media: CBC News · $1,800",
+    "link-wiki-media": "Foo (audio)\nhttps://en.wikipedia.org/wiki/Media:Foo.ogg",
     "table-hero": "Three ways to Kigali\nAirline · Time · Fare\nKLM · 18 h 55 · $1,482 (via Amsterdam) — Ava’s pick\n"
                   "Qatar · 22 h 10 · $1,395 (via Doha)\nBrussels · 19 h 40 · $1,610 (via Brussels)",
     "table-sheet": "Card balances\nCard · Balance · Due\nAmex Cobalt · $2,184.20 · Nov 28\nTD Visa Infinite · $640.12 · Dec 4\n"
@@ -150,6 +153,30 @@ REV4_REFUSALS = {
 }
 
 
+_DIRECTIVE_REFUSAL = ("contains a MEDIA: or [[…]] delivery directive; a card attaches nothing, so write the words "
+                      "another way")
+REV4_REFUSALS |= {  # rev 5: MEDIA: before a quote, ~, / or a drive letter is still refused
+    "note-media-quoted": ("note", _DIRECTIVE_REFUSAL),
+    "title-media-home": ("title", _DIRECTIVE_REFUSAL),
+    "cell-media-drive": ("data.rows[0].cells[0]", _DIRECTIVE_REFUSAL),
+}
+
+
+@pytest.mark.parametrize("text", ["Paid media: November results", "Social media: what changed", "Media: CBC News",
+                                  "https://en.wikipedia.org/wiki/Media:Foo.ogg", "Multimedia: 3 files"])
+def test_media_in_ordinary_words_is_accepted_and_spoken_as_written(text):
+    from tools.cards.alt import defang
+    card = {"kind": "table", "title": text, "data": {"columns": [{"title": "Item"}], "rows": [{"cells": [text]}]}}
+    assert validate_card(card) == [] and defang(text) == text and card_alt(card).count(text) == 2
+
+
+@pytest.mark.parametrize("text", ["MEDIA:/p/a.pdf", 'MEDIA: "/p/a.pdf"', "media:~/x", "MEDIA:C:\\x.pdf",
+                                  "Media: C:/x.pdf", "MEDIA:\t`a.pdf`", "[[as_document]]"])
+def test_media_before_a_path_is_still_refused(text):
+    card = {"kind": "table", "title": "Files", "data": {"columns": [{"title": "Item"}], "rows": [{"cells": [text]}]}}
+    assert [(p.path, p.message) for p in validate_card(card)] == [("data.rows[0].cells[0]", _DIRECTIVE_REFUSAL)]
+
+
 @pytest.mark.parametrize("name", sorted(REV4_REFUSALS))
 def test_rev4_refusals_name_the_field(name):
     problems = validate_card(_load({"file": f"fixtures/hostile/{name}.json"}), file_problem=_synthetic_files)
@@ -167,7 +194,7 @@ def test_the_process_file_fixture_is_refused_by_the_real_file_check():
 def test_no_valid_fixture_claims_an_effect():
     """A card shows; nothing in a valid card says a thing was held, booked, paid, shared or signed in."""
     import re
-    claims = re.compile(r"\b(held|hold|booked|paid|shared|signed in)\b", re.IGNORECASE)
+    claims = re.compile(r"\b(held|hold|booked|paid(?! media)|shared|signed in)\b", re.IGNORECASE)  # "paid media" is a trade
     for entry in (e for e in MANIFEST if e["expect"] == "accept"):
         card = _load(entry)
         assert not claims.search(json.dumps(card, ensure_ascii=False)), entry["file"]

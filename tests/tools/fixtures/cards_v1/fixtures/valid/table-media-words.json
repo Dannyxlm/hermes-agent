@@ -1,0 +1,30 @@
+{
+ "kind": "table",
+ "title": "Paid media: November results",
+ "data": {
+  "columns": [
+   {
+    "title": "Channel"
+   },
+   {
+    "title": "Spend",
+    "type": "money",
+    "currency": "CAD"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "Social media: what changed",
+     4200
+    ]
+   },
+   {
+    "cells": [
+     "Media: CBC News",
+     1800
+    ]
+   }
+  ]
+ }
+}

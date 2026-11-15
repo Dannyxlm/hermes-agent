@@ -673,6 +673,36 @@
    "expect": "reject",
    "kind": "document",
    "about": "pages 3.0 (an integer to the schema) with a quote on page 7"
+  },
+  {
+   "file": "fixtures/valid/table-media-words.json",
+   "expect": "accept",
+   "kind": "table",
+   "about": "ordinary words with \"media:\" (paid media, social media, a source label) are not a directive"
+  },
+  {
+   "file": "fixtures/valid/link-wiki-media.json",
+   "expect": "accept",
+   "kind": "link",
+   "about": "a Wikipedia Media: link is a URL, not a directive"
+  },
+  {
+   "file": "fixtures/hostile/note-media-quoted.json",
+   "expect": "reject",
+   "kind": "link",
+   "about": "MEDIA: before a quoted path"
+  },
+  {
+   "file": "fixtures/hostile/title-media-home.json",
+   "expect": "reject",
+   "kind": "link",
+   "about": "media: (lower case) before a ~/ path"
+  },
+  {
+   "file": "fixtures/hostile/cell-media-drive.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "MEDIA: before a drive-letter path"
   }
  ]
 }

@@ -24,8 +24,11 @@ MAX_ERRORS = 8
 _BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 # What the messaging gateway would turn into an attachment or a delivery mode (gateway/platforms/base.py
-# ``extract_media``): a card shows, it never attaches. Matched case-insensitively, anywhere, as the gateway does.
-_DELIVERY_DIRECTIVE = re.compile(r"MEDIA:|\[\[(?:audio_as_voice|as_document)\]\]", re.IGNORECASE)
+# ``extract_media``): a card shows, it never attaches. ``MEDIA:`` counts only where a path or quoted name
+# could follow (a quote, ``~``, ``/`` or a drive letter): "Paid media: November results" and a wiki
+# ``Media:Foo.ogg`` link are words, and the gateway attaches nothing for them.
+_DELIVERY_DIRECTIVE = re.compile(r"MEDIA:\s*(?:[`\"'~/]|[A-Za-z]:[/\\])|\[\[(?:audio_as_voice|as_document)\]\]",
+                                 re.IGNORECASE)
 # C0, DEL, C1 (U+0085 NEL, U+009B CSI) and the Unicode line/paragraph separators, which break a line
 # in SwiftUI text; a multi-line field keeps only \n.
 _CONTROL_ONE_LINE = re.compile("[\u0000-\u001f\u007f-\u009f\u2028\u2029]")
