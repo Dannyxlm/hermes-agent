@@ -282,6 +282,8 @@ async def rollback(connection, ref, params, *, kind):
                 raise RuntimeStoreError('unsupported_terminal_backend')
             from tui_gateway.render import render_diff
             result = mgr.diff(cwd, target)
+            if not result.get('success'):
+                raise RuntimeStoreError('checkpoint_diff_failed', detail=result.get('error') or 'Checkpoint diff failed')
             raw = result.get('diff', '')[:4000]
             payload = {'stat': result.get('stat', ''), 'diff': raw}
             if rendered := render_diff(raw, 80):
