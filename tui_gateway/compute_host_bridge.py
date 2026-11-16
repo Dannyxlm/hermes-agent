@@ -51,6 +51,7 @@ def _compute_host_turn_frame(
     rid: str, sid: str, session: dict, text: Any, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None, display_kind: str | None = None,
     display_metadata: dict | None = None, auto_continue: bool = True) -> dict:
+    from tui_gateway.cards_capability import CLIENT_DRAWS_CARDS, session_draws_cards
     with session["history_lock"]:
         history = list(session.get("history", []))
         history_version = int(session.get("history_version", 0))
@@ -78,6 +79,8 @@ def _compute_host_turn_frame(
         "service_tier_override": session.get("create_service_tier_override"),
         "source": _session_source(session), "attached_images": attached_images,
         "auth_user_id": _session_auth_user_id(session),
+        # The child never sees the client's socket: say whether the app attached here draws cards.
+        CLIENT_DRAWS_CARDS: session_draws_cards(session),
         "queued_prompt_generation": queued_prompt_generation,
         **({"auto_continue": False} if not auto_continue else {}),
         # #101416: vouch that this process already holds the registry lease for this session, so

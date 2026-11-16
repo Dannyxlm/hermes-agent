@@ -14,6 +14,7 @@ Each test advertises through the real ``client.capabilities`` RPC, creates throu
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -31,8 +32,15 @@ class _Admitted(Exception):
 
 
 class Peer:
-    def write(self, _frame):
+    def __init__(self):
+        self.frames = []
+
+    def write(self, frame):
+        self.frames.append(frame)
         return True
+
+    def events(self, kind):
+        return [f["params"]["payload"] for f in self.frames if f.get("params", {}).get("type") == kind]
 
     def close(self):
         return None
@@ -193,3 +201,33 @@ def test_a_new_app_chat_built_in_process_has_show_card_on_its_first_turn(monkeyp
     assert not server._session_uses_compute_host(session)
     assert _has_cards(session["agent"])
     assert _admit(monkeypatch, sid, session) is session["agent"] and len(isolated) == 1
+
+
+def test_a_card_drawn_in_the_child_reaches_the_apps_socket(monkeypatch, isolated):
+    """Tool progress off, as on Danny's phone: the card still crosses the pipe and lands live and in the
+    reconnect snapshot of the serving process's session."""
+    from tui_gateway.session_stream_cut import stream_cut
+    out = io.StringIO()
+    host = ComputeHost(stdout=out, heartbeat_secs=0)
+    card = {"kind": "table", "title": "Budget", "data": {"columns": [{"title": "Item"}, {"title": "Share", "type": "percent"}],
+                                                         "rows": [{"cells": ["Rent", 0.541]}]}}
+    try:
+        sid, parent = _app_creates_a_chat()
+        child = _turn_in_child(host, sid, parent)
+        child["tool_progress_mode"] = "off"
+        server._sessions[sid] = child
+        try:
+            server._emit("message.start", sid, {})
+            server._on_tool_start(sid, "call-card", "show_card", card)
+        finally:
+            server._sessions[sid] = parent
+    finally:
+        host.close()
+    for line in out.getvalue().splitlines():
+        frame = json.loads(line)
+        if frame.get("type") == "rpc":
+            server._relay_compute_host_rpc(frame["message"])
+    phone = parent["transport"]
+    assert [p["args"] for p in phone.events("tool.start")] == [card]
+    part = next(p for p in stream_cut(sid, parent)["stream"]["parts"] if p.get("tool_id") == "call-card")
+    assert part["card"] == card
