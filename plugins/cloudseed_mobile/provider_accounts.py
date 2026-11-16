@@ -157,13 +157,14 @@ def _active_pin(provider, strategy, entries):
         return None
     try:
         from agent.account_router.snapshot import read_snapshot, snapshot_path
-        pin = read_snapshot(snapshot_path(provider)).get("pins", {}).get(provider)
+        pin = read_snapshot(snapshot_path(provider)).get("pins", {}).get(provider) or {}
         entry_id, until = pin.get("entry_id"), pin.get("until")
         if (not isinstance(entry_id, str) or entry_id not in {e.id for e in entries}
                 or isinstance(until, bool) or not isinstance(until, (int, float)) or until <= time.time()):
             return None
+        # Whole seconds, as in the contract's example: plain ISO-8601 parsers on the phone read it.
         return {"account_id": entry_id,
-                "until": datetime.fromtimestamp(until, UTC).isoformat().replace("+00:00", "Z")}
+                "until": datetime.fromtimestamp(int(until), UTC).isoformat().replace("+00:00", "Z")}
     except Exception:  # health: allow BLE001 -- advisory field: unreadable router state is "no pin", never a 5xx
         return None
 

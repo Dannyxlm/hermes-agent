@@ -259,8 +259,8 @@ def test_live_pin_is_shown_with_its_expiry(monkeypatch, tmp_path):
     _write_router_state(home, {'version': 1, 'pins': {'openai-codex': {'entry_id': 'codex-b', 'until': until}}})
     section = _codex(accounts.get_accounts())
     assert section['pin'] == {'account_id': 'codex-b',
-                              'until': datetime.fromtimestamp(until, UTC).isoformat().replace('+00:00', 'Z')}
-    assert section['pin']['until'].endswith('Z')
+                              'until': datetime.fromtimestamp(int(until), UTC).isoformat().replace('+00:00', 'Z')}
+    assert datetime.strptime(section['pin']['until'], '%Y-%m-%dT%H:%M:%SZ')  # whole seconds, Z
     assert all(p['pin'] is None for p in accounts.get_accounts()['providers'] if p['id'] != 'openai-codex')
 
 
