@@ -681,6 +681,18 @@
    "about": "ordinary words with \"media:\" (paid media, social media, a source label) are not a directive"
   },
   {
+   "file": "fixtures/valid/table-percent-fractions.json",
+   "expect": "accept",
+   "kind": "table",
+   "about": "rev 6: percent cells are fractions (0.541 = 54.1%); totals is one cell per column"
+  },
+  {
+   "file": "fixtures/valid/table-percent-growth.json",
+   "expect": "accept",
+   "kind": "table",
+   "about": "rev 6: real growth above 150% beside ordinary rates and a zero still passes the percent-points rule"
+  },
+  {
    "file": "fixtures/valid/link-wiki-media.json",
    "expect": "accept",
    "kind": "link",
@@ -703,6 +715,12 @@
    "expect": "reject",
    "kind": "table",
    "about": "MEDIA: before a drive-letter path"
+  },
+  {
+   "file": "fixtures/hostile/table-percent-points.json",
+   "expect": "reject",
+   "kind": "table",
+   "about": "rev 6: a percent column written in points (54.1 for 54.1%) would draw as 5,410%; refused with the fraction hint"
   }
  ]
 }

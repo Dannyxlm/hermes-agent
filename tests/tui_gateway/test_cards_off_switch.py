@@ -85,7 +85,7 @@ def test_on_card_off_restart_on_again(home):
     assert not _offers(off)
     assert _call(2, off)["ok"] is False
     refused = _call(3)  # even a call that reaches the handler directly
-    assert refused["ok"] is False and "cards are off" in refused["error"]
+    assert refused["ok"] is False and "card_id" not in refused
 
     _flag(True)
     back = _restart_and_first_turn(home)

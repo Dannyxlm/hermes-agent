@@ -1,0 +1,62 @@
+{
+ "kind": "table",
+ "title": "Monthly budget",
+ "data": {
+  "columns": [
+   {
+    "title": "Category"
+   },
+   {
+    "title": "Monthly",
+    "type": "money",
+    "currency": "USD"
+   },
+   {
+    "title": "Share",
+    "type": "percent"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "Rent",
+     1200,
+     54.1
+    ]
+   },
+   {
+    "cells": [
+     "Food",
+     400,
+     18.0
+    ]
+   },
+   {
+    "cells": [
+     "Transit",
+     120,
+     5.4
+    ]
+   },
+   {
+    "cells": [
+     "Fun",
+     200,
+     9.0
+    ]
+   },
+   {
+    "cells": [
+     "Savings",
+     300,
+     13.5
+    ]
+   }
+  ],
+  "totals": [
+   "Total",
+   2220,
+   100
+  ]
+ }
+}

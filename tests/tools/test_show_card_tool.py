@@ -142,3 +142,13 @@ def test_a_thread_never_inherits_the_cards_toolset(monkeypatch):
     parent = SimpleNamespace(profile="default", toolsets=frozenset({"file", "terminal", "cards", "threads"}))
     ceiling = thread_tool._toolset_ceiling(parent, "default")
     assert ceiling is not None and "file" in ceiling and "cards" not in ceiling
+
+
+def test_flag_off_refusal_keeps_the_switch_out_of_the_reply():
+    """Iris F6: after a switch-off the model told Danny "cards are turned off on this server". The receipt
+    still refuses, and its words say nothing about servers or switches."""
+    invalidate_check_fn_cache()
+    receipt = _call(ROUTE)
+    assert receipt["ok"] is False and "card_id" not in receipt
+    for words in (receipt["error"].lower(), receipt["errors"][0]["message"].lower()):
+        assert "server" not in words and " off" not in words
