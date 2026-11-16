@@ -219,7 +219,13 @@ be <=256000 serialized UTF-8 bytes. There is no remote HTTP enqueue endpoint.
   `CredentialPool.move_entry` and persisted readback, stale revision yields 409.
 
 Provider section: `{id,display_name,strategy,revision,scope,scope_label,
-can_set_primary,read_only_reason,primary_id,accounts}`. Account:
+can_set_primary,read_only_reason,primary_id,pin,accounts}`. `pin` is the router's live
+"Use now" override, `null | {account_id,until}` (`until` ISO-8601 UTC with `Z`, like
+`retry_after`): non-null only for a `smart` pool whose saved pin (`state/account_router.json`,
+read where the router reads it, so a borrowed pool shows the root's) has `until` in the future
+and names an account in this pool. Read-only; unreadable router state is `null`, never an
+error. Under `smart`, POST `/provider/accounts/primary` also pins the account for the policy's
+`pin_hours` (default 6), even when it is already first, and answers with the new `pin`. Account:
 `{id,label,priority,is_primary,status,retry_after,can_set_primary,read_only_reason,
 usage:{status,fetched_at,stale,refreshing,windows,message}}`.
 Usage window: `{label,used_percent,remaining_percent,reset_at,detail}`.

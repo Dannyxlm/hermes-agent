@@ -219,3 +219,97 @@ def test_grok_usage_inventory_is_read_only_and_sanitized(monkeypatch, tmp_path, 
     assert len(seen) == 2  # retry fence applies to Grok, too
     cached = next(p for p in accounts.get_accounts()['providers'] if p['id'] == 'xai-oauth')
     assert cached['accounts'][0]['usage'] == account_usage
+
+
+
+# "Use now" on the phone (handoff-use-now-button.md): each provider section says which account the
+# router's manual override pins and until when, read where the router reads it.
+def _pool_home(monkeypatch, tmp_path, *, strategy='smart', home=None):
+    import hermes_constants
+    from hermes_cli.config_backend import write_config_key
+    home = home or tmp_path
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('HERMES_HOME', str(home))
+    monkeypatch.setattr(hermes_constants, '_get_platform_default_hermes_home', lambda: tmp_path)
+    write_config_key(home / 'config.yaml', 'credential_pool_strategies.openai-codex', strategy)
+    if home == tmp_path:
+        (home / 'auth.json').write_text(json.dumps({'credential_pool': {'openai-codex': [
+            {'id': 'codex-a', 'label': 'A', 'source': 'manual', 'priority': 0, 'auth_type': 'oauth',
+             'access_token': 'fixture-only-a'},
+            {'id': 'codex-b', 'label': 'B', 'source': 'manual', 'priority': 1, 'auth_type': 'oauth',
+             'access_token': 'fixture-only-b'},
+        ]}}))
+    return home
+
+
+def _write_router_state(root, state):
+    (root / 'state').mkdir(exist_ok=True)
+    (root / 'state' / 'account_router.json').write_text(state if isinstance(state, str) else json.dumps(state))
+
+
+def _codex(inventory):
+    return next(p for p in inventory['providers'] if p['id'] == 'openai-codex')
+
+
+def test_live_pin_is_shown_with_its_expiry(monkeypatch, tmp_path):
+    import time
+    from datetime import UTC, datetime
+    home = _pool_home(monkeypatch, tmp_path)
+    until = time.time() + 3600
+    _write_router_state(home, {'version': 1, 'pins': {'openai-codex': {'entry_id': 'codex-b', 'until': until}}})
+    section = _codex(accounts.get_accounts())
+    assert section['pin'] == {'account_id': 'codex-b',
+                              'until': datetime.fromtimestamp(until, UTC).isoformat().replace('+00:00', 'Z')}
+    assert section['pin']['until'].endswith('Z')
+    assert all(p['pin'] is None for p in accounts.get_accounts()['providers'] if p['id'] != 'openai-codex')
+
+
+@pytest.mark.parametrize('pin', [
+    {'entry_id': 'codex-b', 'until': 1},  # expired
+    {'entry_id': 'codex-gone', 'until': 4_102_444_800},  # no longer in this pool
+    {'entry_id': 'codex-b'}, {'entry_id': 'codex-b', 'until': 'tomorrow'}, {'entry_id': 'codex-b', 'until': True},
+    {'entry_id': 'codex-b', 'until': 1e300}, {'entry_id': ['codex-b'], 'until': 4_102_444_800}, 'codex-b',
+], ids=['expired', 'not-in-pool', 'no-until', 'text-until', 'bool-until', 'huge-until', 'list-id', 'not-an-object'])
+def test_no_live_pin_reads_as_null(monkeypatch, tmp_path, pin):
+    home = _pool_home(monkeypatch, tmp_path)
+    _write_router_state(home, {'version': 1, 'pins': {'openai-codex': pin}})
+    assert _codex(accounts.get_accounts())['pin'] is None
+
+
+def test_a_pin_only_counts_for_a_smart_pool(monkeypatch, tmp_path):
+    home = _pool_home(monkeypatch, tmp_path, strategy='fill_first')
+    _write_router_state(home, {'version': 1, 'pins': {'openai-codex': {'entry_id': 'codex-b', 'until': 4_102_444_800}}})
+    assert _codex(accounts.get_accounts())['pin'] is None
+
+
+@pytest.mark.parametrize('state', ['{not json', '[]', json.dumps({'version': 2, 'pins': {}}),
+                                   json.dumps({'version': 1, 'pins': []}), json.dumps({'version': 1, 'pins': 'x'})],
+                         ids=['bad-json', 'not-an-object', 'other-version', 'pins-list', 'pins-text'])
+def test_unreadable_router_state_is_no_pin_never_a_route_error(monkeypatch, tmp_path, state):
+    home = _pool_home(monkeypatch, tmp_path)
+    _write_router_state(home, state)
+    inventory = accounts.get_accounts()
+    assert inventory['ok'] is True and _codex(inventory)['pin'] is None
+    assert [a['id'] for a in _codex(inventory)['accounts']] == ['codex-a', 'codex-b']
+
+
+def test_use_now_returns_the_new_pin_in_the_same_response(monkeypatch, tmp_path):
+    """set_primary pins under smart (even the account already first) and answers with the inventory."""
+    _pool_home(monkeypatch, tmp_path)
+    section = _codex(accounts.get_accounts())
+    assert section['pin'] is None
+    after = _codex(accounts.set_primary({'provider': 'openai-codex', 'account_id': 'codex-a',
+                                         'profile_id': accounts.get_accounts()['profile_id'],
+                                         'revision': section['revision']}))
+    assert after['pin']['account_id'] == 'codex-a' and after['pin']['until'].endswith('Z')
+
+
+def test_a_borrowed_pool_shows_the_pin_the_router_honours(monkeypatch, tmp_path):
+    """A profile using the root's accounts reads the root's router state, as the router does for it."""
+    _pool_home(monkeypatch, tmp_path)
+    _write_router_state(tmp_path, {'version': 1, 'pins': {'openai-codex': {'entry_id': 'codex-b',
+                                                                            'until': 4_102_444_800}}})
+    _pool_home(monkeypatch, tmp_path, home=tmp_path / 'profiles' / 'b')
+    section = _codex(accounts.get_accounts())
+    assert section['scope'] == 'shared_root' and not section['can_set_primary']
+    assert section['pin'] == {'account_id': 'codex-b', 'until': '2100-01-01T00:00:00Z'}
