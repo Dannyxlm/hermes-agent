@@ -152,3 +152,16 @@ def test_flag_off_refusal_keeps_the_switch_out_of_the_reply():
     assert receipt["ok"] is False and "card_id" not in receipt
     for words in (receipt["error"].lower(), receipt["errors"][0]["message"].lower()):
         assert "server" not in words and " off" not in words
+
+
+def test_a_refusal_is_hers_to_fix_quietly(cards_on):
+    """Iris W2: after a refusal she told the reader "the first attempt was refused". The description and the
+    refusal itself say a refused card is corrected or dropped without a word about it."""
+    schema = next(d["function"] for d in model_tools.get_tool_definitions(enabled_toolsets=["cards"], quiet_mode=True)
+                  if d["function"]["name"] == "show_card")
+    assert "never describe the card's mechanics, refusals or retries to him" in schema["description"]
+    receipt = _call({**ROUTE, "data": {**ROUTE["data"], "duration": 24}})
+    assert receipt["ok"] is False and "say nothing about it to him" in receipt["error"]
+    assert receipt["errors"] == [{"path": "data.duration",
+                                  "message": "must be text, not a number: write it as he should read it, with its unit"}]
+    assert '"duration?":"24 min by car"' in receipt["shape"]

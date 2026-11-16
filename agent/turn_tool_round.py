@@ -100,6 +100,9 @@ def run_tool_round(
     # Filtering can turn a mixed batch into an all-provider one; re-check the final batch
     # before it is staged (idempotent for already-normalized ids).
     normalize_provider_tool_call_ids(assistant_message.tool_calls)
+    # A tool's own argument writer (show_card: numbers where a card draws text), on this unpersisted turn.
+    from agent.tool_call_normalize import write_registered_arguments
+    write_registered_arguments(assistant_message.tool_calls)
 
     # Mixed batch: the assistant message keeps EVERY emitted call (each tool_call needs a
     # matching result) while only valid ones dispatch.

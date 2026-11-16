@@ -17,6 +17,7 @@ import threading
 from collections import OrderedDict
 from typing import Any, Optional
 
+from tools.cards.normalize import normalize_card
 from tools.registry import registry
 
 MAX_CARDS_PER_TURN = 6
@@ -43,8 +44,9 @@ _DESCRIPTION = (
     "≤ 240 chars, on what it means for him. At most two actions; ask only fills his composer with its exact "
     "text, it never sends. Files are absolute paths on this server; never web image URLs. compose needs alt "
     "(plain words, ≤ 1,200 chars); other kinds derive it. At most six cards a turn; several cards go as "
-    "parallel calls. If the call is refused, fix each listed path and call again. Fill the optional fields "
-    "you know: they are what the app draws (a flight's city names, seat line and airport coordinates for the "
+    "parallel calls. If a call is refused, fix each listed path and call again, or drop the card: a refusal "
+    "is yours to correct quietly, so never describe the card's mechanics, refusals or retries to him. Fill the "
+    "optional fields you know: they are what the app draws (a flight's city names, seat line and airport coordinates for the "
     "arc; a document's quotes with their pages; a route stop's address)."
 )
 
@@ -53,14 +55,17 @@ _DATA_DESCRIPTION = (
     "currency?}] (1-12), rows:[{cells:[one per column: string|number|null], secondary?, badge?, tone?, "
     "highlight?}] (≤60), totals?: [one cell per column, like a row's cells], count?, file?}; percent cells are "
     "fractions (0.541 shows as 54.1%, 1.5 as 150%); variant sheet is the full-sheet look. flight: {legs:[{number?, "
-    "from, to (airport codes), departure, arrival, dayOffset?, duration?, date?, fromName?, toName? (cities), "
+    "from, to (airport codes), departure, arrival (text, e.g. \"17:55\"), dayOffset?, duration? (text, e.g. \"6 h 45\"), "
+    "date?, fromName?, toName? (cities), "
     "detail? (seat line), arrivalDetail?, fromLat?/fromLon?, toLat?/toLon? (pairs)}] (1-6), connection?, "
-    "connectionCode?, airline?, total?, price?, priceNote?, leave?: {time, label?, detail?}}. route: "
-    "{stops:[{name, lat, lon, address?, detail?}] (2-12), mode?: drive|walk|transit|cycle|flight, duration?, "
-    "distance?}. place: "
-    "{name, lat, lon, address?, detail?}. weather: {headline, condition?: clear|partly_cloudy|cloudy|rain|snow|"
-    "storm|fog|wind, comparison?, range?, chart?: <chart data>, days?:[{day, high?, low?, condition?}] (≤10)}. "
-    "chart: {type?: line|bar|area|point, headline? (the figure alone, e.g. 18 with unit km), caption? (≤120), comparison?, tone?, unit?, x:[labels], series:[{name, "
+    "connectionCode?, airline?, total?, price? (text with its currency, e.g. \"$1,482\"), priceNote?, leave?: {time, "
+    "label?, detail?}}. route: {stops:[{name, lat, lon, address?, detail?}] (2-12), mode?: drive|walk|transit|cycle|"
+    "flight, duration? (text, e.g. \"24 min by car\"), distance? (text, e.g. \"21 km\")}. place: "
+    "{name, lat, lon, address?, detail?}. weather: {headline (now, e.g. \"4°\"), condition?: clear|partly_cloudy|cloudy|"
+    "rain|snow|storm|fog|wind, comparison?, range?, chart?: <chart data>, days?:[{day, high?, low?, condition?}] "
+    "(≤10)}; headline, high and low are temperatures: a number shows as 7°, with the card's °C or °F if it states one. "
+    "chart: {type?: line|bar|area|point, headline? (the figure alone, e.g. 18 with unit km), caption? (≤120), "
+    "comparison?, tone?, unit?, x:[labels, text or numbers], series:[{name, "
     "values:[one per x, number|null]}] (1-6, ≤400 values in all), reference?: {value, label?}}. document: "
     "{file, quotes?: [{label?, text, page, tone?}] (1-3), or one quote? with page?; pages?}. link: {url (https), description?, image? (file)}. gallery: {images:[{file, "
     "caption?}] (1-24)}. compose: {hero?: {type:image, file, aspect?} | {type:map, route|place: <route or "
@@ -68,7 +73,8 @@ _DATA_DESCRIPTION = (
     "caption}, stats {items: 2-3 {label, value, unit?, delta?, tone?}}, rows {items ≤8 {label, value, glyph?, "
     "tone?}}, meter {label, value 0-1, caption?, tone?}, spark {label, value?, points 2-60}, list {items ≤6 "
     "{title, detail?, trailing?, glyph?, checked?}}, timeline {items ≤6 {time, title, detail?, state?: done|"
-    "next}}, quote {text ≤300, by?}, chips {items ≤4}, image {file, aspect?: wide|square|tall, caption?}}. "
+    "next}}, quote {text ≤300, by?}, chips {items ≤4}, image {file, aspect?: wide|square|tall, caption?}}; a stats, "
+    "rows or spark value and a list trailing may be a number, while delta, unit and time are text (\"+12%\", \"15:10\"). "
     "tone is neutral|good|caution. glyph is an SF Symbol name such as checkmark.circle, clock, calendar, "
     "airplane, car, mappin, creditcard, envelope, house, star."
 )
@@ -158,7 +164,8 @@ def show_card(card: Any, *, session_id: Optional[str] = None) -> str:
     if problems:
         kind = card.get("kind") if isinstance(card, dict) else None
         refusal = {"ok": False, "error": f"card refused: {len(problems)} problem{'s' if len(problems) != 1 else ''}; "
-                                         "fix each path and call show_card again",
+                                         "fix each path and call show_card again, or drop the card; either way, "
+                                         "say nothing about it to him",
                    "errors": [problem.as_dict() for problem in problems]}
         if kind in KIND_SHAPES:
             refusal["shape"] = KIND_SHAPES[kind]
@@ -179,4 +186,5 @@ registry.register(
     handler=lambda args, **kw: show_card(args, session_id=kw.get("session_id")),
     check_fn=cards_enabled,
     emoji="🃏",
+    normalize_args=normalize_card,
 )

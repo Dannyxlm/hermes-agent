@@ -155,8 +155,9 @@ def _weather(card: dict) -> str:
     data = card["data"]
     now = data["headline"]
     if data.get("condition"):
-        condition = str(data["condition"])
-        now += ", " + _CONDITION_WORDS.get(condition, condition)
+        words = _CONDITION_WORDS.get(str(data["condition"]), str(data["condition"]))
+        if not re.search(rf"\b{re.escape(words)}", now, re.IGNORECASE):  # "4°C and cloudy" already says it
+            now += ", " + words
     sentence = ". ".join(part for part in (now, data.get("comparison"), data.get("range")) if part)
     days = []
     for day in data.get("days") or []:

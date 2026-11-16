@@ -281,3 +281,57 @@ def test_a_refused_real_figure_can_be_repaired_as_text():
 ])
 def test_a_percent_column_of_fractions_or_real_growth_passes(cells, totals):
     assert validate_card(_percent_table(cells, totals)) == []
+
+
+
+# Contract rev 7 (Iris W1): numbers where a card draws text are written as text when the call arrives.
+WRITTEN = json.loads((CONTRACT / "written.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("pair", WRITTEN["written"], ids=lambda p: p["about"][:40])
+def test_rev7_numbers_are_written_as_the_text_a_reader_draws(pair):
+    from tools.cards.normalize import normalize_card
+    written = normalize_card(pair["sent"])
+    assert json.dumps(written, ensure_ascii=False) == json.dumps(pair["card"], ensure_ascii=False)  # order too
+    assert validate_card(pair["sent"]) != []  # as sent, the strict validator refuses it (the extra model call)
+    assert validate_card(written) == []  # as written, it is accepted the first time
+    sent, card = dict(_leaves(pair["sent"])), dict(_leaves(written))
+    assert sent.keys() == card.keys()
+    changed = {path for path in sent if sent[path] != card[path]}
+    assert changed and all(isinstance(sent[path], (int, float)) and isinstance(card[path], str) for path in changed)
+
+
+@pytest.mark.parametrize("pair", WRITTEN["unchanged"], ids=lambda p: p["about"][:40])
+def test_rev7_numbers_that_need_a_unit_stay_and_ask_for_text(pair):
+    from tools.cards.normalize import normalize_card
+    assert normalize_card(pair["sent"]) is pair["sent"]
+    problems = validate_card(pair["sent"])
+    assert problems and all(p.message.startswith("must be text, not a number") for p in problems), problems
+
+
+def test_rev7_leaves_non_finite_numbers_and_booleans_for_the_validator():
+    from tools.cards.normalize import normalize_card
+    for value in (float("nan"), float("inf"), True):
+        card = {"kind": "weather", "title": "x", "data": {"headline": "4°", "days": [{"day": "Mon", "high": value}]}}
+        assert normalize_card(card) is card and validate_card(card) != []
+
+
+def _leaves(value, path=()):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from _leaves(child, (*path, key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _leaves(child, (*path, index))
+    else:
+        yield path, value
+
+
+def test_w3_weather_alt_does_not_repeat_the_condition_the_headline_says():
+    """Iris W3: the derived alt read "4°C and cloudy, cloudy"."""
+    card = {"kind": "weather", "title": "Pinehollow", "data": {"headline": "4°C and cloudy", "condition": "cloudy"}}
+    assert card_alt(card) == "Pinehollow: 4°C and cloudy."
+    partly = {"kind": "weather", "title": "Kigali", "data": {"headline": "24°, partly cloudy", "condition": "partly_cloudy"}}
+    assert card_alt(partly) == "Kigali: 24°, partly cloudy."
+    plain = {"kind": "weather", "title": "Kigali", "data": {"headline": "24°", "condition": "partly_cloudy"}}
+    assert card_alt(plain) == "Kigali: 24°, partly cloudy."

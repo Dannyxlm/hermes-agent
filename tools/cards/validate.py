@@ -41,13 +41,16 @@ _MAP_ACTIONS = frozenset({"directions", "open_in_maps"})
 KIND_SHAPES = {
     "table": '{"columns":[{"title","type?":"text|number|money|percent|date|delta|status","currency?"}] (1-12), '
              '"rows":[{"cells":[one per column],"secondary?","badge?","tone?","highlight?"}] (≤60), "totals?","count?","file?"}',
-    "flight": '{"legs":[{"number?","from","to","departure","arrival","dayOffset?","duration?","date?","fromName?","toName?",'
+    "flight": '{"legs":[{"number?","from","to","departure":"17:55","arrival","dayOffset?","duration?":"6 h 45","date?",'
+              '"fromName?","toName?",'
               '"detail?","arrivalDetail?","fromLat?","fromLon?","toLat?","toLon?"}] (1-6), "connection?","connectionCode?",'
-              '"airline?","total?","price?","priceNote?","leave?":{"time","label?","detail?"}}',
+              '"airline?","total?","price?":"$1,482","priceNote?","leave?":{"time","label?","detail?"}} (times, durations '
+              'and prices are text)',
     "route": '{"stops":[{"name","lat","lon","address?","detail?"}] (2-12), "mode?":"drive|walk|transit|cycle|flight", '
-             '"duration?","distance?"}',
+             '"duration?":"24 min by car","distance?":"21 km"} (duration and distance are text)',
     "place": '{"name","lat","lon","address?","detail?"}',
-    "weather": '{"headline","condition?","comparison?","range?","chart?":<chart data>,"days?":[{"day","high?","low?","condition?"}]}',
+    "weather": '{"headline":"4°","condition?","comparison?","range?","chart?":<chart data>,'
+               '"days?":[{"day","high?":"7°","low?":"2°","condition?"}]} (temperatures: text or a number)',
     "chart": '{"type?":"line|bar|area|point","headline?","caption?","comparison?","tone?","unit?","x":[labels],'
              '"series":[{"name","values":[one per x]}] (1-6, ≤400 values in all),"reference?":{"value","label?"}}',
     "document": '{"file":"/absolute/path","quotes?":[{"label?","text","page","tone?"}] (1-3) or "quote?","page?"; "pages?"}',
@@ -101,7 +104,7 @@ def _describe(error) -> str:
     if validator == "const":
         return f"must be {json.dumps(expected)}"
     if validator == "type":
-        return f"must be {expected if isinstance(expected, str) else ' or '.join(expected)}, not {type(value).__name__}"
+        return _type_hint(value, expected)
     if validator in ("minimum", "maximum"):
         return f"{_short(value)} is {'below' if validator == 'minimum' else 'above'} {expected:g}"
     if validator == "additionalProperties":
@@ -114,6 +117,12 @@ def _describe(error) -> str:
         return "needs exactly one of route or place" if isinstance(value, dict) and value.get("type") == "map" \
             else "matches none of the allowed shapes"
     return error.message if len(error.message) < 200 else error.message[:200] + "…"
+
+
+def _type_hint(value: Any, expected: Any) -> str:
+    if expected == "string" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "must be text, not a number: write it as he should read it, with its unit"
+    return f"must be {expected if isinstance(expected, str) else ' or '.join(expected)}, not {type(value).__name__}"
 
 
 def _pattern_hint(error) -> str:
