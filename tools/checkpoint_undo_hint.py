@@ -86,6 +86,8 @@ def _changed_files(abs_dir: str, tree: str) -> Optional[list[str]]:
         ok, _, _ = cm._run_git(["read-tree", tree], store, abs_dir, index_file=index)
         if not ok:
             return None
+        uncaptured = cm.unborn.unborn_paths(store, abs_dir, index)
+        excludes = ["--", *excludes[1:], *cm.unborn.exclusion_args(uncaptured)]
         ok, changed, _ = cm._run_git(["diff", "--name-only", "-z", *excludes], store, abs_dir, index_file=index)
         ok_new, new, _ = cm._run_git(["ls-files", "--others", "--exclude-standard", "-z", *excludes],
                                      store, abs_dir, index_file=index)

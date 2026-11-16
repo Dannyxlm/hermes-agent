@@ -65,6 +65,7 @@ from hermes_cli.gitlock import clear_stale_index_lock, clear_stale_tmp_packs
 from typing import Dict, List, Optional, Set, Tuple
 
 from utils import env_int, rmtree_readonly
+from tools import checkpoint_unborn as unborn
 
 logger = logging.getLogger(__name__)
 
@@ -928,6 +929,7 @@ class CheckpointManager:
         self.max_total_size_mb = max(0, int(max_total_size_mb))
         self.max_file_size_mb = max(0, int(max_file_size_mb))
         self._checkpointed_dirs: set[str] = set()
+        self._warned_unborn: set[tuple[str, tuple[str, ...]]] = set()
 
     # ------------------------------------------------------------------
     # Turn lifecycle
@@ -1006,10 +1008,7 @@ class CheckpointManager:
 
         # Stage the current tree so the name-only diff sees new files too.
         clear_stale_index_lock(index_file)
-        staged, _, stage_error = _run_git(
-            _stage_all_args(store.parent, abs_dir), store, abs_dir,
-            timeout=_GIT_TIMEOUT * 2, index_file=index_file,
-        )
+        staged, stage_error = unborn.stage_current(store, abs_dir, index_file)
         if not staged:
             return {"success": False, "error": f"Could not stage current files: {stage_error}"}
         ok, names_out, err = _run_git(
@@ -1193,10 +1192,7 @@ class CheckpointManager:
 
         # Stage current state into the per-project index to compare.
         clear_stale_index_lock(index_file)
-        staged, _, stage_error = _run_git(
-            _stage_all_args(store.parent, abs_dir), store, abs_dir,
-            timeout=_GIT_TIMEOUT * 2, index_file=index_file,
-        )
+        staged, stage_error = unborn.stage_current(store, abs_dir, index_file)
         if not staged:
             return {"success": False, "error": f"Could not stage current files: {stage_error}"}
 
@@ -1314,6 +1310,7 @@ class CheckpointManager:
         )
         if not ok:
             return {"success": False, "error": f"Could not inspect checkpoint: {err}"}
+        excluded = unborn.restore_exclusions(store, abs_dir, commit_hash, tree_out)
         nested_repos = _gitlink_paths(tree_out)
         selected_paths: Optional[list[str]] = None
         if nested_repos:
@@ -1407,18 +1404,20 @@ class CheckpointManager:
                 # the classic full restore rather than restoring nothing.
                 restore_paths = None
             else:
-                restore_paths = plan["restore"]
+                restore_paths = [p for p in plan["restore"] if not unborn.contains_path(excluded, p)]
                 skipped_user_edits = plan["skipped"]
                 if not restore_paths:
                     return {
                         "success": True,
                         "restored_to": commit_hash[:8],
-                        "reason": "nothing to restore (all changed files were user-edited)",
+                        "reason": unborn.disclose("nothing to restore among captured files", excluded),
                         "directory": abs_dir,
                         "restored_files": [],
                         "skipped_user_edits": skipped_user_edits,
                         "skipped_oversize": [],
                     }
+
+        selected_paths = unborn.filter_selection(selected_paths, excluded)
 
         # Take a pre-rollback snapshot so you can undo the undo.
         self._take(abs_dir, f"pre-rollback snapshot (restoring to {commit_hash[:8]})", prune=False)
@@ -1489,7 +1488,8 @@ class CheckpointManager:
             # that out over the live store (it would rewind refs to the captured ones).
             store_excludes = _exclude_store_args(store.parent, abs_dir)[1:]
             ok, _stdout, err = _run_git(
-                ["checkout", commit_hash, "--", file_path if file_path else ".", *store_excludes],
+                ["checkout", commit_hash, "--", file_path if file_path else ".", *store_excludes,
+                 *unborn.exclusion_args(excluded)],
                 store, abs_dir, timeout=_GIT_TIMEOUT * 2,
                 index_file=index_file,
             )
@@ -1506,7 +1506,7 @@ class CheckpointManager:
         result = {
             "success": True,
             "restored_to": commit_hash[:8],
-            "reason": reason,
+            "reason": unborn.disclose(reason, excluded),
             "directory": abs_dir,
         }
         if file_path:
@@ -1620,7 +1620,9 @@ class CheckpointManager:
         if not _unstage_excluded(store, working_dir, index_file):
             logger.debug("Checkpoint could not drop newly excluded paths from the index")
             return False
-        ok, err = self._stage_with_oversize_preflight(store, working_dir, index_file)
+        excluded = unborn.unborn_paths(store, working_dir, index_file)
+        unborn.warn_once(self, working_dir, excluded)
+        ok, err = self._stage_with_oversize_preflight(store, working_dir, index_file, excluded)
         if not ok:
             logger.debug("Checkpoint git-add failed: %s", err)
             return False
@@ -1686,7 +1688,9 @@ class CheckpointManager:
 
         # Build commit (parent = current ref tip, if any). The body's exact take time lets a whole-tree
         # /rollback tell a turn after the snapshot from one before it in the same git second.
+        reason = unborn.disclose(reason, excluded)
         message = f"{reason}\n\n{TAKEN_AT_TRAILER}: {time.time():.6f}"
+        message += "\n" + unborn.EXCLUDED_TRAILER + json.dumps(excluded)
         commit_args = ["commit-tree", tree_sha, "-m", message, "--no-gpg-sign"]
         if has_ref:
             commit_args = ["commit-tree", tree_sha, "-p", ref_commit, "-m", message, "--no-gpg-sign"]
@@ -1734,10 +1738,16 @@ class CheckpointManager:
             return False
 
     def _stage_with_oversize_preflight(
-        self, store: Path, working_dir: str, index_file: Path,
+        self, store: Path, working_dir: str, index_file: Path, excluded: Optional[list[str]] = None,
     ) -> tuple[bool, str]:
-        """Stage the worktree without opening files already over the size cap."""
+        """Stage without opening oversize files or uncaptured unborn repositories."""
+        if excluded is None:
+            excluded = unborn.unborn_paths(store, working_dir, index_file)
         add_args = _stage_all_args(store.parent, working_dir)
+        if excluded:
+            if "--" not in add_args:
+                add_args.append("--")
+            add_args.extend(unborn.exclusion_args(excluded))
         oversize_pathspec: Optional[Path] = None
         if self.max_file_size_mb > 0:
             oversize = self._oversize_paths_for_staging(store, working_dir, index_file)
@@ -1747,7 +1757,7 @@ class CheckpointManager:
                 # git refuses command-line pathspecs beside --pathspec-from-file, so the
                 # store self-exclusion rides in the same file.
                 oversize_pathspec = self._write_oversize_pathspec(
-                    oversize + _store_pathspecs(store.parent, working_dir))
+                    oversize + excluded + _store_pathspecs(store.parent, working_dir))
                 add_args = ["add", "-A"]
                 add_args.extend([
                     f"--pathspec-from-file={oversize_pathspec}",
