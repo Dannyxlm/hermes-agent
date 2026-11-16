@@ -152,4 +152,3 @@ def test_flag_off_refusal_keeps_the_switch_out_of_the_reply():
     assert receipt["ok"] is False and "card_id" not in receipt
     for words in (receipt["error"].lower(), receipt["errors"][0]["message"].lower()):
         assert "server" not in words and " off" not in words
-
