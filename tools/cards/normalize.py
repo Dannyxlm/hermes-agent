@@ -16,6 +16,8 @@ import math
 import re
 from typing import Any, Callable
 
+from tools.cards.validate import MAX_DEPTH
+
 _DEGREE_MARKS = ("°", "°C", "°F")
 _STATED_MARK = re.compile(r"(°[CF]?)\s*$")
 
@@ -102,11 +104,24 @@ def _compose(data: dict) -> bool:
 _WRITERS: dict[str, Callable[[dict], bool]] = {"weather": _weather, "chart": _chart, "compose": _compose}
 
 
+def _deeper_than(value: Any, limit: int) -> bool:
+    """Iterative, so a card nested past Python's recursion limit is measured, not crashed on."""
+    stack = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        children = node.values() if isinstance(node, dict) else node if isinstance(node, list) else ()
+        stack.extend((child, depth + 1) for child in children)
+    return False
+
+
 def normalize_card(card: Any) -> Any:
-    """*card* with those numbers written as text, or *card* itself (the same object) when none are."""
+    """*card* with those numbers written as text, or *card* itself (the same object) when none are.
+    A card the validator refuses for nesting is left as sent, for that refusal."""
     kind = card.get("kind") if isinstance(card, dict) else None
     writer = _WRITERS.get(kind) if isinstance(kind, str) else None
-    if writer is None or not isinstance(card.get("data"), dict):
+    if writer is None or not isinstance(card.get("data"), dict) or _deeper_than(card, MAX_DEPTH):
         return card
     data = copy.deepcopy(card["data"])
     return {**card, "data": data} if writer(data) else card

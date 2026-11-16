@@ -83,3 +83,56 @@ def test_a_call_with_nothing_to_write_keeps_its_exact_bytes(cards_on):
                          indent=2)
     result, _started, _second = _run_turn(written)
     assert _stored_arguments(result["messages"]) == written
+
+
+def test_a_card_nested_past_the_depth_limit_is_refused_not_crashed_on(cards_on):
+    """Review B1: deep-copying a ~600-level card raised RecursionError in the turn loop, which re-called
+    the model as if the API had failed. It is left as sent and the validator's depth rule refuses it."""
+    nested = {"x": 1}
+    for _ in range(600):
+        nested = {"x": nested}
+    card = {**FORECAST, "data": {**FORECAST["data"], "days": [{"day": "Today", "high": 4, "extra": nested}]}}
+    result, _started, _second = _run_turn(json.dumps(card))
+    receipt = json.loads(next(m for m in result["messages"] if m["role"] == "tool")["content"])
+    assert receipt["ok"] is False and "nests deeper" in receipt["errors"][0]["message"]
+
+
+def _tool_call(arguments, call_id="toolu_card"):
+    from agent.transports.types import ToolCall
+    return ToolCall(id=call_id, name="show_card", arguments=arguments)
+
+
+def test_native_block_sidecars_replay_the_written_input():
+    """Review B2: Anthropic and Bedrock Converse replay the turn from ordered block sidecars, not from
+    tool_calls; their tool block gets the written input, every other block and the order stay exactly."""
+    import tools.cards.tool  # registers show_card and its writer
+    from agent.tool_call_normalize import write_registered_arguments
+
+    call = _tool_call(json.dumps(FORECAST))
+    thinking = {"type": "thinking", "thinking": "a forecast", "signature": "sig"}
+    provider_data = {
+        "anthropic_content_blocks": [thinking, {"type": "tool_use", "id": "toolu_card", "name": "show_card",
+                                                "input": FORECAST}],
+        "bedrock_content_blocks": [{"reasoningContent": {"text": "a forecast"}},
+                                   {"toolUse": {"toolUseId": "toolu_card", "name": "show_card", "input": FORECAST}}]}
+    write_registered_arguments([call], provider_data=provider_data)
+
+    written = json.loads(call.function.arguments)
+    assert written["data"]["days"][0]["high"] == "4°"
+    anthropic, bedrock = provider_data["anthropic_content_blocks"], provider_data["bedrock_content_blocks"]
+    assert anthropic[0] is thinking and anthropic[1]["input"] == written
+    assert bedrock[0] == {"reasoningContent": {"text": "a forecast"}} and bedrock[1]["toolUse"]["input"] == written
+
+
+def test_a_failing_writer_leaves_the_call_as_sent(monkeypatch):
+    """A tool's writer runs inside the turn loop; if it raises, the call goes on exactly as the model sent it."""
+    from agent import tool_call_normalize
+
+    def broken(_args):
+        raise ValueError("writer bug")
+
+    monkeypatch.setattr(tool_call_normalize.registry, "get_args_normalizer", lambda _name: broken)
+    sent = json.dumps(FORECAST)
+    call = _tool_call(sent)
+    tool_call_normalize.write_registered_arguments([call], provider_data={"anthropic_content_blocks": [{"x": 1}]})
+    assert call.function.arguments == sent
