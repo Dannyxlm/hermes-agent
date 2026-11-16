@@ -23,6 +23,8 @@ MAX_CARDS_PER_TURN = 6
 _TURNS_REMEMBERED = 512
 _turn_counts: OrderedDict[tuple[str, str], int] = OrderedDict()
 _turn_lock = threading.Lock()
+# Said to the model, never to Danny: the switch is plumbing, so the reply just answers (Iris F6).
+CARDS_OFF = "no card this time; give the answer in words and don't mention cards or this result"
 
 _DESCRIPTION = (
     "Show Danny a card under your reply in the Hermes app: a natively drawn object (a sheet, a flight, a "
@@ -32,7 +34,9 @@ _DESCRIPTION = (
     "(document), a page (link), images (gallery). Use compose for a summary that mixes stats, a timeline and "
     "rows. Not for a plain answer, code, or anything two sentences already make clear.\n"
     "Rules: your reply must stand on its own. Say the answer in a sentence or two; the card shows the thing "
-    "itself (notifications, older apps and other chats see only your words and the card's alt). Data only: "
+    "itself (notifications, older apps and other chats see only your words and the card's alt). He sees the "
+    "card, so your words carry the point and never repeat it: no markdown copy of its table, no list of its "
+    "rows, and the note doesn't restate your sentence. Data only: "
     "no sizes, colours or layout, the app owns the look. title ≤ 80 chars. note is optional: one sentence, "
     "≤ 240 chars, on what it means for him. At most two actions; ask only fills his composer with its exact "
     "text, it never sends. Files are absolute paths on this server; never web image URLs. compose needs alt "
@@ -45,7 +49,8 @@ _DESCRIPTION = (
 _DATA_DESCRIPTION = (
     "The kind's fields. table: {columns:[{title, type?: text|number|money|percent|date|delta|status, "
     "currency?}] (1-12), rows:[{cells:[one per column: string|number|null], secondary?, badge?, tone?, "
-    "highlight?}] (≤60), totals?, count?, file?}; variant sheet is the full-sheet look. flight: {legs:[{number?, "
+    "highlight?}] (≤60), totals?: [one cell per column, like a row's cells], count?, file?}; percent cells are "
+    "fractions (0.541 shows as 54.1%, 1.5 as 150%); variant sheet is the full-sheet look. flight: {legs:[{number?, "
     "from, to (airport codes), departure, arrival, dayOffset?, duration?, date?, fromName?, toName? (cities), "
     "detail? (seat line), arrivalDetail?, fromLat?/fromLon?, toLat?/toLon? (pairs)}] (1-6), connection?, "
     "connectionCode?, airline?, total?, price?, priceNote?, leave?: {time, label?, detail?}}. route: "
@@ -53,7 +58,7 @@ _DATA_DESCRIPTION = (
     "distance?}. place: "
     "{name, lat, lon, address?, detail?}. weather: {headline, condition?: clear|partly_cloudy|cloudy|rain|snow|"
     "storm|fog|wind, comparison?, range?, chart?: <chart data>, days?:[{day, high?, low?, condition?}] (≤10)}. "
-    "chart: {type?: line|bar|area|point, headline?, caption? (≤120), comparison?, tone?, unit?, x:[labels], series:[{name, "
+    "chart: {type?: line|bar|area|point, headline? (the figure alone, e.g. 18 with unit km), caption? (≤120), comparison?, tone?, unit?, x:[labels], series:[{name, "
     "values:[one per x, number|null]}] (1-6, ≤400 values in all), reference?: {value, label?}}. document: "
     "{file, quotes?: [{label?, text, page, tone?}] (1-3), or one quote? with page?; pages?}. link: {url (https), description?, image? (file)}. gallery: {images:[{file, "
     "caption?}] (1-24)}. compose: {hero?: {type:image, file, aspect?} | {type:map, route|place: <route or "
@@ -145,8 +150,7 @@ def show_card(card: Any, *, session_id: Optional[str] = None) -> str:
     from tools.cards.alt import card_alt
     from tools.cards.validate import KIND_SHAPES, unknown_field_warnings, validate_card
     if not cards_enabled():  # a tool array pinned while cards were on still reaches here: the flag is the switch
-        off = "cards are off on this server; say it in words"
-        return json.dumps({"ok": False, "error": f"card refused: {off}", "errors": [{"path": "(card)", "message": off}]},
+        return json.dumps({"ok": False, "error": CARDS_OFF, "errors": [{"path": "(card)", "message": CARDS_OFF}]},
                           ensure_ascii=False)
     problems = validate_card(card)
     if problems:

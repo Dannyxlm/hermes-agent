@@ -1,0 +1,42 @@
+{
+ "kind": "table",
+ "title": "This quarter against last",
+ "data": {
+  "columns": [
+   {
+    "title": "Metric"
+   },
+   {
+    "title": "Change",
+    "type": "percent"
+   }
+  ],
+  "rows": [
+   {
+    "cells": [
+     "Revenue",
+     3.0
+    ],
+    "tone": "good"
+   },
+   {
+    "cells": [
+     "Orders",
+     1.5
+    ]
+   },
+   {
+    "cells": [
+     "Refunds",
+     -0.12
+    ]
+   },
+   {
+    "cells": [
+     "Returns",
+     0
+    ]
+   }
+  ]
+ }
+}

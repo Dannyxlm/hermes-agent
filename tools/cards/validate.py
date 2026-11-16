@@ -245,6 +245,34 @@ def _table_problems(data: dict) -> list[CardProblem]:
     totals = data.get("totals")
     if isinstance(totals, list) and len(totals) != columns:
         problems.append(CardProblem("data.totals", f"has {len(totals)} cells; the table has {columns} columns"))
+    return problems + _percent_point_problems(data)
+
+
+def _number_cell(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _percent_point_problems(data: dict) -> list[CardProblem]:
+    """A percent column written in points (54.1 for 54.1%): readers draw fractions, so it would show as
+    5,410%. Plainly points means every non-zero cell reads above 150% and there are two of them, or one
+    reads 1,000% or more. A real 150% or 300% beside ordinary rates still passes, and so does one growth
+    figure; a column where every row truly tops 150% can say so as text cells ("320%")."""
+    from tools.cards.alt import format_cell
+    rows = [row.get("cells") for row in data.get("rows") or [] if isinstance(row, dict)]
+    totals = data.get("totals")
+    lines = [cells for cells in rows + [totals] if isinstance(cells, list)]
+    problems = []
+    for index, column in enumerate(data.get("columns") or []):
+        if not (isinstance(column, dict) and column.get("type") == "percent"):
+            continue
+        values = [abs(cells[index]) for cells in lines
+                  if index < len(cells) and _number_cell(cells[index]) and cells[index] != 0]
+        if values and min(values) > 1.5 and (len(values) >= 2 or max(values) >= 10):
+            shown = next(cells[index] for cells in lines if index < len(cells) and _number_cell(cells[index])
+                         and cells[index] != 0)
+            problems.append(CardProblem(
+                f"data.columns[{index}]", f"is percent, and percent cells are fractions: {shown:g} would show as "
+                f"{format_cell(shown, column)}. Write {shown / 100:g} for {shown:g}% (rows and totals)"))
     return problems
 
 

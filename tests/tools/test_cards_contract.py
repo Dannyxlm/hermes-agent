@@ -113,6 +113,9 @@ ALT = {
                          "Café Olimpico: 124 Rue Saint-Viateur O · open till midnight\n"
                          "https://maps.apple.com/?saddr=45.5191,-73.5836&daddr=45.5228,-73.6003&dirflg=w",
     "chart-caption": "Card spending: $3,412 this month — 11% over your average.\nSpent: 2,890 (Jun) → 3,412 (Nov)",
+    "table-percent-fractions": "Monthly budget\nCategory · Monthly · Share\nRent · US$1,200 · 54.1%\nFood · US$400 · 18%\n"
+                               "Transit · US$120 · 5.4%\nFun · US$200 · 9%\nSavings · US$300 · 13.5%\nTotal · US$2,220 · 100%",
+    "table-percent-growth": "This quarter against last\nMetric · Change\nRevenue · 300%\nOrders · 150%\nRefunds · -12%\nReturns · 0%",
 }
 
 # Contract rev 3: each new field's refusal names the field to repair, once.
@@ -233,3 +236,39 @@ def test_alt_is_bounded_at_a_line_for_a_full_table():
 ])
 def test_cells_read_as_words(value, column, words):
     assert format_cell(value, column) == words
+
+
+# Contract rev 6 (Iris F1): percent cells are fractions; a column plainly in points never draws.
+def _percent_table(cells, totals=None):
+    data = {"columns": [{"title": "Item"}, {"title": "Share", "type": "percent"}],
+            "rows": [{"cells": [f"Row {i}", cell]} for i, cell in enumerate(cells)]}
+    return {"kind": "table", "title": "Shares", "data": {**data, **({"totals": ["Total", totals]} if totals is not None else {})}}
+
+
+def test_rev6_percent_points_fixture_is_refused_with_the_fraction_hint():
+    problems = validate_card(_load({"file": "fixtures/hostile/table-percent-points.json"}), file_problem=_synthetic_files)
+    assert [(p.path, p.message) for p in problems] == [(
+        "data.columns[2]", "is percent, and percent cells are fractions: 54.1 would show as 5,410%. "
+                           "Write 0.541 for 54.1% (rows and totals)")]
+
+
+@pytest.mark.parametrize(("cells", "totals"), [
+    ([54.1, 18.0, 5.4, 9.0, 13.5], 100),  # Iris's budget, in points
+    ([18, 54.1, 100], None),
+    ([3.5, 4.2, 5.0], None),  # rates in points would draw 350%..500%
+    ([54.1], None),  # one cell, but 5,410%
+    ([None, 0, 12.5, "n/a", 40], None),  # blanks, zeros and words don't hide it
+])
+def test_a_percent_column_in_points_is_refused(cells, totals):
+    problems = validate_card(_percent_table(cells, totals))
+    assert [p.path for p in problems] == ["data.columns[1]"] and "fractions" in problems[0].message
+
+
+@pytest.mark.parametrize(("cells", "totals"), [
+    ([0.541, 0.18, 0.054, 0.09, 0.135], 1),
+    ([1.5], None), ([3.0], None),  # one real 150% or 300% growth figure
+    ([0.12, 1.5, 3.0], None), ([-0.12, 3.0, 0], None),  # growth beside ordinary rates
+    ([0, 0], None), (["320%", "410%"], None),  # words are shown as written
+])
+def test_a_percent_column_of_fractions_or_real_growth_passes(cells, totals):
+    assert validate_card(_percent_table(cells, totals)) == []

@@ -70,7 +70,7 @@
           "type": "object", "required": ["title"],
           "properties": {
             "title": {"$ref": "#/$defs/label", "minLength": 1},
-            "type": {"enum": ["text", "number", "money", "percent", "date", "delta", "status"], "description": "Default text. money/percent/number/delta format numeric cells; a string cell is shown as written."},
+            "type": {"enum": ["text", "number", "money", "percent", "date", "delta", "status"], "description": "Default text. money/percent/number/delta format numeric cells; percent cells are fractions (0.541 is 54.1%). A string cell is shown as written."},
             "currency": {"type": "string", "pattern": "^[A-Z]{3}$", "description": "ISO 4217, money columns only. Default CAD."}
           }
         }},
@@ -84,7 +84,7 @@
             "highlight": {"type": "boolean"}
           }
         }},
-        "totals": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/cell"}},
+        "totals": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/cell"}, "description": "One cell per column, like a row's cells."},
         "count": {"type": "integer", "minimum": 0, "maximum": 1000000, "description": "Total rows in the full sheet when rows is only the first part."},
         "file": {"$ref": "#/$defs/file", "description": "CSV or XLSX holding the full sheet."}
       }
