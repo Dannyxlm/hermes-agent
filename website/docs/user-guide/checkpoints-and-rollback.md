@@ -278,8 +278,10 @@ from the nested repository's own working directory.
 
 ### Nested repositories without commits
 
-A newly initialized nested Git repository has no commit for Git to record.
-Hermes excludes that path instead of losing the entire parent checkpoint.
+An entirely untracked, newly initialized nested Git repository has no commit
+for Git to record. Hermes excludes that path instead of losing the entire
+parent checkpoint. A directory whose contents were already captured before
+`git init` keeps being snapshotted and restored as ordinary files, as before.
 The checkpoint listing names the uncaptured repository, and a warning is
 logged once per directory/path set for the manager's lifetime. The nested
 repository's files and Git metadata are never initialized or committed by
@@ -287,8 +289,8 @@ checkpointing.
 
 The gap is recorded with the checkpoint: full and safe rollback recover the
 parent's captured files but leave excluded paths untouched, even after the
-nested `.git` marker disappears. Restore results list these paths as
-`skipped_uncaptured`. Keep a separate backup of that repository. Nested
+nested `.git` marker disappears. The rendered restore reason names all the
+uncaptured paths it kept. Keep a separate backup of that repository. Nested
 repositories that already have commits retain the gitlink behavior above.
 
 ### Container Backends

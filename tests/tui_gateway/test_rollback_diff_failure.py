@@ -28,5 +28,5 @@ def test_rollback_diff_reports_staging_failure(tmp_path, monkeypatch):
 
     assert "result" not in response, response
     assert response["error"]["code"] == 5022
-    assert "Could not inspect nested repositories" in response["error"]["message"]
+    assert "Could not inspect untracked paths" in response["error"]["message"]
     assert (work / "a.txt").read_text(encoding="utf-8") == "edited\n"

@@ -31,7 +31,7 @@ def test_rollback_diff_reports_staging_failure(tmp_path):
 
                 assert "result" not in response, response
                 assert response["error"]["message"] == "checkpoint_diff_failed"
-                assert "Could not inspect nested repositories" in response["error"]["data"]["detail"]
+                assert "Could not inspect untracked paths" in response["error"]["data"]["detail"]
                 assert (work / "a.txt").read_text(encoding="utf-8") == "edited\n"
 
         asyncio.run(probe())

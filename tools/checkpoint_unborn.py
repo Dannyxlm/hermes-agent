@@ -1,43 +1,35 @@
 """Unborn nested repositories are named snapshot gaps, never rollback targets."""
 import json
+import tempfile
 from pathlib import Path, PurePosixPath
 
 EXCLUDED_TRAILER = "Hermes-Uncaptured-Unborn: "
 
 
 def unborn_paths(store: Path, working_dir: str, index_file: Path) -> list[str]:
-    """Discover only Git-visible nested repos; read their refs without changing them.
+    """Find only entirely untracked unborn repos: Git already handles tracked contents.
 
-    Cached files can predate a nested `git init`, so inspect their ancestors too.
-    Do not walk ignored dependencies or follow symlinks outside the worktree.
+    `ls-files --others` emits a nested repository as `path/`, but emits actual
+    filenames when its contents were already tracked before `git init`. Avoid
+    walking every cached file (and changing the coverage of those directories).
     """
     from tools import checkpoint_manager as cm
 
     ok, names, err = cm._run_git(
-        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["ls-files", "--others", "--exclude-standard", "-z"],
         store, working_dir, index_file=index_file,
     )
     if not ok:
-        raise OSError(f"Could not inspect nested repositories: {err}")
+        raise OSError(f"Could not inspect untracked paths: {err}")
     root = Path(working_dir)
-    candidates = set()
-    inspected = set()
-    for name in filter(None, names.split("\0")):
-        path = root / name
-        for parent in (path, *path.parents):
-            if parent == root:
-                break
-            if parent in inspected:
-                break
-            inspected.add(parent)
-            if parent.is_symlink():
-                continue
-            if (parent / ".git").exists() and parent.resolve().is_relative_to(root):
-                candidates.add(parent)
     excluded = []
-    for path in sorted(candidates):
-        # Detached HEAD, broken repositories, and command failures retain Git's
-        # existing fail-closed behavior. Only a valid symbolic, absent HEAD is unborn.
+    for name in sorted(set(names.split("\0"))):
+        if not name.endswith("/"):
+            continue
+        path = root / name
+        if not (path / ".git").exists() or not path.resolve().is_relative_to(root):
+            continue
+        # Detached HEAD and command failures retain Git's existing behavior.
         symbolic, _, _ = cm._run_git(
             ["symbolic-ref", "-q", "HEAD"], path / ".git", str(path),
             allowed_returncodes={1, 128},
@@ -58,8 +50,6 @@ def stage_current(store: Path, working_dir: str, index_file: Path) -> tuple[bool
     from tools import checkpoint_manager as cm
 
     excluded = unborn_paths(store, working_dir, index_file)
-    if not drop_from_index(store, working_dir, index_file, excluded):
-        return False, "could not drop uncaptured nested repositories"
     args = cm._stage_all_args(store.parent, working_dir)
     if excluded:
         if "--" not in args:
@@ -67,20 +57,6 @@ def stage_current(store: Path, working_dir: str, index_file: Path) -> tuple[bool
         args.extend(exclusion_args(excluded))
     ok, _, err = cm._run_git(args, store, working_dir, index_file=index_file, timeout=cm._GIT_TIMEOUT * 2)
     return ok, err
-
-
-def drop_from_index(store: Path, working_dir: str, index_file: Path, paths: list[str]) -> bool:
-    """Forget previously captured contents as well as excluding new additions."""
-    from tools import checkpoint_manager as cm
-
-    if not paths:
-        return True
-    ok, _, _ = cm._run_git(
-        ["rm", "--cached", "-r", "-f", "-q", "--ignore-unmatch", "--", *paths],
-        store, working_dir, index_file=index_file,
-        extra_env={"GIT_LITERAL_PATHSPECS": "1"},
-    )
-    return ok
 
 
 def checkpoint_exclusions(store: Path, working_dir: str, commit_hash: str) -> list[str]:
@@ -110,7 +86,15 @@ def restore_exclusions(store: Path, working_dir: str, commit_hash: str, tree: st
     from tools import checkpoint_manager as cm
 
     excluded = checkpoint_exclusions(store, working_dir, commit_hash)
-    excluded += unborn_paths(store, working_dir, cm._index_path(store, cm._project_hash(working_dir)))
+    # The pre-rollback take normally repairs the project index. Inspect through
+    # a fresh index first so a corrupt cache cannot block an otherwise valid restore.
+    with tempfile.TemporaryDirectory(prefix="restore-gaps-", dir=store) as scratch:
+        index = Path(scratch) / "index"
+        tip = cm._ref_tip(store, working_dir, cm._ref_name(cm._project_hash(working_dir)))
+        ok, _, err = cm._run_git(["read-tree", tip or "--empty"], store, working_dir, index_file=index)
+        if not ok:
+            raise OSError(f"Could not inspect restore gaps: {err}")
+        excluded += unborn_paths(store, working_dir, index)
     # A formerly captured file at an ancestor must not replace the directory
     # now holding an uncaptured repository either.
     ancestors = [record.split("\t", 1)[1] for record in tree.split("\0") if "\t" in record
@@ -134,6 +118,13 @@ def warn_once(manager, working_dir: str, excluded: list[str]) -> None:
     if excluded and key not in manager._warned_unborn:
         cm.logger.warning("Checkpoint does not capture unborn nested repositories: %s", json.dumps(excluded))
         manager._warned_unborn.add(key)
+
+
+def disclose(reason: str, excluded: list[str]) -> str:
+    """Use the existing rendered reason field on every rollback surface."""
+    if not excluded:
+        return reason
+    return " ".join(reason.splitlines()) + " [uncaptured unborn repos kept: " + json.dumps(excluded, ensure_ascii=False) + "]"
 
 
 def contains_path(paths: list[str], rel: str) -> bool:

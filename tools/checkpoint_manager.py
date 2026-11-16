@@ -1410,12 +1410,11 @@ class CheckpointManager:
                     return {
                         "success": True,
                         "restored_to": commit_hash[:8],
-                        "reason": "nothing to restore (all changed files were user-edited)",
+                        "reason": unborn.disclose("nothing to restore among captured files", excluded),
                         "directory": abs_dir,
                         "restored_files": [],
                         "skipped_user_edits": skipped_user_edits,
                         "skipped_oversize": [],
-                        "skipped_uncaptured": excluded,
                     }
 
         selected_paths = unborn.filter_selection(selected_paths, excluded)
@@ -1507,9 +1506,8 @@ class CheckpointManager:
         result = {
             "success": True,
             "restored_to": commit_hash[:8],
-            "reason": reason,
+            "reason": unborn.disclose(reason, excluded),
             "directory": abs_dir,
-            "skipped_uncaptured": excluded,
         }
         if file_path:
             result["file"] = file_path
@@ -1677,9 +1675,7 @@ class CheckpointManager:
         # A nested repository is stored as a gitlink, not its files: say so in
         # the checkpoint itself rather than only when a rollback is refused.
         ok_ls, tree_out, _ = _run_git(["ls-tree", "-r", "-z", tree_sha], store, working_dir)
-        nested_repos = (_gitlink_paths(tree_out) if ok_ls else []) + [
-            json.dumps(path, ensure_ascii=False)[1:-1] for path in excluded
-        ]
+        nested_repos = _gitlink_paths(tree_out) if ok_ls else []
         if nested_repos:
             logger.info("Checkpoint of %s does not capture nested git repositories: %s",
                         working_dir, ", ".join(nested_repos))
@@ -1692,6 +1688,7 @@ class CheckpointManager:
 
         # Build commit (parent = current ref tip, if any). The body's exact take time lets a whole-tree
         # /rollback tell a turn after the snapshot from one before it in the same git second.
+        reason = unborn.disclose(reason, excluded)
         message = f"{reason}\n\n{TAKEN_AT_TRAILER}: {time.time():.6f}"
         message += "\n" + unborn.EXCLUDED_TRAILER + json.dumps(excluded)
         commit_args = ["commit-tree", tree_sha, "-m", message, "--no-gpg-sign"]
@@ -1746,8 +1743,6 @@ class CheckpointManager:
         """Stage without opening oversize files or uncaptured unborn repositories."""
         if excluded is None:
             excluded = unborn.unborn_paths(store, working_dir, index_file)
-        if not unborn.drop_from_index(store, working_dir, index_file, excluded):
-            return False, "could not drop uncaptured nested repositories"
         add_args = _stage_all_args(store.parent, working_dir)
         if excluded:
             if "--" not in add_args:
