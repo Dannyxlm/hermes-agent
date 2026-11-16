@@ -5,6 +5,8 @@ forget on disconnect). A session's agent gets the ``cards`` toolset when any cli
 session at build time advertised the version this server speaks. A long-lived chat (Home) whose
 agent was built before such a client attached is rebuilt once, at the next turn's admission
 (``sync_cards_toolset``): the tool array changes between turns, never inside one (prompt caching).
+Under ``dashboard.turn_isolation`` a turn may run in the compute-host child, which never sees the
+client's socket: each turn frame carries ``CLIENT_DRAWS_CARDS`` from the serving process instead.
 """
 from __future__ import annotations
 
@@ -15,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 CARDS_VERSION = 1
 _ATTRIBUTE = "cards_capability"
+# Turn-frame field and child session key: the serving process's answer to ``session_draws_cards`` for a
+# turn it hands to the compute host (``dashboard.turn_isolation``).
+CLIENT_DRAWS_CARDS = "client_draws_cards"
 
 
 def advertise(transport: Any, cards: dict | None) -> bool:
@@ -33,7 +38,10 @@ def draws_cards(transport: Any) -> bool:
 
 
 def session_draws_cards(session: dict | None) -> bool:
-    return bool(session) and draws_cards(session.get("transport"))
+    """A card-drawing client is attached to *session*: on its own transport, or, in the compute-host
+    child (whose transport is the pipe to the serving process), as the serving process said on this
+    turn's frame (``CLIENT_DRAWS_CARDS``)."""
+    return bool(session) and (draws_cards(session.get("transport")) or session.get(CLIENT_DRAWS_CARDS) is True)
 
 
 def _plus_cards(selection: list[str] | None) -> list[str]:
@@ -45,15 +53,18 @@ def _plus_cards(selection: list[str] | None) -> list[str]:
     return [*selection, "cards"]
 
 
-def with_cards_toolset(selection: list[str] | None, session: dict | None) -> list[str] | None:
+def with_cards_toolset(selection: list[str] | None, session: dict | None,
+                       client_draws_cards: bool | None = None) -> list[str] | None:
     """*selection* plus ``cards`` for a session a card-drawing client is attached to.
 
     ``None`` (every toolset) never includes a platform-gated toolset such as ``cards``, so it is
     spelled out first. ``cards.enabled`` decides here, not only in the tool's ``check_fn``: a
     session's tool pin carries a pinned tool forward whenever the selection names its toolset,
     before ``check_fn`` is asked, so the flag must keep ``cards`` out of the selection to be an
-    off switch for a chat that already showed one."""
-    return _plus_cards(selection) if session_draws_cards(session) and offered_version() else selection
+    off switch for a chat that already showed one. A build that runs before the session record
+    exists (the compute host's) passes ``client_draws_cards`` instead."""
+    drawing = session_draws_cards(session) if client_draws_cards is None else client_draws_cards
+    return _plus_cards(selection) if drawing and offered_version() else selection
 
 
 def carry_cards_toolset(selection: list[str] | None, agent: Any) -> list[str] | None:

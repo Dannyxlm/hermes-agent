@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Collection
 
 from hermes_cli.config_backend import ConfigBackendUnavailable
+from tui_gateway.cards_capability import CLIENT_DRAWS_CARDS
 from tui_gateway.host_supervisor import MUTATOR_ROUTE_TABLE, _build_sha
 
 
@@ -373,6 +374,8 @@ class ComputeHost:
         else:
             session = self._build_server_session(server, frame, sid)
         session["_compute_host_boot_id"] = self._boot_id
+        # Read at this turn's admission (``sync_cards_toolset``): the app may have attached since the last.
+        session[CLIENT_DRAWS_CARDS] = frame.get(CLIENT_DRAWS_CARDS) is True
         if isinstance(frame.get("attached_images"), list):
             session["attached_images"] = list(frame.get("attached_images") or [])
         # A model switch queued on the host side while this session was busy rides
@@ -425,7 +428,8 @@ class ComputeHost:
                 cwd_override=str(frame.get("cwd") or "") or None,
                 context_cwd_is_launch_artifact=bool(
                     frame.get("context_cwd_is_launch_artifact", False)),
-                session_db=session_db, auth_user_id=frame.get("auth_user_id"))
+                session_db=session_db, auth_user_id=frame.get("auth_user_id"),
+                client_draws_cards=frame.get(CLIENT_DRAWS_CARDS) is True)
             if server._transfer_db_to_agent(agent, session_db):
                 owns_db = False
         finally:
