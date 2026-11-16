@@ -248,8 +248,8 @@ def _percent_table(cells, totals=None):
 def test_rev6_percent_points_fixture_is_refused_with_the_fraction_hint():
     problems = validate_card(_load({"file": "fixtures/hostile/table-percent-points.json"}), file_problem=_synthetic_files)
     assert [(p.path, p.message) for p in problems] == [(
-        "data.columns[2]", "is percent, and percent cells are fractions: 54.1 would show as 5,410%. "
-                           "Write 0.541 for 54.1% (rows and totals)")]
+        "data.columns[2]", "is percent, and percent cells are fractions: 100 would show as 10,000%. Write 1 for 100% "
+                           "(rows and totals), or if 10,000% is right, write that cell as text (\"10,000%\")")]
 
 
 @pytest.mark.parametrize(("cells", "totals"), [
@@ -258,10 +258,19 @@ def test_rev6_percent_points_fixture_is_refused_with_the_fraction_hint():
     ([3.5, 4.2, 5.0], None),  # rates in points would draw 350%..500%
     ([54.1], None),  # one cell, but 5,410%
     ([None, 0, 12.5, "n/a", 40], None),  # blanks, zeros and words don't hide it
+    ([54.1, 18, 5.4, 9, 12.3, 1.2], 100), ([60, 39, 1], None),  # one small share doesn't hide it (review 1)
+    ([0.541, 0.459], 100),  # fractions with a total in points
 ])
 def test_a_percent_column_in_points_is_refused(cells, totals):
     problems = validate_card(_percent_table(cells, totals))
     assert [p.path for p in problems] == ["data.columns[1]"] and "fractions" in problems[0].message
+
+
+def test_a_refused_real_figure_can_be_repaired_as_text():
+    """Review 2: [3.0, 2.0] may be real growth; the refusal names the way to keep it, and that way passes."""
+    message = validate_card(_percent_table([3.0, 2.0]))[0].message
+    assert 'write that cell as text ("300%")' in message
+    assert validate_card(_percent_table(["300%", "200%"])) == []
 
 
 @pytest.mark.parametrize(("cells", "totals"), [

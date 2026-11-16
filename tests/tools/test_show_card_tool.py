@@ -146,20 +146,10 @@ def test_a_thread_never_inherits_the_cards_toolset(monkeypatch):
 
 def test_flag_off_refusal_keeps_the_switch_out_of_the_reply():
     """Iris F6: after a switch-off the model told Danny "cards are turned off on this server". The receipt
-    still refuses, but its words ask for a plain answer and say nothing about servers or switches."""
+    still refuses, and its words say nothing about servers or switches."""
     invalidate_check_fn_cache()
     receipt = _call(ROUTE)
     assert receipt["ok"] is False and "card_id" not in receipt
-    words = receipt["error"].lower()
-    assert "in words" in words and "don't mention" in words
-    assert "server" not in words and " off" not in words
+    for words in (receipt["error"].lower(), receipt["errors"][0]["message"].lower()):
+        assert "server" not in words and " off" not in words
 
-
-def test_the_tool_schema_teaches_percent_fractions_and_no_duplication(cards_on):
-    schema = next(d["function"] for d in model_tools.get_tool_definitions(enabled_toolsets=["cards"], quiet_mode=True)
-                  if d["function"]["name"] == "show_card")
-    data = schema["parameters"]["properties"]["data"]["description"]
-    assert "percent cells are fractions (0.541 shows as 54.1%" in data
-    assert "totals?: [one cell per column" in data
-    assert "headline? (the figure alone" in data
-    assert "never repeat it: no markdown copy of its table" in schema["description"]

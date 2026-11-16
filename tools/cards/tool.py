@@ -24,7 +24,7 @@ _TURNS_REMEMBERED = 512
 _turn_counts: OrderedDict[tuple[str, str], int] = OrderedDict()
 _turn_lock = threading.Lock()
 # Said to the model, never to Danny: the switch is plumbing, so the reply just answers (Iris F6).
-CARDS_OFF = "no card this time; give the answer in words and don't mention cards or this result"
+CARDS_OFF = "no cards for now; give the answer in words and don't mention cards or this result"
 
 _DESCRIPTION = (
     "Show Danny a card under your reply in the Hermes app: a natively drawn object (a sheet, a flight, a "

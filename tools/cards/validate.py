@@ -254,10 +254,10 @@ def _number_cell(value: Any) -> bool:
 
 def _percent_point_problems(data: dict) -> list[CardProblem]:
     """A percent column written in points (54.1 for 54.1%): readers draw fractions, so it would show as
-    5,410%. Plainly points means every non-zero cell reads above 150% and there are two of them, or one
-    reads 1,000% or more. A real 150% or 300% beside ordinary rates still passes, and so does one growth
-    figure; a column where every row truly tops 150% can say so as text cells ("320%")."""
-    from tools.cards.alt import format_cell
+    5,410%. Plainly points means one cell reads 1,000% or more, or every non-zero cell reads above 150%
+    and there are two of them. One real 150% or 300% figure, or growth beside ordinary rates, still
+    passes; a figure that truly is that large can be written as a text cell ("1,200%")."""
+    from tools.cards.alt import _number, format_cell
     rows = [row.get("cells") for row in data.get("rows") or [] if isinstance(row, dict)]
     totals = data.get("totals")
     lines = [cells for cells in rows + [totals] if isinstance(cells, list)]
@@ -265,14 +265,16 @@ def _percent_point_problems(data: dict) -> list[CardProblem]:
     for index, column in enumerate(data.get("columns") or []):
         if not (isinstance(column, dict) and column.get("type") == "percent"):
             continue
-        values = [abs(cells[index]) for cells in lines
+        values = [cells[index] for cells in lines
                   if index < len(cells) and _number_cell(cells[index]) and cells[index] != 0]
-        if values and min(values) > 1.5 and (len(values) >= 2 or max(values) >= 10):
-            shown = next(cells[index] for cells in lines if index < len(cells) and _number_cell(cells[index])
-                         and cells[index] != 0)
+        sizes = [abs(value) for value in values]
+        if sizes and (max(sizes) >= 10 or (len(sizes) >= 2 and min(sizes) > 1.5)):
+            shown = max(values, key=abs)
+            drawn = format_cell(shown, column)
             problems.append(CardProblem(
-                f"data.columns[{index}]", f"is percent, and percent cells are fractions: {shown:g} would show as "
-                f"{format_cell(shown, column)}. Write {shown / 100:g} for {shown:g}% (rows and totals)"))
+                f"data.columns[{index}]", f"is percent, and percent cells are fractions: {_number(shown, 6)} would show "
+                f"as {drawn}. Write {_number(shown / 100, 6)} for {_number(shown, 6)}% (rows and totals), or if "
+                f"{drawn} is right, write that cell as text (\"{drawn}\")"))
     return problems
 
 
