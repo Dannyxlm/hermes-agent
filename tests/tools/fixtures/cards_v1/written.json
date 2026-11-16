@@ -1,0 +1,462 @@
+{
+ "v": 1,
+ "about": "Rule 14: numbers sent where a card draws text, as the server writes them when the call arrives (before the turn is stored or shown). Each pair: `sent` is the call as the model sent it, `card` the arguments every reader then gets. `unchanged` calls are left exactly as sent and refused.",
+ "written": [
+  {
+   "about": "weather: Iris's W1 call. Temperatures sent as numbers get the bare degree mark; a headline that is already text stays as written",
+   "sent": {
+    "kind": "weather",
+    "title": "Pinehollow · next three days",
+    "data": {
+     "headline": "4°C and cloudy",
+     "condition": "cloudy",
+     "days": [
+      {
+       "day": "Today",
+       "high": 4,
+       "low": -1,
+       "condition": "cloudy"
+      },
+      {
+       "day": "Tue",
+       "high": 7,
+       "low": 1,
+       "condition": "partly_cloudy"
+      },
+      {
+       "day": "Wed",
+       "high": 2,
+       "low": -3,
+       "condition": "snow"
+      }
+     ]
+    }
+   },
+   "card": {
+    "kind": "weather",
+    "title": "Pinehollow · next three days",
+    "data": {
+     "headline": "4°C and cloudy",
+     "condition": "cloudy",
+     "days": [
+      {
+       "day": "Today",
+       "high": "4°",
+       "low": "-1°",
+       "condition": "cloudy"
+      },
+      {
+       "day": "Tue",
+       "high": "7°",
+       "low": "1°",
+       "condition": "partly_cloudy"
+      },
+      {
+       "day": "Wed",
+       "high": "2°",
+       "low": "-3°",
+       "condition": "snow"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "about": "weather: a numeric headline, and the card's stated unit (chart unit °F) carried onto every temperature; decimals keep one place; chart x hours become labels",
+   "sent": {
+    "kind": "weather",
+    "title": "Burlington · Saturday",
+    "data": {
+     "headline": 39,
+     "condition": "rain",
+     "chart": {
+      "type": "line",
+      "unit": "°F",
+      "x": [
+       8,
+       12,
+       16,
+       20
+      ],
+      "series": [
+       {
+        "name": "Temperature",
+        "values": [
+         36,
+         39,
+         41,
+         37
+        ]
+       }
+      ]
+     },
+     "days": [
+      {
+       "day": "Sat",
+       "high": 41.0,
+       "low": 33.46,
+       "condition": "rain"
+      },
+      {
+       "day": "Sun",
+       "high": 44,
+       "condition": "clear"
+      }
+     ]
+    }
+   },
+   "card": {
+    "kind": "weather",
+    "title": "Burlington · Saturday",
+    "data": {
+     "headline": "39°F",
+     "condition": "rain",
+     "chart": {
+      "type": "line",
+      "unit": "°F",
+      "x": [
+       "8",
+       "12",
+       "16",
+       "20"
+      ],
+      "series": [
+       {
+        "name": "Temperature",
+        "values": [
+         36,
+         39,
+         41,
+         37
+        ]
+       }
+      ]
+     },
+     "days": [
+      {
+       "day": "Sat",
+       "high": "41°F",
+       "low": "33.5°F",
+       "condition": "rain"
+      },
+      {
+       "day": "Sun",
+       "high": "44°F",
+       "condition": "clear"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "about": "weather: the headline states °C, so a numeric day takes °C",
+   "sent": {
+    "kind": "weather",
+    "title": "Kigali",
+    "data": {
+     "headline": "24°C",
+     "days": [
+      {
+       "day": "Mon",
+       "high": 26,
+       "low": 17
+      }
+     ]
+    }
+   },
+   "card": {
+    "kind": "weather",
+    "title": "Kigali",
+    "data": {
+     "headline": "24°C",
+     "days": [
+      {
+       "day": "Mon",
+       "high": "26°C",
+       "low": "17°C"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "about": "chart: a numeric headline figure and year labels become their digits, never grouped (2024, not 2,024)",
+   "sent": {
+    "kind": "chart",
+    "title": "Members by year",
+    "data": {
+     "type": "bar",
+     "headline": 3087,
+     "unit": "members",
+     "x": [
+      2022,
+      2023,
+      2024
+     ],
+     "series": [
+      {
+       "name": "Members",
+       "values": [
+        1210,
+        2290,
+        3087
+       ]
+      }
+     ]
+    }
+   },
+   "card": {
+    "kind": "chart",
+    "title": "Members by year",
+    "data": {
+     "type": "bar",
+     "headline": "3087",
+     "unit": "members",
+     "x": [
+      "2022",
+      "2023",
+      "2024"
+     ],
+     "series": [
+      {
+       "name": "Members",
+       "values": [
+        1210,
+        2290,
+        3087
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "about": "compose: a stats value, a rows value, a spark value and a list trailing sent as numbers; a hero chart's x labels",
+   "sent": {
+    "kind": "compose",
+    "title": "This week",
+    "alt": "41 sign-ups this week, up from 35. Four people booked.",
+    "data": {
+     "hero": {
+      "type": "chart",
+      "chart": {
+       "x": [
+        1,
+        2,
+        3
+       ],
+       "series": [
+        {
+         "name": "Sign-ups",
+         "values": [
+          9,
+          14,
+          18
+         ]
+        }
+       ]
+      }
+     },
+     "blocks": [
+      {
+       "type": "stats",
+       "items": [
+        {
+         "label": "Sign-ups",
+         "value": 41,
+         "delta": "+6"
+        },
+        {
+         "label": "Rate",
+         "value": 2.5,
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "type": "rows",
+       "items": [
+        {
+         "label": "Party size",
+         "value": 4
+        }
+       ]
+      },
+      {
+       "type": "spark",
+       "label": "Visits",
+       "value": 1200,
+       "points": [
+        3,
+        5,
+        4,
+        8
+       ]
+      },
+      {
+       "type": "list",
+       "items": [
+        {
+         "title": "Open tasks",
+         "trailing": 3
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "card": {
+    "kind": "compose",
+    "title": "This week",
+    "alt": "41 sign-ups this week, up from 35. Four people booked.",
+    "data": {
+     "hero": {
+      "type": "chart",
+      "chart": {
+       "x": [
+        "1",
+        "2",
+        "3"
+       ],
+       "series": [
+        {
+         "name": "Sign-ups",
+         "values": [
+          9,
+          14,
+          18
+         ]
+        }
+       ]
+      }
+     },
+     "blocks": [
+      {
+       "type": "stats",
+       "items": [
+        {
+         "label": "Sign-ups",
+         "value": "41",
+         "delta": "+6"
+        },
+        {
+         "label": "Rate",
+         "value": "2.5",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "type": "rows",
+       "items": [
+        {
+         "label": "Party size",
+         "value": "4"
+        }
+       ]
+      },
+      {
+       "type": "spark",
+       "label": "Visits",
+       "value": "1200",
+       "points": [
+        3,
+        5,
+        4,
+        8
+       ]
+      },
+      {
+       "type": "list",
+       "items": [
+        {
+         "title": "Open tasks",
+         "trailing": "3"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "unchanged": [
+  {
+   "about": "route: a duration and a distance need a unit the card cannot know, so numbers stay as sent and are refused with a request for text",
+   "sent": {
+    "kind": "route",
+    "title": "Airport to the hotel",
+    "data": {
+     "stops": [
+      {
+       "name": "YUL",
+       "lat": 45.4577,
+       "lon": -73.7499
+      },
+      {
+       "name": "Hôtel William Gray",
+       "lat": 45.5075,
+       "lon": -73.554
+      }
+     ],
+     "duration": 24,
+     "distance": 21
+    }
+   }
+  },
+  {
+   "about": "flight: a time and a price stay as sent and are refused",
+   "sent": {
+    "kind": "flight",
+    "title": "To Kigali",
+    "data": {
+     "legs": [
+      {
+       "from": "YUL",
+       "to": "KGL",
+       "departure": 1755,
+       "arrival": "15:50",
+       "dayOffset": 1
+      }
+     ],
+     "price": 1482
+    }
+   }
+  },
+  {
+   "about": "compose: a stats delta and a timeline time stay as sent and are refused",
+   "sent": {
+    "kind": "compose",
+    "title": "Today",
+    "alt": "Revenue up 12 percent. Call at three.",
+    "data": {
+     "blocks": [
+      {
+       "type": "stats",
+       "items": [
+        {
+         "label": "Revenue",
+         "value": "$18.4k",
+         "delta": 12
+        },
+        {
+         "label": "Orders",
+         "value": "96"
+        }
+       ]
+      },
+      {
+       "type": "timeline",
+       "items": [
+        {
+         "time": 15,
+         "title": "Call with Adam"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

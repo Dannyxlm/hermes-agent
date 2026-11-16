@@ -92,6 +92,10 @@ def run_tool_round(
     from agent.tool_call_batches import expand_local_tool_batches
     assistant_message.tool_calls = expand_local_tool_batches(
         assistant_message.tool_calls, provider_data=getattr(assistant_message, "provider_data", None))
+    # A tool's own argument writer (show_card: numbers where a card draws text), before de-duplication.
+    from agent.tool_call_normalize import write_registered_arguments
+    write_registered_arguments(assistant_message.tool_calls,
+                               provider_data=getattr(assistant_message, "provider_data", None))
 
     # Post-call guardrails.
     assistant_message.tool_calls = agent._deduplicate_tool_calls(
