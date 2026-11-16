@@ -291,6 +291,10 @@ def test_account_primary_cas_uses_native_store(client, provider, display_name, s
     assert changed.status_code == 200, changed.text
     section2 = next(p for p in changed.json()['providers'] if p['id'] == provider)
     assert section2['primary_id'] == 'second'
+    assert section['pin'] is None
+    # "Use now" comes straight back in the same response, only where the router honours it.
+    pinned = strategy == 'smart' and not broken_pin
+    assert (section2['pin'] or {}).get('account_id') == ('second' if pinned else None)
     from agent.account_router.snapshot import read_snapshot
     if broken_pin:
         assert (home/'state'/'account_router.json').read_text() == '{not json'
@@ -309,6 +313,7 @@ def test_account_primary_cas_uses_native_store(client, provider, display_name, s
     borrowed_section = next(p for p in borrowed.json()['providers'] if p['id'] == provider)
     assert borrowed_section['scope'] == 'shared_root'
     assert not borrowed_section['can_set_primary']
+    assert borrowed_section['pin'] is None  # profile b's own strategy is fill_first
     denied = c.post(P+'/provider/accounts/primary?profile=b', json={
         'provider': provider, 'account_id': 'first', 'profile_id': 'b', 'revision': borrowed_section['revision']})
     assert denied.status_code == 403

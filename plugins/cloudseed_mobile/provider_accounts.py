@@ -149,6 +149,26 @@ def _cached_usage(home, provider, entry):
             "message": "Usage has not been loaded."}
 
 
+def _active_pin(provider, strategy, entries):
+    """The router's live "Use now" override for this pool, read through the router's own snapshot
+    reader at the path it reads (``snapshot_path``: a borrowed pool reads the root's state), or None.
+    Advisory: unreadable router state is "no pin", never an error on the inventory route."""
+    if strategy != "smart" or not entries:
+        return None
+    try:
+        from agent.account_router.snapshot import read_snapshot, snapshot_path
+        pin = read_snapshot(snapshot_path(provider)).get("pins", {}).get(provider) or {}
+        entry_id, until = pin.get("entry_id"), pin.get("until")
+        if (not isinstance(entry_id, str) or entry_id not in {e.id for e in entries}
+                or isinstance(until, bool) or not isinstance(until, (int, float)) or until <= time.time()):
+            return None
+        # Whole seconds, as in the contract's example: plain ISO-8601 parsers on the phone read it.
+        return {"account_id": entry_id,
+                "until": datetime.fromtimestamp(int(until), UTC).isoformat().replace("+00:00", "Z")}
+    except Exception:  # health: allow BLE001 -- advisory field: unreadable router state is "no pin", never a 5xx
+        return None
+
+
 def _section(provider, profile_id, home, auth):
     from plugins.cloudseed_mobile.account_render import _entry_is_pool_exhausted, _entry_pool_retry_after, _safe_entry_label
     entries, _rows, _store, owner, strategy, reason, revision = _pool_state(provider, profile_id, home, auth)
@@ -172,7 +192,8 @@ def _section(provider, profile_id, home, auth):
             "revision": revision, "scope": "shared_root" if shared else "profile",
             "scope_label": "Shared Ava accounts" if shared else "This Hermes profile",
             "can_set_primary": reason is None, "read_only_reason": reason,
-            "primary_id": entries[0].id if entries else None, "accounts": accounts}
+            "primary_id": entries[0].id if entries else None, "pin": _active_pin(provider, strategy, entries),
+            "accounts": accounts}
 
 
 def get_accounts():
