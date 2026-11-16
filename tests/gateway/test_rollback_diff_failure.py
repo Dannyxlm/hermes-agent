@@ -1,6 +1,5 @@
 """The shared owner's rollback.diff preserves checkpoint staging refusals."""
 import asyncio
-import subprocess
 
 import pytest
 
@@ -23,16 +22,16 @@ def test_rollback_diff_reports_staging_failure(tmp_path):
                 sid = created["result"]["session_id"]
                 await asyncio.to_thread(_checkpoint, home, work, "before edit")
                 (work / "a.txt").write_text("edited\n", encoding="utf-8")
-                nested = work / "nested"
-                nested.mkdir()
-                await asyncio.to_thread(subprocess.run, ["git", "init", str(nested)],
-                                        check=True, capture_output=True)
+                # Use a real Git index failure, not the now-supported unborn case.
+                import hashlib
+                key = hashlib.sha256(str(work.resolve()).encode()).hexdigest()[:16]
+                (home / "checkpoints" / "store" / "indexes" / key).write_bytes(b"invalid index\n")
 
                 response = await _git_rpc(ws, "rollback.diff", session_id=sid, hash="1")
 
                 assert "result" not in response, response
                 assert response["error"]["message"] == "checkpoint_diff_failed"
-                assert "Could not stage current files" in response["error"]["data"]["detail"]
+                assert "Could not inspect nested repositories" in response["error"]["data"]["detail"]
                 assert (work / "a.txt").read_text(encoding="utf-8") == "edited\n"
 
         asyncio.run(probe())
