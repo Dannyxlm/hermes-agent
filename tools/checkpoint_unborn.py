@@ -124,7 +124,10 @@ def disclose(reason: str, excluded: list[str]) -> str:
     """Use the existing rendered reason field on every rollback surface."""
     if not excluded:
         return reason
-    return " ".join(reason.splitlines()) + " [uncaptured unborn repos kept: " + json.dumps(excluded, ensure_ascii=False) + "]"
+    reason = " ".join(reason.splitlines())
+    suffix = " [uncaptured unborn repos kept: " + json.dumps(excluded, ensure_ascii=False) + "]"
+    # Restore reads a subject that already discloses the snapshot's gaps.
+    return reason if reason.endswith(suffix) else reason + suffix
 
 
 def contains_path(paths: list[str], rel: str) -> bool:
