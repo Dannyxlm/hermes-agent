@@ -252,22 +252,23 @@ def _record_pinned_snapshot(agent, session_id) -> None:
     with _agent_tools_lock:
         _PINNED_SNAPSHOTS.pop(key, None)
         if isinstance(generation, int) and isinstance(selection, tuple):
-            _PINNED_SNAPSHOTS[key] = (generation, selection)
+            _PINNED_SNAPSHOTS[key] = (generation, selection, frozenset(agent_tool_names(agent)))
             while len(_PINNED_SNAPSHOTS) > _PINNED_SNAPSHOTS_MAX:
                 _PINNED_SNAPSHOTS.popitem(last=False)
 
 
-def _pin_restore_held(agent, registered: set) -> tuple[bool, frozenset]:
+def _pin_restore_held(agent, registered: set, pinned_names: frozenset) -> tuple[bool, frozenset]:
     """(pinned here, held) for a restore from this session's pin: whether this process wrote the pin (the
     rebuild is the same conversation), and the names it holds back: those the freeze holds when neither the
-    registry nor the agent's toolset selection has moved since."""
+    registry nor the agent's toolset selection has moved since, and the pin still names what this process
+    wrote (another process, a turn the app wasn't on, may have re-pinned the chat since)."""
     from tools.registry import registry
     session_id = getattr(agent, "session_id", None)
     if not session_id:
         return False, frozenset()
     with _agent_tools_lock:
         pinned_against = _PINNED_SNAPSHOTS.get(_pinned_snapshot_key(session_id))
-    if pinned_against != (registry._generation, getattr(agent, "_tool_snapshot_selection", None)):
+    if pinned_against != (registry._generation, getattr(agent, "_tool_snapshot_selection", None), pinned_names):
         return pinned_against is not None, frozenset()
     return True, _frozen_tool_names(registered)
 
@@ -286,7 +287,20 @@ def _config_permitted_names(agent) -> set:
     if disabled and agent_is_oneshot(agent):  # the one-shot gate is no config choice either: a pinned clarify stays,
         configured = set(getattr(agent, "_configured_disabled_toolsets", None) or ())  # unless config disables it
         disabled = [name for name in disabled if name not in ONESHOT_DISABLED_TOOLSETS or name in configured]
-    return _select_tool_names(enabled, disabled, True)
+    return _select_tool_names(enabled, disabled, True) | _carried_card_names(disabled)
+
+
+def _carried_card_names(disabled) -> set:
+    """``show_card`` once the app drew in this chat: only a card-drawing client adds ``cards`` to a
+    selection, so a turn it isn't on (a wake, a thread update) would otherwise re-pin the chat without
+    it, and the next phone turn pays a tools[] rewrite or, when its process still holds the freeze,
+    loses the tool. Only a pinned entry is carried, so a chat no app drew in never gets it, and only
+    while ``cards.enabled`` is on (the off switch) and the profile doesn't disable the toolset."""
+    if "cards" in (disabled or ()):
+        return set()
+    from tools.cards.tool import cards_enabled
+    from toolsets import resolve_toolset
+    return set(resolve_toolset("cards")) if cards_enabled() else set()
 
 
 def _drop_gated_carried_tools(merged: list, carried: set) -> list:
@@ -350,7 +364,7 @@ def restore_agent_tool_prefix(agent, saved) -> bool:
     registered_names = {entry.name for entry in registry.get_all_entries()}
     carried = {_def_name(d) for d in pinned_defs if _def_name(d) not in fresh and _def_name(d) in registered_names}
     carried &= _config_permitted_names(agent) if carried else set()
-    pinned_here, held = _pin_restore_held(agent, registered_names)
+    pinned_here, held = _pin_restore_held(agent, registered_names, frozenset(_def_name(d) for d in pinned_defs))
     if pinned_here:  # same conversation: the synthesized bridge keeps its slot, as in _merge_preserving_prefix
         from tools.tool_search_catalog import BRIDGE_TOOL_NAMES
         carried |= {_def_name(d) for d in pinned_defs if _def_name(d) in BRIDGE_TOOL_NAMES}
