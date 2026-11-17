@@ -166,8 +166,13 @@ def _restore_snapshot(pre_dir, snap, post_dir, dir_pre_existed=False, written=()
         # The dir predates the batch (adopted empty leftover): unlink exactly the files the
         # batch wrote there, then rmdir() the now-empty dirs up to and including the skill dir.
         # rmdir() fails on anything left, so a file that landed out-of-band survives.
+        from tools.path_security import has_traversal_component, validate_within_dir
+
         for rel in ("SKILL.md", *written):
             target = post_dir / rel
+            # A pending op may have been interrupted before its path was validated.
+            if has_traversal_component(rel) or validate_within_dir(target, post_dir):
+                continue
             with suppress(OSError):
                 target.unlink()
             for parent in target.parents:
