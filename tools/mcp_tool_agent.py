@@ -286,7 +286,20 @@ def _config_permitted_names(agent) -> set:
     if disabled and agent_is_oneshot(agent):  # the one-shot gate is no config choice either: a pinned clarify stays,
         configured = set(getattr(agent, "_configured_disabled_toolsets", None) or ())  # unless config disables it
         disabled = [name for name in disabled if name not in ONESHOT_DISABLED_TOOLSETS or name in configured]
-    return _select_tool_names(enabled, disabled, True)
+    return _select_tool_names(enabled, disabled, True) | _carried_card_names(disabled)
+
+
+def _carried_card_names(disabled) -> set:
+    """``show_card`` once the app drew in this chat: only a card-drawing client adds ``cards`` to a
+    selection, so a turn it isn't on (a wake, a thread update) would otherwise re-pin the chat without
+    it, and the next phone turn pays a tools[] rewrite or, when its process still holds the freeze,
+    loses the tool. Only a pinned entry is carried, so a chat no app drew in never gets it, and only
+    while ``cards.enabled`` is on (the off switch) and the profile doesn't disable the toolset."""
+    if "cards" in (disabled or ()):
+        return set()
+    from tools.cards.tool import cards_enabled
+    from toolsets import resolve_toolset
+    return set(resolve_toolset("cards")) if cards_enabled() else set()
 
 
 def _drop_gated_carried_tools(merged: list, carried: set) -> list:
