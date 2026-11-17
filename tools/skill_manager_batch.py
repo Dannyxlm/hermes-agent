@@ -166,8 +166,13 @@ def _restore_snapshot(pre_dir, snap, post_dir, dir_pre_existed=False, written=()
         # The dir predates the batch (adopted empty leftover): unlink exactly the files the
         # batch wrote there, then rmdir() the now-empty dirs up to and including the skill dir.
         # rmdir() fails on anything left, so a file that landed out-of-band survives.
+        from tools.path_security import has_traversal_component, validate_within_dir
+
         for rel in ("SKILL.md", *written):
             target = post_dir / rel
+            # A pending op may have been interrupted before its path was validated.
+            if has_traversal_component(rel) or validate_within_dir(target, post_dir):
+                continue
             with suppress(OSError):
                 target.unlink()
             for parent in target.parents:
@@ -276,9 +281,11 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
         rollback_failed = False
         token = _smt._skill_gate_bypass.set(True)
         review_token = _smt._skill_review_batch.set(True)
+        pending = None
         try:
             for i, op in enumerate(operations):
                 rollback_results = results
+                pending = {"name": names[i], "action": op["action"], "file_path": op.get("file_path")}
                 try:
                     raw = _smt._skill_manage_from({**op, "name": names[i], "operations": None},
                                                   task_id=task_id, session_id=session_id)
@@ -313,6 +320,16 @@ def _skill_manage_batch(operations, default_name: str | None = None, task_id: st
                 # compact success row otherwise hides them and the model never sees a finding.
                 entry.update({k: parsed[k] for k in _ADVISORY_KEYS if parsed.get(k) is not None})
                 results.append(entry)
+                pending = None
+        except BaseException:
+            # Cancellation/exit must unwind the transaction, not just delete its backups.
+            # Include the current op: an interrupted writer may already have replaced its file.
+            rollback_failed = True  # Keep recovery copies if rollback itself is interrupted.
+            note, rollback_failed = _rollback(
+                snapshots, _smt._find_skill, [*results, pending] if pending is not None else results,
+            )
+            logger.warning("Skill batch interrupted: %s", note)
+            raise
         finally:
             from tools.skills_tool_index import invalidate_skill_index
             invalidate_skill_index()  # rollback may have replaced trees indexed by an earlier op
