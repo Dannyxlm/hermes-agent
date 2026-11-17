@@ -120,11 +120,30 @@ def test_flag_off_a_wake_turn_drops_the_pinned_show_card(chat, monkeypatch):
 
 def test_a_profile_that_disables_cards_drops_the_pinned_show_card(chat, monkeypatch):
     _turn(chat, PHONE_SID)
+    (get_hermes_home() / "config.yaml").write_text(
+        "cards:\n  enabled: true\nagent:\n  disabled_toolsets: [cards]\n", encoding="utf-8")
+    invalidate_check_fn_cache()
+    assert "show_card" not in _names(_in_other_process(monkeypatch, lambda: _turn(chat, WAKE_SID)))
 
-    def wake_with_cards_disabled():
-        agent = server._make_agent(WAKE_SID, KEY, session_id=KEY, session_db=chat, platform_override="tui")
-        agent.disabled_toolsets = [*(agent.disabled_toolsets or []), "cards"]
-        _restore_pinned_tools(agent, chat.get_session(KEY))
-        return agent
 
-    assert "show_card" not in _names(_in_other_process(monkeypatch, wake_with_cards_disabled))
+@pytest.mark.parametrize("rebuild", ["compaction", "reload"])
+def test_a_rebuild_elsewhere_that_drops_show_card_does_not_lock_it_out_of_the_next_phone_turn(
+        chat, monkeypatch, rebuild):
+    """A compaction boundary or an explicit reload on a wake turn re-derives tools from that turn's
+    selection (no ``cards``) and re-pins the chat. The phone's process must not then hold show_card
+    back from a pin it no longer wrote."""
+    from agent.conversation_compression import _refresh_agent_tool_definitions
+
+    _turn(chat, PHONE_SID)
+
+    def wake_then_rebuild():
+        wake = _turn(chat, WAKE_SID)
+        if rebuild == "compaction":
+            _refresh_agent_tool_definitions(wake)
+        else:
+            mcp_tool_agent.refresh_agent_mcp_tools(wake, quiet_mode=True)
+        return wake
+
+    _in_other_process(monkeypatch, wake_then_rebuild)
+    assert "show_card" not in [t["function"]["name"] for t in json.loads(chat.get_session(KEY)["tool_names"])["tools"]]
+    assert "show_card" in _names(_turn(chat, PHONE_SID))

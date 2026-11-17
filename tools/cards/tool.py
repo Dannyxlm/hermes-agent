@@ -6,7 +6,9 @@ Nothing a card holds causes an effect on the server.
 
 Offered only where someone can draw it: ``cards.enabled`` in config (``check_fn``), a session on a
 local chat platform (the toolset's ``platforms``), and a client that advertised ``cards: {v: 1}`` in
-``client.capabilities`` when the session's agent was built (``tui_gateway/cards_capability.py``).
+``client.capabilities`` when the session's agent was built (``tui_gateway/cards_capability.py``). Once
+offered, the chat's pinned tool array keeps it on turns that client isn't on (a wake, a thread update)
+while the flag is on, so the array does not flip (``tools/mcp_tool_agent.py::_carried_card_names``).
 """
 from __future__ import annotations
 

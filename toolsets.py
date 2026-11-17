@@ -156,7 +156,8 @@ TOOLSETS = {
     "threads": _ts("Lead threads: open, message, wait on and read the user's own chats", ["thread"],
                    platforms=frozenset({"cli", "tui", "desktop"})),
     # Local chats only, and only for an agent built while a client that draws cards was attached
-    # (tui_gateway/agent_factory.py folds it in; cards.enabled gates the tool itself).
+    # (tui_gateway/agent_factory.py folds it in; cards.enabled gates the tool itself). A chat's tool pin
+    # then carries it on turns that client isn't on (tools/mcp_tool_agent.py::_carried_card_names).
     "cards": _ts("Paper cards drawn by the Hermes app under a reply (show_card)", ["show_card"],
                  platforms=frozenset({"tui", "desktop", "local", "mobile", "gui"})),
     "kanban": _ts(
