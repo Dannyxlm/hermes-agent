@@ -454,9 +454,19 @@ class HermesProviderMixin:
         finally:
             await self._hermes_release_refresh_fence()
 
+    def _hermes_refresh_server_label(self) -> str:
+        """Use only the bounded storage key, never a URL or provider response."""
+        name = getattr(self.context.storage, "_server_name", None)
+        if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name):
+            return name
+        return "unknown"
+
     async def _hermes_handle_refresh_response(self, response) -> bool:
         if not (200 <= response.status_code < 300):
-            self._hermes_logger.warning("Token refresh failed: %s", response.status_code)
+            self._hermes_logger.warning(
+                "Token refresh failed: server=%s status=%s failure=http_error",
+                self._hermes_refresh_server_label(), response.status_code,
+            )
             # A writer outside the fence (interactive `hermes mcp login`, or a
             # pre-fence Hermes sharing this HERMES_HOME) may have rotated the
             # grant and persisted the replacement. Providers issuing single-use
@@ -475,7 +485,10 @@ class HermesProviderMixin:
         try:
             token_response = OAuthToken.model_validate_json(await response.aread())
         except (HTTPError, ValidationError):
-            self._hermes_logger.warning("Invalid refresh response: %s", response.status_code)
+            self._hermes_logger.warning(
+                "Invalid refresh response: server=%s status=%s failure=invalid_response",
+                self._hermes_refresh_server_label(), response.status_code,
+            )
             self.context.clear_tokens()
             return False
         # RFC 6749 §6: a refresh response may omit refresh_token (AS does not rotate) and scope
