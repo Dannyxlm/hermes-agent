@@ -120,14 +120,19 @@ def warn_once(manager, working_dir: str, excluded: list[str]) -> None:
         manager._warned_unborn.add(key)
 
 
+def _coverage_suffix(paths: list[str]) -> str:
+    return " [uncaptured unborn repos kept: " + json.dumps(paths, ensure_ascii=False) + "]"
+
+
 def disclose(reason: str, excluded: list[str]) -> str:
     """Use the existing rendered reason field on every rollback surface."""
     if not excluded:
         return reason
     reason = " ".join(reason.splitlines())
-    suffix = " [uncaptured unborn repos kept: " + json.dumps(excluded, ensure_ascii=False) + "]"
-    # Restore reads a subject that already discloses the snapshot's gaps.
-    return reason if reason.endswith(suffix) else reason + suffix
+    suffix = _coverage_suffix(sorted(excluded))
+    # Older snapshots sorted Git's directory entries before removing the slash.
+    legacy_suffix = _coverage_suffix(sorted(excluded, key=lambda path: path + "/"))
+    return reason if reason.endswith((suffix, legacy_suffix)) else reason + suffix
 
 
 def contains_path(paths: list[str], rel: str) -> bool:
