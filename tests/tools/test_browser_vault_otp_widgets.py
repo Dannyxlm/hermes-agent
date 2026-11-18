@@ -94,6 +94,14 @@ class TestSplitCodeWidgets:
     def test_numeric_groups_that_are_not_codes_are_left_alone(self, raw):
         assert _fills(raw) == []
 
+    def test_digit_suffixed_box_names_are_read_as_words(self):
+        """``otp1``..``otp6`` names a code; ``dob1``.. and ``zip1``.. name a date and a postal code."""
+        named = [_box(i, type="text", pattern="", hint="", label="", name=f"otp{i + 1}") for i in range(6)]
+        assert [f["value"] for f in _fills(named)] == list(_FIXTURE_CODE)
+        for prefix, count in (("dob", 8), ("zip", 5)):
+            parts = [_box(i, type="tel", pattern="", hint="", label="", name=f"{prefix}{i + 1}") for i in range(count)]
+            assert _classify(parts) == []
+
     def test_single_code_field_still_takes_the_whole_code(self):
         for raw in ([{"index": 0, "type": "text", "name": "otp", "label": "", "autocomplete": "one-time-code"}],
                     [{"index": 0, "type": "text", "name": "verification_code", "label": "Verification code",
@@ -129,6 +137,26 @@ class TestEnterCodeOnTheSplitWidget:
         assert out["success"] and out["filled_fields"] == 6
         assert re.findall(r'"value": "(\d)"', seen["expr"]) == list(_FIXTURE_CODE)
         assert _FIXTURE_CODE not in out_raw
+
+    def test_a_code_that_does_not_fit_the_boxes_writes_nothing(self):
+        """A six-digit code on a four-box page used to go whole into box 1 and report success."""
+        from agent.vault_backends import unlock as unlock_mod
+        from tools import browser_vault_tool as vt
+
+        raw = [_box(i) for i in range(4)]
+        writes = []
+        fake_eval = lambda t, e: {"success": True, "result": json.dumps(raw) if "querySelectorAll" in e else _CRM + "/pin"}
+        unlock_mod.set_code_prompt_callback(lambda site, hint: _FIXTURE_CODE)
+        try:
+            with patch("agent.vault_backends.unlock.can_prompt_here", return_value=True), \
+                 patch.object(vt, "_focus_bound_origin", lambda *a, **k: None), \
+                 patch.object(vt, "_eval_js", side_effect=fake_eval), \
+                 patch.object(vt, "_eval_js_secret", side_effect=lambda t, e: writes.append(e)):
+                out_raw = vt.browser_vault_enter_code(task_id="t-crm")
+        finally:
+            unlock_mod.set_code_prompt_callback(None)
+        assert json.loads(out_raw)["error_type"] == "code_does_not_fit"
+        assert writes == [] and _FIXTURE_CODE not in out_raw
 
 
 # ── driven-tab resolution ────────────────────────────────────────────────────
@@ -263,6 +291,33 @@ def test_the_harness_records_its_current_tab_when_the_call_ends(tmp_path):
 def test_a_daemon_that_cannot_say_records_nothing(tmp_path):
     rc, written = _run_harness_exit(tmp_path, "raise RuntimeError('not_attached')", 0)
     assert rc == 0 and written == ""
+
+
+def test_the_real_launcher_records_the_driven_tab(tmp_path):
+    """browser_exec's actual launcher command, run against a stand-in browser_harness package: the agent's code
+    exits non-zero and the tab the daemon reports still lands in the file."""
+    from tools.browser_use_shot import ACTIVATE_NEVER, harness_command
+
+    pkg = tmp_path / "site" / "browser_harness"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "helpers.py").write_text(
+        "def capture_screenshot(*a, **k): return ''\n"
+        "def new_tab(url='about:blank'): return 'T'\n"
+        "def cdp(*a, **k): return {}\n"
+        "def _send(req, response_timeout=5.0):\n"
+        "    assert req == {'meta': 'current_tab'} and response_timeout <= 2.0\n"
+        "    return {'targetId': 'T-CRM', 'url': 'https://crm.example.test/verify', 'title': 'x'}\n"
+        "def current_tab(): return _send({'meta': 'current_tab'})\n")
+    (pkg / "run.py").write_text("import sys\nexec(sys.stdin.read())\n")
+    out = tmp_path / "driven.json"
+    out.write_text("")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path / "site"), "HERMES_BH_DRIVEN_TAB_FILE": str(out)}
+    proc = subprocess.run(harness_command([sys.executable, "-m", "browser_harness.run"], ACTIVATE_NEVER),
+                          input="raise SystemExit(3)\n", env=env, capture_output=True, text=True, timeout=60,
+                          check=False)
+    assert proc.returncode == 3, proc.stderr
+    assert json.loads(out.read_text()) == {"targetId": "T-CRM", "url": "https://crm.example.test/verify"}
 
 
 def test_browser_exec_records_the_driven_tab_for_its_task(tmp_path, monkeypatch):

@@ -406,8 +406,14 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
 
         tasks = [asyncio.ensure_future(_probe(i, tid, url)) for i, (tid, url) in enumerate(candidates)]
         selected = None
-        # Nothing can beat this rank: stop waiting out hung tabs.
-        good_enough = _DRIVEN_RANK if prefer_target else (0 if prefer_url else 2)
+        # Stop waiting out hung tabs once nothing can beat the rank in hand. A preference for a tab that is not
+        # among the candidates (closed, on another origin) cannot be met, so it must not hold the wait open.
+        if prefer_target and any(tid == prefer_target for tid, _url in candidates):
+            good_enough = _DRIVEN_RANK
+        elif prefer_url and any(_url == prefer_url for _tid, _url in candidates):
+            good_enough = 0
+        else:
+            good_enough = 2
         try:
             try:
                 for next_done in asyncio.as_completed(tasks):

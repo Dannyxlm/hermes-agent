@@ -152,6 +152,17 @@ def install(helpers: Any, activate: str = ACTIVATE_NEVER) -> None:
 # Where the launcher writes ``{"targetId", "url"}`` of the harness's current tab when the call ends, so Hermes
 # knows which tab the agent is driving (browser_vault acts on that tab). Set per call by browser_exec.
 DRIVEN_TAB_FILE_ENV = "HERMES_BH_DRIVEN_TAB_FILE"
+# The exit hook waits at most this long on a hung daemon, so it cannot push a finished call past its timeout.
+DRIVEN_TAB_TIMEOUT_S = 2.0
+
+
+def _current_tab(helpers: Any) -> Any:
+    """The harness's ``current_tab()`` answer, with a short response bound when the pinned harness exposes its
+    IPC request (``_send``), else through the public helper (its own 5 s bound)."""
+    send = getattr(helpers, "_send", None)
+    if callable(send):
+        return send({"meta": "current_tab"}, response_timeout=DRIVEN_TAB_TIMEOUT_S)
+    return helpers.current_tab()
 
 
 def record_driven_tab_at_exit(helpers: Any) -> None:
@@ -164,7 +175,7 @@ def record_driven_tab_at_exit(helpers: Any) -> None:
 
     def _record() -> None:
         try:
-            tab = helpers.current_tab()
+            tab = _current_tab(helpers)
             if tab.get("targetId") and tab.get("url"):
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump({"targetId": tab["targetId"], "url": tab["url"]}, f)

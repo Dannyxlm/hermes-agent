@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import os
+import stat
 import tempfile
 from typing import Iterator, Optional
 
@@ -21,12 +22,19 @@ from tools.browser_use_shot import DRIVEN_TAB_FILE_ENV
 logger = logging.getLogger(__name__)
 
 
+_MAX_BYTES = 64 * 1024
+
+
 def _read(path: str) -> tuple[str, str]:
+    """The recorded tab, read without following a link or blocking on anything but a small regular file."""
     try:
-        with open(path, encoding="utf-8-sig") as f:
-            raw = json.load(f)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return "", ""
+            raw = json.loads(f.read(_MAX_BYTES + 1)[:_MAX_BYTES].decode("utf-8-sig") or "null")
     except (OSError, ValueError):
-        return "", ""  # empty: the call timed out, never reached the daemon, or wrote nothing
+        return "", ""  # the call timed out, never reached the daemon, or wrote nothing
     if not isinstance(raw, dict):
         return "", ""
     return str(raw.get("url") or ""), str(raw.get("targetId") or "")

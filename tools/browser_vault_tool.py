@@ -548,6 +548,12 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
     def write(code: str, source: str) -> str:
         register_vault_redaction_value(code)
         fills = build_otp_fills(otp_controls, code)
+        if not fills:
+            boxes = sum(1 for c in otp_controls if c.control.max_length == 1)
+            return json.dumps({"success": False, "error_type": "code_does_not_fit",
+                               "error": (f"The page's code entry is {boxes} single-character boxes that do not take this "
+                                         "code. Nothing was written. Check the page asks for this code (an SMS PIN "
+                                         "and an authenticator code differ), or ask the user to enter it.")})
         result = _eval_js_secret(effective_task_id, build_fill_js(fills, expected_origin=origin, nonce=nonce))
         del code
         if not result.get("success"):

@@ -155,10 +155,11 @@ _RE_DIGIT_PATTERN = re.compile(r"^\^?(?:\[0-9\]|\\d)(?:[*+]|\{\d*,?\d*\})?\$?$")
 _SPLIT_BOXES = range(4, 9)  # 4-8 single-character boxes: every code widget seen in the wild
 
 
-def _hint_text(c: LoginControl) -> str:
-    """name/label/class hints as words; camelCase class names (``otpInput``) split first."""
-    raw = " ".join(p for p in (c.name, c.label, c.hint) if p)
-    return _normalize_text(re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw))
+def _words(*parts: str) -> str:
+    """Attribute text as words: camelCase (``otpInput``) and letter-digit suffixes (``otp1``, ``dob3``) are
+    split first, one direction only so ``2fa`` stays a word."""
+    raw = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", " ".join(p for p in parts if p))
+    return _normalize_text(re.sub(r"([A-Za-z])([0-9])", r"\1 \2", raw))
 
 
 def _digit_only(c: LoginControl) -> bool:
@@ -190,12 +191,12 @@ def _split_code_widget_score(run: list[LoginControl]) -> Optional[int]:
         return None
     if any("one-time-code" in c.autocomplete.lower().split() for c in run):
         return 100
-    labels = " ".join(_normalize_text(" ".join(p for p in (c.name, c.label) if p)) for c in run)
-    if _RE_OTP.search(labels):
+    labels = [_words(c.name, c.label) for c in run]
+    if any(_RE_OTP.search(label) for label in labels):
         return 95
-    if _RE_NOT_A_CODE.search(labels):
+    if _RE_NOT_A_CODE.search(" ".join(labels)):
         return None
-    if _RE_CODE_WIDGET.search(" ".join(_hint_text(c) for c in run)):
+    if _RE_CODE_WIDGET.search(" ".join(_words(c.name, c.label, c.hint) for c in run)):
         return 90
     return 80 if all(_digit_only(c) for c in run) else None
 
@@ -304,13 +305,17 @@ def build_otp_fills(otp_controls: list[ClassifiedLoginControl], code: str) -> li
     Per-digit entry only when the page unmistakably uses it: exactly len(code) OTP controls that are all
     ``maxlength=1``, all in the same form, and adjacent in DOM order (the classic N-box widget). Anything
     looser (several code-like inputs scattered over a page) gets ONE field, never a digit sprayed across
-    unrelated inputs."""
-    best = max(otp_controls, key=lambda c: c.score)
+    unrelated inputs, and never a single-character box: when only such boxes are left (a 6-digit code on a
+    4-box page), nothing is filled and the caller says the code does not fit."""
     boxes = sorted((c for c in otp_controls if c.control.max_length == 1), key=lambda c: c.control.index)
     if (len(boxes) == len(code)
             and len({b.control.form_index for b in boxes}) == 1
             and all(b.control.index - a.control.index == 1 for a, b in itertools.pairwise(boxes))):
         return [{"index": b.control.index, "token": "one-time-code", "value": ch} for b, ch in zip(boxes, code)]
+    fields = [c for c in otp_controls if c.control.max_length != 1]
+    if not fields:
+        return []
+    best = max(fields, key=lambda c: c.score)
     return [{"index": best.control.index, "token": "one-time-code", "value": code}]
 
 

@@ -200,6 +200,22 @@ def test_the_exact_driven_tab_beats_a_visible_tab_with_the_same_url():
     assert asyncio.run(run()) == (url, "S-agents")
 
 
+def test_a_preference_no_candidate_can_meet_does_not_wait_out_hung_tabs():
+    """The driven tab is on another origin (or closed): selection must not sit on a hung tab's probe."""
+    fake = FakeBrowser([Tab("hung", "https://shop.example/a", "hung"),
+                        Tab("vis", "https://shop.example/b", "visible", form=True)])
+    sup = _supervisor(fake)
+
+    async def run():
+        res = await sup._pick_page([(i, fake.tabs[i].url) for i in fake.order], accept=PASSWORD_PROBE,
+                                   prefer_url="https://elsewhere.example/verify", prefer_target="closed",
+                                   probe_timeout=30.0)
+        await asyncio.gather(*list(sup._background_tasks))
+        return res
+    assert asyncio.run(asyncio.wait_for(run(), timeout=5.0)) == ("https://shop.example/b", "S-vis")
+    assert not fake.expired_probes
+
+
 def test_initial_attach_prefers_the_driven_target_id():
     url = "https://b.example/page"
     fake = FakeBrowser([Tab("a", url, "visible"), Tab("b", url, "hidden")])
