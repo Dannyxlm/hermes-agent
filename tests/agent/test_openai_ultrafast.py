@@ -17,6 +17,9 @@ from hermes_cli.models import model_supports_ultrafast, resolve_fast_mode_overri
 
 ASTRA_SPELLINGS = ("gpt-6-astra", "openai/gpt-6-astra", "gpt-6-astra-900k", "openai/gpt-6-astra-900k")
 SOL_SPELLINGS = ("gpt-6.1-sol", "openai/gpt-6.1-sol", "gpt-6.1-sol-900k", "openai/gpt-6.1-sol-900k")
+GEN62_SPELLINGS = ("gpt-6.2-sol", "openai/gpt-6.2-sol", "gpt-6.2-astra", "openai/gpt-6.2-astra")
+# Published Ultrafast multiple of Standard: 6x for GPT-6 Astra / 6.1 Sol, 3x launch promo for 6.2.
+ULTRAFAST_MULTIPLE = {"gpt-6-astra": 6, "gpt-6.1-sol": 6, "gpt-6.2-astra": 3, "gpt-6.2-sol": 3}
 
 
 def test_every_config_loader_parses_tiers_through_the_same_table(monkeypatch):
@@ -38,7 +41,7 @@ def test_every_config_loader_parses_tiers_through_the_same_table(monkeypatch):
                                                ("openai-api", "https://api.openai.com/v1"),
                                                ("openai-codex", "https://chatgpt.com/backend-api/codex")])
 def test_ultrafast_is_requested_only_for_ultrafast_models_on_first_party_routes(provider, base_url):
-    for model in (*ASTRA_SPELLINGS, *SOL_SPELLINGS):
+    for model in (*ASTRA_SPELLINGS, *SOL_SPELLINGS, *GEN62_SPELLINGS):
         assert model_supports_ultrafast(model), model
         assert resolve_fast_mode_overrides(model, provider=provider, base_url=base_url, tier="ultrafast") == {
             "service_tier": "ultrafast"}
@@ -114,7 +117,7 @@ def _usage(prompt_uncached: int, served_tier=None) -> CanonicalUsage:
 
 
 @pytest.mark.parametrize("prompt_uncached", [50_000, 400_000])  # below / above the 272K whole-request tier
-@pytest.mark.parametrize("model", [*ASTRA_SPELLINGS, *SOL_SPELLINGS])
+@pytest.mark.parametrize("model", [*ASTRA_SPELLINGS, *SOL_SPELLINGS, *GEN62_SPELLINGS])
 def test_served_ultrafast_bills_at_the_ultrafast_row_and_requested_only_does_not(prompt_uncached, model):
     standard = estimate_usage_cost(model, _usage(prompt_uncached), provider="openai-api")
     served_default = estimate_usage_cost(model, _usage(prompt_uncached, "default"), provider="openai-api")
@@ -123,7 +126,8 @@ def test_served_ultrafast_bills_at_the_ultrafast_row_and_requested_only_does_not
     assert ultra.status == "estimated"
     wire_model = model.removeprefix("openai/").removesuffix("-900k")
     assert ultra.pricing_version == _OPENAI_ULTRAFAST_PRICING[wire_model].pricing_version
-    assert ultra.amount_usd == standard.amount_usd * 6  # every bucket, both context tiers
+    assert standard.status == "estimated"  # the Standard row exists too
+    assert ultra.amount_usd == standard.amount_usd * ULTRAFAST_MULTIPLE[wire_model]  # every bucket, both tiers
 
 
 @pytest.mark.parametrize("model", ["gpt-6-sol", "gpt-6.1-sol-pro", "gpt-6.1-sol-preview-900k"])

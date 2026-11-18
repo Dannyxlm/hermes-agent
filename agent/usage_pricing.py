@@ -287,6 +287,19 @@ _OFFICIAL_DOCS_PRICING[("openai", "gpt-6-astra")] = _snap(
     cache_write_cost_per_million_above=Decimal("25.00"),
 )
 
+# GPT-6.2 Astra (2026-11-17): 20% under GPT-6 Astra, cached input 0.05x input. Same 272K
+# whole-request tier (2x input + cache, 1.5x output).
+_OFFICIAL_DOCS_PRICING[("openai", "gpt-6.2-astra")] = _snap(
+    "8.00", "40.00", "0.40", "10.00",
+    url="https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+    version="openai-gpt-6.2-2026-11-17",
+    tier_threshold_tokens=272_000,
+    input_cost_per_million_above=Decimal("16.00"),
+    output_cost_per_million_above=Decimal("60.00"),
+    cache_read_cost_per_million_above=Decimal("0.80"),
+    cache_write_cost_per_million_above=Decimal("20.00"),
+)
+
 # GPT-6 Sol / Luna (the 5.6 Sol/Luna successors): same 272K whole-request tier as Astra
 # (2x input + cache, 1.5x output). Cache write = 1.25x input, cache read = 0.10x input.
 # Terra has no published model page yet, so it deliberately has no row.
@@ -294,6 +307,8 @@ for _slug, _inp, _out, _read, _write, _inp_above, _out_above, _read_above, _writ
     ("gpt-6-sol", "2.00", "10.00", "0.20", "2.50", "4.00", "15.00", "0.40", "5.00"),
     # 6.1 Sol: same input/output as 6 Sol, but cached input is 0.05x input (not 0.10x).
     ("gpt-6.1-sol", "2.00", "10.00", "0.10", "2.50", "4.00", "15.00", "0.20", "5.00"),
+    # 6.2 Sol keeps 6.1 Sol's rates (developers.openai.com/api/docs/models/gpt-6.2-sol, 2026-11-17).
+    ("gpt-6.2-sol", "2.00", "10.00", "0.10", "2.50", "4.00", "15.00", "0.20", "5.00"),
     ("gpt-6-luna", "0.10", "0.50", "0.01", "0.125", "0.20", "0.75", "0.02", "0.25"),
 ):
     _OFFICIAL_DOCS_PRICING[("openai", _slug)] = _snap(
@@ -331,6 +346,28 @@ _OPENAI_ULTRAFAST_PRICING: dict[str, PricingEntry] = {
         output_cost_per_million_above=Decimal("90.00"),
         cache_read_cost_per_million_above=Decimal("1.20"),
         cache_write_cost_per_million_above=Decimal("30.00"),
+    ),
+    # GPT-6.2 launch promo: Ultrafast is 3x Standard through 2027-02-28 (Pacific), then 6x from
+    # 2027-03-01. Replace these two rows with 6x rates (and a new version) after that date.
+    "gpt-6.2-astra": _snap(
+        "24.00", "120.00", "1.20", "30.00",
+        url="https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+        version="openai-ultrafast-6.2-promo-until-2027-02-28",
+        tier_threshold_tokens=272_000,
+        input_cost_per_million_above=Decimal("48.00"),
+        output_cost_per_million_above=Decimal("180.00"),
+        cache_read_cost_per_million_above=Decimal("2.40"),
+        cache_write_cost_per_million_above=Decimal("60.00"),
+    ),
+    "gpt-6.2-sol": _snap(
+        "6.00", "30.00", "0.30", "7.50",
+        url="https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+        version="openai-ultrafast-6.2-promo-until-2027-02-28",
+        tier_threshold_tokens=272_000,
+        input_cost_per_million_above=Decimal("12.00"),
+        output_cost_per_million_above=Decimal("45.00"),
+        cache_read_cost_per_million_above=Decimal("0.60"),
+        cache_write_cost_per_million_above=Decimal("15.00"),
     ),
 }
 
