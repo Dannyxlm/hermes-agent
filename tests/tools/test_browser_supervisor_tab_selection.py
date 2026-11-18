@@ -186,6 +186,48 @@ def test_initial_attach_prefers_the_tab_this_task_navigated():
     assert sup._page_session_id == "S-b"
 
 
+def test_the_exact_driven_tab_beats_a_visible_tab_with_the_same_url():
+    """Two tabs on one page (the user's and the agent's): a URL cannot tell them apart, the target id can."""
+    url = "https://crm.example.test/v2/location/x/verify"
+    fake = FakeBrowser([Tab("users", url, "visible", form=True), Tab("agents", url, "hidden", form=True)])
+    sup = _supervisor(fake)
+
+    async def run():
+        res = await sup._pick_page([(i, fake.tabs[i].url) for i in fake.order], accept=PASSWORD_PROBE,
+                                   prefer_url=url, prefer_target="agents", probe_timeout=PROBE)
+        await asyncio.gather(*list(sup._background_tasks))
+        return res
+    assert asyncio.run(run()) == (url, "S-agents")
+
+
+def test_a_preference_no_candidate_can_meet_does_not_wait_out_hung_tabs():
+    """The driven tab is on another origin (or closed): selection must not sit on a hung tab's probe."""
+    fake = FakeBrowser([Tab("hung", "https://shop.example/a", "hung"),
+                        Tab("vis", "https://shop.example/b", "visible", form=True)])
+    sup = _supervisor(fake)
+
+    async def run():
+        res = await sup._pick_page([(i, fake.tabs[i].url) for i in fake.order], accept=PASSWORD_PROBE,
+                                   prefer_url="https://elsewhere.example/verify", prefer_target="closed",
+                                   probe_timeout=30.0)
+        await asyncio.gather(*list(sup._background_tasks))
+        return res
+    assert asyncio.run(asyncio.wait_for(run(), timeout=5.0)) == ("https://shop.example/b", "S-vis")
+    assert not fake.expired_probes
+
+
+def test_initial_attach_prefers_the_driven_target_id():
+    url = "https://b.example/page"
+    fake = FakeBrowser([Tab("a", url, "visible"), Tab("b", url, "hidden")])
+    sup = _supervisor(fake, task_id="target-hinted")
+    bs.SUPERVISOR_REGISTRY.note_page("target-hinted", url, "b")
+    try:
+        asyncio.run(sup._attach_initial_page())
+    finally:
+        bs.SUPERVISOR_REGISTRY.stop("target-hinted")
+    assert sup._page_session_id == "S-b"
+
+
 def test_initial_attach_still_succeeds_when_every_tab_is_hung():
     """Browser-level work (focus_page) must stay possible: attach the first tab, enable it in the background."""
     fake = FakeBrowser([Tab("h1", "https://h1.example/", "hung"), Tab("h2", "https://h2.example/", "hung")])
@@ -348,9 +390,9 @@ def test_page_hints_record_http_pages_only_and_clear_on_stop():
 
 def test_page_hint_is_recorded_for_task_and_session_key():
     # The legacy browser_navigate producer (browser_tool._note_supervisor_page) retired with the
-    # built-in browser_* tools in v0.22.7; browser_exec has no navigation producer, so vault tab
-    # selection falls back to its existing heuristics unless a caller records a hint. The registry
-    # contract that the consumer reads is unchanged and still covered here.
+    # built-in browser_* tools in v0.22.7; browser_exec now records its harness's current tab after
+    # every call (tools/browser_use_driven_tab.py). The registry contract that the consumer reads is
+    # covered here.
     try:
         bs.SUPERVISOR_REGISTRY.note_page("nav-task", "https://www.bestbuy.ca/signin?tid=B")
         bs.SUPERVISOR_REGISTRY.note_page("nav-task::rp", "https://www.bestbuy.ca/signin?tid=B")

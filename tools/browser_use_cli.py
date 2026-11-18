@@ -1201,6 +1201,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
     from agent.redact import redact_sensitive_text
+    from tools import browser_use_driven_tab as driven_tab
     from tools.browser_use_cli_lanes import prepare_lane_call
     from tools.registry import tool_error, tool_result
     if not code or not code.strip():
@@ -1283,7 +1284,8 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         from agent.periodic_scheduler import schedule
         owning = schedule(lambda: _own_harness_daemon_until_owned(env), _OWN_DURING_CALL_S)
         try:
-            return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
+            with driven_tab.recording(env, task_id):
+                return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
         except subprocess.TimeoutExpired:
             return {"error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
