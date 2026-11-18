@@ -307,8 +307,6 @@ for _slug, _inp, _out, _read, _write, _inp_above, _out_above, _read_above, _writ
     ("gpt-6-sol", "2.00", "10.00", "0.20", "2.50", "4.00", "15.00", "0.40", "5.00"),
     # 6.1 Sol: same input/output as 6 Sol, but cached input is 0.05x input (not 0.10x).
     ("gpt-6.1-sol", "2.00", "10.00", "0.10", "2.50", "4.00", "15.00", "0.20", "5.00"),
-    # 6.2 Sol keeps 6.1 Sol's rates (developers.openai.com/api/docs/models/gpt-6.2-sol, 2026-11-17).
-    ("gpt-6.2-sol", "2.00", "10.00", "0.10", "2.50", "4.00", "15.00", "0.20", "5.00"),
     ("gpt-6-luna", "0.10", "0.50", "0.01", "0.125", "0.20", "0.75", "0.02", "0.25"),
 ):
     _OFFICIAL_DOCS_PRICING[("openai", _slug)] = _snap(
@@ -323,7 +321,20 @@ for _slug, _inp, _out, _read, _write, _inp_above, _out_above, _read_above, _writ
     )
 del _slug, _inp, _out, _read, _write, _inp_above, _out_above, _read_above, _write_above
 
-# OpenAI Ultrafast (``service_tier: "ultrafast"``): 6x Standard on every bucket, same 272K
+# GPT-6.2 Sol (2026-11-17) keeps 6.1 Sol's rates; its own row so sessions record the 6.2 source.
+_OFFICIAL_DOCS_PRICING[("openai", "gpt-6.2-sol")] = _snap(
+    "2.00", "10.00", "0.10", "2.50",
+    url="https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+    version="openai-gpt-6.2-2026-11-17",
+    tier_threshold_tokens=272_000,
+    input_cost_per_million_above=Decimal("4.00"),
+    output_cost_per_million_above=Decimal("15.00"),
+    cache_read_cost_per_million_above=Decimal("0.20"),
+    cache_write_cost_per_million_above=Decimal("5.00"),
+)
+
+# OpenAI Ultrafast (``service_tier: "ultrafast"``): 6x Standard on every bucket (3x launch promo for
+# GPT-6.2 through 2027-02-28), same 272K
 # whole-request tier. Selected by the tier the response reports it was SERVED at (a request asking
 # for Ultrafast can be served at ``default``, and is then billed at Standard).
 _OPENAI_ULTRAFAST_PRICING: dict[str, PricingEntry] = {

@@ -183,3 +183,34 @@ def test_codex_stream_assembler_keeps_the_served_tier():
                                                        "usage": {"input_tokens": 1, "output_tokens": 1}}}
     events = [{"type": "response.output_text.delta", "delta": "PASS"}, done]
     assert _consume_codex_event_stream(iter(events), model="gpt-6-astra").service_tier == "default"
+
+
+def test_gpt62_ultrafast_promo_rows_are_replaced_when_the_promo_ends():
+    """OpenAI's 3x launch promo for GPT-6.2 Ultrafast ends 2027-02-28 (Pacific); 6x applies from
+    2027-03-01. This goes red on that date so the rows (and ULTRAFAST_MULTIPLE) get the 6x list rates."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    today = dt.datetime.now(ZoneInfo("America/Los_Angeles")).date()
+    promo = {m for m in ("gpt-6.2-astra", "gpt-6.2-sol")
+             if "promo" in (_OPENAI_ULTRAFAST_PRICING[m].pricing_version or "")}
+    assert not (promo and today >= dt.date(2027, 3, 1)), (
+        f"GPT-6.2 Ultrafast promo ended; update {sorted(promo)} to 6x Standard")
+
+
+def test_gpt62_sol_standard_price_matches_61_sol_at_both_context_tiers():
+    for prompt_uncached in (50_000, 400_000):
+        a = estimate_usage_cost("gpt-6.2-sol", _usage(prompt_uncached), provider="openai-api")
+        b = estimate_usage_cost("gpt-6.1-sol", _usage(prompt_uncached), provider="openai-api")
+        assert a.status == "estimated" and a.amount_usd == b.amount_usd
+
+
+def test_gpt62_has_api_value_rates_on_the_codex_subscription_route():
+    from agent.api_value_pricing import estimate_api_value
+
+    for model in ("gpt-6.2-sol", "gpt-6.2-astra"):
+        value = estimate_api_value(model, _usage(50_000), provider="openai-codex")
+        assert value["estimated_cost_usd"] is not None, model
+    sol62 = estimate_api_value("gpt-6.2-sol", _usage(400_000), provider="openai-codex")
+    sol61 = estimate_api_value("gpt-6.1-sol", _usage(400_000), provider="openai-codex")
+    assert sol62["estimated_cost_usd"] == sol61["estimated_cost_usd"]

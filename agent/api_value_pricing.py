@@ -1,6 +1,6 @@
 """Offline API-list-price value, NOT the provider invoice or plan allowance.
 
-Snapshot retrieved 2026-10-19. Exact model ids only; never guess by family.
+Snapshot retrieved 2026-10-19; GPT-6.2 rows added 2026-11-18. Exact model ids only; never guess by family.
 The detailed developer rate card is authoritative when the marketing page lags.
 CanonicalUsage buckets are disjoint; reasoning is already included in output.
 """
@@ -8,11 +8,13 @@ from decimal import Decimal
 
 from agent.usage_pricing import CanonicalUsage
 
-PRICING_DATE = "2026-10-19"
+PRICING_DATE = "2026-11-18"
 OPENAI_SOURCE = "https://developers.openai.com/api/docs/pricing"
 ANTHROPIC_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
 # USD / million: uncached input, output, cache read, cache write (5m for Claude).
 _OPENAI = {
+    "gpt-6.2-astra": ("8", "40", "0.4", "10"),
+    "gpt-6.2-sol": ("2", "10", "0.1", "2.5"),
     "gpt-6-astra": ("10", "50", "1", "12.5"),
     "gpt-6.1-sol": ("2", "10", "0.1", "2.5"),
     "gpt-6-sol": ("2", "10", "0.2", "2.5"),
@@ -44,7 +46,7 @@ _ANTHROPIC = {
     "claude-sonnet-4-6": ("3", "15", "0.3", "3.75"),
     "claude-haiku-4-5": ("1", "5", "0.1", "1.25"),
 }
-_LONG_CONTEXT = frozenset({"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+_LONG_CONTEXT = frozenset({"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
                            "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"})
 
 
