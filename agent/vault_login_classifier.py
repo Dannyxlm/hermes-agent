@@ -158,7 +158,7 @@ _SPLIT_BOXES = range(4, 9)  # 4-8 single-character boxes: every code widget seen
 def _words(*parts: str) -> str:
     """Attribute text as words: camelCase (``otpInput``) and letter-digit suffixes (``otp1``, ``dob3``) are
     split first, one direction only so ``2fa`` stays a word."""
-    raw = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", " ".join(p for p in parts if p))
+    raw = re.sub(r"([a-z])([A-Z])", r"\1 \2", " ".join(p for p in parts if p))
     return _normalize_text(re.sub(r"([A-Za-z])([0-9])", r"\1 \2", raw))
 
 
