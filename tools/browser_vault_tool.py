@@ -251,6 +251,14 @@ def _deep_probe(selector: str) -> str:
             ".some((e) => e.shadowRoot && w(e.shadowRoot)); return !!w(document); })(" + json.dumps(selector) + ")")
 
 
+def _deep_count(selector: str, at_least: int) -> str:
+    """A JS expression truthy when ``selector`` matches ``at_least`` elements across the document and its
+    open shadow roots."""
+    return ("((s, n) => { let c = 0; const w = (r) => { c += r.querySelectorAll(s).length; "
+            "for (const e of r.querySelectorAll('*')) if (e.shadowRoot) w(e.shadowRoot); }; w(document); return c >= n; })("
+            + json.dumps(selector) + ", " + str(int(at_least)) + ")")
+
+
 # Per kind: a JS probe that is truthy on a tab holding the form this kind fills.
 _TAB_PROBES = {
     "login": _deep_probe("input[type=password]"),
@@ -259,11 +267,21 @@ _TAB_PROBES = {
 }
 
 
+def _origin_of(url: Optional[str]) -> str:
+    from agent.vault_store import VaultError, normalize_origin
+    try:
+        return normalize_origin(url) if url else ""
+    except VaultError:
+        return ""
+
+
 def _focus_bound_origin(task_id: str, origin: str, kind: str) -> Optional[str]:
     """Point the supervisor's page session at the open tab on ``origin`` that holds a ``kind`` form
     (browser_exec sessions open their own tabs, so the tab the supervisor attached to first is rarely the
-    login page). Returns the origin when a tab was focused, else None (caller falls back to the current page).
-    A plugin page backend's current page IS the tab the agent drove, so there is nothing to focus."""
+    login page). The tab the agent last drove with browser_exec wins whenever it is on that origin; with
+    ``origin=""`` the search stays on the driven tab's site. Returns the origin when a tab was focused, else
+    None (caller falls back to the current page). A plugin page backend's current page IS the tab the agent
+    drove, so there is nothing to focus."""
     if _page_backend(task_id) is not None:
         return None
     try:
@@ -278,10 +296,24 @@ def _focus_bound_origin(task_id: str, origin: str, kind: str) -> Optional[str]:
     binding = fill_target.get()
     if binding is not None:
         return origin if bound_target_matches(supervisor, task_id) and origin == binding.origin else None
-    focused = supervisor.focus_page(origin, accept=_TAB_PROBES.get(kind), prefer_url=SUPERVISOR_REGISTRY.page_hint(task_id))
+    url, target = SUPERVISOR_REGISTRY.driven_tab(task_id)
+    site = origin or _origin_of(url)
+    focused = supervisor.focus_page(site, accept=_TAB_PROBES.get(kind), prefer_url=url, prefer_target=target)
+    if not focused.get("ok") and target and site == _origin_of(url):
+        # The probes know common forms, not every widget: the tab the agent is driving on this site still
+        # qualifies, and the classifier then answers truthfully for THAT page (never another tab's).
+        focused = supervisor.focus_page(site, prefer_url=url, prefer_target=target)
     if not focused.get("ok"):
-        logger.debug("vault fill: focus on %s failed: %s", origin or "any site", focused.get("error"))
+        logger.debug("vault fill: focus on %s failed: %s", site or "any site", focused.get("error"))
     return (origin or focused.get("url")) if focused.get("ok") else None
+
+
+def _focus_driven_tab(task_id: str) -> None:
+    """Point the supervisor at the tab the agent last drove (no-op when none is known), so a refusal names the
+    page the agent is actually on rather than whichever tab the supervisor happened to attach to first."""
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+    if SUPERVISOR_REGISTRY.driven_tab(task_id)[1]:
+        _focus_bound_origin(task_id, "", "")
 
 
 def _bound_page_origin(task_id: str, meta: Any, probe_kind: str) -> str | dict[str, Any]:
@@ -305,6 +337,8 @@ def _bound_page_origin(task_id: str, meta: Any, probe_kind: str) -> str | dict[s
                 "error": f"Vault item {meta.id!r} has no bound origin; {meta.kind} items are filled only on "
                          "the site they were saved for."}
     page_origin = next((o for o in (_focus_bound_origin(task_id, c, probe_kind) for c in allowed) if o), None)
+    if not page_origin:
+        _focus_driven_tab(task_id)
     page_origin = page_origin or _current_page_origin(task_id)
     if not page_origin:
         return {"success": False,
@@ -434,8 +468,11 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None) -> 
                       ensure_ascii=False)
 
 
-_TAB_PROBES["otp"] = _deep_probe("input[autocomplete=one-time-code], input[name*=otp i], input[name*=code i], "
-                                  "input[id*=otp i], input[id*=code i], input[name*=totp i], input[aria-label*=code i]")
+# Split code widgets (one maxlength=1 box per digit) often carry no name, id or label at all.
+_TAB_PROBES["otp"] = ("(" + _deep_probe("input[autocomplete=one-time-code], input[name*=otp i], input[name*=code i], "
+                                        "input[id*=otp i], input[id*=code i], input[name*=totp i], "
+                                        "input[aria-label*=code i]")
+                      + " || " + _deep_count("input[maxlength='1']", 4) + ")")
 
 
 def _email_code(backend, handle: str, site: str) -> Optional[str]:

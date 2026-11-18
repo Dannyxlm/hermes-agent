@@ -103,6 +103,11 @@ def _page_rank(url: str, visibility: str, prefer_url: Optional[str]) -> int:
     return 2 if visibility == "visible" else 3
 
 
+# The exact tab the task's browser tool drove (by target id) outranks even an exact URL match: a second
+# tab on the same page (the user's own) must never win a tie.
+_DRIVEN_RANK = -1
+
+
 def _fail(error: str) -> dict[str, Any]:
     return {"ok": False, "error": error}
 
@@ -303,7 +308,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
         return {"ok": True, "result": value, "result_type": result_type}
 
     def focus_page(self, origin: str, *, accept: Optional[str] = None, timeout: float = 10.0,
-                   prefer_url: Optional[str] = None, probe_timeout: float = PAGE_PROBE_TIMEOUT_S) -> dict[str, Any]:
+                   prefer_url: Optional[str] = None, prefer_target: Optional[str] = None,
+                   probe_timeout: float = PAGE_PROBE_TIMEOUT_S) -> dict[str, Any]:
         """Re-attach the supervisor's page session to an open page target on ``origin``
         (``scheme://host[:port]``). The initial attach picks one page target, but tools
         that open their own tabs (browser_exec) put the login form somewhere else. With
@@ -312,8 +318,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
 
         Every candidate is probed in parallel with ``probe_timeout`` per call, so frozen,
         discarded or busy tabs in a shared browser are skipped instead of stalling the call.
-        Among the tabs that answer, ``prefer_url`` (the page this session's browser tool last
-        navigated) wins, then a visible tab, then the first background tab.
+        Among the tabs that answer, ``prefer_target`` (the exact tab this session's browser tool last
+        drove) wins, then ``prefer_url``, then a visible tab, then the first background tab.
         Returns ``{"ok": True, "url"}`` or ``{"ok": False, "error"}``; on failure the previous session stays."""
         loop = self._loop
         if loop is None or not loop.is_running():
@@ -332,7 +338,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                         candidates.append((t["targetId"], url))
                 except Exception:
                     continue
-            best = await self._pick_page(candidates, accept=accept, prefer_url=prefer_url, probe_timeout=probe_timeout)
+            best = await self._pick_page(candidates, accept=accept, prefer_url=prefer_url,
+                                         prefer_target=prefer_target, probe_timeout=probe_timeout)
             if best is None:
                 where = origin or "any site"
                 if not candidates:
@@ -357,10 +364,11 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             return _err(exc)
 
     async def _pick_page(self, candidates: list[tuple[str, str]], *, accept: Optional[str], prefer_url: Optional[str],
-                         probe_timeout: float) -> Optional[tuple[str, str]]:
+                         probe_timeout: float, prefer_target: Optional[str] = None) -> Optional[tuple[str, str]]:
         """Probe ``(target_id, url)`` candidates in parallel and return ``(url, session_id)`` of the best
         responsive one that passes ``accept`` (its session stays attached), or None. Every other probe
-        session is detached. Returns as soon as the exact ``prefer_url`` tab answers."""
+        session is detached. Returns as soon as the ``prefer_target`` tab (else the exact ``prefer_url``
+        tab) answers: two tabs can share a URL, a target id names one."""
         if not candidates:
             return None
         from websockets.exceptions import WebSocketException
@@ -378,12 +386,14 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                     probe = await self._cdp("Runtime.evaluate", {"expression": expression, "returnByValue": True},
                                             session_id=sid, timeout=probe_timeout)
                 value = probe.get("result", {}).get("result", {}).get("value")
+                driven = bool(prefer_target) and target_id == prefer_target
                 if isinstance(value, list) and len(value) == 3 and value[1]:
                     live_url = str(value[2] or url)
-                    return _page_rank(live_url, str(value[0] or ""), prefer_url), index, live_url, str(sid)
+                    rank = _DRIVEN_RANK if driven else _page_rank(live_url, str(value[0] or ""), prefer_url)
+                    return rank, index, live_url, str(sid)
                 if accept is None and "exceptionDetails" not in probe.get("result", {}):
                     # It answered, which is all a liveness probe needs; visibility unknown.
-                    return _page_rank(url, "", prefer_url), index, url, str(sid)
+                    return _DRIVEN_RANK if driven else _page_rank(url, "", prefer_url), index, url, str(sid)
             except asyncio.CancelledError:
                 if sid:
                     self._detach_soon(sid)
@@ -396,7 +406,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
 
         tasks = [asyncio.ensure_future(_probe(i, tid, url)) for i, (tid, url) in enumerate(candidates)]
         selected = None
-        good_enough = 0 if prefer_url else 2  # nothing can beat this rank: stop waiting out hung tabs
+        # Nothing can beat this rank: stop waiting out hung tabs.
+        good_enough = _DRIVEN_RANK if prefer_target else (0 if prefer_url else 2)
         try:
             try:
                 for next_done in asyncio.as_completed(tasks):
@@ -572,7 +583,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             await self._enable_page_domains(sid, timeout=10.0)
             await self._install_dialog_bridge(sid)
             return
-        best = await self._pick_page(pages, accept=None, prefer_url=SUPERVISOR_REGISTRY.page_hint(self.task_id),
+        hint_url, hint_target = SUPERVISOR_REGISTRY.driven_tab(self.task_id)
+        best = await self._pick_page(pages, accept=None, prefer_url=hint_url, prefer_target=hint_target,
                                      probe_timeout=PAGE_PROBE_TIMEOUT_S)
         if best is not None:
             _url, sid = best
@@ -650,19 +662,25 @@ class _SupervisorRegistry:
         self._lock = threading.Lock()
         self._by_task: dict[str, CDPSupervisor] = {}
         self._home_by_task: dict[str, str] = {}  # profile home that started it (``stop_home``)
-        # task_id -> URL that task's browser tool last navigated: lets the supervisor (re)attach to
-        # THAT tab in a browser shared with other agents and the human, not just any page.
-        self._page_hints: dict[str, str] = {}
+        # task_id -> (URL, target id) of the tab that task's browser tool last drove: lets the supervisor
+        # (re)attach to THAT tab in a browser shared with other agents and the human, not just any page.
+        self._page_hints: dict[str, tuple[str, str]] = {}
 
-    def note_page(self, task_id: str, url: str) -> None:
-        """Record the page ``task_id``'s browser tool just navigated (hint for tab selection)."""
+    def note_page(self, task_id: str, url: str, target_id: str = "") -> None:
+        """Record the tab ``task_id``'s browser tool just drove (hint for tab selection); ``target_id``
+        names that exact tab when the tool knows it (browser_exec records its harness's current tab)."""
         if task_id and url and url.startswith(("http://", "https://")):
             with self._lock:
-                self._page_hints[task_id] = url
+                self._page_hints[task_id] = (url, target_id or "")
 
     def page_hint(self, task_id: str) -> Optional[str]:
+        return self.driven_tab(task_id)[0]
+
+    def driven_tab(self, task_id: str) -> tuple[Optional[str], Optional[str]]:
+        """``(url, target_id)`` of the tab ``task_id`` last drove; ``(None, None)`` when unknown."""
         with self._lock:
-            return self._page_hints.get(task_id)
+            url, target = self._page_hints.get(task_id, ("", ""))
+        return url or None, target or None
 
     def get(self, task_id: str) -> Optional[CDPSupervisor]:
         with self._lock:

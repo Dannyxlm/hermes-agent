@@ -74,6 +74,11 @@ class LoginControl:
     name: str
     type: str
     max_length: Optional[int] = None
+    # Class names of the control and its two nearest ancestors (plus their aria-label / data-testid): split
+    # code widgets often carry no name, label or autocomplete, only ``class="otp-input"`` on a wrapper.
+    hint: str = ""
+    pattern: str = ""
+    input_mode: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> LoginControl:
@@ -87,6 +92,9 @@ class LoginControl:
             name=str(raw.get("name") or ""),
             type=str(raw.get("type") or ""),
             max_length=int(max_length) if max_length is not None else None,
+            hint=str(raw.get("hint") or ""),
+            pattern=str(raw.get("pattern") or ""),
+            input_mode=str(raw.get("inputMode", raw.get("input_mode")) or ""),
         )
 
 
@@ -135,18 +143,84 @@ _RE_OTP = re.compile(
 )
 
 
+_CODE_INPUT_TYPES = ("text", "tel", "number", "password", "")
+# Split code widgets name themselves in class names more often than in labels ("ui-otp-field-input",
+# "pin-input", "digit-box", "verification-code").
+_RE_CODE_WIDGET = re.compile(r"\b(?:otp|totp|2fa|mfa|one\s*time|code|codes|pin|pincode|digit|digits|passcode|"
+                             r"verification|verify)\b")
+# A box group that names one of these is a date, phone, card or amount split into parts, never a code.
+_RE_NOT_A_CODE = re.compile(r"\b(?:date|birth|birthday|dob|day|month|year|dd|mm|yy|yyyy|phone|telephone|mobile|"
+                            r"zip|postal|postcode|card|cvv|cvc|ssn|sin|amount|price|qty|quantity)\b")
+_RE_DIGIT_PATTERN = re.compile(r"^\^?(?:\[0-9\]|\\d)(?:[*+]|\{\d*,?\d*\})?\$?$")
+_SPLIT_BOXES = range(4, 9)  # 4-8 single-character boxes: every code widget seen in the wild
+
+
+def _hint_text(c: LoginControl) -> str:
+    """name/label/class hints as words; camelCase class names (``otpInput``) split first."""
+    raw = " ".join(p for p in (c.name, c.label, c.hint) if p)
+    return _normalize_text(re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw))
+
+
+def _digit_only(c: LoginControl) -> bool:
+    return (c.type in ("number", "tel") or c.input_mode.lower() == "numeric"
+            or bool(_RE_DIGIT_PATTERN.match(c.pattern.strip())))
+
+
+def _box_runs(controls: list[LoginControl]) -> list[list[LoginControl]]:
+    """Maximal runs of single-character inputs adjacent in DOM order (no other input between them) and in
+    the same form: the shape of an N-box code widget."""
+    runs: list[list[LoginControl]] = []
+    for c in sorted((c for c in controls if c.max_length == 1 and c.type in _CODE_INPUT_TYPES),
+                    key=lambda c: c.index):
+        last = runs[-1][-1] if runs else None
+        if last is not None and c.index - last.index == 1 and c.form_index == last.form_index:
+            runs[-1].append(c)
+        else:
+            runs.append([c])
+    return runs
+
+
+def _split_code_widget_score(run: list[LoginControl]) -> Optional[int]:
+    """Score for a run of single-character boxes that is a one-time-code widget, else None. A box saying
+    ``autocomplete=one-time-code`` or naming a code settles it; otherwise no box may label itself a
+    date/phone/card/amount part, and the group must call itself a code (class names count: ancestors are
+    where widgets say ``otp``) or be all digit-only boxes. Ancestor classes never veto: a generic wrapper
+    such as Bootstrap's ``.card`` says nothing about the boxes inside it."""
+    if len(run) not in _SPLIT_BOXES:
+        return None
+    if any("one-time-code" in c.autocomplete.lower().split() for c in run):
+        return 100
+    labels = " ".join(_normalize_text(" ".join(p for p in (c.name, c.label) if p)) for c in run)
+    if _RE_OTP.search(labels):
+        return 95
+    if _RE_NOT_A_CODE.search(labels):
+        return None
+    if _RE_CODE_WIDGET.search(" ".join(_hint_text(c) for c in run)):
+        return 90
+    return 80 if all(_digit_only(c) for c in run) else None
+
+
 def classify_otp_controls(controls: list[LoginControl]) -> list[ClassifiedLoginControl]:
     """The controls that take a second-factor code. ``autocomplete=one-time-code`` is authoritative;
     otherwise a text/tel/number input whose name/label says code/OTP/2FA/verification. Some sites split
-    the code into one input per digit (``maxlength=1`` boxes): they are returned in DOM order and the
-    fill spreads the code across them."""
+    the code into one input per digit (``maxlength=1`` boxes, often with no name or label at all): the
+    whole group is returned in DOM order (see ``_split_code_widget_score``) and the fill spreads the code
+    across it."""
+    grouped: dict[int, int] = {}
+    for run in _box_runs(controls):
+        score = _split_code_widget_score(run)
+        if score is not None:
+            grouped.update((c.index, score) for c in run)
     out: list[ClassifiedLoginControl] = []
     for c in controls:
+        if c.index in grouped:
+            out.append(ClassifiedLoginControl(c, grouped[c.index], "one-time-code"))
+            continue
         tokens = c.autocomplete.lower().split()
         if "one-time-code" in tokens:
             out.append(ClassifiedLoginControl(c, 100, "one-time-code"))
             continue
-        if c.type not in ("text", "tel", "number", "password", ""):
+        if c.type not in _CODE_INPUT_TYPES:
             continue
         if _RE_OTP.search(_normalize_text(" ".join(p for p in (c.name, c.label) if p))):
             out.append(ClassifiedLoginControl(c, 70, "one-time-code"))
@@ -272,11 +346,19 @@ _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {
       .map((id) => { const r = element.getRootNode(); const n = (r.getElementById ? r.getElementById(id) : null) || document.getElementById(id); return n ? (n.textContent || "") : ""; })
       .join(" ");
     const resolvedFormIndex = element.form ? forms.indexOf(element.form) : -1;
+    const hint = [];
+    for (let n = element, depth = 0; n && depth < 3; n = n.parentElement, depth += 1) {
+      hint.push(typeof n.className === "string" ? n.className : "", n.getAttribute("data-testid") || "");
+      if (depth > 0) hint.push(n.id || "", n.getAttribute("aria-label") || "");
+    }
     return [{
       autocomplete: element.autocomplete || "",
       formIndex: resolvedFormIndex >= 0 ? resolvedFormIndex : null,
       index,
       maxLength: element.maxLength > 0 ? element.maxLength : null,
+      hint: hint.filter(Boolean).join(" ").slice(0, 400),
+      pattern: element.getAttribute("pattern") || "",
+      inputMode: element.getAttribute("inputmode") || "",
       label: [
         ...labels,
         element.getAttribute("aria-label") || "",
@@ -340,10 +422,17 @@ _FILL_JS_TEMPLATE = """(() => {
       }
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
-      // one-time-code split into single-character boxes: f.value is the slice for THIS box (see build_otp_fills)
+      // One box of a split code widget (f.value is THIS box's character, see build_otp_fills). Widgets built
+      // on keydown/keyup (Vue/React OTP components advance focus and commit the digit there) need the key
+      // events a typing user would send around the value change.
+      const key = f.token === "one-time-code" && f.value.length === 1
+        ? { key: f.value, code: /^[0-9]$/.test(f.value) ? "Digit" + f.value : "", bubbles: true, composed: true, cancelable: true }
+        : null;
+      if (key) el.dispatchEvent(new KeyboardEvent("keydown", key));
       if (setter && setter.set) { setter.set.call(el, f.value); } else { el.value = f.value; }
       // composed: a component listening on its shadow host must see the value change too.
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText" }));
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: key ? f.value : null }));
+      if (key) el.dispatchEvent(new KeyboardEvent("keyup", key));
       el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
       if (el.value.length > 0) filled += 1;
     } catch (e) { /* skip */ }

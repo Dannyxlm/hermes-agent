@@ -10,8 +10,10 @@ from Hermes and touches the harness only through the helpers module it is given.
 
 from __future__ import annotations
 
+import atexit
 import base64
 import io
+import json
 import logging
 import os
 import tempfile
@@ -147,6 +149,30 @@ def install(helpers: Any, activate: str = ACTIVATE_NEVER) -> None:
         helpers.new_tab = make_new_tab(helpers.new_tab, helpers.cdp, activate=check)
 
 
+# Where the launcher writes ``{"targetId", "url"}`` of the harness's current tab when the call ends, so Hermes
+# knows which tab the agent is driving (browser_vault acts on that tab). Set per call by browser_exec.
+DRIVEN_TAB_FILE_ENV = "HERMES_BH_DRIVEN_TAB_FILE"
+
+
+def record_driven_tab_at_exit(helpers: Any) -> None:
+    """At interpreter exit (normal end, ``sys.exit`` or an uncaught error in the agent's code), write the
+    tab the harness daemon is attached to into ``$HERMES_BH_DRIVEN_TAB_FILE``. Nothing is written when the
+    variable is unset or the daemon cannot say (not attached, gone)."""
+    path = os.environ.get(DRIVEN_TAB_FILE_ENV)
+    if not path:
+        return
+
+    def _record() -> None:
+        try:
+            tab = helpers.current_tab()
+            if tab.get("targetId") and tab.get("url"):
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"targetId": tab["targetId"], "url": tab["url"]}, f)
+        except (RuntimeError, OSError, KeyError, TypeError, ValueError, AttributeError) as e:
+            _log.debug("driven tab not recorded: %s", type(e).__name__)
+    atexit.register(_record)
+
+
 _HARNESS_MODULE_ARGS = ["-m", "browser_harness.run"]
 _LAUNCHER = """\
 import importlib.util, runpy
@@ -154,6 +180,7 @@ spec = importlib.util.spec_from_file_location('hermes_browser_use_shot', {path!r
 shot = importlib.util.module_from_spec(spec); spec.loader.exec_module(shot)
 import browser_harness.helpers
 shot.install(browser_harness.helpers, activate={activate!r})
+shot.record_driven_tab_at_exit(browser_harness.helpers)
 runpy.run_module('browser_harness.run', run_name='__main__', alter_sys=True)
 """
 
