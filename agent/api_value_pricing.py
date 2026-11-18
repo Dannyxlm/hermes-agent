@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from agent.usage_pricing import CanonicalUsage
 
-PRICING_DATE = "2026-11-18"
+PRICING_DATE = "2026-10-19"
 OPENAI_SOURCE = "https://developers.openai.com/api/docs/pricing"
 ANTHROPIC_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
 # USD / million: uncached input, output, cache read, cache write (5m for Claude).
