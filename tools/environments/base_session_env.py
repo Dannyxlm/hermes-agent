@@ -168,7 +168,8 @@ def _passthrough_save_restore(names: Iterable[str]) -> tuple[list[str], list[str
 def _wrap_command_script(
     command: str, *, quoted_cwd: str, quoted_snap: str, snap_tmp_template: str,
     passthrough_names: Iterable[str], snapshot_ready: bool, cwd_marker: str,
-    pipe_marker: str = "", persist_env: bool = True, track_unsets: bool = False) -> str:
+    pipe_marker: str = "", persist_env: bool = True, track_unsets: bool = False,
+    seed_snaps: Iterable[str] = ()) -> str:
     """Per-command bash script: source snapshot, cd, run, re-dump env, emit CWD marker.
     ``persist_env=False`` skips the re-dump, so every command starts from the login-time
     snapshot and exports from one command never reach the next (the CWD marker still runs).
@@ -179,7 +180,9 @@ def _wrap_command_script(
     uses the same mktemp+mv atomic publish as the bootstrap and chains ``mv`` on the dump
     succeeding so a failed dump never replaces a good snapshot. ``umask 077`` is applied after
     the user's command so snapshot files (which may carry secrets) are private without
-    changing the command's umask.
+    changing the command's umask. *seed_snaps* (quoted paths) are read, first existing wins,
+    while *quoted_snap* does not exist yet: a delegated child's own snapshot starts as a copy of
+    its parent's shell state and its re-dump never writes the parent's file.
     """
     escaped = command.replace("'", "'\\''")
     capture = bool(pipe_marker) and _can_capture_pipestatus(command)
@@ -189,7 +192,12 @@ def _wrap_command_script(
         parts.append(
             f"__hermes_initial_exports=$(unset {_snapshot_unset_args(passthrough_names)} "
             "2>/dev/null; compgen -e)")
-    if snapshot_ready:
+    seeds = list(seed_snaps)
+    if snapshot_ready and seeds:
+        parts.append(
+            f"for __hermes_s in {quoted_snap} {' '.join(seeds)}; do "
+            'if [ -f "$__hermes_s" ]; then source "$__hermes_s" >/dev/null 2>&1 || true; break; fi; done')
+    elif snapshot_ready:
         parts.append(f"source {quoted_snap} >/dev/null 2>&1 || true")
     parts += restore
     parts += [

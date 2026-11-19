@@ -10,16 +10,14 @@ from tools import mcp_oauth
 from tools.mcp_oauth_manager import MCPOAuthManager
 
 
-@pytest.fixture(params=["legacy", "manager"])
-def provider(request, tmp_path, monkeypatch):
+@pytest.fixture
+def provider(tmp_path, monkeypatch):
+    # Upstream v0.23.2 deleted the unreached build_oauth_auth path (dd478aa3f3); the manager is the live one.
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr(mcp_oauth, "_is_interactive", lambda: True)
-    if request.param == "legacy":
-        result = mcp_oauth.build_oauth_auth("sample-server", "https://mcp.example.com")
-    else:
-        result = MCPOAuthManager().get_or_build_provider(
-            "sample-server", "https://mcp.example.com", {}
-        )
+    result = MCPOAuthManager().get_or_build_provider(
+        "sample-server", "https://mcp.example.com", {}
+    )
     assert result is not None
     result.context.current_tokens = OAuthToken(
         access_token="synthetic-access-secret", token_type="Bearer",

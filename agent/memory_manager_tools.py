@@ -26,7 +26,7 @@ def normalize_tool_schema(schema: Any) -> Optional[dict[str, Any]]:
 def memory_provider_tools_enabled(enabled_toolsets: Optional[list[str]], disabled_toolsets: Optional[list[str]] = None,
                                   *, memory_tool_present: bool = False) -> bool:
     """Return whether external memory-provider tools should be exposed."""
-    if disabled_toolsets and "memory" in disabled_toolsets:
+    if disabled_toolsets and {"memory", "all", "*"}.intersection(disabled_toolsets):
         return False
     if enabled_toolsets is not None and not enabled_toolsets:
         return False

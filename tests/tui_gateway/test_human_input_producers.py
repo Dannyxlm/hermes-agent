@@ -22,9 +22,9 @@ def isolate(monkeypatch):
     # exact-owner live/dead query boundary, not duplicate its deadline engine.
     monkeypatch.setattr(server_requests, "has_pending_human",
                         lambda sid: any(req.sid == sid for req in server_requests._open.values()), raising=False)
-    live.reset_for_tests()
+    live._open.clear()
     yield
-    live.reset_for_tests()
+    live._open.clear()
 
 
 def test_approval_notifier_passes_exact_frozen_deadline_and_deny_reason(monkeypatch):

@@ -17,7 +17,7 @@ def home(tmp_path, monkeypatch):
     skills = tmp_path / "skills"
     skills.mkdir()
     (tmp_path / "laws").mkdir()
-    with patch("tools.skill_manager_tool.SKILLS_DIR", skills), \
+    with patch("tools.skills_tool.SKILLS_DIR", skills), \
          patch("agent.skill_utils.get_all_skills_dirs", return_value=[skills]):
         yield tmp_path
 
@@ -125,7 +125,7 @@ def test_a_specialist_profile_editing_the_shared_library_is_governed_but_its_own
     _budget(root)
     shared, own = _put(root, "shared", 1_000), _put(profile, "own", 1_000)
     grow = dict(old_string="# T\n", new_string="# T\n" + "u" * 3_000)
-    with patch("tools.skill_manager_tool.SKILLS_DIR", profile / "skills"), \
+    with patch("tools.skills_tool.SKILLS_DIR", profile / "skills"), \
          patch("agent.skill_utils.get_all_skills_dirs", return_value=[profile / "skills", root / "skills"]):
         assert _call(action="patch", name="shared", **grow)["success"] is False
         assert _call(action="patch", name="own", **grow)["success"] is True

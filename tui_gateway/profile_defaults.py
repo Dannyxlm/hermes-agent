@@ -56,8 +56,9 @@ def _audit(path, record):
 def write_default(path, *, key, value, provider, principal):
     # Same lock as /api/model/set and dashboard config autosave. Catalog/network
     # validation has already finished outside the lock, as in the main-model writer.
-    from hermes_cli.web_server import _CONFIG_MUTATION_LOCK
-    with _CONFIG_MUTATION_LOCK:
+    # Upstream a16c8de2a4 moved the shared config write lock to config_backend.
+    from hermes_cli.config_backend import CONFIG_MUTATION_LOCK
+    with CONFIG_MUTATION_LOCK:
         before = read_defaults(path)
         same = (before["reasoning"] == value if key == "reasoning" else
                 (before["delegation_model"], before["delegation_provider"]) == (value, provider))

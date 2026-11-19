@@ -167,6 +167,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
         self._pending_calls: dict[int, asyncio.Future] = {}
         self._ws: Optional[ClientConnection] = None
         self._page_session_id: Optional[str] = None
+        # The tab the task's browser_exec daemon last drove (``set_driven_target``); ``focus_page`` prefers it.
+        self._driven_target_id: Optional[str] = None
         # Dialog auto-dismiss watchdog handles (per dialog id) + id generator.
         self._dialog_watchdogs: dict[str, asyncio.TimerHandle] = {}
         self._dialog_seq = 0
@@ -307,19 +309,22 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             value = result_obj.get("description") or result_obj.get("unserializableValue")
         return {"ok": True, "result": value, "result_type": result_type}
 
+    def set_driven_target(self, target_id: Optional[str]) -> None:
+        """Record the CDP target the task's browser_exec session drives (None: unknown)."""
+        with self._state_lock:
+            self._driven_target_id = target_id
+
     def focus_page(self, origin: str, *, accept: Optional[str] = None, timeout: float = 10.0,
                    prefer_url: Optional[str] = None, prefer_target: Optional[str] = None,
                    probe_timeout: float = PAGE_PROBE_TIMEOUT_S) -> dict[str, Any]:
         """Re-attach the supervisor's page session to an open page target on ``origin``
         (``scheme://host[:port]``). The initial attach picks one page target, but tools
         that open their own tabs (browser_exec) put the login form somewhere else. With
-        ``accept`` (a JS expression) only same-origin tabs where it evaluates truthy qualify,
-        so a login and a checkout tab on one site resolve to the right one.
-
-        Every candidate is probed in parallel with ``probe_timeout`` per call, so frozen,
-        discarded or busy tabs in a shared browser are skipped instead of stalling the call.
-        Among the tabs that answer, ``prefer_target`` (the exact tab this session's browser tool last
-        drove) wins, then ``prefer_url``, then a visible tab, then the first background tab.
+        ``accept`` (a JS expression), an unknown or off-origin driven target falls back to responsive
+        candidates whose probe is truthy. Candidates are probed concurrently, with ``probe_timeout``
+        per call; a matching URL ranks ahead of visibility when there is no exact driven target.
+        A known same-origin driven target is the only candidate, even before its form renders:
+        a slow or form-less tab must not send a fill to another session on the same origin.
         Returns ``{"ok": True, "url"}`` or ``{"ok": False, "error"}``; on failure the previous session stays."""
         loop = self._loop
         if loop is None or not loop.is_running():
@@ -338,13 +343,19 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                         candidates.append((t["targetId"], url))
                 except Exception:
                     continue
-            best = await self._pick_page(candidates, accept=accept, prefer_url=prefer_url,
+            with self._state_lock:
+                driven = prefer_target or self._driven_target_id
+            if own := [candidate for candidate in candidates if candidate[0] == driven]:
+                candidates, accept_probe = own, None
+            else:
+                accept_probe = accept
+            best = await self._pick_page(candidates, accept=accept_probe, prefer_url=prefer_url,
                                          prefer_target=prefer_target, probe_timeout=probe_timeout)
             if best is None:
                 where = origin or "any site"
                 if not candidates:
                     return _fail(f"no open page on {where}")
-                return _fail(f"no responsive page on {where}" + (" with the expected form" if accept else "")
+                return _fail(f"no responsive page on {where}" + (" with the expected form" if accept_probe else "")
                              + f" ({len(candidates)} candidate tab(s) probed)")
             url, sid = best
             try:
