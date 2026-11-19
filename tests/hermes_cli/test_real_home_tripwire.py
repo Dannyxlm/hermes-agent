@@ -231,6 +231,46 @@ def test_pm_generation_dir_around_the_running_venv_is_the_interpreter(tmp_path, 
     assert _pm_generation_dirs([tmp_path / "checkout" / ".venv", tmp_path / "other" / "venv"]) == set()
 
 
+def test_collection_logging_uses_a_sandbox_for_nested_home(tmp_path):
+    operator = tmp_path / "operator"
+    localappdata = operator / "AppData" / "Local"
+    root = localappdata / "hermes" if sys.platform == "win32" else operator / ".hermes"
+    home = root / "custom-home"
+    home.mkdir(parents=True)
+    sentinel = home / "config.yaml"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    probe = tmp_path / "test_probe.py"
+    probe.write_text(textwrap.dedent(f"""
+        import logging
+        import os
+        from pathlib import Path
+
+        import pytest
+        import hermes_cli.main
+        from hermes_logging import flush_log_queue
+
+        collection_home = Path(os.environ['HERMES_HOME'])
+
+        def test_can_log_without_touching_the_operator_home():
+            logging.getLogger('test.probe').warning('sandbox log entry')
+            flush_log_queue()
+            assert 'sandbox log entry' in (collection_home / 'logs' / 'agent.log').read_text(encoding='utf-8')
+            with pytest.raises(AssertionError, match='REAL hermes home'):
+                Path({str(sentinel)!r}).read_text(encoding='utf-8')
+        """), encoding="utf-8")
+    env = dict(os.environ, HOME=str(operator), USERPROFILE=str(operator),
+               LOCALAPPDATA=str(localappdata), HERMES_HOME=str(home))
+    env.pop("HERMES_TEST_SANDBOX_HOME", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "tests.conftest", "-p", "no:cacheprovider", "-q", str(probe)],
+        cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=120,
+        check=False,
+    )
+    assert not (home / "logs").exists(), "collection configured logging in the operator home"
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+
+
 def test_hermes_exported_scratch_tmp_is_not_the_test_temp_root(tmp_path):
     """A Hermes-launched shell hands pytest TMPDIR=<home>/cache/scratch (tagged by
     HERMES_SCRATCH_DIR). With that home guarded, honoring it would put the session

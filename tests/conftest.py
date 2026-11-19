@@ -83,18 +83,12 @@ from hermes_constants import _get_platform_default_hermes_home
 _NATIVE_HERMES_PARENT = _get_platform_default_hermes_home().parent
 
 
-def _hermes_home_points_at_production(value: str) -> bool:
-    """True when a pre-set HERMES_HOME resolves to the real production root.
+def _hermes_home_points_at_production(value: str, *, include_descendants: bool = False) -> bool:
+    """Whether HERMES_HOME is unset or points to the default home or a named profile.
 
-    Gateway-launched shells (and developer shells that ``export
-    HERMES_HOME=~/.hermes``) hand pytest the PRODUCTION home. Historically
-    the session sandbox below honored any pre-set value, so collection-time
-    imports (logging handlers, ``hermes_state.DEFAULT_DB_PATH``) froze paths
-    inside the real ``~/.hermes`` — the escape vector that landed pytest
-    fixture rows (chat-1 / wx-chat sessions, /tmp/pytest-of-* routing
-    scopes) in the live state.db and flipped its journal mode under the
-    WAL-mode gateway writer. Only a genuinely custom (non-production)
-    HERMES_HOME is honored now.
+    Collection must avoid the whole default tree that the file I/O guard protects.
+    The other callers use the narrower check to retain explicitly configured custom
+    roots in their deny-lists, including custom roots nested in the default tree.
     """
     if not value:
         return True
@@ -109,10 +103,11 @@ def _hermes_home_points_at_production(value: str) -> bool:
         real_root = _real_platform_state_root() or (Path.home() / ".hermes").resolve()
     except Exception:
         return True
-    if resolved == real_root:
-        return True
-    # Profile home directly under the production root: <root>/profiles/<name>
-    return resolved.parent.name == "profiles" and resolved.parent.parent == real_root
+    if include_descendants:
+        return resolved.is_relative_to(real_root)
+    return resolved == real_root or (
+        resolved.parent.name == "profiles" and resolved.parent.parent == real_root
+    )
 
 
 # ``import hermes_bootstrap`` (transitively: any entry-point module) runs
@@ -158,7 +153,7 @@ for _key in SCRATCH_TMP_ENV_VARS:
 tempfile.tempdir = None  # re-resolve after stripping guarded temp directories
 os.environ.setdefault("TMPDIR", tempfile.gettempdir())
 
-if _hermes_home_points_at_production(os.environ.get("HERMES_HOME", "")):
+if _hermes_home_points_at_production(_PRE_SANDBOX_HERMES_HOME, include_descendants=True):
     _SESSION_HERMES_HOME = tempfile.mkdtemp(prefix="hermes-test-home-")
     os.environ["HERMES_HOME"] = _SESSION_HERMES_HOME
     # Marker for re-imported conftest module bodies (xdist workers exec this
@@ -653,13 +648,10 @@ def _capture_real_kanban_root() -> Path:
     if _PRE_SANDBOX_HERMES_HOME and not _hermes_home_points_at_production(
         _PRE_SANDBOX_HERMES_HOME
     ):
-        # HERMES_HOME was genuinely set to a CUSTOM root before the sandbox
-        # (production-pointing values are sandboxed away above, in which case
-        # the env still holds the tempdir and the resolver would be wrong) —
-        # honor it via the normal resolver (it may be a profile dir whose
-        # root matters).
+        # Collection may have redirected a custom home inside the default tree.
+        # Resolve the original setting, not the now-test-owned process home.
         from hermes_constants import get_default_hermes_root
-        return get_default_hermes_root().resolve()
+        return get_default_hermes_root(home=_PRE_SANDBOX_HERMES_HOME).resolve()
     # No pre-existing HERMES_HOME: the real root is the platform default,
     # NOT the sandbox tempdir now sitting in the env.
     return (Path.home() / ".hermes").resolve()
