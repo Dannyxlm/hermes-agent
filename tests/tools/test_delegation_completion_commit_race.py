@@ -25,10 +25,10 @@ def test_committed_child_beats_forced_completion_placeholder(monkeypatch, status
     entered, release = threading.Event(), threading.Event()
     persist = ad._persist_completion
 
-    def paused(event, result):
+    def paused(event, result, **kwargs):  # forwards upstream's delivery= (d8bb741c11)
         entered.set()
         assert release.wait(5)
-        return persist(event, result)
+        return persist(event, result, **kwargs)
 
     monkeypatch.setattr(ad, "_persist_completion", paused)
     result = (lambda rec: ad._stalled_result(did, rec)) if status == "stalled" else ad._batch_crash("boom", 1.0)

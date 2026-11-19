@@ -142,10 +142,10 @@ def test_forced_settlement_preserves_committed_children_on_delivery_and_reload(m
     entered, release = threading.Event(), threading.Event()
     persist = ad._persist_completion
 
-    def paused_persist(event, result):
+    def paused_persist(event, result, **kwargs):  # forwards upstream's delivery= (d8bb741c11)
         entered.set()
         assert release.wait(5)
-        return persist(event, result)
+        return persist(event, result, **kwargs)
 
     if commit_during_finalize:
         monkeypatch.setattr(ad, '_persist_completion', paused_persist)

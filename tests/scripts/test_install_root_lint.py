@@ -101,7 +101,7 @@ def test_non_resolver_classification_is_exact_not_a_file_exemption(tmp_path, rel
     path = tmp_path / relative
     path.parent.mkdir(parents=True)
     path.write_text(source, encoding="utf-8")
-    assert lint.collect(tmp_path) == {"root_from_file": [], "module_sys_path": []}
+    assert lint.collect(tmp_path) == {"root_from_file": [], "module_sys_path": [], "moved_climb": []}  # + upstream MOVED key
 
     path.write_text(source + extra, encoding="utf-8")
     assert lint.collect(tmp_path)[kind] == [f"{relative}:{len(source.splitlines()) + 1}"]

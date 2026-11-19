@@ -83,6 +83,8 @@ _TRANSCRIPT_EVENTS_SQL = f"""WITH transcript_events(seq) AS (
           ON source.room_id=member.room_id
          AND source.event_id=json_extract(member.payload_json, '$.discussion_event_id')
          AND source.kind='message.user'
+         -- Same-thread sources only: a corrupted link must not import another thread's user (upstream 3430fa287f).
+         AND json_extract(source.payload_json, '$.thread_id')=:thread_id
         WHERE transcript.room_id=:room_id AND transcript.thread_id=:thread_id
           AND transcript.kind='message.member')
     SELECT {", ".join("events." + column for column in _ROOM_EVENT_COLUMNS.split(", "))}

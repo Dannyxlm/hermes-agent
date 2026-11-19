@@ -54,6 +54,8 @@ def room_watch(tmp_path, monkeypatch):
     monkeypatch.setattr(hosted_room_service, "live_room_services", lambda: list(services))
     events = []
     monkeypatch.setattr(server, "_broadcast_global_event", lambda ev, payload=None: events.append((ev, payload)))
+    # CloudSeed skips watcher scans with no UI client attached (8aa21ff7c4); these broadcasts are for one.
+    monkeypatch.setattr(server, "_stdio_is_rpc_channel", True)
     for room_id in ("room-1", "room-2"):
         rooms.create_room(shared, room_id=room_id, name="Room", members=[{"profile": "ops", "handle": "ops"}],
                           authority_gateway_id="gateway-a", now=10)
@@ -128,10 +130,12 @@ def test_a_burst_inside_the_floor_is_held_and_then_names_every_room(room_watch):
     assert len(set(ids)) == 2 and all(ids), "each broadcast has its own id"
 
 
-def test_only_the_store_whose_log_grew_wakes_its_driver(room_watch, tmp_path):
+def test_only_the_store_whose_log_grew_wakes_its_driver(room_watch, tmp_path, monkeypatch):
     """A cron post must reach the driver now, not at its 5 s idle poll; a status move or another store's
     append must not wake it (each wake re-schedules every busy room)."""
     db, tick, services, _events = room_watch
+    # Headless (no UI client): the room scan still runs while a room service is live, so its driver wakes.
+    monkeypatch.setattr(server, "_stdio_is_rpc_channel", False)
     owner, other = _Service(db), _Service(tmp_path / "home" / "state.db")
     services += [owner, other]
     tick()

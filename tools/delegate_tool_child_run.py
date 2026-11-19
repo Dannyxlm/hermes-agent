@@ -920,27 +920,20 @@ class _ChildRun:
         # Continue from the child's last cwd/worktree, rather than the parent's.
         resumed = getattr(self.child, "_delegate_continue_workspace", None)
         resumed = resumed if isinstance(resumed, dict) else None
+        inherit_shell_state = False
+        with _quiet("Child terminal scope resolution failed: %s"):
+            from tools.terminal_tool import _qualify_task_key
+            parent_scope = _qualify_task_key("default")
+            with child_profile_scope(self.child):
+                inherit_shell_state = _qualify_task_key("default") == parent_scope
         with _quiet("Child container alias registration failed: %s"):
             from tools.terminal_tool import register_container_alias
-            register_container_alias(self.child_task_id, self.parent_task_id)
+            register_container_alias(self.child_task_id, self.parent_task_id, inherit_shell_state=inherit_shell_state)
         with _quiet("Child cwd seed failed: %s"):
             from tools.terminal_tool import get_session_cwd, record_session_cwd
             parent_cwd = get_session_cwd(self.parent_task_id)
             with child_profile_scope(self.child):
                 record_session_cwd(self.child_task_id, resumed["cwd"] if resumed else parent_cwd)
-
-        with _quiet("Child environment seed failed: %s"):
-            from tools.approval import get_current_session_key
-            from tools.terminal_tool import _qualify_task_key
-            from tools.terminal_tool_session_env import capture_session_environment, seed_session_environment
-            parent_scope = _qualify_task_key("default")
-            # Match terminal_tool: parents use the approval key, falling back to task_id.
-            parent_session_key = get_current_session_key(default="") or (self.parent_task_id or "")
-            with child_profile_scope(self.child):
-                same_profile = _qualify_task_key("default") == parent_scope
-            if same_profile:
-                parent_snapshot = capture_session_environment(self.parent_task_id, parent_session_key)
-                seed_session_environment(_qualify_task_key(self.child_task_id), parent_snapshot)
 
         if resumed is not None:
             self.worktree_info = resumed.get("worktree")

@@ -168,11 +168,13 @@ def test_non_mapping_config_root_does_not_widen_claims(
     from hermes_cli.config import read_raw_config
     from hermes_cli.config_effective import load_user_config_effective
 
-    (kanban_home / "config.yaml").write_text(root, encoding="utf-8")
-    if warm:
-        {"effective": load_user_config_effective, "raw": read_raw_config}[warm]()
     with kbc.connect() as conn, caplog.at_level("WARNING", logger="hermes_cli.kanban_db"):
+        # CloudSeed: card creation reads config fail-closed (kanban_policy.creation_model) and
+        # refuses a malformed root, so the card exists before the config breaks.
         tid = kb.create_task(conn, title="foreign card", assignee="default")
+        (kanban_home / "config.yaml").write_text(root, encoding="utf-8")
+        if warm:
+            {"effective": load_user_config_effective, "raw": read_raw_config}[warm]()
         assert kbd.has_spawnable_ready(conn) is False
         res = kbd.dispatch_once(conn, dry_run=True)
     assert res.spawned == []
@@ -192,9 +194,9 @@ def test_non_mapping_kanban_section_skips_all_cards(
     """A ``kanban`` section that parses into a non-mapping is present-but-unusable,
     not absent: it must fail closed like an unreadable config (#113620) instead of
     widening this home's claim scope to every existing profile (#147532)."""
-    (kanban_home / "config.yaml").write_text(section, encoding="utf-8")
     with kbc.connect() as conn, caplog.at_level("WARNING", logger="hermes_cli.kanban_db"):
-        tid = kb.create_task(conn, title="foreign card", assignee="default")
+        tid = kb.create_task(conn, title="foreign card", assignee="default")  # before the break, as above
+        (kanban_home / "config.yaml").write_text(section, encoding="utf-8")
         assert kbd.has_spawnable_ready(conn) is False
         res = kbd.dispatch_once(conn, dry_run=True)
     assert res.spawned == []

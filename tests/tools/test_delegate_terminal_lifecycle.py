@@ -20,7 +20,6 @@ def test_child_resources_close_even_if_terminal_profile_scope_cannot_enter(tmp_p
     from concurrent.futures import Future
     from contextlib import contextmanager
     from tools import delegate_tool_routes
-    from tools.delegate_tool_child_run import _defer_close_after_timeout
 
     @contextmanager
     def broken_scope(child):
@@ -30,15 +29,14 @@ def test_child_resources_close_even_if_terminal_profile_scope_cannot_enter(tmp_p
     monkeypatch.setattr(delegate_tool_routes, "child_profile_scope", broken_scope)
     with (tmp_path / "child-resource").open("w") as resource:
         child = SimpleNamespace(_launch_executed=True, close=resource.close)
+        state = _ChildRun(child, SimpleNamespace(), 0, "close", "close-child", None)
+        # Deferred: the real timeout path, where cleanup hands its tail to the worker Future.
+        state.deferred_future = Future() if deferred else None
+        state.cleanup(heartbeat=SimpleNamespace(stop=lambda: None), child_pool=None,
+                      leased_cred_id=None, close_deferred=deferred)
         if deferred:
-            future = Future()
-            _defer_close_after_timeout(child, future, "close-child")
             assert not resource.closed
-            future.set_result(None)
-        else:
-            state = _ChildRun(child, SimpleNamespace(), 0, "close", "close-child", None)
-            state.cleanup(heartbeat=SimpleNamespace(stop=lambda: None), child_pool=None,
-                          leased_cred_id=None, close_deferred=False)
+            state.deferred_future.set_result(None)
         assert resource.closed
 
 
@@ -49,7 +47,7 @@ def test_timeout_reclaims_terminal_state_only_after_worker_exit(
     terminal_sessions, monkeypatch, tmp_path, profile_mode, close_raises,
 ):
     from hermes_constants import get_hermes_home
-    from tools import delegate_tool
+    from tools import delegate_tool_child_run
     from tests.waiting import wait_until
 
     run, _, _ = terminal_sessions
@@ -94,7 +92,7 @@ def test_timeout_reclaims_terminal_state_only_after_worker_exit(
     child = Child()
     state = _ChildRun(child, SimpleNamespace(_current_task_id="export-parent"),
                       0, "timeout lifecycle", "export-a", None)
-    monkeypatch.setattr(delegate_tool, "_get_child_timeout", lambda: 1)
+    monkeypatch.setattr(delegate_tool_child_run, "_get_child_timeout", lambda: 1)  # reader binds it (43dc9a0a28)
 
     def abandon_after_start(*args):
         assert started.wait(timeout=10)

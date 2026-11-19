@@ -27,7 +27,7 @@ def test_consumption_between_snapshot_and_publication_cannot_resurrect_notice(tm
     from tools import process_registry_results as results
     from tools.process_registry_delivery import restore_process_completions
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(module, '_checkpoint_path', lambda: tmp_path / 'processes.json')  # per-call path (0cbf579e63)
     registry = ProcessRegistry()
     process = ProcessSession(id='proc_consume_race', command='build', started_at=1,
         session_key='owner', parent_session_id='owner', notify_on_complete=True, output_buffer='final output')

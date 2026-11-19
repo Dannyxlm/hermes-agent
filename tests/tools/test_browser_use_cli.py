@@ -875,14 +875,18 @@ class TestIdleLaneReaping:
 
     @pytest.mark.platforms("posix")
     def test_marker_write_never_follows_a_planted_symlink(self, tmp_path, monkeypatch):
-        """The marker name in the shared temp root is predictable: a planted link must not create its target."""
-        monkeypatch.setenv("BU_NAME", "r7k2")
-        monkeypatch.setitem(sys.modules, "browser_harness", None)  # no daemon pid: marker suffix "0"
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
-        victim = tmp_path / "victim"
-        (tmp_path / f"hermes-bu-owntab-{os.getuid()}-r7k2-0").symlink_to(victim)  # windows-footgun: ok — posix-only
+        """A planted link at the tab-ledger path must not create its target.
 
-        exec(bu_cli._OWN_TAB_PREAMBLE, {"cdp": lambda *a, **k: {}, "switch_tab": lambda _tid: None})
+        The old shared-temp own-tab marker is gone (v0.23.2's per-lane tab ledger replaced the
+        preamble); the no-follow write now lives in the ledger prelude's opener."""
+        victim = tmp_path / "victim"
+        ledger = tmp_path / "bu-lane-tabs"
+        ledger.symlink_to(victim)  # windows-footgun: ok — posix-only
+        monkeypatch.setenv(bu_cli._TABS_FILE_ENV, str(ledger))
+        ns = {"cdp": lambda *a, **k: {"targetInfos": []}, "new_tab": lambda url="about:blank": "T-new"}
+
+        exec(bu_cli._TAB_LEDGER_PRELUDE, ns)
+        assert ns["new_tab"]() == "T-new"
 
         assert not victim.exists()
 

@@ -270,7 +270,8 @@ class TestMetaExclude:
 
     def test_each_server_keeps_its_own_list(self, _patch_mcp_server):
         other = SimpleNamespace(session=MagicMock(), _rpc_lock=None)
-        with patch.dict(mcp_tool._servers, {"other-server": other}):
+        with patch.dict(mcp_tool._servers, {"other-server": other}), \
+             patch.dict(mcp_tool._server_trust_levels, {"other-server": "full"}):
             self._configure({"test-server": {"meta_exclude": ["ambient_fact"]}, "other-server": {}},
                             connect=True)
             meta = {"ambient_fact": 1, "call_detail": 2}

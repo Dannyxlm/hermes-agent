@@ -394,13 +394,26 @@ def clear_task_env_overrides(task_id: str):
         _container_aliases.pop(task_id, None)
 
 
-def register_container_alias(child_task_id: str, parent_task_id: Optional[str]) -> None:
-    """Make *child_task_id* resolve to *parent_task_id*'s container (called at
-    delegate_task spawn). A missing parent id aliases to ``"default"``."""
+def register_container_alias(
+    child_task_id: str, parent_task_id: Optional[str], *, inherit_shell_state: bool = True,
+) -> None:
+    """Share a container and seed a private local shell snapshot at delegation spawn.
+
+    Call in the parent's scope. A profile-routed child must opt out of copying
+    shell state when it runs in a different profile. No parent id aliases to ``"default"``.
+    """
     if not child_task_id:
         return
     with _container_alias_lock:
         _container_aliases[child_task_id] = str(parent_task_id or "default")
+    if inherit_shell_state:
+        with _quiet("Child environment seed failed"):
+            from tools.approval import get_current_session_key
+            from tools.terminal_tool_session_env import capture_session_environment, seed_session_environment
+
+            session_key = get_current_session_key(default="") or (parent_task_id or "")
+            parent_snapshot = capture_session_environment(parent_task_id, session_key)
+            seed_session_environment(_qualify_task_key(child_task_id), parent_snapshot)
 
 
 def _resolve_container_alias(task_id: str) -> str:

@@ -1,8 +1,8 @@
 """browser_vault fills land in the tab the session's browser_exec drives (#140196).
 
 On a shared CDP browser several tabs can sit on the same login origin (another session's, a stale
-one). ``focus_page`` used to attach to the FIRST same-origin tab whose form probe passed; it now
-prefers the target browser_exec's harness daemon reports as its current tab.
+one). ``focus_page`` prefers the target browser_exec's harness daemon reports as its current tab
+rather than falling back to a same-origin tab whose form probe passed.
 
 The supervisor runs against a real local WebSocket speaking just enough CDP; the harness daemon's
 ``current_tab`` answer comes from a real AF_UNIX listener at the path the harness binds.
@@ -35,6 +35,7 @@ class _FakeCDP:
 
     def __init__(self) -> None:
         self.attached: list[str] = []
+        self.page_enabled: list[str] = []
         self.formless: set[str] = set()  # sessions whose form probe is falsy (form not rendered yet)
         self.url = ""
         self.loop = asyncio.new_event_loop()
@@ -63,8 +64,18 @@ class _FakeCDP:
             elif method == "Target.attachToTarget":
                 self.attached.append(params["targetId"])
                 result = {"sessionId": f"S-{params['targetId']}"}
+            elif method == "Page.enable":
+                self.page_enabled.append(msg["sessionId"])
             elif method == "Runtime.evaluate":
-                result = {"result": {"type": "boolean", "value": msg.get("sessionId") not in self.formless}}
+                sid = msg.get("sessionId")
+                accepted = sid not in self.formless
+                if "document.visibilityState" in params["expression"]:
+                    # CloudSeed evaluates visibility, the form predicate, and the live URL together.
+                    url = next(tab["url"] for tab in _TABS if sid == f"S-{tab['targetId']}")
+                    value = {"type": "object", "value": ["hidden", accepted, url]}
+                else:
+                    value = {"type": "boolean", "value": accepted}
+                result = {"result": value}
             await ws.send(json.dumps({"id": msg["id"], "result": result}))
 
 
@@ -73,6 +84,7 @@ def supervisor():
     cdp, registry = _FakeCDP(), _SupervisorRegistry()
     sup = registry.get_or_start("t", cdp.url, start_timeout=5)
     cdp.attached.clear()  # the initial attach
+    cdp.page_enabled.clear()
     try:
         yield sup, cdp
     finally:
@@ -99,8 +111,9 @@ def test_driven_tab_whose_form_has_not_rendered_is_still_the_only_candidate(supe
 def test_driven_tab_elsewhere_falls_back_to_the_origin_walk(supervisor):
     sup, cdp = supervisor
     sup.set_driven_target("T-closed-or-on-another-site")
-    assert sup.focus_page(_ORIGIN, accept="true")["ok"] is True
-    assert cdp.attached == ["T-stale"]
+    assert sup.focus_page(_ORIGIN, accept="true") == {"ok": True, "url": f"{_ORIGIN}/login?old"}
+    # The fork attaches candidates to probe them; only the winner gets page domains enabled.
+    assert cdp.page_enabled == ["S-T-stale"]
 
 
 @pytest.mark.platforms("linux", "macos")

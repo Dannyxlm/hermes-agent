@@ -198,7 +198,8 @@ class TestSlackPeerAgentSmoke:
             return_value={"ok": True, "user": {"is_bot": True, "profile": {}}})
         checked_bot_flags = []
 
-        def authorize_bot_only(user_id, chat_type, chat_id, *, is_bot=False, thread_id=None):
+        def authorize_bot_only(user_id, chat_type, chat_id, *, is_bot=False, thread_id=None, scope_id=None):
+            # scope_id: the fork's workspace-scoped auth contract (the gateway's real check accepts it).
             checked_bot_flags.append(is_bot)
             return user_id == PEER_USER_ID and is_bot
 

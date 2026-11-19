@@ -26,7 +26,7 @@ def tree_bytes(root):
                                   pytest.param("line\nbreak", marks=pytest.mark.platforms("posix"))])
 @pytest.mark.parametrize("gitfile", [False, True])
 def test_parent_snapshot_and_restore_preserve_uncaptured_repo(tmp_path, monkeypatch, caplog, safe, size_cap, name, gitfile):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints, resolved per call (b3f468205e)
     work = tmp_path / "work"
     nested = work / "packages" / name
     nested.mkdir(parents=True)
@@ -71,7 +71,7 @@ def test_parent_snapshot_and_restore_preserve_uncaptured_repo(tmp_path, monkeypa
 
 @pytest.mark.parametrize("safe", [False, True])
 def test_exclusion_survives_reload_and_removed_git_marker(tmp_path, monkeypatch, safe):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints, resolved per call (b3f468205e)
     work = tmp_path / "work"
     nested = work / "new"
     nested.mkdir(parents=True)
@@ -108,7 +108,7 @@ def test_exclusion_survives_reload_and_removed_git_marker(tmp_path, monkeypatch,
 @pytest.mark.parametrize("safe", [False, True])
 @pytest.mark.parametrize("old_shape", ["directory", "ancestor-file"])
 def test_restore_preserves_coverage_and_protects_uncaptured_ancestor_collision(tmp_path, monkeypatch, safe, old_shape):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints, resolved per call (b3f468205e)
     work = tmp_path / "work"
     work.mkdir()
     notes = work / "notes.txt"
@@ -148,7 +148,7 @@ def test_restore_preserves_coverage_and_protects_uncaptured_ancestor_collision(t
 
 @pytest.mark.parametrize("file_path", [None, "a.txt"])
 def test_full_restore_repairs_corrupt_index_before_gap_inspection(tmp_path, monkeypatch, file_path):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints, resolved per call (b3f468205e)
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("before\n")
@@ -164,7 +164,7 @@ def test_full_restore_repairs_corrupt_index_before_gap_inspection(tmp_path, monk
 
 @pytest.mark.parametrize("safe", [False, True])
 def test_previously_captured_directory_remains_recoverable_after_git_init(tmp_path, monkeypatch, safe):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints, resolved per call (b3f468205e)
     work = tmp_path / "work"
     nested = work / "app"
     nested.mkdir(parents=True)
@@ -194,7 +194,7 @@ def test_previously_captured_directory_remains_recoverable_after_git_init(tmp_pa
 
 
 def test_listing_names_all_unborn_gaps_beside_committed_and_ignored_repos(tmp_path, monkeypatch):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints, resolved per call (b3f468205e)
     work = tmp_path / "work"
     work.mkdir()
     (work / "notes.txt").write_text("notes\n")

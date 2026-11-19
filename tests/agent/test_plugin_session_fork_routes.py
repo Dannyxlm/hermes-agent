@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agent import background_review, memory_provider, plugin_session_fork
-from agent.inline_tool_executors import pre_registry_route, resolve_invoke_tool_executor
+from agent.inline_tool_executors import InlineToolContext, pre_registry_route, resolve_invoke_tool_executor
 from agent.memory_manager import MemoryManager
 from agent.side_question_lease import issue_side_question_token
 from tests.agent import test_plugin_session_fork as _base
@@ -82,6 +82,8 @@ def probe(monkeypatch):
 def _wire(agent, seen):
     """Give ``agent`` a live memory provider serving MEMORY and a context engine serving CONTEXT."""
     agent._memory_manager = _SpyMemory(seen)
+    # This fixture installs the provider after init; simulate advertising its schema.
+    agent._memory_provider_tool_names = {MEMORY}
     agent._context_engine_tool_names = {CONTEXT}
     agent.context_compressor = SimpleNamespace(
         handle_tool_call=lambda name, args, **kw: seen.append(("context", name)) or json.dumps({"route": "context"}))
@@ -190,7 +192,8 @@ def test_the_route_predicate_names_where_the_dispatcher_sends_each_name(probe):
     # Unfenced, the connector name reaches the connector and the memory name the memory provider.
     handle_function_call(CONNECTOR, {})
     memory_executor = resolve_invoke_tool_executor(agent, MEMORY)
-    memory_executor(agent, {}, SimpleNamespace())
+    assert memory_executor is not None
+    memory_executor(agent, {}, InlineToolContext(effective_task_id="task-1", tool_call_id="route-probe"))
     assert probe.seen == [("connector", CONNECTOR), ("memory", MEMORY)]
 
     allowed = plugin_session_fork.fork_tool_allowlist(_ctx(probe.manager)._own_tool_names(), agent)

@@ -116,12 +116,14 @@ class CredentialPoolModelCooldownMixin:
         would otherwise be re-selected for the very model that just failed.
         Caller holds the lock.
         """
-        from agent.credential_pool import _exhausted_ttl, _normalize_error_context
+        from agent.credential_pool import _cooldown_error_context, _exhausted_ttl, _normalize_error_context
 
         if failure_reason == "model_entitlement":
             until = time.time() + MODEL_ENTITLEMENT_BENCH_SECONDS
         else:
-            until = _normalize_error_context(error_context, use_bench=not self._is_sole_credential()).get("reset_at") or (
+            # Fork bench policy first, then upstream's redacting normalizer (same order as mark_exhausted).
+            cooldown_error = _cooldown_error_context(error_context, use_bench=not self._is_sole_credential())
+            until = _normalize_error_context(cooldown_error).get("reset_at") or (
                 time.time() + _exhausted_ttl(429, sole_credential=self._is_sole_credential())
             )
         failed_key = entry.runtime_api_key
