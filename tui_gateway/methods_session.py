@@ -916,7 +916,7 @@ def _resume_reuse_live(ctx: _Resume, sid: str, session: dict) -> dict:
     with _session_resume_lock:
         response = _resume_reuse_live_locked(ctx, sid, session)
     if "result" in response:
-        response["result"]["info"] = {} if ctx.omit_info else _fallback_session_info(session)
+        response["result"]["info"] = {} if getattr(ctx, "omit_info", False) else _fallback_session_info(session)
     return response
 
 
@@ -994,8 +994,9 @@ def _resume_deferred(ctx: _Resume) -> dict:
     sid, source, cwd = ctx.mint()
     with _profile_build_scope(ctx.profile_home):
         overrides = _stored_session_runtime_overrides(ctx.found)
+    omit_info = getattr(ctx, "omit_info", False)
     record = ctx.record(source, cwd, [], overrides,
-                        todo_state=None if ctx.omit_info else _todo_state_from_db(ctx.db, ctx.target))
+                        todo_state=None if omit_info else _todo_state_from_db(ctx.db, ctx.target))
     record.update(resume_history_ready=threading.Event(), resume_hydrating=True,
                   resume_message_count=int(ctx.found.get("message_count") or 0))
     if (reused := ctx.claim(sid, record)) is not None:
@@ -1006,7 +1007,7 @@ def _resume_deferred(ctx: _Resume) -> dict:
         **({"tip_only": True} if ctx.strict_canonical_root_id is not None else {}))
     ctx.owns_db = False  # the hydration worker now owns (and closes) the profile-scoped handle
     _schedule_session_cap_enforcement()
-    return _resume_response(ctx, sid, record, info={} if ctx.omit_info else ctx.info(cwd, overrides), messages=[],
+    return _resume_response(ctx, sid, record, info={} if omit_info else ctx.info(cwd, overrides), messages=[],
                             message_count=record["resume_message_count"], status="resuming", hydrating=True)
 
 

@@ -247,7 +247,7 @@ def _busy(conn, lineage) -> bool:
 def _owner(home: Path, session_id: str, fn, stages=None):
     """``fn(client, target)`` on a connection attached to the lead, where ``target`` is the id the owner
     attached (a compressed chat's tip, or a local chat's logical id) and the only one it takes writes for."""
-    from tools.thread_tool import _run, _subject, _with_owner
+    from tools.thread_tool import _resume_lightweight, _run, _subject, _with_owner
     stages = {} if stages is None else stages
     stages['owner_start'] = time.monotonic()
     subject = _subject(home, session_id)
@@ -256,8 +256,7 @@ def _owner(home: Path, session_id: str, fn, stages=None):
 
     async def go(client):
         stages['connected'] = time.monotonic()
-        snap = await client.rpc("session.resume", session_id=session_id, omit_messages=True,
-                                defer_history=True, omit_info=True)
+        snap = await _resume_lightweight(client, session_id)
         stages['resumed'] = time.monotonic()
         return await fn(client, snap.get("session_id") or session_id)
     return _run(_with_owner(home, subject, go))

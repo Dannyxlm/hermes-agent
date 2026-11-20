@@ -1,111 +1,116 @@
-"""Regression tests for thread orchestration performance, finite-turn background safety,
-uninitialized profile-store resilience, and subagent output_schema failure guards."""
+"""Regression tests for thread orchestration performance, thread-turn background safety,
+uninitialized profile-store resilience, skills cache isolation, and subagent output_schema guards."""
 
 from __future__ import annotations
 
 import asyncio
 import sqlite3
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
-
-def test_routed_banner_memo_caches_per_profile_home(tmp_path):
-    """Under HERMES_HOME override (multiplexed gateway owner_scope), _memo caches per
-    resolved home instead of rescanning all skills on every session.resume."""
-    from hermes_cli import banner
+def test_skills_cache_isolates_profiles_and_kanban_and_invalidates_on_write(tmp_path):
+    """_SKILLS_CACHE keys on active skills dir + kanban selection: multiplexed profiles and
+    CLI kanban scans stay cached without evicting each other, reflect new SKILL.md files
+    immediately via directory signature, and respect clear_skills_cache()."""
+    from gateway import session_local_inventory as inv
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tools import skills_tool
 
     home_a = tmp_path / "profile_a"
     home_b = tmp_path / "profile_b"
-    home_a.mkdir()
-    home_b.mkdir()
-    banner._routed_memo_cache.clear()
-    calls: list[str] = []
+    for h, sname in ((home_a, "alpha-skill"), (home_b, "beta-skill")):
+        sdir = h / "skills" / "ops" / sname
+        sdir.mkdir(parents=True)
+        (sdir / "SKILL.md").write_text(f"---\nname: {sname}\ndescription: test\n---\nbody\n", encoding="utf-8")
 
-    def fake_find():
-        from hermes_constants import get_hermes_home
-        h = get_hermes_home().name
-        calls.append(h)
-        return [{"name": f"skill-{h}", "category": "ops"}]
+    skills_tool.clear_skills_cache()
+    scan_calls = 0
+    orig_read = skills_tool._read_skill_text
+
+    def counting_read(path):
+        nonlocal scan_calls
+        scan_calls += 1
+        return orig_read(path)
 
     try:
-        with patch("tools.skills_tool.find_all_skills", side_effect=fake_find):
-            tok = set_hermes_home_override(str(home_a))
+        with patch.object(skills_tool, "_read_skill_text", side_effect=counting_read):
+            tok_a = set_hermes_home_override(str(home_a))
             try:
-                first_a = banner.get_available_skills()
-                second_a = banner.get_available_skills()
+                a1 = skills_tool.find_all_skills()
+                c1 = inv._cli_skills()
+                before_warm = scan_calls
+                a2 = skills_tool.find_all_skills()
+                c2 = inv._cli_skills()
+                assert scan_calls == before_warm  # warm hits for both default and kanban views
             finally:
-                reset_hermes_home_override(tok)
+                reset_hermes_home_override(tok_a)
 
-            tok = set_hermes_home_override(str(home_b))
+            # Switch to profile_b and back to profile_a: neither should evict the other
+            tok_b = set_hermes_home_override(str(home_b))
             try:
-                first_b = banner.get_available_skills()
-                second_b = banner.get_available_skills()
+                b1 = skills_tool.find_all_skills()
             finally:
-                reset_hermes_home_override(tok)
+                reset_hermes_home_override(tok_b)
+
+            before_return = scan_calls
+            tok_a = set_hermes_home_override(str(home_a))
+            try:
+                a3 = skills_tool.find_all_skills()
+                assert scan_calls == before_return  # still cached after visiting profile_b
+
+                # Adding a new SKILL.md invalidates immediately via directory signature
+                new_dir = home_a / "skills" / "ops" / "gamma-skill"
+                new_dir.mkdir(parents=True)
+                (new_dir / "SKILL.md").write_text(
+                    "---\nname: gamma-skill\ndescription: fresh\n---\nbody\n", encoding="utf-8"
+                )
+                a4 = skills_tool.find_all_skills()
+                assert any(s["name"] == "gamma-skill" for s in a4)
+            finally:
+                reset_hermes_home_override(tok_a)
     finally:
-        banner._routed_memo_cache.clear()
+        skills_tool.clear_skills_cache()
 
-    assert first_a == second_a == {"ops": ["skill-profile_a"]}
-    assert first_b == second_b == {"ops": ["skill-profile_b"]}
-    assert calls == ["profile_a", "profile_b"]
-
-
-def test_cli_skills_caches_per_home(tmp_path):
-    """_cli_skills caches its kanban-scoped grouped skills per home instead of popping
-    _SKILLS_CACHE and rescanning disk on every CLI resume."""
-    from gateway import session_local_inventory as inv
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-
-    home = tmp_path / "cli_home"
-    home.mkdir()
-    inv._CLI_SKILLS_CACHE.clear()
-    calls = 0
-
-    def fake_find():
-        nonlocal calls
-        calls += 1
-        return [{"name": "kanban-helper", "category": "devops"}]
-
-    tok = set_hermes_home_override(str(home))
-    try:
-        with patch("tools.skills_tool.find_all_skills", side_effect=fake_find):
-            r1 = inv._cli_skills()
-            r2 = inv._cli_skills()
-    finally:
-        reset_hermes_home_override(tok)
-        inv._CLI_SKILLS_CACHE.clear()
-
-    assert r1 == r2 == {"devops": ["kanban-helper"]}
-    assert calls == 1
+    assert [s["name"] for s in a1] == [s["name"] for s in a2] == [s["name"] for s in a3]
+    assert any(s["name"] == "alpha-skill" for s in a1)
+    assert any(s["name"] == "beta-skill" for s in b1)
+    assert c1 == c2
 
 
-def test_finite_turn_disables_background_notify_on_complete():
-    """A finite=True turn (native thread, one-shot) must not arm post-turn notify_on_complete
-    even when the underlying local gateway supports async delivery."""
+def test_thread_turn_disables_background_notify_while_non_thread_keeps_it():
+    """Tool-sent thread turns (request_id starting with 'thread-') disable post-turn
+    notify_on_complete so threads don't stall at done; non-thread turns (chat -q, lead-chat
+    thread_update) keep normal async delivery."""
     from gateway.session_context import clear_session_vars, set_session_vars
-    from gateway.session_finite import finite_turn_scope
+    from gateway.session_display import submission_turn_scope
     from tools.terminal_tool_background import _apply_async_support
 
-    proc = SimpleNamespace(id="proc_finite_test", watcher_platform="")
     tokens = set_session_vars(
         platform="local", chat_id="local-1", session_key="local-1", async_delivery=True
     )
     try:
-        with finite_turn_scope(True):
-            result_data: dict = {"status": "running", "notify_on_complete": True}
-            notify, watch = _apply_async_support(proc, result_data, True, ["READY"])
+        # 1. Tool-sent thread turn -> notify disabled
+        proc_thread = SimpleNamespace(id="proc_thread", watcher_platform="")
+        with submission_turn_scope("adm-1", "thread-create-abc"):
+            rd: dict = {"status": "running", "notify_on_complete": True}
+            notify, watch = _apply_async_support(proc_thread, rd, True, ["READY"])
+        assert notify is False
+        assert watch is None
+        assert rd["notify_on_complete"] is False
+        assert "poll" in rd.get("notify_unsupported", "").lower()
+        assert proc_thread.watcher_platform == ""
+
+        # 2. Lead-chat thread_update turn -> notify preserved
+        proc_lead = SimpleNamespace(id="proc_lead", watcher_platform="")
+        with submission_turn_scope("adm-2", "thread_update:xyz"):
+            rd2: dict = {"status": "running", "notify_on_complete": True}
+            notify2, watch2 = _apply_async_support(proc_lead, rd2, True, ["READY"])
+        assert notify2 is True
+        assert watch2 == ["READY"]
+        assert "notify_unsupported" not in rd2
     finally:
         clear_session_vars(tokens)
-
-    assert notify is False
-    assert watch is None
-    assert result_data["notify_on_complete"] is False
-    assert "poll" in result_data.get("notify_unsupported", "").lower()
-    assert proc.watcher_platform == ""
 
 
 def test_thread_wake_skips_uninitialized_profile_store_without_work_launches(tmp_path, monkeypatch):
@@ -119,13 +124,11 @@ def test_thread_wake_skips_uninitialized_profile_store_without_work_launches(tmp
     good_home.mkdir()
     bad_home.mkdir()
 
-    # bad_home has a state.db with no work_launches table
     bad_conn = sqlite3.connect(bad_home / "state.db")
     bad_conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
     bad_conn.commit()
     bad_conn.close()
 
-    # good_home has a minimal valid sessions + work_launches schema with one active thread
     good_conn = sqlite3.connect(good_home / "state.db")
     good_conn.executescript(
         """
@@ -166,13 +169,16 @@ def test_thread_wake_skips_uninitialized_profile_store_without_work_launches(tmp
     assert [row["child_session_id"] for row in found] == ["child-1"]
 
 
-def test_output_schema_does_not_retry_failed_api_turn():
-    """When a subagent's first turn failed (e.g. HTTP 429 error text in final_response),
-    _validate_child_output_schema must not fire a schema-correction retry turn."""
+def test_output_schema_skips_failed_api_turn_but_retries_max_iterations_handoff():
+    """API failures (failed=True / error set) skip the output_schema retry turn, while a
+    non-failed max-iterations handoff (completed=False, failed=False) still gets one retry."""
     from tools.delegate_tool_child_run import _validate_child_output_schema
 
-    child = MagicMock()
-    child._delegate_output_schema = {"type": "object", "required": ["verdict"]}
+    schema = {"type": "object", "required": ["verdict"]}
+
+    # 1. API failure -> 0 retries
+    child_fail = MagicMock()
+    child_fail._delegate_output_schema = schema
     failed_result = {
         "completed": False,
         "failed": True,
@@ -180,11 +186,29 @@ def test_output_schema_does_not_retry_failed_api_turn():
         "final_response": "Anthropic rate-limited every one of 3 attempts — temporarily unavailable.",
         "api_calls": 3,
     }
+    outcome_fail = _validate_child_output_schema(child_fail, failed_result, 0, "child-0", None)
+    assert outcome_fail.retries == 0
+    assert outcome_fail.valid is False
+    child_fail.run_conversation.assert_not_called()
 
-    outcome = _validate_child_output_schema(child, failed_result, 0, "child-0", None)
-    assert outcome.retries == 0
-    assert outcome.valid is False
-    child.run_conversation.assert_not_called()
+    # 2. Max-iterations non-failure handoff -> still gets 1 schema retry
+    child_handoff = MagicMock()
+    child_handoff._delegate_output_schema = schema
+    child_handoff.run_conversation.return_value = {
+        "completed": True,
+        "final_response": '{"verdict": "PASS"}',
+        "api_calls": 1,
+    }
+    handoff_result = {
+        "completed": False,
+        "failed": False,
+        "final_response": "Ran out of iterations, summary: looks good.",
+        "api_calls": 50,
+    }
+    outcome_handoff = _validate_child_output_schema(child_handoff, handoff_result, 0, "child-1", None)
+    assert outcome_handoff.retries == 1
+    assert outcome_handoff.valid is True
+    child_handoff.run_conversation.assert_called_once()
 
 
 def test_canonical_resume_omit_info_skips_snapshot_info_and_hooks():
@@ -246,6 +270,27 @@ def test_canonical_resume_omit_info_skips_snapshot_info_and_hooks():
     mock_hooks.assert_not_called()
 
 
+def test_resume_lightweight_falls_back_against_older_owner():
+    """If an older owner rejects omit_info with 4001 invalid_params, _resume_lightweight retries once without it."""
+    from hermes_cli.gateway_client import GatewayRPCError
+    from tools.thread_tool import _resume_lightweight
+
+    calls = []
+
+    class _FakeClient:
+        async def rpc(self, method, **kwargs):
+            calls.append((method, kwargs))
+            if kwargs.get("omit_info"):
+                raise GatewayRPCError("invalid_params", code=4001, data={"reason": "invalid_params", "field": "omit_info"})
+            return {"session_id": "sess-1", "revision": 3}
+
+    snap = asyncio.run(_resume_lightweight(_FakeClient(), "sess-1"))
+    assert snap == {"session_id": "sess-1", "revision": 3}
+    assert len(calls) == 2
+    assert calls[0][1].get("omit_info") is True
+    assert "omit_info" not in calls[1][1]
+
+
 def test_thread_wake_deliver_scans_threads_of_once(tmp_path, monkeypatch):
     """deliver() fetches threads_of once and shares the launch list between wake_state and _still_working."""
     from gateway import thread_wake
@@ -292,4 +337,3 @@ def test_thread_wake_deliver_scans_threads_of_once(tmp_path, monkeypatch):
 
     assert thread_wake.deliver(home, "default", "lead-1") is True
     assert calls == 1
-

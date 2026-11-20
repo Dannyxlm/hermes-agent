@@ -596,11 +596,9 @@ def _validate_child_output_schema(
     from tools.delegation_output_schema import append_output_contract, build_retry_message, validate_output
     _first_text = result.get("final_response") or ""
     _schema_valid, _schema_errors = validate_output(_first_text, _output_schema)
-    _turn_failed = (
-        result.get("completed") is False
-        or bool(result.get("failed"))
-        or bool(result.get("error"))
-    )
+    # Match the non-failure handoff contract below (max-iterations sets completed=False with
+    # failed=False and still gets one schema-formatting retry on a fresh budget).
+    _turn_failed = bool(result.get("failed") or result.get("error"))
     if _schema_valid or not _first_text.strip() or result.get("interrupted", False) or _turn_failed:
         return _SchemaOutcome(_output_schema, _schema_valid, _schema_errors, 0)
 

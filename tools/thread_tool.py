@@ -282,11 +282,25 @@ async def _with_owner(home: Path, subject: str, fn):
         raise ThreadError("owner_unavailable", str(exc)) from exc
 
 
+async def _resume_lightweight(client, session_id: str) -> dict:
+    """Resume a session without its banner inventory; fall back once if talking to an older owner."""
+    from hermes_cli.gateway_client import GatewayRPCError
+    try:
+        return await client.rpc("session.resume", session_id=session_id, omit_messages=True,
+                                defer_history=True, omit_info=True)
+    except GatewayRPCError as exc:
+        field = (getattr(exc, "data", None) or {}).get("field")
+        if getattr(exc, "code", None) == 4001 and (
+            field == "omit_info" or (field is None and str(exc) == "invalid_params")
+        ):
+            return await client.rpc("session.resume", session_id=session_id, omit_messages=True, defer_history=True)
+        raise
+
+
 async def _attach(client, thread: Thread) -> tuple[dict, Thread]:
     """Resume the thread. The owner may attach another id of the same conversation (a local chat's logical id
     once it compresses) and takes writes only for the id it attached, so every write uses the returned one."""
-    snap = await client.rpc("session.resume", session_id=thread.session_id, omit_messages=True,
-                            defer_history=True, omit_info=True)
+    snap = await _resume_lightweight(client, thread.session_id)
     return snap, replace(thread, session_id=snap.get("session_id") or thread.session_id)
 
 
@@ -644,8 +658,7 @@ async def _rename(client, sid, titles, request_id):
     from hermes_cli.gateway_client import GatewayRPCError
     for attempt, title in enumerate(titles):
         # Each attempt reads the revision afresh: a refused first title must not fence out the second.
-        snap = await client.rpc("session.resume", session_id=sid, omit_messages=True,
-                                defer_history=True, omit_info=True)
+        snap = await _resume_lightweight(client, sid)
         try:
             await client.rpc("session.mutate", session_id=snap.get("session_id") or sid, request_id=f"{request_id}:{attempt}",
                              expected_revision=snap["revision"], operation="rename", payload={"title": title[:100]})

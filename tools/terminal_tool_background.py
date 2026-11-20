@@ -105,20 +105,22 @@ def _spawn(process_registry, *, env, env_type, command, cwd, effective_task_id, 
 
 
 def _apply_async_support(proc_session, result_data, notify_on_complete, watch_patterns):
-    """Finite sessions (stateless HTTP, one-shot Kanban workers, finite thread turns) can't
-    route a completion back after the turn ends without ending prematurely or stalling: drop
-    the flags and tell the agent to poll/wait in-turn. Otherwise stamp gateway routing.
-    Returns (notify, watch_patterns)."""
+    """Finite sessions (stateless HTTP, one-shot Kanban workers) and tool-sent native thread
+    turns can't route a completion back after the turn ends without ending prematurely or
+    stalling: drop the flags and tell the agent to poll/wait in-turn. Otherwise stamp gateway
+    routing. Returns (notify, watch_patterns)."""
     if not (notify_on_complete or watch_patterns):
         return notify_on_complete, watch_patterns
     from gateway.session_context import async_delivery_supported, get_session_env
-    from gateway.session_finite import finite_turn_required
+    from gateway.session_display import current_submission_id
     from tools.environments.sandbox_scope import hosted_scope
+    from tools.thread_state import REQUEST_PREFIX
 
-    # A hosted agent's process is invisible outside its scope, and a finite turn (e.g. a native
-    # thread turn submitted with finite=True) must finish its work before ending so it doesn't
-    # send a premature "done" update or stall waiting for a post-turn notice.
-    if finite_turn_required() is not True and async_delivery_supported() and hosted_scope() is None:
+    # A hosted agent's process is invisible outside its scope, and a tool-sent thread turn
+    # (request_id starting with "thread-") must wait/join in-turn rather than ending and
+    # delivering a premature "done" update to its lead while the process is still running.
+    is_thread_turn = (current_submission_id() or "").startswith(REQUEST_PREFIX)
+    if not is_thread_turn and async_delivery_supported() and hosted_scope() is None:
         _stamp_gateway_routing(proc_session, get_session_env)
         return notify_on_complete, watch_patterns
     result_data["notify_on_complete"] = False
