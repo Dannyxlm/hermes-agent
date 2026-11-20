@@ -174,7 +174,7 @@ def _teammate(tmp_path, home, root):
 
 def _process(tmp_path, monkeypatch, root):
     import tools.process_registry as module
-    monkeypatch.setattr(module, "CHECKPOINT_PATH", tmp_path / "processes.json")
+    monkeypatch.setattr(module, "_checkpoint_path", lambda: tmp_path / "processes.json")
     registry = module.ProcessRegistry()
     monkeypatch.setattr(registry, "_scope_argv", lambda session, command, *args: ["bash", "-c", command])
     process = registry.spawn_local("printf FAMILY_PROCESS_PROOF", cwd=str(tmp_path),

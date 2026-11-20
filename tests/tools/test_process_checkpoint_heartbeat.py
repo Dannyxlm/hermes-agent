@@ -15,7 +15,7 @@ def test_recovered_heartbeat_emits_recovered_then_new_output(tmp_path, monkeypat
     monkeypatch.setattr(pr, "HEARTBEAT_MIN_SECONDS", 1)
     monkeypatch.setattr(pr, "HEARTBEAT_TICK_SECONDS", 0.02)
     checkpoint = tmp_path / "processes.json"
-    monkeypatch.setattr(pr, "CHECKPOINT_PATH", checkpoint)
+    monkeypatch.setattr(pr, "_checkpoint_path", lambda: checkpoint)
     registry = pr.ProcessRegistry()
     # PID identity is independent of this regression; no process is spawned or signalled.
     monkeypatch.setattr(registry, "_detached_host_fate", lambda *_: "running")
@@ -67,7 +67,7 @@ def test_recovered_heartbeat_emits_recovered_then_new_output(tmp_path, monkeypat
 
 def test_recovery_without_heartbeat_does_not_start_timer(tmp_path, monkeypatch):
     checkpoint = tmp_path / "processes.json"
-    monkeypatch.setattr(pr, "CHECKPOINT_PATH", checkpoint)
+    monkeypatch.setattr(pr, "_checkpoint_path", lambda: checkpoint)
     registry = pr.ProcessRegistry()
     monkeypatch.setattr(registry, "_detached_host_fate", lambda *_: "running")
     checkpoint.write_text(json.dumps([{

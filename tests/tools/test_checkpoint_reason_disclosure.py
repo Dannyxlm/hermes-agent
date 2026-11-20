@@ -11,7 +11,7 @@ from tools.checkpoint_unborn import disclose
 
 @pytest.mark.parametrize("safe,file_path", [(False, None), (True, None), (False, "notes.txt")])
 def test_restore_does_not_repeat_saved_coverage_warning(tmp_path, monkeypatch, safe, file_path):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints (b3f468205e)
     work = tmp_path / "work"
     child = work / "new repo"
     child.mkdir(parents=True)
@@ -35,7 +35,7 @@ def test_restore_does_not_repeat_saved_coverage_warning(tmp_path, monkeypatch, s
 
 
 def test_restore_does_not_repeat_coverage_for_prefix_siblings(tmp_path, monkeypatch):
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints (b3f468205e)
     work = tmp_path / "work"
     git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
     drafts = []

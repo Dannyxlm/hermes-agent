@@ -9,7 +9,7 @@ def test_process_checkpoint_retains_profile_and_conversation(tmp_path, monkeypat
     from gateway.session_context import scoped_current_session_id
     import tools.process_registry as module
     registry = ProcessRegistry()
-    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(module, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     with scoped_current_session_id('stored'):
         process = registry._new_session('fixture', 'root', 'root', 'route', str(tmp_path))
     process.pid = 123

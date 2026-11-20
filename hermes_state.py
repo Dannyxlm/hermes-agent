@@ -1028,16 +1028,21 @@ class SessionDB(
             self._wal_lock_guard = _lockguard.hold(self.db_path)
 
     def _execute_write(
-        self, fn: Callable[[sqlite3.Connection], T], patience_s: Optional[float] = None,
+        self, fn: Callable[[sqlite3.Connection], T], patience_s: Optional[float] = None, *,
+        mutex_patience_s: Optional[float] = None,
     ) -> T:
         """Run *fn(conn)* inside BEGIN IMMEDIATE with jittered lock retry; commit
         is handled here (callers must not commit). Returns *fn*'s result.
         BEGIN IMMEDIATE takes the WAL write lock up front so contention surfaces
         immediately; on locked/busy the Python lock is released, a jitter slept,
-        and the WHOLE callback retried — *fn* must stay idempotent under retry."""
+        and the WHOLE callback retried — *fn* must stay idempotent under retry.
+        ``mutex_patience_s`` bounds the wait for this process's writer mutex separately
+        (default: ``patience_s``), for writers that skip foreign-busy retries but should
+        still queue briefly behind an in-process writer."""
         if patience_s is None:
             patience_s = self._WRITE_PATIENCE_S
         deadline = time.monotonic() + patience_s
+        mutex_deadline = deadline if mutex_patience_s is None else time.monotonic() + mutex_patience_s
         compression_deadline: Optional[float] = None  # set on the first compression-busy collision
         # One retry for SQLITE_IOERR raised by BEGIN IMMEDIATE itself (callback not run: nothing
         # replayed). Once fn has started, an IOERR leaves settlement unknown and must propagate.
@@ -1060,7 +1065,7 @@ class SessionDB(
             # stable post-close state (identity cleared → adopt / reopen path).
             fn_started = False
             try:
-                with writer_mutex_until(self._lock, deadline, db=self, site=write_site(fn)):
+                with writer_mutex_until(self._lock, mutex_deadline, db=self, site=write_site(fn)):
                     self._raise_if_db_replaced()
                     if self._conn is None:  # close() raced this writer
                         self._reopen_after_close_locked(context="write")

@@ -14,7 +14,7 @@ from tools import process_registry_results as results
 @pytest.mark.parametrize('failure', ['enospc', 'deleted_profile', 'corrupt_receipt', 'file_lock'])
 def test_failed_result_write_finishes_live_and_preserves_checkpoint(monkeypatch, tmp_path, failure):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(pr, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(pr, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     registry = pr.ProcessRegistry()
     pipe = io.StringIO()
     session = pr.ProcessSession(id='proc_disk', command='build', started_at=1,
@@ -118,7 +118,7 @@ def test_sqlite_launch_write_failure_does_not_block_completion_or_recovery(monke
     from tools.process_registry_delivery import notification_state
 
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(pr, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(pr, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     db = acquire(tmp_path / 'state.db')
     try:
         db.record_launch('process:sqlite', kind='process', launcher_profile='default',

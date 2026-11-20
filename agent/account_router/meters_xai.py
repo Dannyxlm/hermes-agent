@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 
 from agent import account_usage as usage
+from agent.account_usage_nous import _is_finite_num  # moved out of account_usage upstream (b2c6bc4e1e)
 from agent.account_router.types import AccountMeter, MeterWindow
 from hermes_cli.auth_constants import _decode_jwt_claims
 
@@ -30,7 +31,7 @@ def _headers(token: str) -> dict[str, str]:
 
 
 def _reset_epoch(value) -> float | None:
-    if not isinstance(value, str) and not usage._is_finite_num(value):
+    if not isinstance(value, str) and not _is_finite_num(value):
         return None
     try:
         parsed = usage._parse_dt(value)
@@ -47,7 +48,7 @@ def _window(payload: dict) -> MeterWindow:
     # Proto3 omits zero-valued fields. Only a VALID period end permits the
     # omitted-percent => zero interpretation; explicit null stays unknown.
     used = config.get("creditUsagePercent", 0 if reset is not None else None)
-    if not usage._is_finite_num(used) or used < 0:
+    if not _is_finite_num(used) or used < 0:
         used = None
     else:
         used = min(100, used)

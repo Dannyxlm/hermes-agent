@@ -13,7 +13,7 @@ class Crash(BaseException):
 @pytest.mark.parametrize('boundary', ['result', 'checkpoint', 'enqueue', 'queued'])
 def test_completed_notification_survives_publication_crash(tmp_path, monkeypatch, boundary):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(pr, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(pr, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     registry = pr.ProcessRegistry()
     session = pr.ProcessSession(id='proc_crash', command='build', started_at=1.0,
                                 session_key='owner', parent_session_id='owner',
@@ -155,7 +155,7 @@ def test_old_ambiguous_result_is_not_replayed(tmp_path, monkeypatch):
 
 def test_saved_result_fences_leftover_running_checkpoint_before_pid_probe(tmp_path, monkeypatch):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(pr, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(pr, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     registry = pr.ProcessRegistry()
     _finished(registry, 'proc_saved')
     (tmp_path / 'processes.json').write_text(json.dumps([{

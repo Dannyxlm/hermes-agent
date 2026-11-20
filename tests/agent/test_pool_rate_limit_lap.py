@@ -8,7 +8,7 @@ import pytest
 from agent.agent_runtime_helpers import extract_api_error_context
 from agent.credential_pool import (
     EXHAUSTED_TTL_429_SECONDS, EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS,
-    STATUS_EXHAUSTED, _normalize_error_context,
+    STATUS_EXHAUSTED, _cooldown_error_context, _normalize_error_context,
 )
 from agent.credential_pool_model_cooldowns import model_cooldown_until
 from tests.agent import test_fallback_429_after_timeout as pool_tests
@@ -79,7 +79,9 @@ def test_zero_wait_rotation_has_a_minimum_bench(pooled_agent, monkeypatch, provi
 
 @pytest.mark.parametrize("reset", [0, -1, 30])
 def test_past_or_relative_epoch_is_not_an_exhaustion_hint(reset):
-    assert "reset_at" not in _normalize_error_context({"reset_at": reset})
+    # Fork cooldown policy, then upstream's redacting normalizer: the order mark_exhausted uses.
+    for use_bench in (True, False):
+        assert "reset_at" not in _normalize_error_context(_cooldown_error_context({"reset_at": reset}, use_bench=use_bench))
 
 
 @pytest.mark.parametrize("hint", ["zero", "relative-epoch"])

@@ -10,7 +10,7 @@ from tools.process_launches import record_process_launch
 def test_process_launch_checkpoint_and_completion(tmp_path, monkeypatch):
     import tools.process_registry as module
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(module, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     registry = ProcessRegistry()
     with scoped_current_session_id('parent'):
         process = registry._new_session('a command with a descriptive title ' + 'x' * 60,
@@ -40,7 +40,7 @@ def test_process_launch_checkpoint_and_completion(tmp_path, monkeypatch):
 def test_failed_popen_retains_failed_start_receipt(tmp_path, monkeypatch):
     import tools.process_registry as module
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(module, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     registry = ProcessRegistry()
     def fail(*a, **kw):
         raise OSError('fixture start failure')
@@ -56,7 +56,7 @@ def test_failed_popen_retains_failed_start_receipt(tmp_path, monkeypatch):
 def test_kill_receipt_wins_over_reader_exit_during_signal(tmp_path, monkeypatch):
     import tools.process_registry as module
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(module, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(module, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     registry = ProcessRegistry()
     with scoped_current_session_id('parent'):
         process = registry._new_session('fixture', 'task', 'task', 'route', str(tmp_path))

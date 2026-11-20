@@ -7,7 +7,7 @@ from uuid import uuid4
 def reserve_local_child(db, parent_session_id, metadata):
     from hermes_state import SessionDB
     from hermes_state_ids import new_session_id
-    from hermes_state_launches import record_launch, bind_launch
+    from hermes_state_launches import bind_launch, launch_write_patience, record_launch
     from hermes_state_worker_lifecycle import insert_session_row_in_transaction
     if not isinstance(db, SessionDB) or not isinstance(parent_session_id, str):
         return None
@@ -22,7 +22,7 @@ def reserve_local_child(db, parent_session_id, metadata):
                                           model_config={'_delegate_from': parent_session_id},
                                           parent_session_id=parent_session_id, profile_name=profile)
         bind_launch(conn, metadata['launch_id'], child_session_id=child_sid)
-    db._execute_write(reserve, patience_s=0)
+    db._execute_write(reserve, **launch_write_patience(db))
     return child_sid
 
 

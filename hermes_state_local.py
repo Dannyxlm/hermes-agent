@@ -27,7 +27,7 @@ def listing_lineage_scope(db):
 
 def bind_resumed_launch(db, *, epoch, session_id, fields):
     from hermes_cli.launch_provenance import launch_record
-    from hermes_state_launches import record_launch, bind_launch
+    from hermes_state_launches import bind_launch, launch_write_patience, record_launch
     def write(conn):
         _epoch(conn, epoch)
         row = conn.execute('SELECT source FROM sessions WHERE id=?', (session_id,)).fetchone()
@@ -49,7 +49,7 @@ def bind_resumed_launch(db, *, epoch, session_id, fields):
                          (launch['launch_id'],))
     from hermes_state_optional_launch import optional_launch
     with optional_launch("resume.launch"):
-        db._execute_write(write, patience_s=0)
+        db._execute_write(write, **launch_write_patience(db))
 
 
 def commit_local_session(db, *, epoch, receipt):
