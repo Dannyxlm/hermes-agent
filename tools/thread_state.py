@@ -129,11 +129,16 @@ def tip(conn, session_id: str) -> str:
 def launches(conn, launcher_profile: str, launcher_ids, since: float = 0) -> list[dict]:
     """Thread launches one profile's store records for chats launched by these sessions."""
     ids = list(launcher_ids)
-    return [dict(r) for r in conn.execute(
-        "SELECT launch_id, kind, child_profile, child_session_id, launcher_session_id, title, created_at "
-        f"FROM work_launches WHERE substr(launch_id,1,{len(LAUNCH_PREFIX)})=? AND child_session_id IS NOT NULL "
-        f"AND launcher_profile=? AND launcher_session_id IN ({_marks(ids)}) AND COALESCE(created_at,0)>=? "
-        "ORDER BY created_at", [LAUNCH_PREFIX, launcher_profile, *ids, since])]
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT launch_id, kind, child_profile, child_session_id, launcher_session_id, title, created_at "
+            f"FROM work_launches WHERE substr(launch_id,1,{len(LAUNCH_PREFIX)})=? AND child_session_id IS NOT NULL "
+            f"AND launcher_profile=? AND launcher_session_id IN ({_marks(ids)}) AND COALESCE(created_at,0)>=? "
+            "ORDER BY created_at", [LAUNCH_PREFIX, launcher_profile, *ids, since])]
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
 
 
 def threads_of(launcher_profile: str, launcher_ids, since: float = 0) -> list[dict]:
@@ -298,12 +303,14 @@ def prune_markers(home: Path, now: float | None = None) -> None:
                     path.unlink()
 
 
-def wake_state(launcher_home: Path, launcher_profile: str, launcher_ids, now: float | None = None):
+def wake_state(launcher_home: Path, launcher_profile: str, launcher_ids, now: float | None = None,
+               launch_rows: list[dict] | None = None):
     """The wake's whole read: (results to hand back, how many tool-sent turns are still queued or running)."""
     now = time.time() if now is None else now
     out, working = [], 0
     by_profile = {}
-    for row in threads_of(launcher_profile, launcher_ids, since=now - WAKE_LAUNCH_WINDOW_S):
+    rows_src = threads_of(launcher_profile, launcher_ids, since=now - WAKE_LAUNCH_WINDOW_S) if launch_rows is None else launch_rows
+    for row in rows_src:
         by_profile.setdefault(row["child_profile"], []).append(row)
     for profile, rows in by_profile.items():
         with reader(homes().get(profile, launcher_home)) as conn:

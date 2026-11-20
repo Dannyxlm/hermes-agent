@@ -84,6 +84,12 @@ def submission_turn_scope(admission_id, submission_id):
         _submission_turn.reset(token)
 
 
+def current_submission_id() -> str | None:
+    """The admitted ``request_id`` bound to the currently executing turn, if any."""
+    bound = _submission_turn.get()
+    return bound[1] if bound is not None and isinstance(bound[1], str) else None
+
+
 def admission_submission(event):
     """``{'submission_id': ...}`` for the admission ``event`` executes, ``{}`` for any other event."""
     bound = _submission_turn.get()

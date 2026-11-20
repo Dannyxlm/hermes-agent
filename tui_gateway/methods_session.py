@@ -644,6 +644,7 @@ class _Resume:
     to close (handler ``finally``) until handed to the hydration worker or the agent."""
 
     inline_images = True  # class default so a ``__new__``-built ctx (tests) projects the full form
+    omit_info = False
 
     def __init__(self, rid, params: dict, target: str) -> None:
         self.rid, self.params, self.target = rid, params, target
@@ -656,6 +657,7 @@ class _Resume:
         self.lazy, self.defer_history = _flag(params, "lazy"), _flag(params, "defer_history")
         # Desktop hydrates over REST; suppress the duplicate WS copy only when asked.
         self.omit_messages, self.eager_build = _flag(params, "omit_messages"), _flag(params, "eager_build")
+        self.omit_info = _flag(params, "omit_info")
         # inline_images=False renders image parts as "[image]" (#116511); default keeps data URIs.
         self.inline_images = "inline_images" not in params or _flag(params, "inline_images")
 
@@ -914,7 +916,7 @@ def _resume_reuse_live(ctx: _Resume, sid: str, session: dict) -> dict:
     with _session_resume_lock:
         response = _resume_reuse_live_locked(ctx, sid, session)
     if "result" in response:
-        response["result"]["info"] = _fallback_session_info(session)
+        response["result"]["info"] = {} if getattr(ctx, "omit_info", False) else _fallback_session_info(session)
     return response
 
 
@@ -992,8 +994,9 @@ def _resume_deferred(ctx: _Resume) -> dict:
     sid, source, cwd = ctx.mint()
     with _profile_build_scope(ctx.profile_home):
         overrides = _stored_session_runtime_overrides(ctx.found)
+    omit_info = getattr(ctx, "omit_info", False)
     record = ctx.record(source, cwd, [], overrides,
-                        todo_state=_todo_state_from_db(ctx.db, ctx.target))
+                        todo_state=None if omit_info else _todo_state_from_db(ctx.db, ctx.target))
     record.update(resume_history_ready=threading.Event(), resume_hydrating=True,
                   resume_message_count=int(ctx.found.get("message_count") or 0))
     if (reused := ctx.claim(sid, record)) is not None:
@@ -1004,7 +1007,7 @@ def _resume_deferred(ctx: _Resume) -> dict:
         **({"tip_only": True} if ctx.strict_canonical_root_id is not None else {}))
     ctx.owns_db = False  # the hydration worker now owns (and closes) the profile-scoped handle
     _schedule_session_cap_enforcement()
-    return _resume_response(ctx, sid, record, info=ctx.info(cwd, overrides), messages=[],
+    return _resume_response(ctx, sid, record, info={} if omit_info else ctx.info(cwd, overrides), messages=[],
                             message_count=record["resume_message_count"], status="resuming", hydrating=True)
 
 
@@ -1125,8 +1128,9 @@ def _(rid, params: dict) -> dict:
             sid = result.get("session_id")
             session = _sessions.get(sid)
             if session is not None:
-                from tui_gateway.session_stream_cut import stream_cut
-                result["stream_snapshot"] = stream_cut(sid, session)
+                if not _flag(params, "omit_info"):
+                    from tui_gateway.session_stream_cut import stream_cut
+                    result["stream_snapshot"] = stream_cut(sid, session)
                 pending = None
                 if session.get("_resume_recovery_pending"):
                     with session["history_lock"]:
