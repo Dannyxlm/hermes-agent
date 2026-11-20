@@ -7,7 +7,8 @@ from .types import AccountMeter
 
 DEFAULT_POLICY = {
     "pin_hours": 6, "min_dwell_minutes": 120, "switch_margin": 0.25,
-    "cap_pct": 98, "max_meter_age_minutes": 30, "session_units_floor": 5,
+    "cap_pct": 98, "max_meter_age_minutes": 30, "session_units_floor": 2.5,
+    "fable_capped_non_fable_boost": 2.0,
     "plan_units": {"anthropic": {"default_claude_ai": 1, "default_claude_max_5x": 5,
                                   "default_claude_max_20x": 20},
                    # Relative allowance heuristics, not verified weekly token quotas.
@@ -31,14 +32,23 @@ def _finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def _score(provider, scope, meter, now, policy) -> tuple[float | None, str]:
+def _fresh_scope_periods(meter, target_scope, now, age):
+    if not isinstance(meter, AccountMeter) or not _finite(meter.fetched_at) or now - meter.fetched_at > age:
+        return []
+    stamps = meter.extras.get("window_fetched_at", {})
+    return [w for w in meter.windows if w.kind in ("weekly", "period") and w.model_scope == target_scope
+            and now - stamps.get(window_key(w), meter.fetched_at) <= age]
+
+
+def _score(provider, scope, meter, now, policy, *, require_scope=False) -> tuple[float | None, str]:
     age = policy.get("max_meter_age_minutes", 30) * 60
     if not isinstance(meter, AccountMeter) or not _finite(meter.fetched_at) or now - meter.fetched_at > age:
         return None, "unknown or stale meter"
+    cap_pct = policy.get("cap_pct", 98)
     windows = [w for w in meter.windows if w.model_scope is None or w.model_scope == scope]
     stamps = meter.extras.get("window_fetched_at", {})
     fresh = [w for w in windows if now - stamps.get(window_key(w), meter.fetched_at) <= age]
-    if any(_finite(w.used_pct) and w.used_pct >= policy.get("cap_pct", 98)
+    if any(_finite(w.used_pct) and w.used_pct >= cap_pct
            and (not _finite(w.resets_at) or w.resets_at > now) for w in fresh):
         return 0.0, "applicable allowance capped"
     if len(fresh) != len(windows):
@@ -47,6 +57,10 @@ def _score(provider, scope, meter, now, policy) -> tuple[float | None, str]:
     if not periods or any(not _finite(w.used_pct) or not 0 <= w.used_pct <= 100
                           or not _finite(w.resets_at) or w.resets_at <= now for w in periods):
         return None, "unknown allowance or reset"
+    if (require_scope and scope
+            and (meter.source == "usage_api" or "usage_fetched_at" in meter.extras)
+            and not any(w.model_scope == scope for w in periods)):
+        return 0.0, "model scope unavailable on plan"
     binding = max(periods, key=lambda w: w.used_pct or 0)
     plans = dict(DEFAULT_POLICY["plan_units"].get(provider, {}))
     plans.update(policy.get("plan_units", {}).get(provider, {}))
@@ -56,16 +70,30 @@ def _score(provider, scope, meter, now, policy) -> tuple[float | None, str]:
     score = (100 - binding.used_pct) / 100 * units / max((binding.resets_at - now) / 3600, 1)
     sessions = [w for w in fresh if w.kind == "session" and _finite(w.used_pct)
                 and (not _finite(w.resets_at) or w.resets_at > now)]
-    floor = policy.get("session_units_floor", 5)
+    floor = policy.get("session_units_floor", DEFAULT_POLICY["session_units_floor"])
     if sessions and _finite(floor) and floor > 0:
         remaining = min(max(0, 100 - w.used_pct) / 100 for w in sessions)
         score *= min(1, remaining * units / floor)
-    return score, "remaining plan units / hours to reset; known session headroom" if sessions else "remaining plan units / hours to reset"
+    reason = "remaining plan units / hours to reset; known session headroom" if sessions else "remaining plan units / hours to reset"
+    if provider == "anthropic" and scope != "fable" and score > 0:
+        boost = policy.get("fable_capped_non_fable_boost", DEFAULT_POLICY["fable_capped_non_fable_boost"])
+        fable_windows = _fresh_scope_periods(meter, "fable", now, age)
+        if (_finite(boost) and boost > 1 and any(
+                _finite(w.used_pct) and w.used_pct >= cap_pct
+                and (not _finite(w.resets_at) or w.resets_at > now) for w in fable_windows)):
+            score *= boost
+            reason += "; fable capped"
+    return score, reason
 
 
 def rank(provider, model, entry_ids_in_static_order, meters, now, policy) -> list[tuple[str, float | None, str]]:
     scope = scope_key(model)
-    rows = [(id, *_score(provider, scope, meters.get(id), now, policy))
+    age = policy.get("max_meter_age_minutes", 30) * 60
+    require_scope = (
+        provider == "anthropic" and scope == "fable"
+        and any(_fresh_scope_periods(meters.get(id), "fable", now, age) for id in entry_ids_in_static_order)
+    )
+    rows = [(id, *_score(provider, scope, meters.get(id), now, policy, require_scope=require_scope))
             for id in entry_ids_in_static_order]
     if all(score is None for _, score, _ in rows):
         return rows

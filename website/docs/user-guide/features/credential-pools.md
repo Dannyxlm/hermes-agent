@@ -219,11 +219,18 @@ for the requested model; it never blocks another model when the account is bench
 Pin expiry hands control back to the shared decision.
 
 Tune `account_router.pin_hours`, `min_dwell_minutes`, `switch_margin`, `cap_pct`,
-`max_meter_age_minutes` (default 30), `session_units_floor` (default 5), or
+`max_meter_age_minutes` (default 30), `session_units_floor` (default 2.5),
+`fable_capped_non_fable_boost` (default 2.0), or
 `plan_units.<provider>.<plan>` with `hermes config set`. For a fresh known session
 window, urgency is multiplied by `min(1, session_remaining × plan_units / session_units_floor)`.
-This reduces long-context churn onto small plans without suppressing their unused
-allowance when larger plans have little urgency. Unknown/expired session readings
+This reduces long-context churn onto small plans without penalizing mid-tier plans
+during normal session use or suppressing small plans' unused allowance when larger
+plans have little urgency. When ranking Anthropic `fable` and at least one pool
+account reports a fresh Fable window, accounts whose full usage snapshot omits a
+Fable window score `0.0`. For non-Fable Anthropic scopes, accounts whose Fable window
+is capped while their weekly allowance still has headroom receive
+`fable_capped_non_fable_boost` so non-Fable traffic drains them first and preserves
+Fable capacity on other accounts. Unknown/expired session readings
 do not penalize urgency; expired caps are not treated as current exhaustion.
 Policy hot-reloads independently of frozen model settings.
 Default Anthropic plan units are Pro/default=1, Max 5×=5 and Max 20×=20. Codex

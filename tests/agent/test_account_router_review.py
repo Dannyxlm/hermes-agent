@@ -26,7 +26,7 @@ def test_session_headroom_prevents_fleet_hop_to_near_reset_pro():
     rows = rank("anthropic", "claude-opus-4-7", list(meters), meters, NOW, {})
     assert rows[0][0] == "max"
     scores = {id: score for id, score, _ in rows}
-    assert scores["pro"] == pytest.approx((.92/3) * (.4/5))
+    assert scores["pro"] == pytest.approx((.92/3) * (.4/2.5))
     # Pro still leads when the Max row has little urgency left.
     meters["max"] = meter("max", [MeterWindow("weekly", 97, NOW+100*3600),
                                   MeterWindow("session", 10, NOW+3*3600)], plan="default_claude_max_20x")
@@ -126,9 +126,9 @@ def test_session_units_floor_hot_reloads_from_registered_config(tmp_path, monkey
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     windows = [MeterWindow("weekly", 8, NOW+3*3600), MeterWindow("session", 60, NOW+3600)]
     meters = {"a": meter(windows=windows)}
-    assert load_policy()["session_units_floor"] == 5
+    assert load_policy()["session_units_floor"] == 2.5
     initial = rank("anthropic", None, ["a"], meters, NOW, load_policy())[0][1]
-    write_config_key(tmp_path/"config.yaml", "account_router.session_units_floor", 10)
+    write_config_key(tmp_path/"config.yaml", "account_router.session_units_floor", 5)
     updated = rank("anthropic", None, ["a"], meters, NOW, load_policy())[0][1]
     assert updated == pytest.approx(initial/2)
 
@@ -192,3 +192,90 @@ def test_header_capture_failure_does_not_skip_rate_limit_parser(monkeypatch):
     agent.provider = "anthropic"
     agent._capture_rate_limits(SimpleNamespace(headers={"x-ratelimit-limit-tokens": "100", "x-ratelimit-remaining-tokens": "42"}))
     assert agent.get_rate_limit_state().tokens_min.remaining == 42
+
+
+def test_fable_scope_scores_zero_for_plan_omitting_fable_window_when_pool_has_fable():
+    meters = {
+        "max": meter("max", [MeterWindow("weekly", 35, NOW + 136 * 3600),
+                             MeterWindow("weekly", 28, NOW + 136 * 3600, "fable")],
+                     plan="default_claude_max_5x"),
+        "pro": meter("pro", [MeterWindow("weekly", 10, NOW + 1 * 3600)],
+                     plan="default_claude_ai"),
+    }
+    fable_rows = rank("anthropic", "claude-fable-5-2", ["pro", "max"], meters, NOW, {})
+    assert fable_rows[0][0] == "max"
+    assert fable_rows[1] == ("pro", 0.0, "model scope unavailable on plan")
+    # Non-Fable traffic still scores the Pro account normally.
+    opus_scores = {id: score for id, score, _ in rank("anthropic", "claude-opus-5-5", ["pro", "max"], meters, NOW, {})}
+    assert opus_scores["pro"] > 0
+
+
+def test_fable_scope_preserves_header_only_snapshot_and_unscoped_pool():
+    # Header-only partial snapshot without usage_fetched_at is not falsely marked unentitled.
+    meters = {
+        "max": meter("max", [MeterWindow("weekly", 35, NOW + 48 * 3600),
+                             MeterWindow("weekly", 28, NOW + 48 * 3600, "fable")],
+                     plan="default_claude_max_5x"),
+        "headers_only": AccountMeter("anthropic", "headers_only", "default_claude_max_5x",
+                                     (MeterWindow("weekly", 10, NOW + 24 * 3600),), NOW, "headers"),
+    }
+    scores = {id: score for id, score, _ in rank("anthropic", "claude-fable-5-2", ["max", "headers_only"], meters, NOW, {})}
+    assert scores["headers_only"] > 0
+    # When no account in the pool publishes a fable window, no entry is zeroed out.
+    unscoped = {"a": meter("a", [MeterWindow("weekly", 10, NOW + 24 * 3600)], plan="default_claude_ai")}
+    assert rank("anthropic", "claude-fable-5-2", ["a"], unscoped, NOW, {})[0][1] > 0
+
+
+def test_max_5x_normal_session_use_keeps_full_score_and_tapers_above_half():
+    base = 0.65 * 5 / 100
+    low_session = meter("a", [MeterWindow("weekly", 35, NOW + 100 * 3600),
+                              MeterWindow("session", 35, NOW + 3 * 3600)], plan="default_claude_max_5x")
+    half_session = meter("b", [MeterWindow("weekly", 35, NOW + 100 * 3600),
+                               MeterWindow("session", 50, NOW + 3 * 3600)], plan="default_claude_max_5x")
+    tight_session = meter("c", [MeterWindow("weekly", 35, NOW + 100 * 3600),
+                                MeterWindow("session", 70, NOW + 3 * 3600)], plan="default_claude_max_5x")
+    scores = {id: s for id, s, _ in rank("anthropic", "claude-opus-5-5", ["a", "b", "c"],
+                                         {"a": low_session, "b": half_session, "c": tight_session}, NOW, {})}
+    assert scores["a"] == pytest.approx(base)
+    assert scores["b"] == pytest.approx(base)
+    assert scores["c"] == pytest.approx(base * 0.6)
+
+
+def test_fable_capped_account_boosted_for_non_fable_scopes_until_weekly_cap():
+    meters = {
+        "max5": meter("max5", [MeterWindow("weekly", 35, NOW + 136 * 3600),
+                               MeterWindow("weekly", 28, NOW + 136 * 3600, "fable")],
+                      plan="default_claude_max_5x"),
+        "max20_fable_capped": meter("max20_fable_capped",
+                                    [MeterWindow("weekly", 96, NOW + 48 * 3600),
+                                     MeterWindow("weekly", 100, NOW + 48 * 3600, "fable")],
+                                    plan="default_claude_max_20x"),
+    }
+    # Opus/Sonnet/all prefer the Fable-capped account to drain its non-Fable weekly headroom first.
+    for model in (None, "claude-opus-5-5", "claude-sonnet-5-5"):
+        rows = rank("anthropic", model, ["max5", "max20_fable_capped"], meters, NOW, {})
+        assert rows[0][0] == "max20_fable_capped"
+        assert "fable capped" in rows[0][2]
+    # Fable still skips the Fable-capped account.
+    fable_rows = rank("anthropic", "claude-fable-5-2", ["max5", "max20_fable_capped"], meters, NOW, {})
+    assert fable_rows[0][0] == "max5"
+    assert fable_rows[1][1] == 0.0
+    # Disabling the boost via policy restores pure base urgency order.
+    disabled = rank("anthropic", "claude-opus-5-5", ["max5", "max20_fable_capped"], meters, NOW,
+                    {"fable_capped_non_fable_boost": 1.0})
+    assert disabled[0][0] == "max5"
+    # Once weekly_all itself hits cap_pct, score drops to 0.0 despite the boost.
+    meters["max20_fable_capped"] = meter("max20_fable_capped",
+                                         [MeterWindow("weekly", 98, NOW + 48 * 3600),
+                                          MeterWindow("weekly", 100, NOW + 48 * 3600, "fable")],
+                                         plan="default_claude_max_20x")
+    capped_rows = rank("anthropic", "claude-opus-5-5", ["max5", "max20_fable_capped"], meters, NOW, {})
+    assert capped_rows[0][0] == "max5"
+    assert capped_rows[1][1] == 0.0
+    # An expired Fable cap does not apply the boost.
+    meters["max20_fable_capped"] = meter("max20_fable_capped",
+                                         [MeterWindow("weekly", 96, NOW + 48 * 3600),
+                                          MeterWindow("weekly", 100, NOW - 10, "fable")],
+                                         plan="default_claude_max_20x")
+    expired = rank("anthropic", "claude-opus-5-5", ["max5", "max20_fable_capped"], meters, NOW, {})
+    assert expired[0][0] == "max5"
