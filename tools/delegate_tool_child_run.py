@@ -596,7 +596,12 @@ def _validate_child_output_schema(
     from tools.delegation_output_schema import append_output_contract, build_retry_message, validate_output
     _first_text = result.get("final_response") or ""
     _schema_valid, _schema_errors = validate_output(_first_text, _output_schema)
-    if _schema_valid or not _first_text.strip() or result.get("interrupted", False):
+    _turn_failed = (
+        result.get("completed") is False
+        or bool(result.get("failed"))
+        or bool(result.get("error"))
+    )
+    if _schema_valid or not _first_text.strip() or result.get("interrupted", False) or _turn_failed:
         return _SchemaOutcome(_output_schema, _schema_valid, _schema_errors, 0)
 
     # Exactly one retry turn, continuing the child's conversation. The contract is pasted again:

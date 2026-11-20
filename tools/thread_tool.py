@@ -285,7 +285,8 @@ async def _with_owner(home: Path, subject: str, fn):
 async def _attach(client, thread: Thread) -> tuple[dict, Thread]:
     """Resume the thread. The owner may attach another id of the same conversation (a local chat's logical id
     once it compresses) and takes writes only for the id it attached, so every write uses the returned one."""
-    snap = await client.rpc("session.resume", session_id=thread.session_id, omit_messages=True, defer_history=True)
+    snap = await client.rpc("session.resume", session_id=thread.session_id, omit_messages=True,
+                            defer_history=True, omit_info=True)
     return snap, replace(thread, session_id=snap.get("session_id") or thread.session_id)
 
 
@@ -643,7 +644,8 @@ async def _rename(client, sid, titles, request_id):
     from hermes_cli.gateway_client import GatewayRPCError
     for attempt, title in enumerate(titles):
         # Each attempt reads the revision afresh: a refused first title must not fence out the second.
-        snap = await client.rpc("session.resume", session_id=sid, omit_messages=True, defer_history=True)
+        snap = await client.rpc("session.resume", session_id=sid, omit_messages=True,
+                                defer_history=True, omit_info=True)
         try:
             await client.rpc("session.mutate", session_id=snap.get("session_id") or sid, request_id=f"{request_id}:{attempt}",
                              expected_revision=snap["revision"], operation="rename", payload={"title": title[:100]})

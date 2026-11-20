@@ -103,13 +103,24 @@ def _unknown_toolsets(enabled, config):
     return []
 
 
+_CLI_SKILLS_CACHE: dict[str, tuple[float, dict[str, list[str]]]] = {}
+_CLI_SKILLS_TTL_S = 60.0
+
+
 def _cli_skills():
     """``hermes_cli.banner.get_available_skills`` as main's classic CLI computed it: ``cmd_chat`` pins
     ``HERMES_KANBAN_BOARD`` before HermesCLI starts, so ``environments: [kanban]`` skills are offered.
     The owner never sets that env; the kanban relevance is scoped to this scan (a ContextVar) and the
     catalog cache entry it would poison is restored, so other surfaces keep their own view."""
+    import time
+    from hermes_constants import get_hermes_home
     from tools import skills_tool
     from tools.kanban_toolset_context import scoped_kanban_toolset_selection
+    home_key = str(get_hermes_home().resolve())
+    now = time.monotonic()
+    cached = _CLI_SKILLS_CACHE.get(home_key)
+    if cached is not None and now - cached[0] < _CLI_SKILLS_TTL_S:
+        return cached[1]
     key = ("filtered", False)
     saved = skills_tool._SKILLS_CACHE.pop(key, None)
     try:
@@ -122,6 +133,7 @@ def _cli_skills():
     grouped: dict[str, list[str]] = {}
     for skill in found:
         grouped.setdefault(skill.get("category") or "general", []).append(skill["name"])
+    _CLI_SKILLS_CACHE[home_key] = (now, grouped)
     return grouped
 
 

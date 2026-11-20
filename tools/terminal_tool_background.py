@@ -105,17 +105,20 @@ def _spawn(process_registry, *, env, env_type, command, cwd, effective_task_id, 
 
 
 def _apply_async_support(proc_session, result_data, notify_on_complete, watch_patterns):
-    """Finite sessions (stateless HTTP, one-shot Kanban workers) can't route a
-    completion back after the turn ends: drop the flags and tell the agent to
-    poll. Otherwise stamp gateway routing. Returns (notify, watch_patterns)."""
+    """Finite sessions (stateless HTTP, one-shot Kanban workers, finite thread turns) can't
+    route a completion back after the turn ends without ending prematurely or stalling: drop
+    the flags and tell the agent to poll/wait in-turn. Otherwise stamp gateway routing.
+    Returns (notify, watch_patterns)."""
     if not (notify_on_complete or watch_patterns):
         return notify_on_complete, watch_patterns
     from gateway.session_context import async_delivery_supported, get_session_env
+    from gateway.session_finite import finite_turn_required
     from tools.environments.sandbox_scope import hosted_scope
 
-    # A hosted agent's process is invisible outside its scope, and no notification consumer binds
-    # that scope (the gateway watcher and every drain pass over it), so its notice could never land.
-    if async_delivery_supported() and hosted_scope() is None:
+    # A hosted agent's process is invisible outside its scope, and a finite turn (e.g. a native
+    # thread turn submitted with finite=True) must finish its work before ending so it doesn't
+    # send a premature "done" update or stall waiting for a post-turn notice.
+    if finite_turn_required() is not True and async_delivery_supported() and hosted_scope() is None:
         _stamp_gateway_routing(proc_session, get_session_env)
         return notify_on_complete, watch_patterns
     result_data["notify_on_complete"] = False

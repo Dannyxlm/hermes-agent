@@ -101,6 +101,10 @@ HERMES_CADUCEUS = """[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀�
 _available_skills_cache: Optional[tuple] = None
 _git_banner_state_cache: Optional[tuple] = None
 _latest_release_cache: Optional[tuple] = None
+# Per-profile TTL cache for routed/multiplexed scopes (HERMES_HOME override set by owner_scope).
+# Avoids rescanning hundreds of SKILL.md files on every session.resume while staying profile-isolated.
+_routed_memo_cache: dict[tuple[str, str], tuple[float, object]] = {}
+_ROUTED_MEMO_TTL_S = 60.0
 
 _UNCACHED = object()  # compute() result that must not be memoized
 
@@ -108,11 +112,21 @@ _UNCACHED = object()  # compute() result that must not be memoized
 def _memo(cache_name: str, compute):
     """Return the cached value under module global ``cache_name``, computing (and storing) it once.
 
-    Not consulted under a routed profile (HERMES_HOME override): every memo here is derived from the
-    launch home (its skills tree, its checkout), and the TUI gateway calls these per profile."""
+    Under a routed profile (HERMES_HOME override), memoizes per ``(cache_name, resolved_home)`` with a
+    short TTL so each profile stays isolated without rescanning its skills tree on every resume."""
     from hermes_constants import get_hermes_home_override
-    if get_hermes_home_override() is not None:
-        return compute()
+    override = get_hermes_home_override()
+    if override is not None:
+        import time
+        key = (cache_name, str(Path(override).resolve()))
+        now = time.monotonic()
+        entry = _routed_memo_cache.get(key)
+        if entry is not None and now - entry[0] < _ROUTED_MEMO_TTL_S:
+            return entry[1]
+        value = compute()
+        if value is not _UNCACHED:
+            _routed_memo_cache[key] = (now, value)
+        return value
     cached = globals()[cache_name]
     if cached is not None:
         return cached[0]

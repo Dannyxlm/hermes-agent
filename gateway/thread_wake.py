@@ -97,10 +97,11 @@ def render(items: list[dict], still: list[str], profile: str) -> str:
     return "\n".join(lines)
 
 
-def _still_working(profile: str, lineage, done: set) -> list[str]:
+def _still_working(profile: str, lineage, done: set, launch_rows: list[dict] | None = None) -> list[str]:
     homes = ts.homes()
     out = []
-    for launch in ts.threads_of(profile, lineage, since=time.time() - ts.WAKE_LAUNCH_WINDOW_S):
+    rows_src = ts.threads_of(profile, lineage, since=time.time() - ts.WAKE_LAUNCH_WINDOW_S) if launch_rows is None else launch_rows
+    for launch in rows_src:
         home = homes.get(launch["child_profile"])
         if home is None:
             continue
@@ -130,14 +131,21 @@ WHERE COALESCE(s.last_activity_at, s.started_at) >= ?"""
 
 def leads(profile: str, now: float | None = None) -> list[str]:
     """Chats of ``profile`` that opened a thread with activity in the wake window (one query per store)."""
+    import sqlite3
     now = time.time() if now is None else now
     found: set[str] = set()
     for home in ts.homes().values():
         with ts.reader(home) as conn:
             if conn is None:
                 continue
-            found |= {row[0] for row in conn.execute(_LEADS_SQL, (
-                ts.LAUNCH_PREFIX, profile, now - ts.WAKE_LAUNCH_WINDOW_S, now - ts.WAKE_WINDOW_S))}
+            try:
+                found |= {row[0] for row in conn.execute(_LEADS_SQL, (
+                    ts.LAUNCH_PREFIX, profile, now - ts.WAKE_LAUNCH_WINDOW_S, now - ts.WAKE_WINDOW_S))}
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc).lower():
+                    logger.debug("thread_wake: skipping uninitialized store %s (%s)", home, exc)
+                    continue
+                raise
     home = ts.homes().get(profile)
     if home is not None:
         found.update(_pending_leads(home, profile))
@@ -159,14 +167,20 @@ def _pending_leads(home: Path, profile: str) -> set[str]:
     if legacy:
         # Older pending records have only a hashed filename. Resolve those against the
         # launch ledger once; the next saved transition adds the stable conversation id.
+        import sqlite3
         candidates = set()
         for child_home in ts.homes().values():
             with ts.reader(child_home) as conn:
                 if conn is not None:
-                    candidates.update(row[0] for row in conn.execute(
-                        "SELECT DISTINCT launcher_session_id FROM work_launches "
-                        "WHERE launcher_profile=? AND substr(launch_id,1,?)=?",
-                        (profile, len(ts.LAUNCH_PREFIX), ts.LAUNCH_PREFIX)))
+                    try:
+                        candidates.update(row[0] for row in conn.execute(
+                            "SELECT DISTINCT launcher_session_id FROM work_launches "
+                            "WHERE launcher_profile=? AND substr(launch_id,1,?)=?",
+                            (profile, len(ts.LAUNCH_PREFIX), ts.LAUNCH_PREFIX)))
+                    except sqlite3.OperationalError as exc:
+                        if "no such table" in str(exc).lower():
+                            continue
+                        raise
         with ts.reader(home) as conn:
             if conn is not None:
                 for lead in candidates:
@@ -242,7 +256,8 @@ def _owner(home: Path, session_id: str, fn, stages=None):
 
     async def go(client):
         stages['connected'] = time.monotonic()
-        snap = await client.rpc("session.resume", session_id=session_id, omit_messages=True, defer_history=True)
+        snap = await client.rpc("session.resume", session_id=session_id, omit_messages=True,
+                                defer_history=True, omit_info=True)
         stages['resumed'] = time.monotonic()
         return await fn(client, snap.get("session_id") or session_id)
     return _run(_with_owner(home, subject, go))
@@ -392,13 +407,15 @@ def deliver(home: Path, profile: str, lead: str, trace: dict | None = None) -> b
         return _advance(home, profile, tip, root, record, admission, busy, trace)
     if busy:
         return False
-    items, _working = ts.wake_state(home, profile, lineage)
+    launch_rows = ts.threads_of(profile, lineage, since=time.time() - ts.WAKE_LAUNCH_WINDOW_S)
+    items, _working = ts.wake_state(home, profile, lineage, launch_rows=launch_rows)
     claimed = [item for item in items if ts.claim(home, item["admission_id"], item["status"])]
     if not claimed:
         return False
     done = {item["thread_id"] for item in claimed}
     pairs = [[item["admission_id"], item["status"]] for item in claimed]
-    record = {"key": _key(pairs), "items": pairs, "text": render(claimed, _still_working(profile, lineage, done), profile)}
+    record = {"key": _key(pairs), "items": pairs,
+              "text": render(claimed, _still_working(profile, lineage, done, launch_rows=launch_rows), profile)}
     _save(home, root, record)  # before the submit: a lost answer is never permission for a second turn
     trace['pending'] = True
     return _submit(home, tip, record, profile, trace)

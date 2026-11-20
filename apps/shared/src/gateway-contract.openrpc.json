@@ -12937,6 +12937,11 @@
             "title": "Omit Messages",
             "type": "boolean"
           },
+          "omit_info": {
+            "default": false,
+            "title": "Omit Info",
+            "type": "boolean"
+          },
           "cols": {
             "anyOf": [
               {
@@ -52602,6 +52607,11 @@
           "omit_messages": {
             "default": false,
             "title": "Omit Messages",
+            "type": "boolean"
+          },
+          "omit_info": {
+            "default": false,
+            "title": "Omit Info",
             "type": "boolean"
           },
           "eager_build": {
