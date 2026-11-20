@@ -286,6 +286,7 @@ def _peer_paragraph(root: Path) -> str:
 
 
 def _build_section(home: Path) -> str:
+    from gateway.session_home_alert import NEEDS_YOU
     root = _hermes_root(home)
     me = _profile_name(home)
     if not _any_managed(root):
@@ -326,6 +327,10 @@ def _build_section(home: Path) -> str:
         "with an intentional silence token "
         "([SILENT] or NO_REPLY) — the transport swallows it, so the sender gets "
         "no acknowledgement ping-pong.\n"
+        "This Bot Chat is also the user's conversation on their phone, where a new message only "
+        f"shows as unread. When the user must decide or act, open that message with {NEEDS_YOU} "
+        "(nothing before it): only that sends a push notification. Never mark routine reports, "
+        "summaries or FYIs with it.\n"
         f"You are `@{_handle(me, names)}`. Your teammates (live roster; roles from their "
         "profiles):\n"
         f"{roster_block}"

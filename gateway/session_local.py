@@ -76,7 +76,10 @@ class LocalSessionAdapter(BasePlatformAdapter):
         self.sources.clear()
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
-        # TurnRunner already publishes model/tool deltas and settlement exactly once.
+        # TurnRunner already publishes model/tool deltas and settlement exactly once. A Bot Chat
+        # reply that needs the user also alerts their phone (gateway/session_home_alert.py).
+        from gateway.session_home_alert import notify_if_needed
+        await notify_if_needed(self.authority, chat_id, content)
         return SendResult(success=True, message_id=uuid.uuid4().hex)
 
     async def edit_message(self, chat_id, message_id, content, *, finalize=False):
