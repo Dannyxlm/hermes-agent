@@ -102,6 +102,8 @@ _WS_LOG_PAYLOAD_PREVIEW = 240
 # handler latency (#108325). A full queue parks the reader — the old serial behaviour.
 _WS_DISPATCH_QUEUE_MAX = 256
 # Read-only projections (``ws_read_lane.READ_METHODS``) run beside the serial lane, bounded per socket.
+# Account usage can wait on a provider API or plugin hook, so keep it off the serial control lane.
+ws_read_lane.READ_METHODS.setdefault("session.account_usage", ws_read_lane.SLOW)
 # A shared socket's frame naming a profile hot-serve is still starting (a chat opened on a profile
 # created a moment ago) waits for that start in a lane of its own: on the serial lane every later
 # control on the socket, other profiles' prompts and interrupts included, would queue behind it.

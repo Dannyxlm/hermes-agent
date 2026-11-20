@@ -4,6 +4,7 @@ rebound onto server.py's globals at install time (method_ctx.bind_module)."""
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 import threading
 
@@ -209,6 +210,10 @@ _session_observation_locks: dict[str, Any] = {}
 _session_observation_lock = threading.Lock()
 
 
+_MTIME_FALLBACK = "mtime-fallback"
+_RACY_MTIME = object()
+
+
 def _session_db_content_sig(db_path: Path):
     """Share a store observation across overlapping watcher, push and list readers."""
     key = os.path.realpath(db_path)
@@ -302,7 +307,6 @@ def _read_session_db_content_sig(db_path: Path):
         _drop_store(cache_key)
         _note_observed(cache_key)
         return None
-
     conn = None
     try:
         # The version is sampled BEFORE the rows are read: a commit landing in between is read now and
@@ -316,7 +320,7 @@ def _read_session_db_content_sig(db_path: Path):
             observation, observed, removed, available = snapshot
             if observation is None:
                 # Foreign/transient schema: retain the wake-up signal rather than silently freeze.
-                signature = ("mtime-fallback", _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
+                signature = (_MTIME_FALLBACK, _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
             else:
                 signature = observation.signature
                 if "id" in observation.fields and (removed is None or observed or removed):
@@ -330,9 +334,9 @@ def _read_session_db_content_sig(db_path: Path):
         _drop_store(cache_key)  # never keep a connection that failed mid-read
         # A busy/locked read after a good one keeps the last digest and leaves the cached version
         # stale so the next pass re-reads: digest -> mtime -> digest would broadcast twice.
-        if cached is not None and cached[1] is not None and cached[1][0] != "mtime-fallback":
+        if cached is not None and cached[1] is not None and cached[1][0] != _MTIME_FALLBACK:
             return cached[1]
-        return ("mtime-fallback", _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
+        return (_MTIME_FALLBACK, _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal"))))
     finally:
         kept = _store_probes.get(cache_key)
         if conn is not None and (kept is None or kept[0] is not conn):
@@ -341,9 +345,45 @@ def _read_session_db_content_sig(db_path: Path):
     _note_observed(cache_key)
     if version is not None:
         _sessions_db_sig_cache[cache_key] = (version, signature)
-
     return signature
 
+
+def _settled_mtime(mtime):
+    """``mtime`` when it is old enough to trust as a cache key, else a never-matching sentinel."""
+    from utils import mtime_is_racy  # function-local: bodies are rebound onto server.py's globals
+    if mtime is None or mtime_is_racy(mtime):
+        return _RACY_MTIME
+    return mtime
+
+
+def _db_content_sig(db_path: Path, cache: dict, read, *, fallback=lambda mtime: None):
+    """``read(conn, mtime)`` over a read-only connection, cached behind the DB/WAL mtime so a watch pass
+    stays stat-only until another process commits. ``read`` returns ``(signature, is_fallback)``. A failed
+    read after a good answer keeps it and leaves the cached mtime stale so the next pass re-reads (answer ->
+    fallback -> answer would broadcast twice); otherwise the answer is ``fallback(mtime)``."""
+    mtime = _newest_mtime_ns((db_path, db_path.with_name(f"{db_path.name}-wal")))
+    cache_key = str(db_path)
+    cached = cache.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    if not db_path.exists():
+        cache[cache_key] = (mtime, None, True)
+        return None
+    conn = None
+    try:
+        from hermes_state import _connect_tracked_db
+        from hermes_state_holders import read_only_db_uri
+        conn = _connect_tracked_db(read_only_db_uri(db_path), tracking_path=db_path, uri=True, timeout=0.05)
+        signature, is_fallback = read(conn, mtime)
+    except Exception:  # health: allow BLE001 -- any failed read (busy, locked, foreign schema) falls back like a busy one
+        if cached is not None and not cached[2]:
+            return cached[1]
+        signature, is_fallback = fallback(mtime), True
+    finally:
+        if conn is not None:
+            conn.close()
+    cache[cache_key] = (_settled_mtime(mtime), signature, is_fallback)
+    return signature
 
 def _delegate_session_ids(conn, ids: list, available: set) -> set:
     """Ids among ``ids`` that are delegated child runs (``_delegate_from`` marker): many inherit
@@ -359,6 +399,11 @@ def _delegate_session_ids(conn, ids: list, available: set) -> set:
             f"AND {_delegate_from_json()} IS NOT NULL", chunk))
     return found
 
+def _watched_homes() -> tuple[Path, ...]:
+    """The watcher home and every sibling profile home this gateway serves."""
+    return (_watcher_home(), *_served_profile_homes)
+
+
 def _sessions_sig():
     """Session-table content across the active and served profile stores.
 
@@ -369,7 +414,7 @@ def _sessions_sig():
     """
     return tuple(
         _session_db_content_sig(root / "state.db")
-        for root in (_watcher_home(), *_served_profile_homes)
+        for root in _watched_homes()
     )
 
 
@@ -380,7 +425,7 @@ def _projects_sig():
     signal, exactly like state.db (#53046, #56757)."""
     return _files_sig(
         root / name
-        for root in (_watcher_home(), *_served_profile_homes)
+        for root in _watched_homes()
         for name in ("projects.db", "projects.db-wal"))
 
 
@@ -445,6 +490,82 @@ def _bot_relay_outbox_sig():
     return _bot_relay_outbox_seen or None
 
 
+def _room_rows_sig(conn, _mtime) -> tuple[dict, bool]:
+    """Per live room in one store: what ``groups.log`` and ``groups.state`` read from it."""
+    from gateway.hosted_room_driver import room_change_rows
+    return room_change_rows(conn), False
+
+
+_room_store_sig_cache: dict[str, tuple[object, dict | None, bool]] = {}
+
+
+def _groups_sig() -> dict:
+    """``{room_id: signature}`` across every room store this process serves (each room service's store,
+    each served home's session store, the install's shared room store) plus the status only this
+    process holds: each service's ``live_status_sig`` (approvals, route states, stalls, blocked rooms) and
+    member progress (``live_progress``: tool, live confirmation, progress), signed once. Key ``""`` is
+    process-wide (a worker started or stopped). Cron, the CLI and other gateways append to
+    these stores from their own processes, so the files are the shared signal."""
+    from gateway.hosted_rooms import default_db_path
+    from tui_gateway.hosted_room_service import live_room_services
+    services = live_room_services()
+    stores = {Path(path).resolve(): None for path in (
+        *(root / "state.db" for root in _watched_homes()), default_db_path(),
+        *(service.db_path for service in services))}
+    rooms: dict[str, list] = {}
+    for store in stores:
+        for room_id, part in (_db_content_sig(store, _room_store_sig_cache, _room_rows_sig) or {}).items():
+            rooms.setdefault(room_id, []).append((str(store), part))
+    for service in services:
+        with contextlib.suppress(Exception):  # health: allow BLE001 -- one broken service must not blind the rest
+            for room_id, part in service.live_status_sig().items():
+                rooms.setdefault(room_id, []).append(("live", part))
+    # Member progress is one process-wide map that every service's status reads: signed once.
+    from tui_gateway.hosted_room_member_activity import live_progress
+    for room_id, *progress in live_progress():
+        rooms.setdefault(room_id, []).append(("progress", *progress))
+    # Each part starts with its kind and a key unique within the room (store path, "live", "progress" + task):
+    # plain tuple order, no repr per part per tick.
+    return {room_id: tuple(sorted(parts)) for room_id, parts in rooms.items()}
+
+
+_groups_woken_heads: dict[str, dict] = {}
+
+
+def _wake_room_drivers() -> None:
+    """Wake the room service whose store holds a room whose log grew, so a post another process appended
+    (a cron job, the CLI) is answered now instead of at the driver's 5 s idle poll. Only ``next_seq``
+    counts: task and status moves are the driver's own. Its own appends wake it once more (one empty
+    pass, at most one per watch tick); ``wakeup`` only sets an event. Reads the store signatures the
+    groups watch already cached: no store access of its own."""
+    from tui_gateway.hosted_room_service import live_room_services
+    heads = {store: {room_id: part.next_seq for room_id, part in rows.items()}
+             for store, (_mtime, rows, _fallback) in _room_store_sig_cache.items() if rows}
+    moved = {store for store, rooms in heads.items() if _groups_woken_heads.get(store, rooms) != rooms}
+    _groups_woken_heads.clear()
+    _groups_woken_heads.update(heads)
+    for service in live_room_services():
+        with contextlib.suppress(Exception):  # health: allow BLE001 -- a stopped service must not stop the watcher
+            if str(Path(service.db_path).resolve()) in moved:
+                service.wakeup()
+
+
+# One ``groups.changed`` frame goes to every socket a window holds open to this process; its id (this process's
+# replay epoch, the token gateway.ready already carries, + a counter) tells a view that a copy is one it already
+# read for, and nothing else.
+_groups_broadcast_count = itertools.count(1)
+
+
+def _groups_changed_payload(before: dict, after: dict) -> dict:
+    """``{"room_ids": [...]}``: the rooms whose log or status moved since the last broadcast, so an open
+    view of another room does not re-read. No ``room_ids`` (every view refreshes) when process-wide state
+    moved. ``broadcast_id`` names this one broadcast, unique per process lifetime."""
+    moved = {room_id for room_id in before.keys() | after.keys() if before.get(room_id) != after.get(room_id)}
+    scope = {} if "" in moved else {"room_ids": sorted(moved)}
+    from tui_gateway.event_replay import replay_epoch
+    return {**scope, "broadcast_id": f"{replay_epoch()}:{next(_groups_broadcast_count)}"}
+
+
 def _skills_sig():
     """The skill roots' stat signature for every scope a session resolved commands in (each profile
     home and session repo, not only the launch one: ``agent.skill_commands.published_scopes_signature``):
@@ -459,7 +580,7 @@ def _skills_sig():
 # keeps pricier probes (pet resolves the sheet off disk) off the 0.5s tick. cron/jobs.json
 # moves on edits AND scheduler ticks; gateway_state.json is where the messaging gateway
 # persists platform connect/disconnect/health (the Messaging page's status signal).
-_CHANGE_WATCHES: dict[str, tuple[float, Any, Any]] = {
+_CHANGE_WATCHES: dict[str, tuple[float, Any, Any] | tuple[float, Any, Any, Any]] = {
     "pet.changed": (2.0, _pet_sig, _pet_changed_payload),
     "cron.changed": (1.0, lambda: _home_mtime_ns("cron", "jobs.json"), dict),
     "sessions.changed": (0.5, _sessions_sig, dict),
@@ -471,12 +592,15 @@ _CHANGE_WATCHES: dict[str, tuple[float, Any, Any]] = {
     "pairing.changed": (2.0, _pairing_sig, dict),
     "skills.changed": (2.0, _skills_sig, dict),
     # 1s so a queued DM envelope reaches the Desktop's push-triggered drain fast.
-    "bot_relay.outbox.pending": (1.0, _bot_relay_outbox_sig, dict)}
+    "bot_relay.outbox.pending": (1.0, _bot_relay_outbox_sig, dict),
+    # An open room view re-reads its log delta + status on this; its slow poll is only the backstop.
+    # Its payload names what moved: an optional 4th slot, ``fn(previous broadcast signature, current one)``.
+    "groups.changed": (0.5, _groups_sig, dict, _groups_changed_payload)}
 
 # state.db moves on every append of a streaming turn and gateway_state.json on
 # in-flight bookkeeping; the floor coalesces bursts to one broadcast per window,
 # trailing edge included (a floored change keeps its old signature, re-fires later).
-_CHANGE_BROADCAST_FLOOR_S = {"sessions.changed": 2.0, "platforms.changed": 5.0}
+_CHANGE_BROADCAST_FLOOR_S = {"sessions.changed": 2.0, "platforms.changed": 5.0, "groups.changed": 1.0}
 
 _change_sigs: dict[str, Any] = {}
 _change_checked_at: dict[str, float] = {}
@@ -489,13 +613,18 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
     from tui_gateway import session_change_cursor
     with _live_transports_lock:
         live = list(_live_transports)
-    # Durable Inbox push owns its leased-store refresh in mobile_inbox_invalidation.process;
-    # this UI watcher has no work without a WebSocket or the stdio TUI.
-    if not live and not _stdio_is_rpc_channel:
-        session_change_cursor.pump(_send_session_cursor_frames, live, now)
-        return
+    # Durable Inbox push owns its leased-store refresh. Without a UI client, only the
+    # room driver can use a watch tick: it wakes on posts from another process.
+    publishing = bool(live) or _stdio_is_rpc_channel
+    if not publishing:
+        from tui_gateway.hosted_room_service import live_room_services
+        if not live_room_services():
+            session_change_cursor.pump(_send_session_cursor_frames, live, now)
+            return
     now = time.monotonic() if now is None else now
-    for event, (interval, sig_fn, payload_fn) in _CHANGE_WATCHES.items():
+    for event, (interval, sig_fn, payload_fn, *diff_fn) in _CHANGE_WATCHES.items():
+        if not publishing and event != "groups.changed":
+            continue
         if event == "sessions.changed":
             interval = session_change_cursor.watch_interval(interval)
         if now - _change_checked_at.get(event, -interval) < interval:
@@ -513,10 +642,11 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
             continue
         if floor and now - _change_broadcast_at.get(event, -floor) < floor:
             continue  # floored: old signature stays so it re-fires when the window opens
-        _change_sigs[event] = sig
+        before, _change_sigs[event] = _change_sigs[event], sig
         _change_broadcast_at[event] = now
         with contextlib.suppress(Exception):
-            _broadcast_global_event(event, payload_fn())
+            if publishing:
+                _broadcast_global_event(event, diff_fn[0](before, sig) if diff_fn else payload_fn())
     with _live_transports_lock:
         live = list(_live_transports)
     session_change_cursor.pump(_send_session_cursor_frames, live, now)
@@ -551,6 +681,9 @@ def _ensure_skin_watcher() -> None:
             time.sleep(session_change_cursor.watch_interval(0.5))
             _broadcast_skin_if_changed()
             _broadcast_watched_changes()
+            # A failed wake must never end this thread: every push (skin, sessions, groups...) runs on it.
+            with contextlib.suppress(Exception):  # health: allow BLE001 -- the driver's own idle poll still runs
+                _wake_room_drivers()
     global _change_watcher_thread
     _change_watcher_thread = threading.Thread(target=_loop, name="hermes-change-watcher", daemon=True)
     _change_watcher_thread.start()

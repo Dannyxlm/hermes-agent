@@ -26,8 +26,9 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional
 from hermes_cli.process_identity import (
     own_process_groups, register_child, release_process_group_once_empty, spawn_env, spawned_by_this_process)
 from hermes_constants import get_hermes_home, hermes_home_key
-from tools.browser_harness_dirs import (daemon_env, daemon_identity, fit_default_socket_dir, harness_pid_file,
-                                        namespace_harness_dirs)
+from tools.browser_harness_dirs import (
+    daemon_env, daemon_identity, harness_current_target, harness_pid_file, namespace_harness_dirs)
+from tools.browser_lightpanda import merge_sane_path
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,9 @@ def _hermes_track_new_tabs():
         _tid = _orig(url)
         if _known is not None and _tid and _tid not in _known:
             try:
-                with open(_path, "a", encoding="utf-8") as _f:
+                def _append_only(path, flags):
+                    return _os.open(path, flags | getattr(_os, "O_NOFOLLOW", 0), 0o600)
+                with open(_path, "a", encoding="utf-8", opener=_append_only) as _f:
                     _f.write("%s\\n" % _tid)
             except Exception:
                 pass
@@ -126,8 +129,6 @@ _TASK_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")  # filesystem-safe task ids
 _IMAGE_PATH_RE = re.compile(r"((?:[A-Za-z]:[\\/]|/)[^\s\"']+?\.(?:png|jpe?g|webp))", re.IGNORECASE)
 # http(s) URL literals in exec code, checked against the browser URL policy
 _URL_RE = re.compile(r"https?://[^\s'\"\\)]+", re.IGNORECASE)
-_FHS_BIN_DIRS = ("/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin",
-                 "/usr/bin", "/sbin", "/bin")
 
 
 def _quiet(fn: Callable[[], Any], default: Any, log_prefix: str = "") -> Any:
@@ -219,24 +220,15 @@ def _base_subprocess_env() -> dict:
         env["PYTHONPATH"] = site_dir
     else:
         env.pop("PYTHONPATH", None)
-    env["PATH"] = _floor_subprocess_path(env.get("PATH", ""))
+    # Profile workers can inherit a version-manager-only PATH; the CLI's shell helpers need /usr/bin.
+    env["PATH"] = merge_sane_path(env.get("PATH", ""))
     env.setdefault("ANONYMIZED_TELEMETRY", "false")
-    namespace_harness_dirs(env, _served_profile_tag())  # a served profile's own harness runtime/tmp dirs
+    # The harness reuses any live daemon of a BU_NAME in its runtime dir, and that dir is per OS user:
+    # every profile (served, CLI, cron) gets its own, or one drives another's attached browser (#149829).
+    namespace_harness_dirs(env, hermes_home_key())
     # A daemon the CLI starts inherits this tag; _own_harness_daemon owns only one that names us.
     env.update(spawn_env("browser-harness-daemon"))
     return env
-
-
-def _floor_subprocess_path(path: str) -> str:
-    """Keep system commands reachable from profile workers with a minimal PATH.
-
-    Browser subprocesses may launch shell helpers; version-manager-only paths
-    omit /usr/bin. Reuse the shared browser PATH floor on POSIX.
-    """
-    if os.name == "nt":
-        return path
-    parts = [p for p in (path or "").split(os.pathsep) if p]
-    return os.pathsep.join(parts + [d for d in _FHS_BIN_DIRS if d not in set(parts) and os.path.isdir(d)])
 
 
 def _read_browser_cfg() -> dict:
@@ -680,6 +672,17 @@ def _attach_vault_supervisor(env: dict, task_id: Optional[str]) -> None:
                                          dialog_policy=policy, dialog_timeout_s=timeout_s)
     except Exception as exc:
         logger.debug("browser_exec: CDP supervisor attach failed (non-fatal): %s", exc)
+
+
+def _record_driven_tab(env: dict, task_id: Optional[str]) -> None:
+    """Tell the task's vault supervisor which tab this exec's daemon drives, so a later
+    ``browser_vault`` fill lands in that tab rather than the first one on the origin."""
+    if not (env.get("BU_CDP_WS") or env.get("BU_CDP_URL")):
+        return
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+    supervisor = SUPERVISOR_REGISTRY.get(task_id or "default")
+    if supervisor is not None:
+        supervisor.set_driven_target(harness_current_target(env))
 
 
 def _route_backend(env: dict, session: str, task_id: Optional[str], local: bool,
@@ -1197,15 +1200,24 @@ def _remember_real_profile_task(env, task_id):
             _real_profile_task_homes[task_id or "default"] = hermes_home_key()
 
 
+def _no_code_error(code: str) -> Optional[str]:
+    if not code or not code.strip():
+        return ("No code provided. Pass Python that uses the pre-imported helpers, e.g. "
+                "new_tab(\"https://example.com\") then print(page_info()).")
+    return None
+
+
 def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT_S,
                  task_id: Optional[str] = None, local: bool = False):
     """Run Python code through the browser-use CLI, and return its output"""
     from agent.redact import redact_sensitive_text
     from tools import browser_use_driven_tab as driven_tab
     from tools.browser_use_cli_lanes import prepare_lane_call
+    from tools.hosted_tool_policy import hosted_tool_refusal
     from tools.registry import tool_error, tool_result
-    if not code or not code.strip():
-        return tool_error("No code provided. Pass Python that uses the pre-imported helpers, e.g. new_tab(\"https://example.com\") then print(page_info()).")
+    # A direct (non-dispatch) entry meets the same allowlist, before any setup.
+    if refusal := hosted_tool_refusal("browser_exec") or _no_code_error(code):
+        return tool_error(refusal)
 
     # The verdict is carried into the route, never re-derived: the predicate resolves DNS, so a second
     # evaluation could relax the floor and still pick the cloud for a rebinding host.
@@ -1235,7 +1247,6 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         return tool_error(route_err)
     if local_sidecar:
         env["BU_NAME"] = _sidecar_daemon_name(session)
-    fit_default_socket_dir(env)  # BU_NAME is final: a deep HOME's socket would overflow sun_path
     _exec_route_is_sidecar[route_key] = local_sidecar
     _remember_real_profile_task(env, task_id)
     local_engine = env.pop(_BOT_DESKTOP_BROWSER_SENTINEL, None)
@@ -1285,7 +1296,9 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         owning = schedule(lambda: _own_harness_daemon_until_owned(env), _OWN_DURING_CALL_S)
         try:
             with driven_tab.recording(env, task_id):
-                return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
+                proc = _run_cli_killing_process_group(cmd, code, env, timeout)
+            _record_driven_tab(env, task_id)
+            return {"proc": proc}
         except subprocess.TimeoutExpired:
             return {"error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
@@ -1345,7 +1358,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
 _HEADER_BASE = (
     "Drive a real browser for JS pages, logins, forms and clicks (Browser Use CLI). `code` runs as full "
-    "Python (stdlib available) with pre-imported browser helpers; stdout comes back in the result. Start `code` with a one-line "
+    "Python (stdlib available); print(...) any data you need back. Start `code` with a one-line "
     "comment describing the step for the user in plain language, max 60 chars "
     "(e.g. `# Searching Amazon for paper towels`) — the UI shows it as the step label.\n\n"
     "STATE: the browser session and workspace persist across calls; Python variables do NOT (fresh "
@@ -1354,8 +1367,8 @@ _HEADER_BASE = (
     "('all N products / every entry'), append each batch to a JSON/CSV file in the workspace, then read it "
     "back and aggregate in code — dedupe/count/sort with Python, not in your head — and verify the "
     "collected count against what was asked before answering.\n\n"
-    "Batch each sub-procedure (navigate, wait, extract, act) into one call — do not spend a call per "
-    "action — but for long extractions prefer several medium calls that append to workspace files over "
+    "Batch each sub-procedure (navigate, wait, extract, act) into one call, but for long extractions "
+    "prefer several medium calls that append to workspace files over "
     "one giant call, so progress survives timeouts."
 )
 
@@ -1442,10 +1455,10 @@ BROWSER_EXEC_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "code": {"type": "string", "description": "Python code to execute using the pre-imported browser helpers. Use print(...) for any data you need back."},
+            "code": {"type": "string", "description": "Python using the pre-imported browser helpers."},
             "session": {"type": "string", "description": "Named isolated browser session — its own daemon and (on cloud backends) own browser, so concurrent tasks don't share tabs. Reuse the same name on every related call; omit for the shared default session."},
             "timeout_s": {"type": "integer", "default": _DEFAULT_TIMEOUT_S,
-                          "description": f"Max seconds to wait for the code to finish (default {_DEFAULT_TIMEOUT_S}, max {_MAX_TIMEOUT_S})."},
+                          "description": f"Max seconds to wait for the code to finish (max {_MAX_TIMEOUT_S})."},
         },
         "required": ["code"],
     },
@@ -1488,4 +1501,5 @@ registry.register(
     check_fn=browser_exec_available,
     dynamic_schema_overrides=_dynamic_schema_overrides,
     emoji="🌐",
+    compat_args=("local",),  # advertised only when a local browser is on offer
 )

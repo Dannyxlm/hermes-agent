@@ -131,10 +131,13 @@ export type {
   ToolsetConfig,
   ToolsetInfo,
   ToolsetModel,
-  ToolsetModelsResponse,
+  ToolsetModelsResponse
+} from '@/types/hermes'
+export type {
   WebhookCreatePayload,
   WebhookCreateResponse,
   WebhookEnableResponse,
   WebhookRoute,
+  WebhookSignature,
   WebhooksResponse
-} from '@/types/hermes'
+} from '@/types/webhooks'

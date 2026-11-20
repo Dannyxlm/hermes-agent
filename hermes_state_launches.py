@@ -126,9 +126,18 @@ def sync_job_launches(conn, jobs, removed_ids):
         finish_launch(conn, 'cron-job:' + jid, 'user_stop')
 
 
+def launch_write_patience(db) -> dict:
+    """Launch metadata is best effort: never retry behind a foreign SQLite writer (patience 0), but
+    queue behind this process's own writer mutex like any write. Before v0.23.2 that mutex wait was
+    unbounded; upstream 4c5b875f69 made ``patience_s`` bound it too, which turned patience 0 into
+    "drop the launch record whenever another thread is mid-write"."""
+    return {"patience_s": 0, "mutex_patience_s": db._WRITE_PATIENCE_S}
+
+
 class SessionLaunchesMixin:
     def sync_launch_jobs(self, jobs, removed_ids):
-        return self._execute_write(lambda conn: sync_job_launches(conn, jobs, removed_ids), patience_s=0)
+        return self._execute_write(lambda conn: sync_job_launches(conn, jobs, removed_ids),
+                                   **launch_write_patience(self))
 
     def record_launch(self, launch_id, *, kind, launcher_profile, launcher_session_id, child_profile,
                       parent_launch_id=None, batch_id=None, batch_name=None, title=None, backend_ref=None,
@@ -137,19 +146,22 @@ class SessionLaunchesMixin:
                        launcher_session_id=launcher_session_id, child_profile=child_profile,
                        parent_launch_id=parent_launch_id, batch_id=batch_id, batch_name=batch_name,
                        title=title, backend_ref=backend_ref, next_run_at=next_run_at)
-        return self._execute_write(lambda conn: record_launch(conn, **payload), patience_s=0)
+        return self._execute_write(lambda conn: record_launch(conn, **payload), **launch_write_patience(self))
 
     def bind_launch(self, launch_id, *, child_session_id=None, backend_ref=None):
         return self._execute_write(lambda conn: bind_launch(conn, launch_id,
-                                  child_session_id=child_session_id, backend_ref=backend_ref), patience_s=0)
+                                  child_session_id=child_session_id, backend_ref=backend_ref),
+                                   **launch_write_patience(self))
 
     def finish_launch(self, launch_id, terminal_cause):
-        return self._execute_write(lambda conn: finish_launch(conn, launch_id, terminal_cause), patience_s=0)
+        return self._execute_write(lambda conn: finish_launch(conn, launch_id, terminal_cause),
+                                   **launch_write_patience(self))
 
     def schedule_launch(self, launch_id, next_run_at):
         if next_run_at is not None and (type(next_run_at) not in (float, int) or not math.isfinite(next_run_at)):
             raise ValueError('invalid next_run_at')
-        self._write_sql('UPDATE work_launches SET next_run_at=? WHERE launch_id=?', (next_run_at, launch_id), patience_s=0)
+        self._execute_write(lambda conn: conn.execute('UPDATE work_launches SET next_run_at=? WHERE launch_id=?',
+                                                      (next_run_at, launch_id)), **launch_write_patience(self))
 
 
 def worker_launch(db, conn, session_id, payload, *, operation):
@@ -221,4 +233,4 @@ def mutate_optional_worker_launch(db, *, epoch, execution_id, session_id, genera
         if operation not in {'launch.record', 'launch.bind', 'launch.finish', 'launch.schedule'}:
             raise RuntimeStoreError('invalid_params')
         return worker_launch(db, conn, session_id, payload, operation=operation.split('.')[1])
-    return db._execute_write(write, patience_s=0)
+    return db._execute_write(write, **launch_write_patience(db))

@@ -581,7 +581,7 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
             if code:
                 return write(code, "email")
     prompt = get_code_prompt_callback()
-    if prompt is None or not can_prompt_here():
+    if prompt is None or not can_prompt_here(prompt):
         return json.dumps({"success": False, "error_type": "prompt_unavailable",
                            "error": (f"{site} asks for a one-time code, no code arrived by email in an inbox Hermes can read, "
                                      "and this session cannot ask the user (headless/cron/API). "

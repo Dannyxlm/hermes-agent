@@ -100,7 +100,7 @@ def test_cold_cli_builds_own_runtime_discovers_plugins_and_repairs_app(tmp_path,
     repo.mkdir()
     # Exercise the actual bootstrap/completion graph, not a hand-maintained
     # subset of its transitive source imports. Dependency metadata stays tiny.
-    for name in ("pm", "hermes_cli", "agent", "hermes_platform"):
+    for name in ("pm", "hermes_cli", "agent", "hermes_platform", "hermes_agent", "utils"):
         shutil.copytree(source / name, repo / name,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     for path in source.glob("*.py"):

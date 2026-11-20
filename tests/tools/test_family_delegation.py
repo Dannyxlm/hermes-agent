@@ -13,10 +13,11 @@ def family_parent(tmp_path, monkeypatch):
     from run_agent import AIAgent
     from tools import delegate_tool_config as cfg
     monkeypatch.setenv('HERMES_SINGLE_QUERY_SESSION', '1')
-    monkeypatch.setattr(dt, '_load_config', dict)
+    from tools import delegate_tool_child_run as child_run, delegate_tool_routes as routes
+    # Patch the reading module: delegate_tool no longer re-exports config helpers (43dc9a0a28).
     monkeypatch.setattr(cfg, '_load_config', dict)
-    monkeypatch.setattr(dt, '_get_worktree_isolation', lambda: False)
-    monkeypatch.setattr(dt, '_resolve_delegation_credentials', lambda *_a, **_k: {
+    monkeypatch.setattr(child_run, '_get_worktree_isolation', lambda: False)
+    monkeypatch.setattr(routes, '_resolve_delegation_credentials', lambda *_a, **_k: {
         'model': 'fixture', 'provider': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1',
         'api_key': 'fixture', 'api_mode': 'chat_completions', 'command': None, 'args': None,
     })

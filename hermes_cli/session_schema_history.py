@@ -219,6 +219,8 @@ SCHEMA_HISTORY: dict[str, _TableHistory] = {
             ('+', 'last_activity_kind', 'last_activity_description'),
             ('+', 'last_activity_tool', 'last_activity_kind'),
         )),
+        # Last prompt-cache event (agent/prompt_cache_clock.py), JSON; written with the token batch.
+        ('34 2026-11-15T12:00Z feat/prompt-cache-clock', (('+', 'prompt_cache_clock', 'transcript_revision'),)),
         ),
     ),
     "messages": _TableHistory(

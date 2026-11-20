@@ -145,7 +145,7 @@ def test_skill_manage_mutations_invalidate_warm_index(library, monkeypatch, acti
     support = target.parent / "references" / "example.md"
     support.parent.mkdir()
     support.write_text("Reference.")
-    monkeypatch.setattr(manager, "SKILLS_DIR", library)
+    monkeypatch.setattr(st, "SKILLS_DIR", library)  # skill_manager_tool resolves via skills_tool (17b953d8b7)
     monkeypatch.setattr(manager, "_apply_skill_write_gate", lambda *a, **kw: None)
     assert _lookup(library, "seed")[0] is None
     args = {

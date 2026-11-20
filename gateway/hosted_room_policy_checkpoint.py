@@ -83,6 +83,8 @@ _TRANSCRIPT_EVENTS_SQL = f"""WITH transcript_events(seq) AS (
           ON source.room_id=member.room_id
          AND source.event_id=json_extract(member.payload_json, '$.discussion_event_id')
          AND source.kind='message.user'
+         -- Same-thread sources only: a corrupted link must not import another thread's user (upstream 3430fa287f).
+         AND json_extract(source.payload_json, '$.thread_id')=:thread_id
         WHERE transcript.room_id=:room_id AND transcript.thread_id=:thread_id
           AND transcript.kind='message.member')
     SELECT {", ".join("events." + column for column in _ROOM_EVENT_COLUMNS.split(", "))}
@@ -124,6 +126,33 @@ def _settled_message(
     if event["kind"] != "message.member" or _text(event["payload"], "discussion_event_id") != discussion_event_id:
         return None
     return event
+
+
+def _settled_source_users(
+    conn: sqlite3.Connection, *, room_id: str, thread_id: str, events: Mapping[int, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Load canonical user sources required by retained non-pass settlements."""
+    source_ids = {
+        _text(event["payload"], "discussion_event_id")
+        for event in events.values()
+        if event["kind"] == "turn.settled" and not event["payload"].get("passed")
+    }
+    source_ids.difference_update(_text(event, "event_id") for event in events.values())
+    if not source_ids:
+        return []
+    sources = []
+    ids = sorted(source_ids)
+    for offset in range(0, len(ids), 500):
+        batch = ids[offset:offset + 500]
+        placeholders = ", ".join("?" for _ in batch)
+        rows = conn.execute(
+            f"SELECT {_ROOM_EVENT_COLUMNS} FROM hosted_room_events "
+            f"WHERE room_id=? AND kind='message.user' "
+            f"AND json_extract(payload_json, '$.thread_id')=? AND event_id IN ({placeholders})",
+            (room_id, thread_id, *batch),
+        ).fetchall()
+        sources.extend(_event_from_room_row(row) for row in rows)
+    return sources
 
 
 class HostedRoomPolicyCheckpoint:
@@ -206,6 +235,8 @@ class HostedRoomPolicyCheckpoint:
         events_by_seq = {
             int(event["seq"]): event
             for event in (*map(_event_from_room_row, rows), *(json.loads(row["event_json"]) for row in active_rows))}
+        for event in _settled_source_users(conn, room_id=room_id, thread_id=thread_id, events=events_by_seq):
+            events_by_seq[int(event["seq"])] = event
         return [events_by_seq[seq] for seq in sorted(events_by_seq)]
 
     # -- per-kind projection handlers (dispatched by _apply_event) -----------

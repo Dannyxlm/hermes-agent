@@ -50,7 +50,7 @@ The owner shares a passport, licence, health card or insurance policy to file. S
 @pytest.fixture
 def skills_env(tmp_path, monkeypatch):
     from agent import skill_utils
-    from tools import skill_ledger, skill_manager_tool, skill_usage
+    from tools import skill_ledger, skill_usage, skills_tool
 
     home = tmp_path / "home"
     skills_dir = home / "skills"
@@ -59,7 +59,7 @@ def skills_env(tmp_path, monkeypatch):
         (skills_dir / name / "SKILL.md").write_text(body, encoding="utf-8")
     monkeypatch.setattr(skill_ledger, "get_hermes_home", lambda: home)
     monkeypatch.setattr(skill_usage, "get_hermes_home", lambda: home)
-    monkeypatch.setattr(skill_manager_tool, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(skills_tool, "SKILLS_DIR", skills_dir)  # skill_manager_tool resolves via skills_tool (17b953d8b7)
     monkeypatch.setattr(skill_utils, "get_all_skills_dirs", lambda: [skills_dir])
     return skills_dir
 

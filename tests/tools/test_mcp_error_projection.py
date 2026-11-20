@@ -43,7 +43,7 @@ def call_mcp(monkeypatch):
     with patch.dict(mcp_tool._servers, {"srv": server}), \
          patch("tools.mcp_tool_loop._run_on_mcp_loop", side_effect=_run_on_loop), \
          patch.dict(mcp_tool._server_error_counts, {}, clear=True), \
-         patch.dict(mcp_tool._server_trust_levels, {}, clear=True), \
+         patch.dict(mcp_tool._server_trust_levels, {"srv": "full"}, clear=True), \
          patch.dict(mcp_tool._tool_read_only_hints, {}, clear=True):
         def call(wire):
             session.call_tool = AsyncMock(return_value=wire)

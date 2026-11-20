@@ -6,6 +6,7 @@ Nothing runs on the host unless TERMINAL_ENV=local; other backends run in their 
 
 import codecs
 from contextlib import suppress
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -25,7 +26,8 @@ _IS_WINDOWS = platform.system() == "Windows"
 # (not merely "not Windows") so macOS and other POSIX platforms never touch systemd.
 # See #70716.
 _IS_LINUX = platform.system() == "Linux"
-from tools.environments.local import _append_dropped_path_entries, _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env, _terminal_env
+from tools.environments.sandbox_scope import hosted_scope, producer_fields
+from tools.environments.local import _append_dropped_path_entries, _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env, _terminal_env, routed_terminal_base
 from hermes_cli._subprocess_compat import windows_hide_flags
 from typing import Any, Dict, List, Literal, NamedTuple, Optional
 
@@ -34,32 +36,36 @@ from tools.environments.host_stop_guard import guard_shell_command
 from tools.process_registry_notifications import (
     format_process_notification, heartbeat_output_tail, is_child_process_notification, should_surface_notification)
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
+from tools.process_registry_env_scope import ProcessEnvScopeMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
 from tools.process_registry_ownership import ProcessOwnershipMixin
 from tools.process_registry_termination import ProcessTerminationMixin
-from tools.process_registry_results import load_completed_results, save_completed_result, retain_completed_result
-from tools.process_registry_delivery import mark_completion_consumed
+from tools.process_registry_results import load_completed_results, retain_completed_result, save_completed_result
+from tools.process_registry_delivery import mark_completion_consumed as _persist_completion_consumed
 from tools.process_registry_activity import new_process_session
 from tools.process_registry_launch import ProcessLaunchMixin
 from tools.process_launches import fields as launch_fields
-from tools.process_registry_env_log import log_delta_command
+from tools.process_registry_env_log import fallback_exit_code, log_delta_command, parse_log_delta_reply
 from tools.process_registry_wsl import _is_wsl_launcher_command
+from tools.process_registry_wait import max_wait_timeout, process_deadline_floor
 
 logger = logging.getLogger(__name__)
 
-# Crash-recovery checkpoint (gateway only)
-CHECKPOINT_PATH = get_hermes_home() / "processes.json"
-_CHECKPOINT_PATH_AT_IMPORT = CHECKPOINT_PATH
+def mark_completion_consumed(registry, session) -> None:
+    if session.sandbox_key:
+        registry._completion_consumed.add(session.id)
+        session._notification_consumed = True
+    else:
+        _persist_completion_consumed(registry, session)
 
 
 def _checkpoint_path() -> Path:
-    """Active profile's checkpoint file at call time: the patched ``CHECKPOINT_PATH`` when a test
-    changed it, else live profile-scoped HERMES_HOME — the multiplexed gateway serves every
-    profile from one process, so the import-time constant would pin every profile's process
-    checkpoint to the launch home."""
-    return CHECKPOINT_PATH if CHECKPOINT_PATH != _CHECKPOINT_PATH_AT_IMPORT else get_hermes_home() / "processes.json"
+    """Active profile's crash-recovery checkpoint file, resolved per call: the multiplexed gateway
+    serves every profile from one process, so an import-time path would pin every profile's
+    process checkpoint to the launch home."""
+    return get_hermes_home() / "processes.json"
 
-from tools.process_registry_session import MAX_OUTPUT_CHARS as _MAX_OUTPUT_CHARS, ProcessSession
+from tools.process_registry_session import MAX_OUTPUT_CHARS as _MAX_OUTPUT_CHARS, ProcessSession as _ProcessSession
 MAX_OUTPUT_CHARS = _MAX_OUTPUT_CHARS
 # Tail of the output a completion notification carries. Right for a build log; a spawner whose
 # output IS the payload (a bot DM's reply) asks for more per process (completion_output_chars).
@@ -494,6 +500,19 @@ def _completion_output(session: "ProcessSession") -> dict:
     return {"output": _output_tail(session, limit), **({"output_cut": cut} if cut > 0 else {})}
 
 
+@dataclass
+class ProcessSession(_ProcessSession):
+    """Fork session data with the registry's hosted-sandbox and exit contract."""
+
+    sandbox_key: str = ""  # Empty for local activity; otherwise only that sandbox can see it.
+
+    def mark_exited(self, exit_code, reason: str = "exited", source: str = "") -> bool:
+        """Record the first observed exit; the caller holds the session lock."""
+        if self.exited:
+            return False
+        self.exited, self.exit_code, self.completion_reason = True, exit_code, reason
+        self.termination_source = source or self.termination_source
+        return True
 
 # Watcher routing fields, in event-dict key order (``watcher_<key>`` on the session).
 _WATCHER_ROUTE_KEYS = ("platform", "chat_id", "user_id", "user_name", "thread_id", "message_id")
@@ -520,7 +539,8 @@ _WSL_CHAIN_NOTE = (
 )
 
 
-class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, ProcessOwnershipMixin):
+class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin,
+                      ProcessOwnershipMixin, ProcessEnvScopeMixin):
     """In-memory registry of running and finished background processes.
     Thread-safe: accessed from executor threads (terminal_tool, process handlers),
     the gateway asyncio loop (watchers, reset checks) and the cleanup thread."""
@@ -640,7 +660,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
     def _emit_output(self, session: ProcessSession, chunk: str) -> None:
         """Forward a chunk to the live-output sink; called from reader threads, never raises."""
         sink = self.on_output
-        if sink is None or not chunk:
+        if sink is None or not chunk or session.sandbox_key:  # the UI sinks are local surfaces with no scope
             return
         with suppress(Exception):
             sink(session, chunk)
@@ -742,6 +762,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             "session_key": session.session_key,
             "task_id": session.task_id,
             "owner_task_id": session.owner_task_id,
+            **producer_fields(session.sandbox_key),
             "command": session.command, **launch_fields(session),
             **{key: getattr(session, f"watcher_{key}") for key in _WATCHER_ROUTE_KEYS},
         }
@@ -907,7 +928,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             and not self._is_host_pid_alive(session.pid))
 
     @staticmethod
-    def _config_value(section: str, key: str, fallback):
+    def _config_value(section: str, key: str):
         """``config.yaml`` value for ``section.key``, else the DEFAULT_CONFIG value.
         Raises if config is unreadable; callers wrap with their own hard fallback so
         registry code paths never crash on a broken config file."""
@@ -920,7 +941,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
     def _config_seconds(key: str, fallback: float) -> float:
         """``terminal.<key>`` as a non-negative float (0 disables); *fallback* if unreadable."""
         try:
-            return max(float(ProcessRegistry._config_value("terminal", key, fallback)), 0.0)
+            return max(float(ProcessRegistry._config_value("terminal", key)), 0.0)
         except Exception:
             return fallback
 
@@ -931,7 +952,20 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
 
     # ----- Spawn -----
 
-    _new_session = staticmethod(new_process_session)
+    @staticmethod
+    def _new_session(command, task_id, owner_task_id, session_key, cwd, **extra) -> ProcessSession:
+        from gateway.session_context import get_session_env
+        from tools.environments.sandbox_scope import current_sandbox_key
+
+        sandbox_key = current_sandbox_key()
+        if not sandbox_key:
+            return new_process_session(command, task_id, owner_task_id, session_key, cwd, **extra)
+        # Hosted sessions do not acquire local launch metadata or a host-state writer.
+        return ProcessSession(
+            id=f"proc_{uuid.uuid4().hex[:12]}", command=command, task_id=task_id,
+            owner_task_id=owner_task_id, session_key=session_key, cwd=cwd, sandbox_key=sandbox_key,
+            parent_session_id=get_session_env("HERMES_SESSION_ID", ""),
+            wsl_chain=_is_wsl_launcher_command(command), started_at=time.time(), **extra)
 
     @staticmethod
     def _env_temp_dir(env: Any) -> str:
@@ -964,6 +998,29 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 "%s background executor not isolated in a systemd scope "
                 "(systemd-run --user unavailable); worker shares the gateway cgroup.", label)
         return argv
+
+    @staticmethod
+    def _spawn_env(env_vars: dict) -> dict:
+        """Start from the served profile's sanitized environment and retain launch attribution."""
+        from agent.session_client_env import toolchain_environ
+        from tools.environments.local import _stamp_terminal_launcher
+
+        env = _terminal_env(_sanitize_subprocess_env(toolchain_environ(routed_terminal_base()), env_vars))
+        _stamp_terminal_launcher(env)
+        env["PYTHONUNBUFFERED"] = "1"
+        return env
+
+    def spawn_via_env(
+        self, env: Any, command: str, cwd: str | None = None, task_id: str = "", session_key: str = "",
+        timeout: int = 10, owner_task_id: str = "", persist_on_release: bool = False,
+    ) -> ProcessSession:
+        if hosted_scope() is None:
+            return super().spawn_via_env(env, command, cwd, task_id, session_key, timeout, owner_task_id,
+                                         persist_on_release)
+        # Reuse the fork's launcher without recording a hosted command in the local launch ledger.
+        session = self._new_session(command, task_id, owner_task_id, session_key, cwd, env_ref=env,
+                                    pid_scope="sandbox", persist_on_release=persist_on_release)
+        return self._spawn_env_reserved(session, env, command, cwd, timeout)
 
     def _track_started(self, session: ProcessSession, reader_target, reader_name: str, extra_args=()) -> None:
         """Register before the reader can publish completion, even for an exited child."""
@@ -1229,38 +1286,32 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             logger.warning("%s wait failed; recording known exit status: %s", label, e)
         self._finish_exited(session, exit_code())
 
-    _log_delta_command = staticmethod(log_delta_command)
 
     def _env_poller_loop(self, session: ProcessSession, env: Any, log_path: str, pid_path: str, exit_path: str):
-        """Background thread: poll a sandbox log file for non-local backends."""
+        """Background thread: poll a sandbox log file for non-local backends.
+
+        One ``execute()`` per tick: the read command also reports the process
+        status (see ``log_delta_command``). Sandboxes rate-limit exec starts."""
         q = shlex.quote
         # Byte offset already read from the log (bytes, not chars: the shell counts bytes).
         prev_output_bytes = 0
         while not session.exited:
             time.sleep(2)
             try:
-                # Read only the bytes written since the last poll.
-                raw = env.execute(self._log_delta_command(q(log_path), prev_output_bytes),
-                                  timeout=10).get("output", "")
-                header, _, delta = raw.partition("\n")
-                try:
-                    size_str, offset_str = header.split()
-                    new_size = int(size_str)
-                    used_offset = int(offset_str)
-                except ValueError:
-                    # No usable header (command failed, shell missing a tool): skip this
-                    # poll rather than act on a half-read value.
-                    new_size = None
-                    used_offset = None
-                    delta = ""
-                if new_size is not None:
-                    if used_offset < prev_output_bytes:
+                # Read only the bytes written since the last poll, plus the process status.
+                raw = env.execute(
+                    log_delta_command(q(log_path), prev_output_bytes, q(pid_path), q(exit_path)),
+                    timeout=10).get("output", "")
+                reply = parse_log_delta_reply(raw)
+                delta = reply.delta if reply else ""
+                if reply:
+                    if reply.offset < prev_output_bytes:
                         # Log rotated/truncated: what we hold no longer lines up. Restart.
                         with session._lock:
                             if session.exited:
                                 return
                             session.output_buffer = ""
-                    prev_output_bytes = new_size
+                    prev_output_bytes = reply.size
                 if delta:
                     # A kill that landed after this fetch already published its output
                     # snapshot: leave the output as the kill reported it (as the PTY reader does).
@@ -1273,16 +1324,9 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                     self._check_watch_patterns(session, delta)
                     self._emit_output(session, delta)
 
-                check = env.execute(
-                    f"kill -0 \"$(cat {q(pid_path)} 2>/dev/null)\" 2>/dev/null; echo $?", timeout=5)
-                check_output = check.get("output", "").strip()
-                if check_output and check_output.splitlines()[-1].strip() != "0":
-                    # Exited -- read the exit code captured by the wrapper shell.
-                    exit_str = env.execute(f"cat {q(exit_path)} 2>/dev/null", timeout=5).get("output", "").strip()
-                    try:
-                        exit_code = int(exit_str.splitlines()[-1].strip())
-                    except (ValueError, IndexError):
-                        exit_code = -1
+                # Unreadable reply: separate liveness and exit-code reads, as before the combined read.
+                exit_code = reply.exit_code if reply else fallback_exit_code(env, q(pid_path), q(exit_path))
+                if exit_code is not None:
                     self._finish_exited(session, exit_code)
                     return
             except Exception:
@@ -1355,13 +1399,13 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         self._check_watch_patterns(session, text)
         self._emit_output(session, text)
 
-    def _finish_exited(self, session: ProcessSession, exit_code, reason: str = "exited", source: str = "") -> None:
-        """Mark a reader-observed exit (a raced kill keeps its own code/reason) and finish.
-        Under the session lock, like kill_process's commit: otherwise the kill can land between
-        mark_exited's ``killed`` check and its writes, and the reader overwrites the kill."""
+    def _finish_exited(self, session: ProcessSession, exit_code, reason: str = "exited", source: str = "") -> bool:
+        """Mark an observed exit and finish; returns whether this call recorded the result. Under the
+        session lock (like kill_process's commit) so the check-and-write is atomic against other finishers."""
         with session._lock:
-            session.mark_exited(exit_code, reason, source)
+            recorded = session.mark_exited(exit_code, reason, source)
         self._move_to_finished(session)
+        return recorded
 
     def _move_to_finished(self, session: ProcessSession) -> bool:
         """Move a session from running to finished.
@@ -1399,10 +1443,15 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
 
     def _publish_finished(self, session: ProcessSession, was_running: bool) -> None:
         self._release_finished_handles(session)
-        self._write_checkpoint()
+        if not session.sandbox_key:
+            self._write_checkpoint()
         if was_running and session.notify_on_complete:
             from tools.process_registry_delivery import completion_event
-            self.completion_queue.put(completion_event(session))
+            event = completion_event(session)
+            event.update(producer_fields(session.sandbox_key))
+            if session.sandbox_key:
+                event.pop("_process_result_home", None)
+            self.completion_queue.put(event)
 
     @staticmethod
     def _exit_fields(session: ProcessSession) -> dict:
@@ -1457,7 +1506,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 and reader is not None and reader.is_alive())
 
     def is_completion_consumed(self, session_id: str) -> bool:
-        """Check if a completion notification was already consumed via wait/log."""
+        """True once wait/log/kill/acked poll consumed it; keyed by the full id, never a short prefix."""
         return session_id in self._completion_consumed
 
     def is_session_waiting(self, session_id: str) -> bool:
@@ -1581,13 +1630,16 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         """``delegation.surface_child_process_notifications``; False on any config
         error — never crash the drain loop."""
         try:
-            return bool(ProcessRegistry._config_value("delegation", "surface_child_process_notifications", False))
+            return bool(ProcessRegistry._config_value("delegation", "surface_child_process_notifications"))
         except Exception:
             return False
 
     @staticmethod
     def _owns_event(evt: dict, session_key: str, owns_event, is_async_delegation: bool) -> bool:
         """Routing verdict for one drained event (see drain_notifications); False = requeue."""
+        from tools.environments.sandbox_scope import event_visible
+        if not event_visible(evt):
+            return False  # another agent's: stays queued for it, whatever the session routing says
         home = evt.get("_process_result_home")
         if home and Path(home).resolve() != get_hermes_home().resolve():
             return False
@@ -1612,7 +1664,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         session's profile binding, and a once-per-process replay taken under a secondary's scope
         would leave the launch ledger unreplayed for the life of the process. Secondaries are
         replayed by the gateway's ``_restore_secondary_completion_ledgers``."""
-        if self._completions_restored:
+        if self._completions_restored or hosted_scope() is not None:  # hosted: not its ledger, and the setter refuses
             return 0
         self._completions_restored = True
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -1655,7 +1707,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 requeue.append(evt)
                 continue
             from tools.process_registry_delivery import legacy_notification_ready, legacy_notification_handoff
-            if not legacy_notification_ready(evt):
+            if not evt.get("sandbox_key") and not legacy_notification_ready(evt):
                 continue
             # Routing happened first so a foreign session cannot drop the owner's
             # event via its own consumed/observed state.
@@ -1674,7 +1726,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 if surface_child is None:
                     surface_child = self._surface_child_process_notifications()
                 if not should_surface_notification(evt, surface_child=surface_child):
-                    if evt.get("type") == "completion":
+                    if evt.get("type") == "completion" and not evt.get("sandbox_key"):
                         from tools.process_registry_delivery import settle_notification
                         settle_notification(evt, "terminal", reason="suppressed")
                     logger.debug(
@@ -1684,7 +1736,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                         evt.get("type", "completion"), _evt_sid, _evt_task_id)
                     continue
             if text := format_process_notification(evt):
-                if legacy_notification_handoff(evt):
+                if evt.get("sandbox_key") or legacy_notification_handoff(evt):
                     results.append((evt, text))
         for evt in requeue:
             self.completion_queue.put(evt)
@@ -1695,14 +1747,19 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
 
     def get(self, session_id: str) -> Optional[ProcessSession]:
         """Session by full ID or unique prefix (``proc_4dae`` / bare ``4dae``, like git
-        short hashes); ambiguous or too-short prefixes resolve to None, never a guess."""
+        short hashes); ambiguous or too-short prefixes resolve to None, never a guess.
+        Inside a hosted scope another agent's process is indistinguishable from a missing one."""
+        from tools.environments.sandbox_scope import sandbox_visible
         if not isinstance(session_id, str) or not session_id:
             return None
         with self._lock:
             session = self._running.get(session_id) or self._finished.get(session_id)
         if session is None:
             session = load_completed_results(session_id).get(session_id)
-        return self._refresh_detached_session(session if session is not None else self._resolve_prefix(session_id))
+        session = session if session is not None else self._resolve_prefix(session_id)
+        if session is not None and not sandbox_visible(session.sandbox_key):
+            return None
+        return self._refresh_detached_session(session)
 
     def _resolve_prefix(self, session_id: str) -> Optional[ProcessSession]:
         """Resolve a unique session-ID prefix (a bare hex tail is normalized to
@@ -1714,12 +1771,15 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             query = f"proc_{query}"
         if len(query) - len("proc_") < self._MIN_PREFIX_CHARS:
             return None
+        from tools.environments.sandbox_scope import sandbox_visible
         matches = load_completed_results(query)
         with self._lock:
             matches.update({
                 sid: s for store in (self._running, self._finished)
                 for sid, s in store.items() if sid.startswith(query)
             })
+        # Another agent's process neither matches nor makes a prefix ambiguous.
+        matches = {sid: s for sid, s in matches.items() if sandbox_visible(s.sandbox_key)}
         return next(iter(matches.values())) if len(matches) == 1 else None
 
     def _reconcile_local_exit(self, session: ProcessSession) -> None:
@@ -1791,10 +1851,8 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 logger.debug("Non-blocking drain failed for %s: %s", session.id, e)
         with session._lock:
             session.mark_exited(rc)
-        logger.info(
-            "Reconciled session %s: direct child exited with code %s but reader "
-            "was still blocked (orphaned pipe). Flipped to exited.",
-            session.id, rc)
+        logger.info("Reconciled session %s: direct child exited with code %s but reader was still blocked "
+                    "(orphaned pipe). Flipped to exited.", session.id, rc)
         self._move_to_finished(session)
 
     @staticmethod
@@ -1803,7 +1861,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         return {"session_id": session.id, "command": session.command,
                 "status": "exited" if session.exited else "running", **fields(session)}
 
-    def poll(self, session_id: str) -> dict:
+    def poll(self, session_id: str, acknowledge: bool = False) -> dict:
         """Check status and get new output for a background process."""
         session = self.get(session_id)
         if session is None or self._uncollected_gone(session):
@@ -1819,12 +1877,13 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
             "uptime_seconds": int(time.time() - session.started_at), "output_preview": output_preview}
         if exited:
             result.update(self._exit_fields(session))
-            # Read-only: record in _poll_observed (CLI inline dedup) but NOT in
-            # _completion_consumed, or a status check would suppress the watcher's
-            # autonomous delivery turn. See __init__. A preview taken before the reader's
-            # final drain is partial and must not suppress the full completion.
+            # Read-only unless acknowledged: _poll_observed is CLI inline dedup only; a plain status check must
+            # not suppress the watcher's autonomous turn (#10156), an acknowledged handled result must (#94455).
+            # A preview taken before the reader's final drain is partial and must not suppress the completion.
             if not finalizing:
-                self._poll_observed.add(session_id)
+                self._poll_observed.add(session.id)
+                if acknowledge:
+                    mark_completion_consumed(self, session)
         if session.detached and not session.output_log:
             result.update(detached=True, note="Process recovered after restart -- output history unavailable")
         return result
@@ -1866,10 +1925,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         with status exited|timeout|interrupted|not_found|error and an output snapshot."""
         from tools.interrupt import consume_yield as _consume_yield, is_interrupted as _is_interrupted
 
-        try:
-            max_timeout = int(os.getenv("TERMINAL_TIMEOUT", "180"))
-        except (ValueError, TypeError):
-            max_timeout = 180
+        max_timeout = max_wait_timeout()
         # The schema says minimum=1 but not every caller enforces it; timeout=0 is
         # falsy and would silently fall through to the default wait.
         if timeout is not None and timeout <= 0:
@@ -1971,7 +2027,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         with session._lock:
             session._launch_pending_kills += 1
         try:
-            early = self._signal_kill(session, session_id, consume_output)
+            early = self._signal_kill(session, consume_output)
             if early is not None:
                 return early
             # Additive to the PID kill: stopping the scope reaps double-forked
@@ -2046,7 +2102,7 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
                 from tools.process_launches import finish_process_launch
                 finish_process_launch(session)
 
-    def _signal_kill(self, session: ProcessSession, session_id: str, consume_output: bool) -> Optional[dict]:
+    def _signal_kill(self, session: ProcessSession, consume_output: bool) -> Optional[dict]:
         """Deliver the kill via PTY, local Popen tree, sandbox exec or recovered host
         PID. Returns a final result dict when the kill cannot proceed (recycled/dead
         recovered PID, or no runtime handle), else None."""
@@ -2187,9 +2243,10 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         with self._lock:
             sessions.update(self._finished)
             sessions.update(self._running)
+        from tools.environments.sandbox_scope import sandbox_visible
         all_sessions = [
             refreshed for refreshed in (
-                self._refresh_detached_session(s) for s in sessions.values()
+                self._refresh_detached_session(s) for s in sessions.values() if sandbox_visible(s.sandbox_key)
             ) if refreshed is not None and not self._uncollected_gone(refreshed)
         ]
         if task_id or session_key:
@@ -2335,11 +2392,14 @@ class ProcessRegistry(ProcessLaunchMixin, ProcessTerminationMixin, ProcessCheckp
         session end / compression / error recovery (#41225). An explicit operator stop
         (``process.kill`` via process_manage, CLI /stop) passes its own source and still
         reaches them, so the user can always stop a persisted process on purpose."""
+        from tools.environments.sandbox_scope import sandbox_visible
         lifecycle = source in self._LIFECYCLE_KILL_SOURCES
+        # A sweep reaches only the current activity's own processes; a hosted agent's run in its
+        # sandbox and end with it (its kill would go through that agent's scope anyway).
         with self._lock:
             targets = [
                 s for s in (*self._running.values(), *self._finished.values())
-                if (task_id is None or s.owner_task_id == task_id)
+                if (task_id is None or s.owner_task_id == task_id) and sandbox_visible(s.sandbox_key)
                 and s.id not in exclude_ids and (not s.exited or s._scope_stop_pending)
                 and not (lifecycle and s.persist_on_release)
             ]
@@ -2425,6 +2485,7 @@ PROCESS_SCHEMA = {
                 "type": "integer",
                 "description": "Log line offset (default: last 200)."
             },
+            "acknowledge": {"type": "boolean", "description": "'poll' on an exited process: you handled its result, so skip its notify_on_complete turn."},
             "limit": {
                 "type": "integer",
                 "description": "Max log lines.",
@@ -2476,21 +2537,17 @@ def _redact_process_result(result: dict) -> dict:
 def _list_processes(task_id) -> dict:
     # Also surface session-scoped background processes (e.g. a forgotten preview
     # server): they share the gateway session_key and can block session reset.
-    session_key = ""
-    with suppress(Exception):
-        # See #29177.
-        from tools.approval_context import get_current_session_key
-        session_key = get_current_session_key(default="") or ""
+    from tools.process_registry_access import caller_session_key
     return {"processes": [
         _redact_process_result(p)
         for p in process_registry.list_sessions(
-            task_id=task_id, session_key=session_key or None, include_retained=True)]}
+            task_id=task_id, session_key=caller_session_key() or None, include_retained=True)]}
 
 
 # action -> (handler(session_id, args) -> dict, redact output?). Output-bearing
 # actions are redacted; stdin actions return only status.
 _SESSION_ACTIONS = {
-    "poll": (lambda sid, a: process_registry.poll(sid), True),
+    "poll": (lambda sid, a: process_registry.poll(sid, acknowledge=a.get("acknowledge") is True), True),
     "log": (lambda sid, a: process_registry.read_log(sid, offset=a.get("offset"), limit=a.get("limit", 200)), True),
     "wait": (lambda sid, a: process_registry.wait(sid, timeout=a.get("timeout")), True),
     "kill": (lambda sid, a: process_registry.kill_process(sid), True),
@@ -2498,47 +2555,6 @@ _SESSION_ACTIONS = {
     "submit": (lambda sid, a: process_registry.submit_stdin(sid, str(a.get("data", ""))), False),
     "close": (lambda sid, a: process_registry.close_stdin(sid), False),
 }
-
-
-def _handoff_process(session_id: str, args: dict, task_id: Optional[str]) -> dict:
-    """Subagent-only: transfer a running background process to the parent agent so its completion is delivered THERE
-    (child-owned process notices are suppressed and child teardown kills what it owns). Validated against the live spawn
-    tree: the caller must be a registered child and must own the process; anything else is an error, never a silent
-    no-op, so a PID mentioned in prose can't masquerade as a transfer."""
-    from tools.delegate_tool_registry import _active_subagents, _active_subagents_lock
-    from tools.terminal_tool import _resolve_container_task_id
-    with _active_subagents_lock:
-        record = _active_subagents.get(str(task_id or ""))
-    child = record.get("agent") if record else None
-    parent_ref = getattr(child, "_delegate_parent_ref", None)
-    parent = parent_ref() if callable(parent_ref) else None
-    if parent is None:
-        return {"error": "handoff is only available to a running subagent with a live parent; you are not one."}
-    parent_owner = str(getattr(parent, "_current_task_id", "") or getattr(parent, "session_id", "") or "")
-    if not parent_owner:
-        return {"error": "parent has no process owner id yet; retry after the parent's turn has started."}
-    handed = getattr(child, "_handed_off_processes", None)
-    if handed is None:
-        handed = child._handed_off_processes = []
-    if len(handed) >= _MAX_HANDOFFS_PER_CHILD:
-        return {"error": f"handoff cap reached ({_MAX_HANDOFFS_PER_CHILD} per subagent); wait on or kill the rest yourself."}
-    note = str(args.get("data") or "").strip()
-    if not note:
-        return {"error": "handoff requires `data`: one sentence saying what the process is for and what the parent should do with its result."}
-    session = process_registry.transfer_ownership(
-        session_id, from_owner=str(task_id or ""), to_owner=parent_owner,
-        to_task_id=_resolve_container_task_id(parent_owner),
-        to_session_key=str(getattr(parent, "session_id", "") or ""), note=note)
-    if session is None:
-        return {"error": f"cannot hand off {session_id}: not a running process you own (already exited? read its result "
-                         "with poll/log and report it instead)."}
-    handed.append({"session_id": session.id, "command": session.command, "note": note})
-    return {"status": "handed_off", "session_id": session.id, "command": session.command,
-            "note": "Your parent now owns this process and will receive its completion; you will not. Mention the handoff "
-                    "in your final answer."}
-
-
-_MAX_HANDOFFS_PER_CHILD = 3
 
 
 def _handle_process(args, **kw):
@@ -2550,10 +2566,15 @@ def _handle_process(args, **kw):
     if action == "handoff":
         if not session_id:
             return tool_error("session_id is required for handoff")
-        return json.dumps(_handoff_process(session_id, args, kw.get("task_id")), ensure_ascii=False)
+        from tools.process_registry_handoff import handoff_process
+        return json.dumps(handoff_process(session_id, args, kw.get("task_id")), ensure_ascii=False)
     if action in _SESSION_ACTIONS:
         if not session_id:
             return tool_error(f"session_id is required for {action}")
+        from tools.process_registry_access import resolve_actionable
+        allowed, session_id = resolve_actionable(session_id, kw.get("task_id"))
+        if not allowed:
+            return json.dumps(_not_found(session_id), ensure_ascii=False)
         handler, redact = _SESSION_ACTIONS[action]
         from tools.process_registry_wait_policy import apply_wait_poll_policy
         result = apply_wait_poll_policy(action, session_id, handler(session_id, args))
@@ -2567,4 +2588,5 @@ registry.register(
     schema=PROCESS_SCHEMA,
     handler=_handle_process,
     emoji="⚙️",
+    deadline_floor=process_deadline_floor,
 )

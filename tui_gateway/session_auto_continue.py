@@ -104,6 +104,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
                 session["_auto_continue_scheduled"] = False  # a real user prompt beat us; it clears the marker
                 return
             session["running"] = True
+            session["_notif_turn_claim"] = claim = object()  # the exception release below frees only this claim
             session["last_active"] = time.time()
         # Ownership admission BEFORE message.start: a sibling backend sharing this HERMES_HOME may have written the
         # marker and still be mid-turn. Leave the marker so a later resume retries.
@@ -131,7 +132,7 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
                     **({"display_metadata": {"notification_category": "diagnostic"}} if diagnostic else {}))
         except Exception as exc:
             _notif_log_failure("auto-continue dispatch failed", exc)
-            _notif_release_turn(session)  # rebound from session_notifications
+            _notif_release_claim(session, claim)
     descriptor = {"attempt": attempt, "interrupted_at": marker["started_at"]}
 
     def start():
@@ -627,6 +628,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         _dispose_local_queue(session, [queued], "dispatched")
         _ac_set_queue(session, session.get("queued_prompts") or [])
         session["running"] = True
+        session["_notif_turn_claim"] = claim = object()  # the exception release below frees only this claim
         queued_transport = queued.get("transport")
         # The queuer's transport is pinned so the drained turn reaches the client that sent it — but
         # ATTACHED, not rebound: a mid-turn prompt from a second client used to silence the first for the
@@ -687,7 +689,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             # A failed acknowledgement is not proof no turn started. Its exact
             # callback or explicit Stop owns release; never dispatch a follower here.
             return True
-        _notif_release_turn(session)
+        _notif_release_claim(session, claim)
         dispatch_failed = True
     if dispatch_failed:
         with session["history_lock"]:

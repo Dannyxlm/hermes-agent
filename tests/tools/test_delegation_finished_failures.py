@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import tools.delegate_tool as delegate
+import tools.delegate_tool_child_run as child_run
 from tools import async_delegation as ad
 from tools.delegate_tool_dispatch import _Batch, _execute_and_aggregate
 from tools.process_registry import process_registry
@@ -38,8 +39,8 @@ class Child:
 @pytest.mark.parametrize("status,count", [("failed", 1), ("failed", 2), ("interrupted", 1), ("timeout", 1)])
 def test_returned_failure_keeps_transcript_trim_and_public_fields(monkeypatch, status, count):
     ad._reset_for_tests()
-    monkeypatch.setattr(delegate, "_get_child_timeout", lambda: None)
-    monkeypatch.setattr(delegate, "_get_worktree_isolation", lambda: False)
+    monkeypatch.setattr(child_run, "_get_child_timeout", lambda: None)  # reader binds it (43dc9a0a28)
+    monkeypatch.setattr(child_run, "_get_worktree_isolation", lambda: False)
     offered = queue.Queue()
     monkeypatch.setattr(process_registry, "completion_queue", offered)
     partial = "partial finding. " * 3600

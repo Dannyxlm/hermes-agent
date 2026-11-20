@@ -24,7 +24,8 @@ def test_constructing_delegate_cannot_clear_workers_and_releases_fence(client, w
             raise build_error
         return [], build_error
 
-    monkeypatch.setattr(delegate, '_resolve_delegation_credentials', lambda *a: {})
+    from tools import delegate_tool_routes  # the reader binds it (43dc9a0a28)
+    monkeypatch.setattr(delegate_tool_routes, '_resolve_delegation_credentials', lambda *a: {})
     monkeypatch.setattr(delegate, '_build_children', constructing)
     monkeypatch.setattr(delegate, '_run_batch', lambda *a: '{}')
     if isinstance(build_error, Exception):

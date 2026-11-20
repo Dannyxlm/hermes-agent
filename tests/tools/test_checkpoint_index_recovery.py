@@ -14,7 +14,7 @@ def project(tmp_path, monkeypatch):
     workdir = tmp_path / "project"
     workdir.mkdir()
     (workdir / "notes.md").write_text("before\n", encoding="utf-8")
-    monkeypatch.setattr(cm, "CHECKPOINT_BASE", tmp_path / "checkpoints")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # base = HERMES_HOME/checkpoints (b3f468205e)
     monkeypatch.setattr(cm, "selected_git_env", lambda base=None: dict(base or os.environ))
     return workdir
 

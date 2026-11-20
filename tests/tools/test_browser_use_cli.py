@@ -120,11 +120,12 @@ class TestSubprocessEnvironment:
         assert "/bin" in parts
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX PATH-floor semantics")
-    def test_floor_preserves_existing_entries_and_order(self):
+    def test_floor_preserves_existing_entries_and_order(self, monkeypatch):
         """The floor only adds dirs — never drops or reorders what the
         caller's environment already had."""
         original = "/opt/toolchain/bin:/usr/bin:/snap/bin"
-        merged = bu_cli._floor_subprocess_path(original).split(os.pathsep)
+        monkeypatch.setattr(bs, "build_browser_env", lambda: {"PATH": original})
+        merged = bu_cli._base_subprocess_env()["PATH"].split(os.pathsep)
 
         assert set(original.split(os.pathsep)) <= set(merged)
         positions = [merged.index(p) for p in original.split(os.pathsep)]
@@ -871,6 +872,23 @@ class TestIdleLaneReaping:
 
     def test_runtime_dir_none_for_isolated_single_daemon_dir(self, tmp_path):
         assert bu_cli._harness_runtime_dir({"BH_RUNTIME_DIR": str(tmp_path)}) is None
+
+    @pytest.mark.platforms("posix")
+    def test_marker_write_never_follows_a_planted_symlink(self, tmp_path, monkeypatch):
+        """A planted link at the tab-ledger path must not create its target.
+
+        The old shared-temp own-tab marker is gone (v0.23.2's per-lane tab ledger replaced the
+        preamble); the no-follow write now lives in the ledger prelude's opener."""
+        victim = tmp_path / "victim"
+        ledger = tmp_path / "bu-lane-tabs"
+        ledger.symlink_to(victim)  # windows-footgun: ok — posix-only
+        monkeypatch.setenv(bu_cli._TABS_FILE_ENV, str(ledger))
+        ns = {"cdp": lambda *a, **k: {"targetInfos": []}, "new_tab": lambda url="about:blank": "T-new"}
+
+        exec(bu_cli._TAB_LEDGER_PRELUDE, ns)
+        assert ns["new_tab"]() == "T-new"
+
+        assert not victim.exists()
 
 
 class TestProviderPickerIntegration:

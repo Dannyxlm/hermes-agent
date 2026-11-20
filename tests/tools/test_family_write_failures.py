@@ -23,7 +23,7 @@ def test_process_spawn_survives_unavailable_metadata(tmp_path, monkeypatch):
     from tools import process_registry as pr
     import hermes_state_launch_context
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    monkeypatch.setattr(pr, 'CHECKPOINT_PATH', tmp_path / 'processes.json')
+    monkeypatch.setattr(pr, '_checkpoint_path', lambda: tmp_path / 'processes.json')
     monkeypatch.setattr(hermes_state_launch_context, 'launch_writer', unavailable_writer)
     registry = pr.ProcessRegistry()
     started = []
@@ -53,13 +53,14 @@ def test_process_recording_happens_after_spawn(tmp_path, monkeypatch):
 @pytest.mark.parametrize('failure_at', ['reserve', 'finish'])
 def test_delegate_keeps_success_and_complete_event(tmp_path, monkeypatch, failure_at):
     from run_agent import AIAgent
-    from tools import delegate_tool as dt, delegate_tool_config as cfg
+    from tools import delegate_tool as dt, delegate_tool_child_run as child_run, delegate_tool_config as cfg
+    from tools import delegate_tool_routes as routes
     import hermes_state_launches
     monkeypatch.setenv('HERMES_SINGLE_QUERY_SESSION', '1')
-    monkeypatch.setattr(dt, '_load_config', dict)
+    # Patch where each is read: delegate_tool no longer re-exports config helpers (43dc9a0a28).
     monkeypatch.setattr(cfg, '_load_config', dict)
-    monkeypatch.setattr(dt, '_get_worktree_isolation', lambda: False)
-    monkeypatch.setattr(dt, '_resolve_delegation_credentials', lambda *a, **kw: dict(
+    monkeypatch.setattr(child_run, '_get_worktree_isolation', lambda: False)
+    monkeypatch.setattr(routes, '_resolve_delegation_credentials', lambda *a, **kw: dict(
         model='fixture', provider='openrouter', base_url='https://openrouter.ai/api/v1',
         api_key='fixture', api_mode='chat_completions', command=None, args=None))
     events, ran = [], []

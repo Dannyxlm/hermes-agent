@@ -11,6 +11,7 @@ import time
 from typing import Mapping
 
 from agent import account_usage as usage
+from agent.account_usage_nous import _is_finite_num  # moved out of account_usage upstream (b2c6bc4e1e)
 from agent.account_router.types import AccountMeter, MeterWindow
 from hermes_cli.auth_constants import _decode_jwt_claims
 
@@ -35,7 +36,7 @@ def _epoch(value) -> float | None:
 
 def _percent(value) -> float | None:
     # JSON strings are not usage numbers; header strings are decoded separately.
-    if not usage._is_finite_num(value) or value < 0:
+    if not _is_finite_num(value) or value < 0:
         return None
     return min(100.0, float(value))
 

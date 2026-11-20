@@ -953,8 +953,11 @@ async def _token_auth_seam(request: Request, call_next):
 
     A registered token route is owned here — authenticate, attach the principal
     + ``token_authenticated`` so downstream gates skip enforcement. Non-token
-    routes pass through untouched.
+    routes pass through untouched. ``/api/peer/`` is owned by the peer-pass check instead.
     """
+    from hermes_cli.dashboard_auth.peer_pass import is_peer_path, peer_pass_middleware
+    if is_peer_path(request.url.path):  # only a peer pass opens it; nothing else is tried
+        return await peer_pass_middleware(request, call_next)
     from tui_gateway.mobile_widget_http import SNAPSHOT_PATH, widget_snapshot_response
     # This exact capability response terminates the middleware chain; retain the
     # dashboard's Host gate even though no general authentication is granted.
@@ -1039,7 +1042,10 @@ async def _dashboard_health_middleware(request: Request, call_next):
     except Exception as exc:
         DASHBOARD_HEALTH.record_error(type(exc).__name__, request.url.path)
         raise
-    if response.status_code >= 500:
+    # /api/peer answers carry the gateway api_server's status (asleep, restarting, its own errors),
+    # which the gateway component reports; they say nothing about this process.
+    from hermes_cli.dashboard_auth.peer_pass import is_peer_path
+    if response.status_code >= 500 and not is_peer_path(request.url.path):
         DASHBOARD_HEALTH.record_error(f"http_{response.status_code}", request.url.path)
     return response
 
@@ -1164,12 +1170,6 @@ def get_install_id() -> Optional[str]:
     return _shared_get_install_id(cache=_INSTALL_ID_CACHE)
 
 
-# Serializes config.yaml read-modify-write cycles for handlers on worker threads
-# (asyncio.to_thread): config.py's _CONFIG_LOCK covers each load/save call, not
-# the span between them, so two off-loop updates could drop each other's writes.
-# RLock so nested helpers that also take it can't self-deadlock.
-_CONFIG_MUTATION_LOCK = threading.RLock()
-
 # A finished ``gateway-restart`` child does not mean the gateway is back (it
 # exits once the restart is handed off), so in-flight reuse stops coalescing
 # exactly when a stale frontend re-fires every few seconds (#89034: 77 restarts,
@@ -1286,6 +1286,7 @@ from hermes_cli.web_routers import (
     cron as _cron_routes,
     mcp as _mcp_routes,
     ops as _ops_routes,
+    transfer as _transfer_routes,
     skills as _skills_routes,
     tools as _tools_routes,
     analytics as _analytics_routes,
@@ -1301,6 +1302,7 @@ from hermes_cli.web_routers import (
     gateway_connections as _gateway_connections_routes,
     gateway_connections_reach as _gateway_connections_reach_routes,
     webapp_relay_proxy as _webapp_relay_proxy_routes,
+    peer as _peer_routes,
 )
 
 import hermes_cli.web_routers.desktop_plugins as _desktop_plugin_routes
@@ -1334,6 +1336,7 @@ app.include_router(_status_routes.logs_router)
 app.include_router(_cron_routes.router)
 app.include_router(_mcp_routes.router)
 app.include_router(_ops_routes.router)
+app.include_router(_transfer_routes.router)
 app.include_router(_skills_routes.hub_router)
 app.include_router(_profiles_routes.router)
 app.include_router(_skills_routes.router)
@@ -1345,6 +1348,7 @@ app.include_router(_dashboard_ui_routes.router)
 app.include_router(_webapp_routes.router)
 # The saved-connections proxy checks its surface per request (WebSocket routes take no Request).
 app.include_router(_webapp_relay_proxy_routes.router)
+app.include_router(_peer_routes.router)
 app.include_router(_shared_metrics_routes.router)
 app.include_router(_media_uploads_routes.router)
 app.include_router(_delegation_routes.router)
@@ -1970,6 +1974,9 @@ def _start_server_runtime(
     # The SPA bootstrap reads this so profile-less deep links (/chat?resume=<id>) inherit the
     # launcher's preselected profile instead of silently running in the launch scope (#73085).
     app.state.initial_profile = str(initial_profile or "")
+    # Before multi-profile activation can mirror a turn's profile into HERMES_HOME.
+    from hermes_cli.isolated_scope import record_launch_scope
+    record_launch_scope(isolated=isolated, desktop_owned=is_desktop_owned_backend())
 
     config, server = _build_uvicorn_server(host, port, ssh_isolated=bool(ssh_session_token))
 
