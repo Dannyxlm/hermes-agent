@@ -1,11 +1,11 @@
 """A Bot Chat reply that needs the user alerts their phone; every other reply only marks it unread.
 
-Replies a viewer's own turn produces already reach the phone through the turn's push projection
-(``tui_gateway/methods_mobile_push.py``). Turns the gateway runs for a producer (a scheduled
-job's report, a teammate's DM, a background completion) have no such projection, so the phone
-only sees them as new messages. A producer turn's reply that opens with ``NEEDS_YOU`` is the one
-exception: it records one completed run on the Bot Chat's canonical push scope, which alerts every
-device holding that chat's alert lease, under the device's own preview and category choices.
+Replies to a viewer's own prompt already reach the phone through the turn's push projection
+(``tui_gateway/methods_mobile_push.py``). Turns the gateway runs for a producer (a scheduled job's
+report, a teammate's DM, a background completion) have no such projection, so the phone only sees
+them as new messages. A producer turn's final reply that opens with ``NEEDS_YOU`` is the one
+exception: it records one completed run on the Bot Chat's canonical push scope, alerting as
+*attention* every device holding that chat's alert lease, under the device's own preview choice.
 """
 from __future__ import annotations
 
@@ -30,14 +30,24 @@ def needs_you_body(content) -> str | None:
     return text[len(NEEDS_YOU):].strip()
 
 
-def _canonical_root(db, chat_id) -> str | None:
-    """The canonical Bot Chat root when ``chat_id`` is that chat (its root or a compression tip)."""
+def _canonical_root(db, session_id) -> str | None:
+    """The canonical Bot Chat's root when ``session_id`` is that chat's current tip.
+
+    The identity the mobile roster and push scope use (``methods_mobile._mobile_canonical_identity``):
+    one titled, unarchived root whose compression chain ends at an unarchived tip. A reset, branched
+    or retitled session is not Home, and an ambiguous title is no one's."""
     from hermes_state import SessionDB
-    row = db.get_session_by_title(SessionDB.CANONICAL_BOT_CHAT_TITLE)
-    if not row or row.get("archived"):
+    with db._lock:
+        rows = db._conn.execute("SELECT id FROM sessions WHERE title = ? LIMIT 2",
+                                (SessionDB.CANONICAL_BOT_CHAT_TITLE,)).fetchall()
+    if len(rows) != 1:
         return None
-    chain = db.get_compression_chain(row["id"]) or [row["id"]]
-    return row["id"] if chat_id in chain else None
+    root = db.get_session(rows[0][0])
+    chain = (db.get_compression_chain(root["id"]) or [root["id"]]) if root and not root.get("archived") else None
+    if not chain or chain[0] != root["id"] or chain[-1] != session_id:
+        return None
+    tip = db.get_session(session_id)
+    return root["id"] if tip and not tip.get("archived") else None
 
 
 def _profile(home: Path):
@@ -56,10 +66,12 @@ def push_service():
     return mobile_push.service_for_home(gateway.run._hermes_home)
 
 
-def record_needs_you(db, chat_id, body) -> bool:
-    """Record the alert run for ``chat_id``'s reply; False when nothing was recorded."""
+def record_needs_you(authority, ref, body) -> bool:
+    """Record the alert run for the reply the turn on ``ref`` gave; False when nothing was recorded."""
     from tui_gateway.mobile_push_payloads import AlertPreview, Scope, agent_name
-    root = _canonical_root(db, chat_id)
+    db = authority.db
+    # The physical session the turn ended in: its compression tip, after any mid-turn compression.
+    root = _canonical_root(db, authority.physical_target(ref))
     if root is None:
         return False
     service = push_service()
@@ -71,15 +83,15 @@ def record_needs_you(db, chat_id, body) -> bool:
     preview = AlertPreview(title=title, reply=body)
     scope = Scope("native", profile.name, root)
     run = service.start_run(scope, preview=preview)
-    return service.record(scope, run["run_id"], "needs-you", "complete", preview=preview)
+    return service.record(scope, run["run_id"], "needs-you", "complete", preview=preview, category="attention")
 
 
-async def notify_if_needed(authority, chat_id, content) -> None:
-    """Best effort: a failed projection never fails the reply's delivery."""
+async def notify_if_needed(authority, ref, content) -> None:
+    """Best effort, for a producer turn's final reply: a failed projection never fails the turn."""
     body = needs_you_body(content)
-    if body is None or authority is None or getattr(authority, "db", None) is None:
+    if body is None or getattr(authority, "db", None) is None:
         return
     try:
-        await asyncio.to_thread(record_needs_you, authority.db, chat_id, body)
+        await asyncio.to_thread(record_needs_you, authority, ref, body)
     except Exception as error:  # health: allow BLE001 -- projection only; exception text can carry private paths
         logger.warning("Bot Chat needs-you alert unavailable (%s)", type(error).__name__)
