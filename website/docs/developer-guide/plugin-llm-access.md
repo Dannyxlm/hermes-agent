@@ -224,6 +224,7 @@ result = ctx.llm.complete(
     profile=None,          # optional, gated — explicit auth-profile name
     purpose="optional-audit-string",
     task=None,             # optional — a plugin-registered auxiliary slot
+    fallback=True,         # False: never retry on another provider (see below)
 )
 # → PluginLlmCompleteResult(text, provider, model, agent_id, usage, audit)
 ```
@@ -262,6 +263,7 @@ result = ctx.llm.complete_structured(
     profile=None,
     purpose=None,
     task=None,             # optional — a plugin-registered auxiliary slot
+    fallback=True,
 )
 # → PluginLlmStructuredResult(text, provider, model, agent_id,
 #                             usage, parsed, content_type, audit)
@@ -277,6 +279,30 @@ against your schema if `jsonschema` is installed.
   object that matches your schema.
 * `result.content_type == "text"` — parsing or validation failed;
   inspect `result.text` for the raw model response.
+
+### Pinning the route: `fallback=False`
+
+By default a failed request (timeout, rate limit, 5xx, out of credit) is
+retried down the fallback ladder: the task's `fallback_chain`, then the
+main agent's model, then discovery. Each of those sends the same
+messages to another provider. Pass `fallback=False` when the prompt may
+only go to the route it resolved to, for example text the operator
+approved for one provider:
+
+```python
+result = ctx.llm.complete(messages=[...], task="classifier", fallback=False)
+```
+
+The call then succeeds on its resolved provider and model or raises
+that route's own error. Recovery that stays on the route still runs: a
+parameter repair, a credential refresh, a credential-pool rotation, the
+one same-credential retry after a rate limit, and same-provider retries
+for transient errors. Any step that would change the provider, the
+model or the endpoint is not sent. A route whose client can't be built
+(no credentials) raises `AuxiliaryClientUnavailable` without trying the
+task's `fallback_chain`. `fallback=False` only narrows routing, so it
+needs no trust grant. `call_llm()` and `async_call_llm()` take the same
+argument.
 
 ### Async
 
@@ -504,7 +530,7 @@ config block, a plugin can:
   and model,
 * set request-shaping arguments (`temperature`, `max_tokens`,
   `timeout`, `system_prompt`, `purpose`, `messages`, `instructions`,
-  `input`, `json_schema`),
+  `input`, `json_schema`, `fallback`),
 
 …and that's it. `provider=`, `model=`, `agent_id=`, and `profile=`
 arguments raise `PluginLlmTrustError` until the operator opts in.
