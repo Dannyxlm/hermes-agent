@@ -175,3 +175,34 @@ def test_an_explicit_category_overrides_the_status_and_is_validated(tmp_path):
             service.record(scope, service.start_run(scope)['run_id'], 'e2', 'complete', category='loud')
     finally:
         service.close()
+
+
+def test_bot_mode_protocol_version_bumped_for_needs_you_rule():
+    from tools import bot_mode_probe
+    assert bot_mode_probe._BOT_MODE_PROTOCOL_VERSION >= 4
+
+
+@pytest.mark.asyncio
+async def test_all_chats_policy_receives_needs_you_without_explicit_home_lease(tmp_path, monkeypatch):
+    """A device on the 'all' alert policy materialises its Home lease via listed=True."""
+    home = await _home(tmp_path, monkeypatch)
+    try:
+        # Replace the explicit Home lease with an installation-level 'all' alert policy.
+        home.service._store._conn.execute("DELETE FROM alert_subscriptions")
+        home.service._store._conn.commit()
+        home.service.set_alert_policy(
+            'principal',
+            installation_id=str(uuid.uuid4()),
+            connection_id=str(uuid.uuid4()),
+            token='cc' * 32,
+            environment='production',
+            mode='all',
+            categories=['attention'],
+            preview_enabled=True,
+        )
+        jobs = await _producer_turn(home, '[NEEDS YOU] Urgent approval waiting.')
+        assert len(jobs) == 1
+        assert jobs[0]['payload']['aps']['alert']['body'] == 'Urgent approval waiting.'
+    finally:
+        home.service.close()
+        home.db.close()

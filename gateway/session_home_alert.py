@@ -82,7 +82,7 @@ def record_needs_you(authority, ref, body) -> bool:
     title = profile.bot_title or profile.display_name or agent_name(profile.name)
     preview = AlertPreview(title=title, reply=body)
     scope = Scope("native", profile.name, root)
-    run = service.start_run(scope, preview=preview)
+    run = service.start_run(scope, preview=preview, listed=True)
     return service.record(scope, run["run_id"], "needs-you", "complete", preview=preview, category="attention")
 
 
