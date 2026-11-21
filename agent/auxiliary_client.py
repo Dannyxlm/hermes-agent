@@ -7939,15 +7939,35 @@ def _plan_aux_call(
         raise TypeError(f"fallback must be a bool, got {type(fallback).__name__}")
     main_runtime = _normalize_main_runtime(main_runtime)
     if fallback is False:
-        # A pinned call must name its route. The auto route walks the main provider, the
-        # task/top-level fallback chains and discovery, and a pool-rotation rebuild of "auto"
-        # can resolve to another backend, so none of it can honor the pin: fail closed.
+        # A pinned call must name a concrete route. The auto route walks the main provider, the
+        # task/top-level fallback chains and discovery; bare "custom" (or "main" when
+        # model.provider is unset/auto) without a configured custom endpoint falls through to
+        # the API-key registry discovery walk; and a pool-rotation rebuild of "auto" can resolve
+        # to another backend. Fail closed before any request can be sent.
         pinned_provider, _m, pinned_base_url, _k, _a = _resolve_task_provider_model(
             task, provider, model, base_url, api_key)
-        if not pinned_base_url and (pinned_provider or "").strip().lower() in {"", "auto"}:
+        raw_pinned = (pinned_provider or "").strip().lower()
+        if not pinned_base_url and raw_pinned in {"", "auto"}:
             raise AuxiliaryClientUnavailable(
                 f"fallback=False requires an explicit provider for task={task or 'call'}; "
                 "set auxiliary.<task>.provider (or pass provider=/base_url=)")
+        if not pinned_base_url and _normalize_aux_provider(pinned_provider) == "custom":
+            _main_has_custom = bool(
+                main_runtime
+                and str(main_runtime.get("base_url") or "").strip()
+                and _normalize_api_key(main_runtime.get("api_key"))
+            )
+            _rt = _resolve_custom_runtime()
+            _cfg_base = str(_rt[0] or "").strip() if _rt else ""
+            _cfg_key = _rt[1] if _rt else ""
+            _has_custom_cfg = bool(
+                _cfg_base and _cfg_key
+                and not _cfg_base.lower().startswith(_CODEX_AUX_BASE_URL.lower())
+            )
+            if not (_main_has_custom or _has_custom_cfg):
+                raise AuxiliaryClientUnavailable(
+                    f"fallback=False requires an explicit provider or configured custom endpoint "
+                    f"for task={task or 'call'} (provider={pinned_provider!r} has no custom endpoint)")
     req = _prepare_aux_request(
         task, provider=provider, model=model, base_url=base_url, api_key=api_key,
         main_runtime=main_runtime, messages=messages, temperature=temperature,

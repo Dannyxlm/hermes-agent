@@ -201,6 +201,47 @@ def test_pinned_auto_route_is_refused_before_any_request(routes, task_config):
     assert requests == []
 
 
+@pytest.mark.parametrize("prov", ["custom", "main"])
+def test_pinned_bare_custom_or_unset_main_refuses_api_key_discovery(tmp_path, monkeypatch, prov):
+    """Bare `custom` (or `main` with unset model.provider) has no endpoint and would walk API-key
+    providers via discovery; fallback=False must refuse up front instead of sending a request."""
+    import asyncio
+
+    aux.shutdown_cached_clients()
+    aux._reset_aux_unhealthy_cache()
+    requests: list[tuple[str, str]] = []
+    srv = _serve("discovered", requests, lambda body: (200, _completion(body.get("model")), 0))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # Seed an API-key provider so _resolve_api_key_provider would otherwise discover it.
+    monkeypatch.setenv("GLM_API_KEY", "dummy-zai-key")
+    monkeypatch.setenv("GLM_BASE_URL", srv[2])
+    cfg = {
+        "model": {"default": ""},
+        "auxiliary": {
+            "t": {"provider": prov, "model": PINNED_MODEL},
+            "vision": {"provider": prov, "model": PINNED_MODEL},
+        },
+    }
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    try:
+        with pytest.raises(aux.AuxiliaryClientUnavailable, match="custom endpoint"):
+            aux.call_llm(task="t", messages=MESSAGES, timeout=1.0, fallback=False)
+        with pytest.raises(aux.AuxiliaryClientUnavailable, match="custom endpoint"):
+            asyncio.run(aux.async_call_llm(task="t", messages=MESSAGES, timeout=1.0, fallback=False))
+        with pytest.raises(aux.AuxiliaryClientUnavailable, match="custom endpoint"):
+            aux.call_llm(provider=prov, messages=MESSAGES, timeout=1.0, fallback=False)
+        with pytest.raises(aux.AuxiliaryClientUnavailable, match="custom endpoint"):
+            aux.call_llm(task="vision", messages=MESSAGES, timeout=1.0, fallback=False)
+        assert requests == []
+    finally:
+        aux.shutdown_cached_clients()
+        srv[0].shutdown()
+        srv[0].server_close()
+
+
 @pytest.mark.parametrize("value", [0, None, "false", 1])
 def test_fallback_must_be_a_bool(routes, value):
     """A falsy non-bool must not quietly run the fallback ladder (or quietly pin)."""
