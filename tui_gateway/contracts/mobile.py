@@ -73,6 +73,8 @@ class MobileCanonicalSession(Result):
     id: str
     resolved_id: str
     preview: str | None = None
+    # Who wrote the newest visible line `preview` shows (same row); None when there is none.
+    preview_role: Literal["user", "assistant"] | None = None
     last_active: float
     message_count: int
 
