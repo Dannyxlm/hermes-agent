@@ -133,6 +133,12 @@ def test_roster_preview_role_names_who_wrote_the_newest_line(mobile_home, peer):
     with SessionDB(db_path=path) as db:
         db.append_message("ops-root", "assistant", "   ")
     assert canonical()["preview_role"] == "user"
+    with SessionDB(db_path=path) as db:
+        db.append_message("ops-root", "user", "process 42 exited", display_kind="process_complete",
+                          display_metadata={"display_text": "background process finished"})
+    notice = canonical()
+    assert notice["preview"] == "background process finished"
+    assert notice["preview_role"] is None, "a notice row is stored as user but nobody typed it"
 
 
 def test_real_dispatch_opens_same_runtime_twice_and_bounds_history(mobile_home, peer, monkeypatch):

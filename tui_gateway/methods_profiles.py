@@ -99,6 +99,10 @@ def _latest_message_preview(db, session_id):
     return _latest_message_preview_and_role(db, session_id)[0]
 
 
+_NOTICE_DISPLAY_KINDS = frozenset({"process_complete", "process_complete_notice", "async_delegation_complete",
+                                   "internal_notification", "auto_continue", "model_switch", "personality_switch"})
+
+
 def _latest_message_preview_and_role(db, session_id):
     """(preview, role) of the NEWEST active user/assistant message; ("", None) when there is none.
     Same query shape as ``SessionDB.latest_message_row_id``; keep them in step. The role comes
@@ -118,7 +122,9 @@ def _latest_message_preview_and_role(db, session_id):
         return "", None
     text = " ".join(_notice_preview_text({"content": row[0], "display_kind": row[1],
                                         "display_metadata": row[2]}).split()).strip()
-    role = row[3] if row[3] in ("user", "assistant") else None
+    # A server notice ("background process finished") is stored as a user row but nobody typed it,
+    # and a row whose visible text is empty is not a line: neither names an author.
+    role = row[3] if row[3] in ("user", "assistant") and row[1] not in _NOTICE_DISPLAY_KINDS and text else None
     return (text[:80] + "..." if len(text) > 80 else text), role
 
 
