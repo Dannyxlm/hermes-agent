@@ -8,8 +8,7 @@ With no gateway, prune stays the local command it always was (holder scan, ``--f
 """
 from __future__ import annotations
 
-#: A cron-heavy store prunes tens of thousands of rows in one transaction; the owner shields the
-#: write, so a short client budget would only misreport a prune that still commits.
+#: Default client budget; callers may allow a backlog run longer without changing owner policy.
 PRUNE_RPC_TIMEOUT = 600
 
 
@@ -21,14 +20,14 @@ def live_owner():
     return found.endpoint if found.state == "ready" else None
 
 
-def owner_prune(endpoint, **params) -> dict:
+def owner_prune(endpoint, *, timeout=PRUNE_RPC_TIMEOUT, **params) -> dict:
     """Run one ``session.prune`` on *endpoint*; raises ``GatewayClientError`` on refusal/loss."""
     import asyncio
     from hermes_cli.gateway_client import connect_gateway
 
     async def _run():
         async with connect_gateway(endpoint) as client:
-            return await client.rpc("session.prune", _timeout=PRUNE_RPC_TIMEOUT, **params)
+            return await client.rpc("session.prune", _timeout=timeout, **params)
     return asyncio.run(_run())
 
 

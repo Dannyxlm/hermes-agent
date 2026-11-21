@@ -130,15 +130,26 @@ def _run_prune(monkeypatch, capsys, argv_tail, candidates=None, skipped_open=0, 
     main_mod.main()
     return seen, capsys.readouterr().out
 
-def test_sessions_prune_bare_keeps_90_day_default(monkeypatch, capsys):
+def test_sessions_prune_bare_keeps_90_day_default(monkeypatch, capsys, tmp_path):
     """A truly bare `hermes sessions prune` keeps the implicit 90-day cutoff."""
-    import time as _time
-
-    filters, _out = _run_prune(monkeypatch, capsys, [])
-    assert filters["last_active_before"] is not None
-    assert filters["last_active_before"] == pytest.approx(
-        _time.time() - 90 * 86400, abs=60
-    )
+    import time
+    from hermes_state import SessionDB
+    from hermes_cli import sessions_owner
+    from tests.hermes_cli.test_sessions_prune_via_owner import _args
+    from hermes_cli.sessions_cmd import cmd_sessions
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setattr(sessions_owner, 'live_owner', lambda: None)
+    with SessionDB(tmp_path / 'state.db') as db:
+        for sid, days in [('older', 91), ('newer', 89)]:
+            db.create_session(sid, 'tool')
+            at = time.time() - days * 86400
+            db._write_sql('UPDATE sessions SET started_at=?,last_activity_at=?,ended_at=? WHERE id=?',
+                          (at, at, at, sid))
+    assert cmd_sessions(_args('--yes')) in (None, 0)
+    assert 'Pruned 1 session(s).' in capsys.readouterr().out
+    with SessionDB(tmp_path / 'state.db', read_only=True) as db:
+        assert db.get_session('older') is None
+        assert db.get_session('newer') is not None
 
 
 def test_archive_include_open_flag_reaches_selection(monkeypatch, capsys):
