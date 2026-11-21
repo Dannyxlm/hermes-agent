@@ -29,7 +29,7 @@ class Sender:
 ACTOR = SessionActor('test-owner', 'default', frozenset({'session:create', 'session:submit', 'session:read'}), 'fixture')
 
 
-async def _home(tmp_path, monkeypatch, *, categories=("attention",), title='Bot Chat'):
+async def _home(tmp_path, monkeypatch, *, categories=("attention",), title='Bot Chat', register_lease=True):
     from gateway.config import GatewayConfig
     from gateway.run import GatewayRunner
     from gateway.session_authority import SessionAuthority, initialize_session_authority
@@ -51,8 +51,9 @@ async def _home(tmp_path, monkeypatch, *, categories=("attention",), title='Bot 
     service = PushService(tmp_path / 'outbox.sqlite3', sender)
     monkeypatch.setattr(session_home_alert, 'push_service', lambda: service)
     scope = Scope('native', 'default', ref.session_id)
-    service.register('principal', scope, installation_id=str(uuid.uuid4()), connection_id=str(uuid.uuid4()),
-                     token='aa' * 32, environment='production', categories=list(categories), preview_enabled=True)
+    if register_lease:
+        service.register('principal', scope, installation_id=str(uuid.uuid4()), connection_id=str(uuid.uuid4()),
+                         token='aa' * 32, environment='production', categories=list(categories), preview_enabled=True)
     return SimpleNamespace(runner=runner, authority=authority, ref=ref, service=service, sender=sender, db=db)
 
 
@@ -185,18 +186,15 @@ def test_bot_mode_protocol_version_bumped_for_needs_you_rule():
 @pytest.mark.asyncio
 async def test_all_chats_policy_receives_needs_you_without_explicit_home_lease(tmp_path, monkeypatch):
     """A device on the 'all' alert policy materialises its Home lease via listed=True."""
-    home = await _home(tmp_path, monkeypatch)
+    home = await _home(tmp_path, monkeypatch, register_lease=False)
     try:
-        # Replace the explicit Home lease with an installation-level 'all' alert policy.
-        home.service._store._conn.execute("DELETE FROM alert_subscriptions")
-        home.service._store._conn.commit()
-        home.service.set_alert_policy(
+        home.service.set_policy(
             'principal',
             installation_id=str(uuid.uuid4()),
             connection_id=str(uuid.uuid4()),
+            policy='all',
             token='cc' * 32,
             environment='production',
-            mode='all',
             categories=['attention'],
             preview_enabled=True,
         )
