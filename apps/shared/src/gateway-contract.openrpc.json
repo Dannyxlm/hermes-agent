@@ -33531,6 +33531,22 @@
             "default": null,
             "title": "Preview"
           },
+          "preview_role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "user",
+                  "assistant"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Preview Role"
+          },
           "last_active": {
             "title": "Last Active",
             "type": "number"

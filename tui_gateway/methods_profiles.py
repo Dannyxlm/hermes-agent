@@ -95,22 +95,31 @@ def _clean_revisions(raw: dict) -> dict:
 
 
 def _latest_message_preview(db, session_id):
-    """≤80-char excerpt of the NEWEST active user/assistant message, or "" (roster semantics).
-    Same query shape as ``SessionDB.latest_message_row_id``; keep them in step."""
+    """≤80-char excerpt of the NEWEST active user/assistant message, or "" (roster semantics)."""
+    return _latest_message_preview_and_role(db, session_id)[0]
+
+
+def _latest_message_preview_and_role(db, session_id):
+    """(preview, role) of the NEWEST active user/assistant message; ("", None) when there is none.
+    Same query shape as ``SessionDB.latest_message_row_id``; keep them in step. The role comes
+    from the same row as the preview, so a client can tell who wrote the line it shows."""
     try:
         with db._lock:
             row = db._conn.execute(
-                "SELECT content, display_kind, display_metadata FROM messages"
+                "SELECT content, display_kind, display_metadata, role FROM messages"
                 " WHERE session_id = ? AND role IN ('user', 'assistant')"
                 " AND active = 1 AND content IS NOT NULL AND TRIM(content) != ''"
                 " AND COALESCE(display_kind, '') != 'hidden'"
                 " ORDER BY id DESC LIMIT 1",
                 (session_id,)).fetchone()
     except Exception:
-        return ""
-    text = (" ".join(_notice_preview_text({"content": row[0], "display_kind": row[1],
-                                         "display_metadata": row[2]}).split()).strip() if row else "")
-    return text[:80] + "..." if len(text) > 80 else text
+        return "", None
+    if not row:
+        return "", None
+    text = " ".join(_notice_preview_text({"content": row[0], "display_kind": row[1],
+                                        "display_metadata": row[2]}).split()).strip()
+    role = row[3] if row[3] in ("user", "assistant") else None
+    return (text[:80] + "..." if len(text) > 80 else text), role
 
 
 def _resurrect_recoverable_canonical(db, profile_path, session_id):

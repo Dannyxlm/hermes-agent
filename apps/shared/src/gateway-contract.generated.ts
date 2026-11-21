@@ -4016,6 +4016,7 @@ export interface MobileCanonicalSession {
   id: string
   resolved_id: string
   preview?: string | null
+  preview_role?: 'user' | 'assistant' | null
   last_active: number
   message_count: number
 }

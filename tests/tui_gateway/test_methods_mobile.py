@@ -116,6 +116,25 @@ def test_capabilities_and_roster_are_bounded_and_path_free(mobile_home, peer):
     assert rpc("mobile.bots", offset=1)["result"]["bots"][0]["canonical_session"]["id"] == "ops-root"
 
 
+def test_roster_preview_role_names_who_wrote_the_newest_line(mobile_home, peer):
+    path = mobile_home / "profiles" / "ops" / "state.db"
+
+    def canonical():
+        return rpc("mobile.bots", offset=1)["result"]["bots"][0]["canonical_session"]
+
+    assert canonical()["preview"] == "" and canonical()["preview_role"] is None
+    with SessionDB(db_path=path) as db:
+        db.append_message("ops-root", "assistant", "Box doctor checks out.")
+    assert (canonical()["preview"], canonical()["preview_role"]) == ("Box doctor checks out.", "assistant")
+    with SessionDB(db_path=path) as db:
+        db.append_message("ops-root", "user", "Thanks, from the desktop")
+        db.append_message("ops-root", "tool", "tool output is never the preview")
+    assert (canonical()["preview"], canonical()["preview_role"]) == ("Thanks, from the desktop", "user")
+    with SessionDB(db_path=path) as db:
+        db.append_message("ops-root", "assistant", "   ")
+    assert canonical()["preview_role"] == "user"
+
+
 def test_real_dispatch_opens_same_runtime_twice_and_bounds_history(mobile_home, peer, monkeypatch):
     path = mobile_home / "profiles" / "ops" / "state.db"
     with SessionDB(db_path=path) as db:

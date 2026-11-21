@@ -166,8 +166,9 @@ def _(rid, params):
         try:
             with _mobile_read_db(home) as db:
                 root, tip, _chain = _mobile_canonical_identity(db)
+                preview, preview_role = _latest_message_preview_and_role(db, tip["id"])
                 row["canonical_session"] = {"id": root["id"], "resolved_id": tip["id"],
-                    "preview": _latest_message_preview(db, tip["id"]),
+                    "preview": preview, "preview_role": preview_role,
                     "last_active": tip.get("last_activity_at") or tip.get("started_at") or 0,
                     "message_count": tip.get("message_count") or 0}
             live = live_by_profile_and_session.get((home.resolve(), tip["id"]))
