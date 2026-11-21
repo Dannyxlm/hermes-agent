@@ -156,9 +156,11 @@ def _start_between_turns_compaction(sid: str, session: dict, result: dict):
                 or session.get("_manual_compress_active") or session.get("_between_turns_compaction")):
             return None
         # Do not launch on another path's lock. Core admission checks again under its fence.
-        db = getattr(agent, "_session_db", None)
-        if db is None or db.get_compression_lock_holder(agent.session_id):
-            return None
+        from tui_gateway.store_handles import borrow_persistence
+
+        with borrow_persistence(getattr(agent, "_session_db", None)) as persistence:
+            if persistence is None or persistence.coordination.get_compression_lock_holder(session_id=agent.session_id):
+                return None
         from agent.between_turns_compaction import between_turns_pressure
         messages = copy.deepcopy(session.get("history") or [])
         if between_turns_pressure(agent, messages) is None:

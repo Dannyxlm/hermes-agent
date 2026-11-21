@@ -51,35 +51,38 @@ def _mobile_profile(params):
 
 def _mobile_canonical_identity(db, root_id=None):
     """Reject duplicate registry rows and retired chats; never resurrect them during reads."""
-    from hermes_state import SessionDB
-    with db._lock:
-        rows = db._conn.execute("SELECT id FROM sessions WHERE title = ? LIMIT 2", (SessionDB.CANONICAL_BOT_CHAT_TITLE,)).fetchall()
-    if len(rows) != 1:
-        raise ValueError("canonical absent or ambiguous")
-    root = db.get_session(rows[0][0])
-    if not root or root.get("archived") or _denied_source(root):
-        raise ValueError("canonical unavailable")
-    if root_id is not None and root["id"] != root_id:
-        raise ValueError("canonical identity mismatch")
-    chain = db.get_compression_chain(root["id"])
-    if not chain or chain[0] != root["id"]:
-        raise ValueError("canonical root is not a compression root")
-    tip = db.get_session(chain[-1])
-    if not tip or tip.get("archived") or _denied_source(tip):
-        raise ValueError("canonical tip unavailable")
-    return root, tip, chain
+    from persistence.conversation.sessions import CANONICAL_BOT_CHAT_TITLE
+    from persistence.sqlite.conversation._store.compression import _compression_lineage_on
+    from persistence.sqlite.conversation._store.timeline import _snapshot
+
+    with _snapshot(db) as conn:
+        rows = conn.execute("SELECT * FROM sessions WHERE title = ? LIMIT 2", (CANONICAL_BOT_CHAT_TITLE,)).fetchall()
+        if len(rows) != 1:
+            raise ValueError("canonical absent or ambiguous")
+        root = dict(rows[0])
+        if root.get("archived") or _denied_source(root):
+            raise ValueError("canonical unavailable")
+        if root_id is not None and root["id"] != root_id:
+            raise ValueError("canonical identity mismatch")
+        chain = _compression_lineage_on(db, conn, root["id"])
+        if not chain or chain[0] != root["id"]:
+            raise ValueError("canonical root is not a compression root")
+        tip = dict(conn.execute("SELECT * FROM sessions WHERE id = ?", (chain[-1],)).fetchone() or {})
+        if not tip or tip.get("archived") or _denied_source(tip):
+            raise ValueError("canonical tip unavailable")
+        return root, tip, chain
 
 
 def _mobile_read_db(home):
-    from hermes_state import SessionDB
-    from hermes_state_common import stat_db_file_identity
+    from persistence.sqlite._holder import StoreHolder
+    from persistence.sqlite._state.common import stat_db_file_identity
     from tui_gateway.mobile_history_cache import history_pages
     path = home / "state.db"
     history_pages.invalidate_replaced(path)
     if not path.is_file():
         raise FileNotFoundError("profile state unavailable")
     identity = stat_db_file_identity(path)
-    db = SessionDB(db_path=path, read_only=True)
+    db = StoreHolder(path, read_only=True)
     if stat_db_file_identity(path) != identity:
         db.close()
         raise RuntimeError("profile state replaced during open")
@@ -187,21 +190,24 @@ def _mobile_history_page(db, tip_id, chain, params):
     The chosen durable row can change after compaction; logical ordering and pagination stay stable.
     Unchanged polls reuse bounded row pages; every database commit invalidates that reuse.
     """
-    from agent.context_compressor import split_user_originated_turn
+    from persistence.sqlite.conversation._store.messages import (
+        _decode_content, _decode_display_metadata, _display_identity, _encode_content, _rows_to_conversation,
+    )
+    from session_rules.turns import split_user_originated_turn
     from tui_gateway.mobile_history_cache import history_pages
     limit = _mobile_limit(params)
     before = _mobile_limit(params, "before_row_id", 2**63 - 1, 2**63 - 1)
 
     def content_key(role, content, kind, metadata):
         if role == "user":
-            handoff, live = split_user_originated_turn({"role": role, "content": db._decode_content(content),
-                "display_kind": kind, "display_metadata": db._decode_display_metadata(metadata)})
+            handoff, live = split_user_originated_turn({"role": role, "content": _decode_content(content),
+                "display_kind": kind, "display_metadata": _decode_display_metadata(metadata)})
             if handoff is not None and live is not None:
-                return db._encode_content(live.get("content"))
+                return _encode_content(live.get("content"))
         return content
 
     def identity_key(role, content, timestamp, call_id, calls, tool_name, kind, metadata):
-        return db._display_identity((role, content_key(role, content, kind, metadata),
+        return _display_identity((role, content_key(role, content, kind, metadata),
                                      timestamp, call_id, calls, tool_name))
 
     slots = ",".join("?" for _ in chain)
@@ -210,15 +216,15 @@ def _mobile_history_page(db, tip_id, chain, params):
     # distinction instead of silently changing its existing page/cursor contract.
     computed = "mobile_display_identity(role, content, timestamp, tool_call_id, tool_calls, tool_name, display_kind, display_metadata)"
     page_key = (tip_id, tuple(chain), before, limit)
-    with db._lock:
-        token, rows = history_pages.lookup(db, page_key)
+    with db._read_ctx() as conn:
+        token, rows = history_pages.lookup(db, conn, page_key)
         if rows is None:
-            columns = {row[1] for row in db._conn.execute('PRAGMA table_info(messages)')}
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(messages)')}
             partition = computed
             if 'display_identity' in columns:
                 partition = f"CASE WHEN role = 'assistant' AND tool_calls IS NOT NULL THEN {computed} ELSE COALESCE(display_identity, {computed}) END"
-            db._conn.create_function("mobile_display_identity", 8, identity_key, deterministic=True)
-            rows = db._conn.execute(f"""
+            conn.create_function("mobile_display_identity", 8, identity_key, deterministic=True)
+            rows = conn.execute(f"""
                 WITH identities AS (
                     SELECT id, active, {partition} AS identity
                     FROM messages WHERE session_id IN ({slots}) AND (active = 1 OR compacted = 1)
@@ -235,7 +241,7 @@ def _mobile_history_page(db, tip_id, chain, params):
     selected = list(reversed(rows[:limit]))
     messages = []
     for row in selected:
-        history = db._rows_to_conversation([row], session_id=tip_id, include_ancestors=False,
+        history = _rows_to_conversation(db, [row], session_id=tip_id, include_ancestors=False,
                                            repair_alternation=False, include_row_ids=True)
         projected = _history_to_messages(history)
         tool_calls = history[0].get("tool_calls") if history else None
@@ -248,7 +254,7 @@ def _mobile_history_page(db, tip_id, chain, params):
             if tool_calls:
                 message["tool_calls"] = tool_calls
             if message.get("role") == "tool":
-                message["text"] = _coerce_message_text(db._decode_content(row["content"]))
+                message["text"] = _coerce_message_text(_decode_content(row["content"]))
                 message["timestamp"] = row["timestamp"]
                 message["tool_call_id"] = row["tool_call_id"]
         messages.extend(projected)

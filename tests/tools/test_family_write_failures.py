@@ -170,8 +170,13 @@ def test_profile_not_inferred_from_child_home(tmp_path, monkeypatch):
 @pytest.mark.parametrize('source', ['cli', 'oneshot'])
 @pytest.mark.parametrize(('end_reason', 'expected'), [('user_stop', 'user_stop'), ('cli_close', 'success')])
 def test_multiturn_launch_stays_open_after_turn(tmp_path, end_reason, expected, source):
-    from hermes_state_runtime import (admit_session_input, begin_runtime_epoch, claim_session_input,
-                                      settle_session_input)
+    from persistence.sqlite.authority._admission_store import (
+        admit_session_input,
+        claim_session_input,
+        settle_session_input,
+    )
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
+    from tests.persistence_sqlite.core._fork_store import SessionDB
     with SessionDB(tmp_path / 'state.db') as db:
         db.create_session('child', source)
         db.record_launch('launch', kind='lane', launcher_profile='default', launcher_session_id='parent',
@@ -350,7 +355,7 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
     from gateway.session_controls import AuthorityConnection
     from gateway.session_worker import _claim
     from hermes_cli.process_identity import worker_birth
-    from hermes_state_runtime import register_worker_execution
+    from tests.fixtures.storage_holder import raw_holder
     from tests.gateway.test_local_source_labels import _authority
     authority, _ = await _authority(tmp_path, monkeypatch)
     connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
@@ -366,20 +371,20 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
         scope = dict(profile_id=authority.profile_id, session_id=sid, execution_id='worker', generation=0,
                      pid=worker.pid, birth=worker_birth(psutil.Process(worker.pid)), secret='fixture-worker-secret')
         claim = _claim(connection, SessionRef(authority.profile_id, sid), scope)
-        register_worker_execution(authority.db, epoch=authority.epoch, execution_id='worker', session_id=sid,
+        authority.persistence.worker_executions.register(epoch=authority.epoch, execution_id='worker', session_id=sid,
                                   generation=0, kind='compute', adoption_secret=claim)
         params = scope | dict(epoch=authority.epoch, sequence=0, operation='launch.record', payload=dict(
             launch_id='optional-worker', kind='process', launcher_profile='default', launcher_session_id=sid,
             child_profile='default', backend_ref='fixture-process'))
         recorded = await connection.dispatch({'id': 2, 'method': 'worker.persist', 'params': params})
         assert 'result' in recorded, recorded
-        assert authority.db._read_one('SELECT COUNT(*) FROM worker_receipts')[0] == 0
+        assert raw_holder(authority.persistence)._read_one('SELECT COUNT(*) FROM worker_receipts')[0] == 0
         appended = await connection.dispatch({'id': 3, 'method': 'worker.persist', 'params': scope | dict(
             epoch=authority.epoch, sequence=1, operation='transcript.append',
             payload={'messages': [{'role': 'assistant', 'content': 'real result'}], 'turn_lease_holder': None})})
         assert 'result' in appended, appended
-        assert authority.db._read_one('SELECT COUNT(*) FROM worker_receipts')[0] == 1
-        from hermes_state_runtime import RuntimeStoreError
+        assert raw_holder(authority.persistence)._read_one('SELECT COUNT(*) FROM worker_receipts')[0] == 1
+        from persistence.core.errors import AuthorityRefusal as RuntimeStoreError
         await connection.close()
         connection = AuthorityConnection(authority, SimpleNamespace(write=lambda frame: None), {'user_id': 'owner'})
         connection.actor = replace(connection.actor, capabilities=frozenset({'worker:adopt'}), subject='another-principal')
@@ -392,4 +397,4 @@ async def test_authenticated_optional_worker_write_keeps_receipt_stream_free(tmp
         worker.terminate()
         await asyncio.wait_for(worker.wait(), timeout=5)
         await connection.close()
-        authority.db.close()
+        authority.persistence.close()

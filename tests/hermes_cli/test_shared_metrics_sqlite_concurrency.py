@@ -11,7 +11,7 @@ import pytest
 from hermes_cli.observability.relay_shared_metrics import _reconcile_store_consent
 from hermes_cli.observability.shared_metrics import SharedMetricsStore, _SCHEMA_BUSY_TIMEOUT_MS
 from hermes_cli.observability.shared_metrics_sender import SharedMetricsSender, reconcile_send_consent
-from hermes_state_wal import is_sqlite_wal_reset_vulnerable
+from sqlite_support import is_sqlite_wal_reset_vulnerable
 
 
 @pytest.mark.skipif(is_sqlite_wal_reset_vulnerable(), reason="WAL is unsafe on the linked SQLite")
@@ -61,12 +61,12 @@ def test_shared_metrics_writers_progress_while_a_reader_is_paused(tmp_path, oper
 
 @pytest.mark.parametrize("fallback", ["configured-delete", "vulnerable-sqlite"])
 def test_shared_metrics_keeps_canonical_rollback_journal_safety(tmp_path, monkeypatch, fallback):
-    import hermes_state_wal
+    import sqlite_support
 
-    monkeypatch.setattr(hermes_state_wal, "resolve_journal_mode", lambda: (
+    monkeypatch.setattr(sqlite_support, "resolve_journal_mode", lambda: (
         "delete" if fallback == "configured-delete" else "wal"
     ))
-    monkeypatch.setattr(hermes_state_wal, "is_sqlite_wal_reset_vulnerable", lambda: (
+    monkeypatch.setattr(sqlite_support, "is_sqlite_wal_reset_vulnerable", lambda: (
         fallback == "vulnerable-sqlite"
     ))
     store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
@@ -79,10 +79,10 @@ def test_shared_metrics_keeps_canonical_rollback_journal_safety(tmp_path, monkey
 
 @pytest.mark.parametrize("vulnerable", [False, True])
 def test_configured_delete_blocked_probe_is_not_bypassed(tmp_path, monkeypatch, vulnerable):
-    import hermes_state_wal
+    import sqlite_support
 
-    monkeypatch.setattr(hermes_state_wal, "resolve_journal_mode", lambda: "delete")
-    monkeypatch.setattr(hermes_state_wal, "is_sqlite_wal_reset_vulnerable", lambda: vulnerable)
+    monkeypatch.setattr(sqlite_support, "resolve_journal_mode", lambda: "delete")
+    monkeypatch.setattr(sqlite_support, "is_sqlite_wal_reset_vulnerable", lambda: vulnerable)
     store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
     holder = sqlite3.connect(store.database_path, isolation_level=None)
     try:
@@ -100,10 +100,10 @@ def test_configured_delete_blocked_probe_is_not_bypassed(tmp_path, monkeypatch, 
 
 @pytest.mark.parametrize("vulnerable", [False, True])
 def test_contended_configured_delete_drain_keeps_deferred_updates(tmp_path, monkeypatch, vulnerable):
-    import hermes_state_wal
+    import sqlite_support
 
-    monkeypatch.setattr(hermes_state_wal, "resolve_journal_mode", lambda: "delete")
-    monkeypatch.setattr(hermes_state_wal, "is_sqlite_wal_reset_vulnerable", lambda: vulnerable)
+    monkeypatch.setattr(sqlite_support, "resolve_journal_mode", lambda: "delete")
+    monkeypatch.setattr(sqlite_support, "is_sqlite_wal_reset_vulnerable", lambda: vulnerable)
     store = SharedMetricsStore(tmp_path / "metrics.sqlite3", tmp_path / "outbox")
     holder = sqlite3.connect(store.database_path, isolation_level=None)
     try:

@@ -141,7 +141,7 @@ def interrupt_subagent(subagent_id: str) -> bool:
         return False
     agent._delegate_stop_requested = True  # read where a run that never started settles its record
     try:
-        from hermes_state_launch_causes import stamp_stop
+        from persistence.sqlite.conversation._store.launch_causes import stamp_stop
         stamp_stop(agent, "user_stop")
         return bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
     except Exception as exc:
@@ -242,14 +242,14 @@ def _is_descendant_of(child_agent: Any, parent_agent: Any, max_hops: int = 8) ->
 _CONTROL_ACTIONS = frozenset({"list", "steer", "stop"})
 
 def _resolve_session_lineage(session_id: Optional[str], parent_agent: Any) -> str:
-    """Tip of a session id's compression lineage via the parent's live SessionDB (best-effort; input unchanged when
+    """Tip of a session id's compression lineage via the parent's storage handle (best-effort; input unchanged when
     unavailable) so a delegation dispatched before a compression rotation still matches the rotated parent."""
     sid = str(session_id or "")
-    db = getattr(parent_agent, "_session_db", None)
-    if not sid or db is None:
+    persistence = getattr(parent_agent, "persistence", None)
+    if not sid or persistence is None:
         return sid
     try:
-        resolved = db.resolve_resume_session_id(sid)
+        resolved = persistence.lineage.resolve_resume_target(sid)
         return str(resolved) if resolved else sid
     except Exception:
         return sid

@@ -78,8 +78,8 @@ _EXIT_CODE_HINTS: dict[int, str] = {
     126: "Exit 126: the file was found but is not executable — `chmod +x` it or invoke it via its interpreter (e.g. `bash script.sh`).",
 }
 
-# Every backend's per-command wrapper runs ``builtin cd -- <cwd> || exit 126`` before the
-# command (tools/environments/base_session_env.py), so a 126 whose last line is bash's error
+# The per-command wrapper runs ``builtin cd -- <cwd> || exit 126`` before the command when it
+# may not fall back (an explicit workdir; tools/environments/base_session_env.py), so a 126 whose last line is bash's error
 # for that ``cd`` means the command never ran: the working directory is the problem, and the
 # chmod hint above sends the model after the wrong file. The shell path may start with a drive
 # letter, and bash localizes "line N: " ("Zeile 2: ", "ligne 2 : ").

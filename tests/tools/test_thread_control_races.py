@@ -13,11 +13,15 @@ from gateway.owner_identity import host_owner_subject
 from gateway.session_authority import LiveSession, SessionAuthority
 from gateway.session_controls import AuthorityConnection
 from gateway.session_contract import SessionRef
-from hermes_state import SessionDB
-from hermes_state_runtime import (
-    admit_session_input, begin_runtime_epoch, claim_session_input, get_session_admission,
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from persistence.sqlite.authority._admission_store import (
+    claim_session_input,
+    get_session_admission,
     settle_session_input,
 )
+from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
+from tests.persistence_sqlite.core._fork_runtime import admit_session_input
 
 
 class TurnAgent:
@@ -42,7 +46,7 @@ def owner_env(tmp_path, monkeypatch):
     subject = host_owner_subject()
     db.create_session('parent', 'tui', user_id=subject)
     runner = SimpleNamespace(_draining=False, _cached_agent_for=lambda route: None)
-    authority = SessionAuthority(runner, profile_id=str(home), instance_id='test-owner', db=db,
+    authority = SessionAuthority(runner, profile_id=str(home), instance_id='test-owner', persistence=storage_handle(home),
                                  epoch=begin_runtime_epoch(db, instance_id='test-owner'))
     monkeypatch.setattr(authority, '_schedule', lambda ref: None)
     transport = SimpleNamespace(write=lambda frame: None)

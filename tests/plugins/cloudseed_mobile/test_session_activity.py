@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 from fastapi.responses import JSONResponse
-from hermes_state_sessions import _LINEAGE_CTE_SQL
+from persistence.sqlite.conversation._store.sessions import _LINEAGE_CTE_SQL
 from plugins.cloudseed_mobile import session_activity as activity
 from tests.plugins.test_cloudseed_mobile import client
 from tests.plugins.test_cloudseed_mobile_activity_batch import read_batch, workers

@@ -17,7 +17,7 @@ import time
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
-from hermes_state_holders import read_only_db_uri
+from persistence.sqlite._state.holders import read_only_db_uri
 from plugins.cloudseed_mobile.deliverables import delegate_child, earliest, project, decode, MAX_STRING, is_image
 from plugins.cloudseed_mobile.workspace_files import digest, open_beneath
 

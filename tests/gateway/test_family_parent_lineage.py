@@ -2,11 +2,14 @@
 from contextlib import ExitStack
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
 from gateway.session_controls import AuthorityConnection
 from hermes_family import Family, read_profile
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 from tests.gateway.test_family_integration import identity, native_identity
 
 
@@ -51,7 +54,7 @@ async def test_gateway_parent_launch_intake_nests_under_unit(tmp_path, monkeypat
 async def test_operator_sees_cli_lane_and_teammate_with_missing_unit_parent(tmp_path, monkeypatch):
     from gateway.session_authorities import SessionAuthorities
     from gateway.session_authority import SessionAuthority
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home, other = tmp_path / "state", tmp_path / "state/profiles/atlas"
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
@@ -68,7 +71,7 @@ async def test_operator_sees_cli_lane_and_teammate_with_missing_unit_parent(tmp_
             db.bind_launch(name + "-launch", child_session_id=name + "-child")
             if name == "default":
                 db.create_session("launcher", "cli", user_id="phone-principal")
-            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, db=db,
+            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, persistence=storage_handle(Path(db.db_path).parent),
                                          epoch=begin_runtime_epoch(db, instance_id=name))
             registry.add(path, authority, name=None if name == "default" else name)
             if name == "default":

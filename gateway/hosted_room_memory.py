@@ -1,18 +1,12 @@
 """Server-only trigger receipts and execution-time room memory attestation."""
 from contextlib import contextmanager
 from contextvars import ContextVar
-import hashlib
 import json
 
 from gateway.owner_identity import same_owner
+from persistence.gateway.hosted_rooms import room_memory_trigger_key
 
 _trigger: ContextVar[dict | None] = ContextVar('hosted_room_trigger', default=None)
-_PREFIX = 'gateway.hosted.memory-trigger.v1:'
-
-
-def _key(room_id, event_id):
-    identity = json.dumps([room_id, event_id], separators=(',', ':'))
-    return _PREFIX + hashlib.sha256(identity.encode()).hexdigest()
 
 
 @contextmanager
@@ -37,7 +31,7 @@ def record_trigger(conn, room_id, event_id, payload):
                              ('gateway.hosted.owner.v1:' + room_id,)).fetchone()
         if owner is not None and same_owner(owner[0], trigger['subject']):
             conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)',
-                         (_key(room_id, event_id), json.dumps({key: trigger[key] for key in ('subject', 'trigger')}, sort_keys=True)))
+                         (room_memory_trigger_key(room_id, event_id), json.dumps({key: trigger[key] for key in ('subject', 'trigger')}, sort_keys=True)))
     return payload
 
 
@@ -58,25 +52,15 @@ def local_memory_context(service, task):
         profiles.append(profile)
     if not profiles:
         return None
-    with service.authority.db._read_ctx() as conn:
-        event = conn.execute('SELECT event_id,kind,actor_json,authority_epoch FROM hosted_room_events '
-                             'WHERE room_id=? AND seq=?',
-                             (room_id, task['payload']['source_event_seq'])).fetchone()
-        if event is None or event['kind'] != 'message.user' or event['authority_epoch'] != room['authority_epoch']:
-            return None
-        receipt = conn.execute('SELECT value FROM state_meta WHERE key=?',
-                               (_key(room_id, event['event_id']),)).fetchone()
-        if receipt is None:
-            return None
-        trigger = json.loads(receipt[0])
-    actor = json.loads(event['actor_json'])
-    if (not same_owner(service._owner(room_id), trigger['subject'])
-            or trigger['trigger'] not in {'owner', 'team-room'}
-            or actor.get('kind') != 'user'
-            or actor.get('id') != ('team-room' if trigger['trigger'] == 'team-room' else 'desktop')):
+    from gateway.session_persistence import owner_rule
+
+    trigger = service.store.hosted_rooms.memory_trigger(
+        placement=service.placement, room_id=room_id, source_event_seq=task['payload']['source_event_seq'],
+        authority_epoch=room['authority_epoch'], owner=owner_rule())
+    if trigger is None:
         return None
     return {'version': 1, 'room_id': room_id, 'profiles': profiles,
-            'member_profile': task['payload']['target_profile'], 'trigger': trigger['trigger']}
+            'member_profile': task['payload']['target_profile'], 'trigger': trigger}
 
 
 def admission_memory_context(authority, ref, row):

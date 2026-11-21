@@ -4,8 +4,8 @@ server.py's globals (method_ctx.bind_module) and use them bare; module-level nam
 onto server.py, so they must not collide with its globals.
 """
 
+import contextlib
 import logging
-import sqlite3
 
 from hermes_cli.profiles_cache import yaml_scalar_to_json as _yaml_scalar_to_json
 from .method_ctx import HandlerRegistry, bind_module
@@ -94,9 +94,9 @@ def _clean_revisions(raw: dict) -> dict:
     return {str(k): max(0, int(v)) for k, v in raw.items() if isinstance(v, int) and not isinstance(v, bool)}
 
 
-def _latest_message_preview(db, session_id):
-    """≤80-char excerpt of the NEWEST active user/assistant message, or "" (roster semantics)."""
-    return _latest_message_preview_and_role(db, session_id)[0]
+def _latest_message_preview(persistence, session_id):
+    """≤80-char excerpt of the newest visible user/assistant message."""
+    return _latest_message_preview_and_role(persistence, session_id)[0]
 
 
 _NOTICE_DISPLAY_KINDS = frozenset({"process_complete", "process_complete_notice", "async_delegation_complete",
@@ -104,67 +104,80 @@ _NOTICE_DISPLAY_KINDS = frozenset({"process_complete", "process_complete_notice"
 
 
 def _latest_message_preview_and_role(db, session_id):
-    """(preview, role) of the NEWEST active user/assistant message; ("", None) when there is none.
-    Same query shape as ``SessionDB.latest_message_row_id``; keep them in step. The role comes
-    from the same row as the preview, so a client can tell who wrote the line it shows."""
+    """Preview and author from the same visible row; server notices carry no author."""
+    from persistence.sqlite._backend import SQLiteStore
+    from persistence_assembly import Persistence
+
+    sql = ("SELECT content, display_kind, display_metadata, role FROM messages"
+           " WHERE session_id = ? AND role IN ('user', 'assistant')"
+           " AND active = 1 AND content IS NOT NULL AND TRIM(content) != ''"
+           " AND COALESCE(display_kind, '') != 'hidden' ORDER BY id DESC LIMIT 1")
     try:
-        with db._lock:
-            row = db._conn.execute(
-                "SELECT content, display_kind, display_metadata, role FROM messages"
-                " WHERE session_id = ? AND role IN ('user', 'assistant')"
-                " AND active = 1 AND content IS NOT NULL AND TRIM(content) != ''"
-                " AND COALESCE(display_kind, '') != 'hidden'"
-                " ORDER BY id DESC LIMIT 1",
-                (session_id,)).fetchone()
+        if isinstance(db, Persistence):
+            store = db._bound_store()
+            if not isinstance(store, SQLiteStore):
+                content = db.messages.latest_dialogue_message(session_id)
+                text = " ".join(str(content or "").split()).strip()
+                return (text[:80] + "..." if len(text) > 80 else text), None
+            with store.holder()._read_ctx_with_timeout(1.0) as conn:
+                row = conn.execute(sql, (session_id,)).fetchone()
+        else:
+            # The native mobile SQLite snapshot passes its own reader, not a second profile handle.
+            row = db._read_one(sql, (session_id,))
+        if not row:
+            return "", None
+        text = " ".join(_notice_preview_text({"content": row[0], "display_kind": row[1],
+                                            "display_metadata": row[2]}).split()).strip()
     except Exception:
         return "", None
-    if not row:
-        return "", None
-    text = " ".join(_notice_preview_text({"content": row[0], "display_kind": row[1],
-                                        "display_metadata": row[2]}).split()).strip()
-    # A server notice ("background process finished") is stored as a user row but nobody typed it,
-    # and a row whose visible text is empty is not a line: neither names an author.
-    role = row[3] if row[3] in ("user", "assistant") and row[1] not in _NOTICE_DISPLAY_KINDS and text else None
+    role = row[3] if row[1] not in _NOTICE_DISPLAY_KINDS and text else None
     return (text[:80] + "..." if len(text) > 80 else text), role
 
 
-def _resurrect_recoverable_canonical(db, profile_path, session_id):
+def _resurrect_recoverable_canonical(persistence, profile_path, session_id):
     """Un-archive an accidentally archived canonical row (judged read-only, written via a
     short-lived writable handle); False otherwise.
 
     See #92687.
     """
     try:
-        row = db.get_session(session_id)
-        if not row or not row.get("archived"):
+        row = persistence.sessions.get(session_id)
+        if not row or not row.archived:
             return False
-        tip_id = _try(lambda: db.get_compression_tip(session_id), None) or session_id
-        tip = (_try(lambda: db.get_session(tip_id), None) or row) if tip_id != session_id else row
-        from hermes_state import SessionDB
-        from hermes_state_registry import acquire
-        if (tip.get("end_reason") or "") not in SessionDB.RECOVERABLE_END_REASONS:
+        tip_id = _try(lambda: persistence.lineage.tip(session_id), None) or session_id
+        tip = (_try(lambda: persistence.sessions.get(tip_id), None) or row) if tip_id != session_id else row
+        from persistence.conversation.sessions import RECOVERABLE_END_REASONS
+        from persistence_assembly import open_persistence, profile_scope
+        if (tip.end_reason or "") not in RECOVERABLE_END_REASONS:
             return False
-        wdb = acquire(Path(profile_path) / "state.db")
+        writer = open_persistence(profile_scope(home=Path(profile_path)))
         try:
-            return bool(wdb.unarchive_recoverable_session(session_id))
+            return bool(writer.sessions.unarchive_recoverable(session_id))
         finally:
-            _best_effort(lambda: _lazy("hermes_state_registry", "release_or_close")(wdb))
+            _best_effort(writer.close)
     except Exception:
         return False
 
 
 def _live_count_field(db, session_id) -> dict:
-    """``{"live_message_count": n}`` sized like a stored-transcript read, else ``{}`` (older stores).
+    """``{"live_message_count": n}`` sized like a stored-transcript read, else ``{}`` (older stores)."""
+    with _persistence_for(db) as persistence:
+        return _display_count_field(persistence, session_id)
+
+
+def _display_count_field(persistence, session_id) -> dict:
+    """:func:`_live_count_field` on an interface handle.
 
     The denormalized ``message_count`` also counts folded rows (orphaned compaction marks, full
     rewinds, model-only rows), which once made the roster wait for history no reader serves."""
+    from persistence.core.errors import STORE_FAILURES
     try:
-        return {"live_message_count": db.display_message_count(str(session_id))}
-    except sqlite3.Error:
+        return {"live_message_count": persistence.messages.display_count(str(session_id))}
+    except STORE_FAILURES:
         return {}
 
 
-def _canonical_session_row(db, profile_path):
+def _canonical_session_row(persistence, profile_path):
     """Summary of the profile's canonical "Bot Chat" row (identity is the NAME), or None.
     Lineages via ``get_compression_tip`` (NOT the resume walker's unmarked-child fallback);
     worker sources count as absent. ``id`` is the registry row, ``resolved_id`` the live tip.
@@ -176,9 +189,9 @@ def _canonical_session_row(db, profile_path):
     involved.
     """
     try:
-        row = db.get_session_by_title("Bot Chat")
-        session_id = str((row or {}).get("id") or "").strip()
-        if not session_id or _denied_source(row):
+        row = persistence.sessions.get_by_title("Bot Chat")
+        session_id = str(getattr(row, "session_id", "") or "").strip()
+        if not session_id or _denied_source({"source": row.source}):
             return None
         # Archived = retired (absent), except accidental reaper archives: resurrect those.
         # An archived canonical row usually means the user deliberately retired it — report absent. But the
@@ -186,22 +199,22 @@ def _canonical_session_row(db, profile_path):
         # recoverability READ-ONLY first so the writable open (20s write-lock patience, the very stall this
         # refactor removes from the 5s poll) is paid only in the rare accidental-archive case, then run the
         # real predicate through unarchive_recoverable_session on a short-lived writable handle.
-        if row.get("archived") and not _resurrect_recoverable_canonical(db, profile_path, session_id):
+        if row.archived and not _resurrect_recoverable_canonical(persistence, profile_path, session_id):
             return None
-        tip = _try(lambda: db.get_compression_tip(session_id), None) or session_id
-        tip_row = db.get_session(tip) or row
-        started = row.get("started_at") or 0
+        tip = _try(lambda: persistence.lineage.tip(session_id), None) or session_id
+        tip_row = persistence.sessions.get(tip) or row
+        started = row.started_at or 0
         return {
-            "id": session_id, "resolved_id": tip, "root_title": row.get("title") or "",
-            "title": tip_row.get("title") or "", "preview": _latest_message_preview(db, tip),
-            "started_at": tip_row.get("started_at") or started,
-            "last_active": tip_row.get("last_activity_at") or tip_row.get("started_at") or started,
-            "message_count": tip_row.get("message_count") or 0, **_live_count_field(db, tip)}
+            "id": session_id, "resolved_id": tip, "root_title": row.title or "",
+            "title": tip_row.title or "", "preview": _latest_message_preview(persistence, tip),
+            "started_at": tip_row.started_at or started,
+            "last_active": tip_row.last_activity_at or tip_row.started_at or started,
+            "message_count": tip_row.message_count or 0, **_display_count_field(persistence, tip)}
     except Exception:
         return None
 
 
-def _latest_profile_session_rows(db):
+def _latest_profile_session_rows(persistence):
     """(newest human-facing session, newest worker session); the worker row lets rosters show a
     profile as working (workers heartbeat ``last_activity_at`` every ≤60s).
 
@@ -213,20 +226,23 @@ def _latest_profile_session_rows(db):
     any failure (missing state.db, locked db, older schema) degrades to (None, None) rather than failing the
     whole profiles.list call.
     """
+    from persistence.conversation.sessions import SessionOrder, SessionQuery, SessionWindow
     try:
         human = worker = None
-        for s in db.list_sessions_rich(source=None, limit=20, order_by_last_active=True, compact_rows=True):
-            title, last_active = s.get("title") or "", s.get("last_active") or s.get("started_at") or 0
-            if _denied_source(s):
+        for entry in persistence.sessions.list_sessions(
+                SessionQuery(order=SessionOrder.LAST_ACTIVE), SessionWindow(limit=20), compact_rows=True):
+            s = entry.session
+            title, last_active = s.title or "", entry.last_active or s.started_at or 0
+            if _denied_source({"source": s.source}):
                 if worker is None:
-                    worker = {"id": s["id"], "source": (s.get("source") or "").strip().lower(),
+                    worker = {"id": s.session_id, "source": (s.source or "").strip().lower(),
                               "title": title, "last_active": last_active}
             elif human is None:  # rosters want "where the conversation IS": prefer the newest text
-                human = {"id": s["id"], "title": title,
-                         "preview": _latest_message_preview(db, s["id"]) or s.get("preview") or "",
-                         "started_at": s.get("started_at") or 0, "last_active": last_active,
-                         "message_count": s.get("message_count") or 0,
-                         **_live_count_field(db, s["id"])}
+                human = {"id": s.session_id, "title": title,
+                         "preview": _latest_message_preview(persistence, s.session_id) or entry.preview,
+                         "started_at": s.started_at or 0, "last_active": last_active,
+                         "message_count": s.message_count or 0,
+                         **_display_count_field(persistence, s.session_id)}
             if human is not None and worker is not None:
                 break
         return human, worker
@@ -239,18 +255,16 @@ def _profile_session_fields(row, profile_path):
     read-only attach (a writable ``SessionDB()`` waits up to 20s for the write lock + runs DDL
     and stalled the 5s roster poll); no/unreadable DB -> every field None (the readers swallow)."""
     def _read() -> dict:
-        db_path = Path(profile_path) / "state.db"
-        db = None
-        if _try(db_path.exists, False):
-            db = _try(lambda: _lazy("hermes_state", "SessionDB")(db_path=db_path, read_only=True), None)
-        try:
-            last, worker = _latest_profile_session_rows(db)
+        from persistence_assembly import open_persistence_reader, profile_scope, store_exists
+        scope = profile_scope(home=Path(profile_path))
+        with contextlib.ExitStack() as handles:
+            persistence = None
+            if _try(lambda: store_exists(scope), False):
+                persistence = _try(lambda: handles.enter_context(open_persistence_reader(scope.profile_dir)), None)
+            last, worker = _latest_profile_session_rows(persistence)
             # Resolved server-side on every listing so no client carries a session pointer.
             return {"last_session": last, "worker_session": worker,
-                    "canonical_session": _canonical_session_row(db, profile_path)}
-        finally:
-            if db is not None:
-                _best_effort(db.close)
+                    "canonical_session": _canonical_session_row(persistence, profile_path)}
 
     # These three are a pure function of the profile's session store, and the roster re-asks every
     # 5s per connection — so they are reused while that store has not moved (#117257).
@@ -567,26 +581,32 @@ def _configure_ui_meta(profile_dir, params, applied) -> None:
 
 
 def _profile_group_selection_context(profile_dir, target_model):
-    """The largest measured context among this profile's affected group members."""
-    from agent.usage_anchor import USAGE_ANCHOR_MODEL_CONFIG_KEY, persisted_anchor_tokens
+    """The largest measured context among this profile's affected group members. The store is read through a
+    reader's handle, which ``persisted_anchor_tokens`` does not read through, so the anchor read here is applied
+    the way that helper applies it."""
+    from agent.usage_anchor import USAGE_ANCHOR_MODEL_CONFIG_KEY, _serialize, anchored_context_tokens
     from hermes_cli.model_selection_guards import SelectionContext
-    from hermes_state import SessionDB
+    from persistence.conversation.sessions import SessionQuery, SessionWindow
+    from persistence_assembly import open_persistence_reader, profile_scope, store_exists
 
-    path = profile_dir / "state.db"
-    if not path.is_file():
+    scope = profile_scope(home=Path(profile_dir))
+    if not store_exists(scope):
         return None
 
     largest = None
-    with SessionDB(path, read_only=True) as db:
-        sessions = db.list_sessions_rich(source="bot_room", limit=-1, include_hidden=True, compact_rows=True)
-        for session in sessions:
-            current_model = session["model"]
+    with open_persistence_reader(scope.profile_dir) as store:
+        sessions = store.sessions.list_sessions(
+            SessionQuery(sources=("bot_room",), include_hidden=True), SessionWindow(limit=None), compact_rows=True)
+        for entry in sessions:
+            current_model = entry.session.model
             if current_model == target_model:
                 continue
-            sid = session["id"]
-            if not db.get_session_model_config_value(sid, USAGE_ANCHOR_MODEL_CONFIG_KEY):
+            sid = entry.session.session_id
+            anchor = store.sessions.get_model_config_value(sid, USAGE_ANCHOR_MODEL_CONFIG_KEY)
+            if not anchor:
                 continue
-            tokens = persisted_anchor_tokens(db, sid, db.get_messages_as_conversation(sid))
+            history = [m.as_openai_message() for m in store.messages.read_conversation(sid)]
+            tokens = anchored_context_tokens(history, _serialize(anchor))
             if tokens and (largest is None or tokens > (largest.context_tokens or 0)):
                 largest = SelectionContext(context_tokens=tokens, current_model=current_model)
     return largest

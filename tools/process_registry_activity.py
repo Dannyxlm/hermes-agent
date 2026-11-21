@@ -18,7 +18,7 @@ def new_process_session(command, task_id, owner_task_id, session_key, cwd, **ext
         parent_session_id=stored_session_id,
         wsl_chain=_is_wsl_launcher_command(command), started_at=time.time(), **extra)
     from pathlib import Path
-    from hermes_state_launches import short_title
+    from persistence.sqlite.conversation._store.launches import short_title
     home = Path(session.owner_profile_home)
     session.launch_id = "process:" + session.id
     session.launcher_session_id = stored_session_id

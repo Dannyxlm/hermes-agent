@@ -136,7 +136,7 @@ def test_finite_cli_closes_only_owned_ephemeral_sessions(runtime, source):
         run(attributed, *resume, "-q", "resumed", "-Q", *(["--oneshot"] if source in {"oneshot", "tool"} else []))
     row, = stored(home, "SELECT * FROM sessions WHERE id=?", (sid,))
     launches = stored(home, "SELECT * FROM work_launches")
-    from hermes_state_terminal import RESULT_PREFIX, load_result
+    from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
     receipt, = stored(home, "SELECT m.value FROM session_admissions a JOIN state_meta m ON m.key=? || a.admission_id "
                            "WHERE a.target_session_id=? ORDER BY a.seq DESC LIMIT 1", (RESULT_PREFIX, sid))
     assert load_result(receipt["value"])["result"]["terminal_cause"] == "success"

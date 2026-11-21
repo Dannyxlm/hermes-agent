@@ -7,17 +7,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_state import SessionDB
-from hermes_state_runtime import begin_runtime_epoch
+from persistence.gateway.hosted_rooms import HostedTaskIdentity
+from persistence_assembly import open_persistence, profile_scope
+from tests.persistence_sqlite.core._fork_store import SessionDB
 
 
 @pytest.fixture
 def room(tmp_path, monkeypatch):
     from gateway.session_hosted_service import CanonicalHostedRoomService
-    from gateway.hosted_rooms import create_room, local_authority_gateway_id
+    from gateway.hosted_rooms import local_authority_gateway_id
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
-    with SessionDB(tmp_path / 'state.db') as db:
-        authority = SimpleNamespace(db=db, profile_id=str(tmp_path), epoch=begin_runtime_epoch(db, instance_id='test'))
+    with open_persistence(profile_scope(home=tmp_path)) as store, SessionDB(tmp_path / 'state.db') as db:
+        authority = SimpleNamespace(db=db, persistence=store, profile_id=str(tmp_path),
+                                    epoch=store.runtime.begin_epoch(instance_id='test'))
         from gateway.session_authority import SessionAuthority
         authority.logical_owner = lambda session_id: SessionAuthority.logical_owner(authority, session_id)
         service = authority.hosted_room_service = CanonicalHostedRoomService(authority, None)
@@ -25,9 +27,8 @@ def room(tmp_path, monkeypatch):
         monkeypatch.setattr(service.runtime, 'status', lambda: {'running': True, 'stopping': False})
         monkeypatch.setattr(service, '_prepare_tracked', lambda b: None)
         monkeypatch.setattr(service.runtime, 'wakeup', lambda: None)
-        service.authorize_room('owner', 'room', create=True)
         gateway = local_authority_gateway_id()
-        create_room(db.db_path, room_id='room', name='Room', authority_gateway_id=gateway, members=[
+        service.create_room(room_id='room', name='Room', owner='owner', members=[
             {'member_id': 'default', 'profile': 'default', 'handle': 'ava'},
             {'member_id': 'atlas', 'profile': 'atlas', 'handle': 'atlas'}])
         yield authority, service, gateway
@@ -46,14 +47,14 @@ def submit_task(room, *, automation=False, legacy=False):
         event = _group(authority, SessionActor('owner', authority.profile_id, frozenset(), 'test'), 'groups.send',
                        {'room_id': 'room', 'event_id': 'input', 'payload': {'text': 'input', 'thread_id': 'main'}},
                        automation=automation)['event']
-    identity = tasks.TaskIdentity('room', 'task', 'main', 'turn')
+    identity = HostedTaskIdentity('room', 'task', 'main', 'turn')
     payload = {'target_profile': 'default', 'target_member_id': 'default',
                'source_event_seq': event['seq'], 'prompt': 'frozen'}
-    tasks.admit_task(authority.db.db_path, identity, payload=payload, clock=time.time)
-    lease = tasks.acquire_lease(authority.db.db_path, room_id='room', gateway_id=gateway, authority_epoch=1,
+    tasks.admit_task(service.store, identity, placement=service.placement, payload=payload, clock=time.time)
+    lease = tasks.acquire_lease(service.store, placement=service.placement, room_id='room', gateway_id=gateway, authority_epoch=1,
                                process_generation='test', ttl_seconds=30, clock=time.time)
-    tasks.start_task(authority.db.db_path, identity, lease, expected_cancel_generation=0, clock=time.time)
-    task, = tasks.list_tasks(authority.db.db_path, room_id='room')
+    tasks.start_task(service.store, identity, lease, placement=service.placement, expected_cancel_generation=0, clock=time.time)
+    task, = tasks.list_tasks(service.store, placement=service.placement, room_id='room')
     rpc = service._resolve_member_transport(HostedRoomBinding('room', gateway, 1), task)
     row = {'admission_id': 'admission', 'principal_id': 'owner',
            'request_id': 'hosted:' + json.dumps([asdict(identity), task['execution_generation']]),
@@ -119,7 +120,7 @@ def test_foreign_control_and_client_attestation_field_are_rejected(room):
 
 
 def test_trigger_receipt_is_atomic_and_never_backfills_legacy_events(room, monkeypatch):
-    from gateway import hosted_rooms
+    from persistence.sqlite.gateway import hosted_rooms
     from gateway.hosted_room_memory import local_memory_context
     from gateway.session_contract import SessionActor
     from gateway.session_group_controls import _group

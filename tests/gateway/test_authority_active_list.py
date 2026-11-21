@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from tests.fixtures.storage_seed import seed_session
 
 
 @pytest_asyncio.fixture
@@ -30,10 +31,10 @@ async def owner(tmp_path, monkeypatch):
         await release.wait()
         return event.text
 
-    runner = SimpleNamespace(_session_db=store._db, session_store=store, _draining=False,
+    runner = SimpleNamespace(_session_db=store.persistence, session_store=store, _draining=False,
                              _handle_message=answer, _adapter_for_source=lambda source: None)
     authority = await initialize_session_authority(runner, profile_id=str(tmp_path), instance_id='owner')
-    store._db.create_session('chat', source='telegram')
+    seed_session(store.persistence, 'chat', 'telegram')
     authority.sessions['chat'] = LiveSession(SessionSource(platform=Platform.TELEGRAM, chat_id='chat'), 'chat')
     connection = AuthorityConnection(authority, object(), {'user_id': 'viewer'})
 
@@ -62,28 +63,32 @@ async def test_a_running_turn_reads_working_until_it_settles(owner):
     assert (await owner.active())['chat']['status'] == 'idle'
 
 
+def _seed_thread_launch(store, launch_id, child_sid, *, launcher_profile='default'):
+    from persistence.sqlite.conversation._store.launches import bind_stored_launch, write_launch
+    from tests.fixtures.storage_holder import raw_holder
+
+    holder = raw_holder(store)
+    write_launch(holder, launch_id, kind='lane', launcher_profile=launcher_profile,
+                 launcher_session_id='opening-chat', child_profile='default')
+    bind_stored_launch(holder, launch_id, child_session_id=child_sid)
+
+
 @pytest.mark.asyncio
 async def test_thread_provenance_comes_from_the_authority_store(owner):
-    db = owner.authority.db
-    db.record_launch(launch_id='thread:authority', kind='lane', launcher_profile='other',
-                     launcher_session_id='opening-chat', child_profile='default')
-    db.bind_launch('thread:authority', child_session_id='chat')
+    _seed_thread_launch(owner.authority.persistence, 'thread:authority', 'chat', launcher_profile='other')
     assert (await owner.active())['chat'].get('thread_parent_id') == 'opening-chat'
 
 
 @pytest.mark.asyncio
 async def test_thread_provenance_survives_multiple_compressions_but_not_forks(owner):
     from gateway.session_authority import LiveSession
-    db = owner.authority.db
-    db.create_session('thread-root', source='desktop')
-    db.record_launch(launch_id='thread:compressed', kind='lane', launcher_profile='default',
-                     launcher_session_id='opening-chat', child_profile='default')
-    db.bind_launch('thread:compressed', child_session_id='thread-root')
-    for parent, child in [('thread-root', 'middle'), ('middle', 'tip')]:
-        db._write_sql('UPDATE sessions SET end_reason=? WHERE id=?', ('compression', parent))
-        db.create_session(child, source='desktop', parent_session_id=parent)
-    db.create_session('fork', source='desktop', parent_session_id='thread-root',
-                      model_config={'_branched_from': 'thread-root'})
+    store = owner.authority.persistence
+    seed_session(store, 'thread-root', 'desktop', end_reason='compression')
+    _seed_thread_launch(store, 'thread:compressed', 'thread-root')
+    seed_session(store, 'middle', 'desktop', parent_session_id='thread-root', end_reason='compression')
+    seed_session(store, 'tip', 'desktop', parent_session_id='middle')
+    seed_session(store, 'fork', 'desktop', parent_session_id='thread-root',
+                 model_config={'_branched_from': 'thread-root'})
     source = owner.authority.sessions['chat'].source
     for sid in ['tip', 'fork']:
         owner.authority.sessions[sid] = LiveSession(source, sid)
@@ -96,13 +101,13 @@ async def test_thread_provenance_survives_multiple_compressions_but_not_forks(ow
 @pytest.mark.asyncio
 async def test_a_session_replaced_during_provenance_read_does_not_publish_the_old_snapshot(owner, monkeypatch):
     from copy import copy
-    import hermes_state_launches
+    from persistence.sqlite.conversation._store import launches
 
     def replaced_during_read(*args):
         owner.authority.sessions['chat'] = copy(owner.authority.sessions['chat'])
         return {}
 
-    monkeypatch.setattr(hermes_state_launches, 'thread_parents', replaced_during_read, raising=False)
+    monkeypatch.setattr(launches, 'thread_parents', replaced_during_read)
     assert await owner.active() == {}
 
 

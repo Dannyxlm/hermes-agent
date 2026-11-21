@@ -5,8 +5,19 @@ import sqlite3
 
 import pytest
 
-from hermes_state import SessionDB
-import hermes_state_runtime as rt
+from tests.persistence_sqlite.core._fork_runtime import admit_session_input
+from tests.persistence_sqlite.core._fork_store import MEDIA_ROOT, SessionDB
+from persistence.sqlite.authority._admission_store import (
+    cancel_session_input,
+    claim_session_input,
+    list_session_admissions,
+    recover_session_inputs,
+    settle_session_input,
+    steer_session_input,
+)
+from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
+from persistence.sqlite.conversation._store.compression import _session_turn_lease_key_on_conn
+from persistence.sqlite.workers._executions import adopt_worker_execution, register_worker_execution
 import hermes_state_release as release
 
 
@@ -14,26 +25,26 @@ import hermes_state_release as release
 def ledger(tmp_path):
     path = tmp_path / 'state.db'
     with SessionDB(path) as db:
-        epoch = rt.begin_runtime_epoch(db, instance_id='synthetic-owner')
+        epoch = begin_runtime_epoch(db, instance_id='synthetic-owner')
         for sid in ('work', 'lead', 'foreign', 'legacy'):
             db.create_session(sid, source='api_server')
         # Age cannot remove a long-running obligation from a restart snapshot.
         db._execute_write(lambda c: c.execute('UPDATE sessions SET started_at=1'))
         admitted = {}
         for sid in ('work', 'lead', 'foreign'):
-            admitted[sid] = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+            admitted[sid] = admit_session_input(db, epoch=epoch, principal_id='api',
                 session_id=sid, request_id='request-' + sid,
                 payload={'text': 'SECRET INPUT', 'messages': ['SECRET HISTORY']})
-        claim = rt.claim_session_input(db, epoch=epoch, session_id='work')
+        claim = claim_session_input(db, epoch=epoch, session_id='work')
         execution_id = 'admission-worker:' + claim['admission_id']
-        rt.register_worker_execution(db, epoch=epoch, execution_id=execution_id,
+        register_worker_execution(db, epoch=epoch, execution_id=execution_id,
             session_id='work', generation=claim['generation'], kind='compute',
             adoption_secret='SECRET ADOPTION')
-        steer = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        steer = admit_session_input(db, epoch=epoch, principal_id='api',
             session_id='work', request_id='steer', payload={'text': 'SECRET STEER'}, intent='steer')
-        rt.steer_session_input(db, epoch=epoch, admission_id=steer['admission_id'],
+        steer_session_input(db, epoch=epoch, admission_id=steer['admission_id'],
             generation=claim['generation'])
-        queued = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        queued = admit_session_input(db, epoch=epoch, principal_id='api',
             session_id='work', request_id='queue', payload={'text': 'SECRET QUEUED'})
         yield path, db, epoch, claim, steer, queued, execution_id, admitted
 
@@ -43,7 +54,7 @@ def _scope():
 
 
 def _settle(db, epoch, claim, steer):
-    rt.settle_session_input(db, epoch=epoch, admission_id=claim['admission_id'],
+    settle_session_input(db, epoch=epoch, admission_id=claim['admission_id'],
         generation=claim['generation'], outcome='completed',
         _transfers={steer['admission_id']: True})
 
@@ -51,7 +62,7 @@ def _settle(db, epoch, claim, steer):
 def test_whole_profile_snapshot_includes_lead_and_new_admission_not_historical_idle(ledger):
     path, db, epoch, _, _, _, _, admitted = ledger
     db.create_session('new-at-start', source='api_server')
-    new = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+    new = admit_session_input(db, epoch=epoch, principal_id='api',
         session_id='new-at-start', request_id='new', payload={'text': 'SECRET NEW'})
     batch = release.snapshot_release_evidence(path, scope=None)
     assert batch.scope is None and batch.complete
@@ -64,7 +75,7 @@ def test_stale_pre_enumerated_scope_cannot_certify_whole_profile_coverage(ledger
     path, db, epoch, _, _, _, _, _ = ledger
     earlier_scope = release.ReleaseScope(('work', 'lead', 'foreign'))
     db.create_session('racing-new-target', source='api_server')
-    arrival = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+    arrival = admit_session_input(db, epoch=epoch, principal_id='api',
         session_id='racing-new-target', request_id='racing-new-target', payload={})
     # Planted old integration: its narrower explicit scope can truthfully pass,
     # but mislabelling that as whole-profile coverage loses this admitted ID.
@@ -92,7 +103,7 @@ def test_whole_profile_discovery_and_settlement_share_read_linearization(ledger,
         rows = original(*args, **kwargs)
         _settle(db, epoch, claim, steer)
         db.create_session('after-linearization', source='api_server')
-        rt.admit_session_input(db, epoch=epoch, principal_id='api',
+        admit_session_input(db, epoch=epoch, principal_id='api',
             session_id='after-linearization', request_id='late', payload={})
         return rows
 
@@ -114,18 +125,19 @@ def test_whole_profile_untracked_active_compression_root_lease_not_idle_history(
     active = release.snapshot_release_evidence(path, scope=None)
     assert not active.complete and 'untracked_active_lease' in active.issues
     # The actual writer keys this continuation's lease to the compressed root.
-    assert db._session_turn_lease_key('compression-child') == 'legacy'
-    admission = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+    with db._read_ctx() as conn:
+        assert _session_turn_lease_key_on_conn(db, conn, 'compression-child') == 'legacy'
+    admission = admit_session_input(db, epoch=epoch, principal_id='api',
         session_id='compression-child', request_id='compressed-turn', payload={})
     # A queued arrival is not evidence for the legacy turn holding this lease.
     queued_only = release.snapshot_release_evidence(path, scope=None)
     assert not queued_only.complete and 'untracked_active_lease' in queued_only.issues
-    claimed = rt.claim_session_input(db, epoch=epoch, session_id='compression-child')
+    claimed = claim_session_input(db, epoch=epoch, session_id='compression-child')
     assert isinstance(claimed, dict)
     tracked = release.snapshot_release_evidence(path, scope=None)
     assert not tracked.complete and tracked.issues == ('lease_identity_unavailable',)
     assert admission['admission_id'] in {row.key.id for row in tracked.rows}
-    rt.settle_session_input(db, epoch=epoch, admission_id=claimed['admission_id'],
+    settle_session_input(db, epoch=epoch, admission_id=claimed['admission_id'],
         generation=claimed['generation'], outcome='completed')
     assert not release.snapshot_release_evidence(path, scope=None).complete
     db._execute_write(lambda c: c.execute('UPDATE session_turn_leases SET expires_at=0'))
@@ -140,16 +152,16 @@ def test_whole_profile_lookup_uses_only_saved_keys_and_exact_tombstones(ledger):
     before = release.snapshot_release_evidence(path, scope=None)
     keys = tuple(row.key for row in before.rows if row.key.target_session_id == 'work')
     _settle(db, epoch, claim, steer)
-    rt.cancel_session_input(db, epoch=epoch, admission_id=queued['admission_id'])
-    later = rt.admit_session_input(db, epoch=epoch, principal_id='api',
+    cancel_session_input(db, epoch=epoch, admission_id=queued['admission_id'])
+    later = admit_session_input(db, epoch=epoch, principal_id='api',
         session_id='foreign', request_id='not-captured', payload={})
     after = release.lookup_release_evidence(path, scope=None, keys=keys)
     assert after.scope is None and after.complete
     assert {row.key.id for row in after.rows} == {key.id for key in keys}
     assert later['admission_id'] not in {row.key.id for row in after.rows}
     assert all(row.terminal for row in after.rows)
-    from hermes_state_mutation_retirement import retire_terminal_receipts
-    db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+    from persistence.sqlite.conversation._store.retirement import retire_terminal_receipts
+    db._execute_write(lambda c: retire_terminal_receipts(c, ['work'], media_root=MEDIA_ROOT))
     retired = release.lookup_release_evidence(path, scope=None, keys=keys)
     assert not retired.missing_keys and all(row.storage == 'tombstone' for row in retired.rows)
     assert 'lineage_unavailable' in retired.issues
@@ -164,9 +176,9 @@ def test_whole_profile_read_is_pinned_before_discovery_or_authority_interleaving
     def interleave(conn, issues):
         # At this seam no authority, session IDs, or ledger rows have been
         # returned yet. The reader must already have pinned its WAL read.
-        next_epoch = rt.begin_runtime_epoch(db, instance_id='racing-owner')
+        next_epoch = begin_runtime_epoch(db, instance_id='racing-owner')
         db.create_session('racing-session', source='api_server')
-        admitted.append(rt.admit_session_input(db, epoch=next_epoch, principal_id='api',
+        admitted.append(admit_session_input(db, epoch=next_epoch, principal_id='api',
             session_id='racing-session', request_id='racing', payload={}))
         return original(conn, issues)
 
@@ -190,10 +202,11 @@ def test_whole_profile_fork_ledger_cannot_cover_untracked_parent_lease(ledger, s
         "UPDATE sessions SET end_reason='compression' WHERE id='legacy'"))
     db.create_session('fork', source=source, parent_session_id='legacy', model_config=config)
     assert db.try_acquire_session_turn_lease('legacy', 'synthetic-parent-holder')
-    rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id='fork',
+    admit_session_input(db, epoch=epoch, principal_id='api', session_id='fork',
         request_id='fork-turn', payload={})
-    assert isinstance(rt.claim_session_input(db, epoch=epoch, session_id='fork'), dict)
-    assert db._session_turn_lease_key('fork') == 'fork'
+    assert isinstance(claim_session_input(db, epoch=epoch, session_id='fork'), dict)
+    with db._read_ctx() as conn:
+        assert _session_turn_lease_key_on_conn(db, conn, 'fork') == 'fork'
     batch = release.snapshot_release_evidence(path, scope=None)
     assert not batch.complete and batch.issues == ('untracked_active_lease',)
 
@@ -214,7 +227,7 @@ def test_snapshot_then_terminal_exact_readback_and_retirement(ledger):
     assert not rows[steer['admission_id']].terminal
     assert not any(row.completed_turn for row in before.rows)
     _settle(db, epoch, claim, steer)
-    rt.cancel_session_input(db, epoch=epoch, admission_id=queued['admission_id'])
+    cancel_session_input(db, epoch=epoch, admission_id=queued['admission_id'])
     keys = tuple(row.key for row in before.rows)
     after = release.lookup_release_evidence(path, scope=_scope(), keys=keys)
     assert after.complete and not after.missing_keys
@@ -223,8 +236,8 @@ def test_snapshot_then_terminal_exact_readback_and_retirement(ledger):
     assert completed == [claim['admission_id']]
     assert not release.snapshot_release_evidence(path, scope=_scope()).rows
     # The real retirement path deletes live rows and writes metadata-bearing tombstones.
-    from hermes_state_mutation_retirement import retire_terminal_receipts
-    db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+    from persistence.sqlite.conversation._store.retirement import retire_terminal_receipts
+    db._execute_write(lambda c: retire_terminal_receipts(c, ['work'], media_root=MEDIA_ROOT))
     retired = release.lookup_release_evidence(path, scope=_scope(), keys=keys)
     assert {row.key.id for row in retired.rows} == set(rows)
     assert all(row.storage == 'tombstone' and row.terminal for row in retired.rows)
@@ -237,12 +250,12 @@ def test_sql_authorizer_denies_content_before_it_can_be_redacted(ledger, monkeyp
     path, db, epoch, claim, steer, _, _, _ = ledger
     before = release.snapshot_release_evidence(path, scope=_scope())
     _settle(db, epoch, claim, steer)
-    from hermes_state_mutation_retirement import retire_terminal_receipts
+    from persistence.sqlite.conversation._store.retirement import retire_terminal_receipts
     # The still queued row must be cancelled before retirement.
-    queued = rt.list_session_admissions(db, session_id='work')
+    queued = list_session_admissions(db, session_id='work')
     for row in queued:
-        rt.cancel_session_input(db, epoch=epoch, admission_id=row['admission_id'])
-    db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+        cancel_session_input(db, epoch=epoch, admission_id=row['admission_id'])
+    db._execute_write(lambda c: retire_terminal_receipts(c, ['work'], media_root=MEDIA_ROOT))
     original_connect = sqlite3.connect
     reads = []
     denied = []
@@ -301,8 +314,8 @@ def test_cross_scope_missing_and_wrong_execution_identity_are_incomplete(ledger)
 def test_restarted_authority_does_not_replace_execution_identity(ledger):
     path, db, epoch, _, _, _, _, _ = ledger
     before = release.snapshot_release_evidence(path, scope=_scope())
-    restarted_epoch = rt.begin_runtime_epoch(db, instance_id='synthetic-restart')
-    rt.recover_session_inputs(db, epoch=restarted_epoch)
+    restarted_epoch = begin_runtime_epoch(db, instance_id='synthetic-restart')
+    recover_session_inputs(db, epoch=restarted_epoch)
     result = release.lookup_release_evidence(path, scope=_scope(), keys=tuple(row.key for row in before.rows))
     assert result.complete and result.authority_epoch == restarted_epoch
     assert result.authority_instance_id == 'synthetic-restart'
@@ -380,29 +393,29 @@ def test_adopted_long_running_work_remains_visible_but_epoch_drift_is_incomplete
     path = tmp_path / 'state.db'
     scope = release.ReleaseScope(('work',))
     with SessionDB(path) as db:
-        epoch = rt.begin_runtime_epoch(db, instance_id='before-release')
+        epoch = begin_runtime_epoch(db, instance_id='before-release')
         db.create_session('work', source='api_server')
-        rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
+        admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
             request_id='long-running', payload={'text': 'PRIVATE INPUT'})
-        claimed = rt.claim_session_input(db, epoch=epoch, session_id='work')
+        claimed = claim_session_input(db, epoch=epoch, session_id='work')
         assert isinstance(claimed, dict)
-        rt.register_worker_execution(db, epoch=epoch, execution_id='child-work',
+        register_worker_execution(db, epoch=epoch, execution_id='child-work',
             session_id='work', generation=claimed['generation'], kind='cron',
             adoption_secret='synthetic-adoption')
-        rt.adopt_worker_execution(db, epoch=epoch, execution_id='child-work',
+        adopt_worker_execution(db, epoch=epoch, execution_id='child-work',
             session_id='work', generation=claimed['generation'], adoption_secret='synthetic-adoption')
         before = release.snapshot_release_evidence(path, scope=scope)
         assert before.complete
         keys = tuple(row.key for row in before.rows)
-        next_epoch = rt.begin_runtime_epoch(db, instance_id='after-release')
-        rt.recover_session_inputs(db, epoch=next_epoch)
-        rt.adopt_worker_execution(db, epoch=next_epoch, execution_id='child-work',
+        next_epoch = begin_runtime_epoch(db, instance_id='after-release')
+        recover_session_inputs(db, epoch=next_epoch)
+        adopt_worker_execution(db, epoch=next_epoch, execution_id='child-work',
             session_id='work', generation=claimed['generation'], adoption_secret='synthetic-adoption')
         during = release.lookup_release_evidence(path, scope=scope, keys=keys)
         assert not during.complete and not during.missing_keys
         assert during.issues == ('owner_epoch_changed',)
         assert {row.status for row in during.rows} == {'started', 'running'}
-        rt.settle_session_input(db, epoch=next_epoch, admission_id=claimed['admission_id'],
+        settle_session_input(db, epoch=next_epoch, admission_id=claimed['admission_id'],
             generation=claimed['generation'], outcome='completed')
         after = release.lookup_release_evidence(path, scope=scope, keys=keys)
         assert not after.complete and not after.missing_keys
@@ -416,13 +429,13 @@ def test_queued_identity_can_be_claimed_by_next_owner_without_inventing_a_turn(l
     key = next(row.key for row in before.rows if row.key.id == queued['admission_id'])
     assert key.generation is None
     _settle(db, epoch, claim, steer)
-    next_epoch = rt.begin_runtime_epoch(db, instance_id='next-queue-owner')
-    started = rt.claim_session_input(db, epoch=next_epoch, session_id='work')
+    next_epoch = begin_runtime_epoch(db, instance_id='next-queue-owner')
+    started = claim_session_input(db, epoch=next_epoch, session_id='work')
     assert isinstance(started, dict)
     during = release.lookup_release_evidence(path, scope=_scope(), keys=(key,))
     assert during.complete and not during.rows[0].completed_turn
     assert during.rows[0].key.owner_epoch == next_epoch
-    rt.settle_session_input(db, epoch=next_epoch, admission_id=started['admission_id'],
+    settle_session_input(db, epoch=next_epoch, admission_id=started['admission_id'],
         generation=started['generation'], outcome='completed')
     after = release.lookup_release_evidence(path, scope=_scope(), keys=(key,))
     assert after.complete and after.rows[0].completed_turn
@@ -507,7 +520,7 @@ def test_legacy_queue_scope_uses_exact_metadata_session_and_rejects_mismatched_k
     assert not release.snapshot_release_evidence(path, scope=release.ReleaseScope(('lead',))).complete
     unusual = 'id:with:_glob*?[]%'
     db.create_session(unusual, source='cli')
-    rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id=unusual,
+    admit_session_input(db, epoch=epoch, principal_id='api', session_id=unusual,
         request_id='odd', payload={})
     _legacy_receipt(db, session_id=unusual, input_id='other')
     assert not release.lookup_release_evidence(path, scope=release.ReleaseScope((unusual,)), keys=()).complete

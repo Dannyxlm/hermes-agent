@@ -1,9 +1,12 @@
 """Family reads use the existing RPC dispatchers and do not restore runtimes."""
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 from tests.test_hermes_family import LAUNCH_DDL, launch, session, NOW
 
 
@@ -13,7 +16,7 @@ from tests.test_hermes_family import LAUNCH_DDL, launch, session, NOW
 async def test_canonical_family_entrypoint(tmp_path, monkeypatch, field, expected):
     from gateway.session_authority import LiveSession, SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
@@ -24,7 +27,7 @@ async def test_canonical_family_entrypoint(tmp_path, monkeypatch, field, expecte
         launch(db._conn, "child", backend="delegate-target", cause="success", finished=NOW - 1)
         db._conn.commit()
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home),
-                                     instance_id="family", db=db, epoch=begin_runtime_epoch(db, instance_id="family"))
+                                     instance_id="family", persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="family"))
         authority.sessions["root"] = LiveSession(None, "route")
         connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
         monkeypatch.setattr("gateway.session_local_adoption.adopt_before_restore",
@@ -61,7 +64,7 @@ async def test_canonical_profile_grant_is_not_provenance(tmp_path, monkeypatch, 
     from gateway.session_authorities import SessionAuthorities
     from gateway.session_authority import LiveSession, SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     other = home / "profiles" / "iris"
     other.mkdir(parents=True)
@@ -80,7 +83,7 @@ async def test_canonical_profile_grant_is_not_provenance(tmp_path, monkeypatch, 
         foreign._conn.commit()
         authorities = []
         for path, store, name in ((home, db, "default"), (other, foreign, "iris")):
-            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, db=store,
+            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, persistence=storage_handle(Path(store.db_path).parent),
                 epoch=begin_runtime_epoch(store, instance_id=name))
             registry.add(path, authority, name=None if name == "default" else name)
             authorities.append(authority)
@@ -113,7 +116,7 @@ async def test_canonical_profile_grant_is_not_provenance(tmp_path, monkeypatch, 
 async def test_canonical_cold_stored_root_never_adopts_or_reads_another_local_owner(tmp_path, monkeypatch):
     from gateway.session_authority import SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
@@ -124,7 +127,7 @@ async def test_canonical_cold_stored_root_never_adopts_or_reads_another_local_ow
         db._conn.execute("UPDATE sessions SET user_id='somebody-else' WHERE id='private'")
         db._conn.commit()
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="cold",
-                                    db=db, epoch=begin_runtime_epoch(db, instance_id="cold"))
+                                    persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="cold"))
         connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
         try:
             for sid, readable in (("root", True), ("private", False), ("missing", False)):
@@ -142,7 +145,7 @@ async def test_canonical_pending_input_is_generation_bound_and_read_only(tmp_pat
     import threading
     from gateway.session_authority import LiveSession, SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
@@ -153,7 +156,7 @@ async def test_canonical_pending_input_is_generation_bound_and_read_only(tmp_pat
         launch(db._conn, "child")
         db._conn.commit()
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="pending",
-                                    db=db, epoch=begin_runtime_epoch(db, instance_id="pending"))
+                                    persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="pending"))
         live = LiveSession(None, "route")
         authority.sessions["child"] = live
         generation = db.get_session("child")["runtime_generation"]
@@ -183,7 +186,7 @@ async def test_resident_execution_is_not_erased_by_an_idle_authority_handle(tmp_
     import threading
     from gateway.session_authority import LiveSession, SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
@@ -198,7 +201,7 @@ async def test_resident_execution_is_not_erased_by_an_idle_authority_handle(tmp_
             _active_subagents={"child": {"agent": agent, "status": "running"}})
         monkeypatch.setitem(sys.modules, "tools.delegate_tool_registry", registry)
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="resident",
-                                    db=db, epoch=begin_runtime_epoch(db, instance_id="resident"))
+                                    persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="resident"))
         authority.sessions["child"] = LiveSession(None, "route")
         connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
         try:

@@ -15,7 +15,8 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from hermes_state_pidns import holder_namespace_token
+from agent.agent_init_session import agent_interface
+from process_identity import holder_namespace_token
 
 # Same logger name as the origin module so log records / caplog filters are unchanged.
 logger = logging.getLogger("run_agent")
@@ -41,10 +42,11 @@ class DurableTurnLease:
 
     def __init__(
         self, agent, db, session_id: str, holder: str, *, borrowed: bool = False,
-        expires_at: Optional[float] = None,
+        expires_at: Optional[float] = None, persistence=None,
     ) -> None:
         self.agent = agent
         self.db = db
+        self.persistence = persistence  # the owner's interface handle; None when ``db`` is a client store
         self.session_id = session_id  # id at admission; release always targets this row
         self.holder = holder
         self.borrowed = borrowed
@@ -124,7 +126,10 @@ class DurableTurnLease:
             return  # caller still owns the lease and may flush after this turn
         agent = self.agent
         try:
-            self.db.release_session_turn_lease(self.session_id, self.holder)
+            if self.persistence is not None:
+                self.persistence.coordination.release_turn_lease(session_id=self.session_id, holder=self.holder)
+            else:
+                self.db.release_session_turn_lease(self.session_id, self.holder)
         except Exception:
             logger.error("Failed to release session turn lease: %s", self.session_id, exc_info=True)
         if getattr(agent, "_active_session_turn_lease_holder", None) == self.holder:
@@ -229,10 +234,17 @@ class DurableTurnLease:
         patience = self._authority_deadline - _REFRESH_EXPIRY_MARGIN_S - started
         if patience <= 0:
             return self._stop_on_exhausted_authority()
+        patience_s = min(_REFRESH_WRITE_PATIENCE_S, patience)
         try:
-            if self.db.refresh_session_turn_lease(
-                self._current_session_id(), self.holder, ttl_seconds=LEASE_TTL_SECONDS,
-                patience_s=min(_REFRESH_WRITE_PATIENCE_S, patience),
+            if (
+                self.persistence.coordination.refresh_turn_lease(
+                    session_id=self._current_session_id(), holder=self.holder,
+                    ttl_seconds=LEASE_TTL_SECONDS, patience_s=patience_s,
+                )
+                if self.persistence is not None else
+                self.db.refresh_session_turn_lease(
+                    self._current_session_id(), self.holder, ttl_seconds=LEASE_TTL_SECONDS, patience_s=patience_s,
+                )
             ):
                 self._authority_deadline = started + LEASE_TTL_SECONDS
                 return None
@@ -245,9 +257,9 @@ class DurableTurnLease:
         except Exception as exc:
             if self.stop.is_set():
                 return False
-            from hermes_state_errors import is_sqlite_lock_error
+            from storage_errors import is_lock_contention
 
-            if is_sqlite_lock_error(exc):
+            if is_lock_contention(exc):
                 # The scheduler will not try again until one interval from now. If that attempt
                 # could not finish before the row expiry, stop before a successor can claim it.
                 if time.time() + self.refresh_interval + _REFRESH_EXPIRY_MARGIN_S >= self._authority_deadline:
@@ -275,14 +287,17 @@ class TurnLeaseAdmission:
     conversation_history: Optional[list[dict[str, Any]]] = None
 
 
-def _committed_lease_expiry(db, session_id: str, holder: str, floor: float) -> float:
+def _committed_lease_expiry(db, store, session_id: str, holder: str, floor: float) -> float:
     """The admitted row's committed ``expires_at``; when unreadable, ``floor + TTL`` (taken before
     acquisition, so never later than the real expiry). Overstating it lets a successor reclaim the
     row while this turn still believes it holds the lease."""
-    reader = getattr(db, "session_turn_lease_expires_at", None)
-    if callable(reader):
+    reader = None if store is not None else getattr(db, "session_turn_lease_expires_at", None)
+    if store is not None or callable(reader):
         try:
-            committed = reader(session_id, holder)
+            committed = (
+                store.coordination.turn_lease_expires_at(session_id=session_id, holder=holder)
+                if store is not None else reader(session_id, holder)
+            )
             if isinstance(committed, (int, float)):
                 return float(committed)
         except Exception:
@@ -290,13 +305,13 @@ def _committed_lease_expiry(db, session_id: str, holder: str, floor: float) -> f
     return floor + LEASE_TTL_SECONDS
 
 
-def _durable_session_exists(db, session_id: str) -> Optional[bool]:
+def _durable_session_exists(db, store, session_id: str) -> Optional[bool]:
     """True / False when the row read answered; None when it failed and the state is unknown."""
     try:
-        return db.get_session(session_id) is not None
+        return (store.sessions.get(session_id) if store is not None else db.get_session(session_id)) is not None
     except Exception:
-        # A locked / non-WAL read proves neither presence nor absence: get_session returns None —
-        # it does not raise — when the row is missing. See #84234.
+        # A locked / non-WAL read proves neither presence nor absence: the read returns None (it
+        # does not raise) when the row is missing. See #84234.
         logger.warning(
             "Could not check durable session after turn lease admission; row state is unknown",
             exc_info=True,
@@ -317,19 +332,20 @@ def admit_durable_turn_lease(
     reload. Returns an ``early_result`` (interrupted / timed out) instead of a lease when admission
     fails; the caller returns it verbatim."""
     db = getattr(agent, "_session_db", None)
+    store = agent_interface(agent)  # None: ``db`` is a client store and takes the legacy calls
     admission = TurnLeaseAdmission(conversation_history=conversation_history)
     if db is None or not session_id or getattr(agent, "_persist_disabled", False):
         if session_turn_lease_holder:
             raise RuntimeError("Pre-acquired session turn lease cannot be used for this turn")
         return admission
     # Check the concrete type: MagicMock-style shims accept any attribute without the protocol.
-    if not session_turn_lease_holder and not callable(getattr(type(db), "acquire_session_turn_lease", None)):
+    if not session_turn_lease_holder and store is None and not callable(getattr(type(db), "acquire_session_turn_lease", None)):
         return admission
     # A session id without a row still takes the lease: client-addressed ids (API server
     # X-Hermes-Session-Id, /v1/runs session_id, fingerprint-derived chat ids) are not
     # process-unique, and the first turn creates the row mid-turn, so a second writer would
     # otherwise find the row, take an unheld lease and interleave its turn into this one.
-    # pidns stamp: see hermes_state_pidns.
+    # pidns stamp: see process_identity.holder_namespace_token.
     holder = str(session_turn_lease_holder or "") or (
         f"pid={os.getpid()}{holder_namespace_token()}:turn={relay_turn_id}"
         f":platform={task_context['platform'] or 'unknown'}"
@@ -353,17 +369,26 @@ def admit_durable_turn_lease(
             f"⏳ Still waiting for the other Hermes process on this session ({int(elapsed)}s)..."
         )
 
-    authority_floor = time.time()  # every acquisition or renewal stamps its expiry after this instant
+    authority_floor = time.time()  # every acquisition attempt stamps its expiry after this instant
+    wait = dict(
+        ttl_seconds=LEASE_TTL_SECONDS, wait_seconds=LEASE_WAIT_SECONDS,
+        on_wait=_on_wait, on_contended=_on_contended,
+        should_abort=lambda: getattr(agent, "_interrupt_requested", False),
+    )
     if session_turn_lease_holder:
-        refresh = getattr(db, "refresh_session_turn_lease", None)
-        admitted = callable(refresh) and refresh(session_id, holder, ttl_seconds=LEASE_TTL_SECONDS)
+        if store is not None:
+            acquired = store.coordination.refresh_turn_lease(
+                session_id=session_id, holder=holder, ttl_seconds=LEASE_TTL_SECONDS)
+        else:
+            refresh = getattr(db, "refresh_session_turn_lease", None)
+            acquired = callable(refresh) and refresh(session_id, holder, ttl_seconds=LEASE_TTL_SECONDS)
+    elif store is not None:
+        from persistence.authority.coordination import acquire_turn_lease_waiting
+
+        acquired = acquire_turn_lease_waiting(store.coordination, session_id=session_id, holder=holder, **wait)
     else:
-        admitted = db.acquire_session_turn_lease(
-            session_id, holder, ttl_seconds=LEASE_TTL_SECONDS, wait_seconds=LEASE_WAIT_SECONDS,
-            on_wait=_on_wait, on_contended=_on_contended,
-            should_abort=lambda: getattr(agent, "_interrupt_requested", False),
-        )
-    if not admitted:
+        acquired = db.acquire_session_turn_lease(session_id, holder, **wait)
+    if not acquired:
         admission.early_result = _lease_not_acquired_result(agent, session_id, conversation_history,
                                                             waited=announced)
         return admission
@@ -372,14 +397,14 @@ def admit_durable_turn_lease(
     # row; persist paths read the agent attr so a late flush is fenced in the same transaction.
     lease = DurableTurnLease(
         agent, db, session_id, holder, borrowed=bool(session_turn_lease_holder),
-        expires_at=_committed_lease_expiry(db, session_id, holder, authority_floor),
+        expires_at=_committed_lease_expiry(db, store, session_id, holder, authority_floor), persistence=store,
     )
     agent._active_session_turn_lease_holder = holder
     agent._active_session_turn_lease_ttl_seconds = LEASE_TTL_SECONDS
     try:
         # Read the row only now: the previous holder may have created or deleted it while this
         # turn waited, so an answer from before admission can be stale either way.
-        durable = _durable_session_exists(db, session_id)
+        durable = _durable_session_exists(db, store, session_id)
         if durable and getattr(agent, "_session_db_reserved", False) is not True:
             # Row proven to exist — suppress the redundant create attempt. A missing row leaves
             # the flag alone: the flush heals a row deleted under a live agent (#123583). So does
@@ -396,7 +421,10 @@ def admit_durable_turn_lease(
                 agent._emit_status("Session is free; loading the latest transcript...")
             # The holder may have compressed/rotated the session while we waited: reload only
             # AFTER admission; borrowed authoritative snapshots remain untouched.
-            latest_session_id = db.resolve_resume_session_id(session_id)
+            latest_session_id = (
+                store.lineage.resolve_resume_target(session_id) if store is not None
+                else db.resolve_resume_session_id(session_id)
+            )
             if latest_session_id:
                 tip_getter = getattr(type(db), "get_compression_tip", None)
                 tip = tip_getter(db, session_id) if callable(tip_getter) else session_id
@@ -418,9 +446,23 @@ def admit_durable_turn_lease(
                     and pending.get("content") == current_user_message
                     and (uid := message_uid_or_none(pending))):
                 replay_options["exclude_message_uid"] = uid
-            reloaded = db.get_messages_as_conversation(
-                agent.session_id, repair_alternation=True, include_row_ids=True, **replay_options
-            )
+            if store is not None:
+                from persistence.conversation.messages import ConversationRequest
+
+                exclude_uid = replay_options.get("exclude_message_uid")
+                if exclude_uid:
+                    # The interface has not yet grown the staged-UID filter; the SQLite
+                    # reader must apply it before its normal replay policy merges rows.
+                    from persistence.sqlite.conversation._store.messages import get_messages_as_conversation
+                    reloaded = get_messages_as_conversation(
+                        store._bound_store().holder(), agent.session_id,
+                        repair_alternation=True, include_row_ids=True, exclude_message_uid=exclude_uid)
+                else:
+                    reloaded = [m.as_openai_message() for m in store.messages.read_conversation(
+                        agent.session_id, ConversationRequest(repair_alternation=True, include_row_ids=True))]
+            else:
+                reloaded = db.get_messages_as_conversation(
+                    agent.session_id, repair_alternation=True, include_row_ids=True, **replay_options)
             # Decide on the stored rows alone: an unknown row that reloads nothing keeps the
             # caller's history, which already holds any carried input below.
             if durable or reloaded:

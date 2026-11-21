@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
-from hermes_state_holders import read_only_db_uri
+from persistence.sqlite._state.holders import read_only_db_uri
 from plugins.cloudseed_mobile.deliverables import MAX_REFERENCES, MAX_STRING, decode, delegate_child, is_image, strings, visible
 from plugins.cloudseed_mobile.workspace_files import digest, open_beneath, parts
 

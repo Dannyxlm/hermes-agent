@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from hermes_state_holders import read_only_db_uri
+from persistence.sqlite._state.holders import read_only_db_uri
 
 MAX_PREVIEW = 256 * 1024
 MIN_FREE_BYTES = 5 * 1024**3

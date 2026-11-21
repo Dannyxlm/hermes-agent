@@ -1483,6 +1483,7 @@ def _run_foreground(
             with session_environment(env, snapshot_key(task_id, session_key)):
                 result = env.execute(
                     command, timeout=effective_timeout, cwd=command_cwd, bounded_capture=True,
+                    allow_cwd_fallback=not workdir,
                     **_yield_kwargs(command, env_type=env_type, cwd=command_cwd, effective_task_id=eff,
                                     task_id=task_id, session_key=session_key),
                 )
@@ -1527,8 +1528,8 @@ _PRE_EXEC_GUARD_MIN_TIMEOUT_S = 30
 
 def _refuse_missing_local_workdir(workdir: str, env: Any) -> None:
     """An explicit ``workdir`` the model named is never swapped for a parent: a typo would run
-    ``rm -f ./*`` one level up. Only a cwd the session inherited falls back (``_usable_cwd``),
-    and only ``LocalEnvironment`` falls back at all."""
+    ``rm -f ./*`` one level up. Only a cwd the session inherited falls back (``_usable_cwd``);
+    sandbox wrappers refuse it themselves (``execute(allow_cwd_fallback=False)``)."""
     from tools.environments.local import LocalEnvironment
     if not isinstance(env, LocalEnvironment):
         return

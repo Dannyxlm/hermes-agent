@@ -284,11 +284,10 @@ async def test_sweep_overlapping_live_delivery_admits_once(gateway, monkeypatch)
 async def test_lost_ack_reconciles_after_live_route_moves_back_to_chat(monkeypatch):
     from tests.gateway import test_authority_lane_moves_on as lanes
     import gateway.process_completion_delivery as delivery
-    from hermes_state_runtime import list_session_admissions
     runner, adapter, authority, source, sent, ran, _gates = await lanes._gateway(monkeypatch)
     await lanes._chat(adapter, source, sent, 'hello')
     ref = authority.register(source)
-    authority.db.set_session_title(ref.session_id, 'Process owner')
+    authority.persistence.sessions.set_title(ref.session_id, 'Process owner')
     route = authority.sessions[ref.session_id].route
     process = ProcessSession(id='proc_moved', command='build', started_at=1,
         notify_on_complete=True, parent_session_id=ref.session_id, session_key=route,
@@ -310,15 +309,15 @@ async def test_lost_ack_reconciles_after_live_route_moves_back_to_chat(monkeypat
         patch.setattr(delivery, 'acknowledge_process_admission', crash)
         with pytest.raises(Crash):
             await runner._deliver_completion_notification('[finished]', event)
-    rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
-    matching = [row for row in rows if row['request_id'] == '["completion","proc_moved",1]']
-    assert len(matching) == 1 and matching[0]['principal_id'] == 'automation:' + detached_route
+    rows = authority.persistence.admissions.list(session_id=ref.session_id, pending_only=False)
+    matching = [row for row in rows if row.request_id == '["completion","proc_moved",1]']
+    assert len(matching) == 1 and matching[0].principal_id == 'automation:' + detached_route
     assert state(authority, event)['status'] == 'unknown'
     await lanes._chat(adapter, source, sent, '/resume Process owner')
     assert authority.sessions[ref.session_id].route == route
     before = len(ran)
     await runner._drain_watch_notifications(recover(authority))
     assert state(authority, event)['status'] == 'admitted'
-    rows = list_session_admissions(authority.db, session_id=ref.session_id, pending_only=False)
-    matching = [row for row in rows if row['request_id'] == '["completion","proc_moved",1]']
+    rows = authority.persistence.admissions.list(session_id=ref.session_id, pending_only=False)
+    matching = [row for row in rows if row.request_id == '["completion","proc_moved",1]']
     assert len(matching) == 1 and len(ran) == before

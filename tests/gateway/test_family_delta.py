@@ -17,7 +17,7 @@ pytest_plugins = ["tests.gateway.test_family_review"]
 @pytest.mark.parametrize("kind", ["approval", "clarify"])
 async def test_compressed_pending_uses_logical_claim(reader, requested, kind):
     db, authority, connection = reader
-    from hermes_state_runtime import admit_session_input, claim_session_input
+    from persistence.sqlite.authority._admission_store import admit_session_input, claim_session_input
     db._conn.execute("UPDATE sessions SET ended_at=1,end_reason='compression',runtime_generation=4 WHERE id='root'")
     db.create_session("tip", source="test", parent_session_id="root")
     db._conn.execute("UPDATE sessions SET runtime_generation=4 WHERE id='tip'")
@@ -78,7 +78,11 @@ async def test_compressed_failed_helper_uses_logical_admission(reader, status, v
     db.create_session("helper", source="subagent", parent_session_id="tip")
     launch(db._conn, "helper", launcher="tip", cause="error", finished=NOW)
     db._conn.commit()
-    from hermes_state_runtime import admit_session_input, claim_session_input, settle_session_input
+    from persistence.sqlite.authority._admission_store import (
+        admit_session_input,
+        claim_session_input,
+        settle_session_input,
+    )
     admit_session_input(db, epoch=authority.epoch, principal_id="owner", session_id="root",
                         request_id="turn", payload={"text": "post-compression turn"})
     claim = claim_session_input(db, epoch=authority.epoch, session_id="root")

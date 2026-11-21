@@ -8,10 +8,10 @@ import json
 
 import pytest
 
-import hermes_state
-import hermes_state_local as local
+from persistence.sqlite import _holder
+from persistence.sqlite.conversation._store import local
 from hermes_cli.web_routers import sessions
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +22,7 @@ def fresh_cache(monkeypatch):
 @pytest.fixture
 def parses(monkeypatch):
     """Every statement that reads receipt values to look inside their lineage."""
-    real = hermes_state._connect_tracked_db
+    real = _holder._connect_tracked_db
     seen = []
 
     def tracked(*args, **kwargs):
@@ -36,7 +36,7 @@ def parses(monkeypatch):
         conn.set_trace_callback(trace)
         return conn
 
-    monkeypatch.setattr(hermes_state, "_connect_tracked_db", tracked)
+    monkeypatch.setattr(_holder, "_connect_tracked_db", tracked)
     return seen
 
 

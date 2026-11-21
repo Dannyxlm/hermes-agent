@@ -5,9 +5,9 @@ import math
 
 from fastapi import HTTPException
 from hermes_constants import get_hermes_home
-from hermes_state_holders import read_only_db_uri
-from hermes_state_common import _non_continuation_child_sql
-from hermes_state_sessions import _LINEAGE_CTE_SQL
+from persistence.sqlite._state.holders import read_only_db_uri
+from persistence.sqlite.conversation._store.sql_common import _non_continuation_child_sql
+from persistence.sqlite.conversation._store.sessions import _LINEAGE_CTE_SQL
 from plugins.cloudseed_mobile.scope import profile_id
 from tui_gateway.side_task_activity import registry
 

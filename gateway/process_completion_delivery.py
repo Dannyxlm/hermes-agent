@@ -15,13 +15,13 @@ def acknowledge_process_admission(event, receipt):
 
 def claim_process_notifications(events):
     """Refund only this attempt's claims when preparation fails before FIFO admission."""
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
     from tools.process_registry_delivery import settle_notification
     claimed = []
     try:
         for member in events:
             if not settle_notification(member, 'unknown', reason='admission_in_progress', expected_status='pending'):
-                raise RuntimeStoreError('outcome_unknown')
+                raise AuthorityRefusal('outcome_unknown')
             claimed.append(member)
     except (OSError, ValueError, RuntimeError):
         for member in claimed:

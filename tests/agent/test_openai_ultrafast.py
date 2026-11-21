@@ -51,7 +51,7 @@ def test_ultrafast_is_requested_only_for_ultrafast_models_on_first_party_routes(
         assert not model_supports_ultrafast(model), model
         assert resolve_fast_mode_overrides(model, provider=provider, base_url=base_url, tier="ultrafast") is None
     # Proxies never see the tier, even under a first-party provider name.
-    for model in (*ASTRA_SPELLINGS, *SOL_SPELLINGS):
+    for model in (*ASTRA_SPELLINGS, *SOL_SPELLINGS, *GEN62_SPELLINGS):
         assert resolve_fast_mode_overrides(model, provider="openrouter",
                                            base_url="https://openrouter.ai/api/v1", tier="ultrafast") is None
         assert resolve_fast_mode_overrides(model, provider="openai-api",
@@ -62,12 +62,13 @@ def test_desktop_surfaces_carry_the_exact_tier_ultrafast_is_never_plain_fast():
     from hermes_cli.inventory import _apply_capabilities
     from tui_gateway.methods_session_model_guard import create_overrides
 
-    rows = [{"slug": "openai-codex", "models": ["gpt-6-astra-900k", *SOL_SPELLINGS[::2], "gpt-6-sol", "gpt-daybreak-blue-latest-900k"]},
+    rows = [{"slug": "openai-codex", "models": ["gpt-6-astra-900k", *SOL_SPELLINGS[::2], *GEN62_SPELLINGS[::2], "gpt-6-sol",
+                                                "gpt-daybreak-blue-latest-900k"]},
             {"slug": "openrouter", "models": ["openai/gpt-6-astra", "openai/gpt-6.1-sol"]}]
     _apply_capabilities(rows)
     caps = {m: c for row in rows for m, c in row["capabilities"].items()}
     assert caps["gpt-6-astra-900k"]["fast"] and caps["gpt-6-astra-900k"].get("ultrafast")
-    for model in SOL_SPELLINGS[::2]:
+    for model in (*SOL_SPELLINGS[::2], *GEN62_SPELLINGS[::2]):
         assert caps[model]["fast"] and caps[model].get("ultrafast"), model
     assert caps["gpt-6-sol"]["fast"] and not caps["gpt-6-sol"].get("ultrafast")
     assert caps["gpt-daybreak-blue-latest-900k"]["fast"] and not caps["gpt-daybreak-blue-latest-900k"].get("ultrafast")
@@ -118,14 +119,17 @@ def _usage(prompt_uncached: int, served_tier=None) -> CanonicalUsage:
 
 @pytest.mark.parametrize("prompt_uncached", [50_000, 400_000])  # below / above the 272K whole-request tier
 @pytest.mark.parametrize("model", [*ASTRA_SPELLINGS, *SOL_SPELLINGS, *GEN62_SPELLINGS])
-def test_served_ultrafast_bills_at_the_ultrafast_row_and_requested_only_does_not(prompt_uncached, model):
+def test_served_ultrafast_bills_at_the_ultrafast_row_and_requested_only_does_not(prompt_uncached, model, monkeypatch):
+    from datetime import UTC, datetime
+    monkeypatch.setattr("agent.usage_pricing._UTC_NOW", lambda: datetime(2027, 2, 1, tzinfo=UTC))
     standard = estimate_usage_cost(model, _usage(prompt_uncached), provider="openai-api")
     served_default = estimate_usage_cost(model, _usage(prompt_uncached, "default"), provider="openai-api")
     ultra = estimate_usage_cost(model, _usage(prompt_uncached, "ultrafast"), provider="openai-api")
     assert served_default.amount_usd == standard.amount_usd  # asked for Ultrafast, served at Standard
     assert ultra.status == "estimated"
     wire_model = model.removeprefix("openai/").removesuffix("-900k")
-    assert ultra.pricing_version == _OPENAI_ULTRAFAST_PRICING[wire_model].pricing_version
+    if wire_model in _OPENAI_ULTRAFAST_PRICING:
+        assert ultra.pricing_version == _OPENAI_ULTRAFAST_PRICING[wire_model].pricing_version
     assert standard.status == "estimated"  # the Standard row exists too
     assert ultra.amount_usd == standard.amount_usd * ULTRAFAST_MULTIPLE[wire_model]  # every bucket, both tiers
 
@@ -154,8 +158,8 @@ def test_context_alias_pricing_preserves_custom_endpoint_rates(monkeypatch, prov
     assert (cost.amount_usd, cost.source) == (Decimal(amount), source)
 
 
-@pytest.mark.parametrize("model", SOL_SPELLINGS)
-def test_sol_ultrafast_codex_request_uses_the_wire_slug_and_keeps_subscription_accounting(model):
+@pytest.mark.parametrize("model", [*SOL_SPELLINGS, *GEN62_SPELLINGS])
+def test_codex_ultrafast_request_uses_the_wire_slug_and_keeps_subscription_accounting(model):
     from agent.fast_mode import effective_request_overrides
     from agent.transports.codex import ResponsesApiTransport
     from hermes_cli.model_normalize import normalize_model_for_provider
@@ -171,7 +175,7 @@ def test_sol_ultrafast_codex_request_uses_the_wire_slug_and_keeps_subscription_a
     )
     wire = transport.preflight_kwargs(kwargs, sanitize_harmony_tokens=True)
     assert wire["service_tier"] == "ultrafast"
-    assert wire["model"] == "gpt-6.1-sol"
+    assert wire["model"] == model.removeprefix("openai/").removesuffix("-900k")
     cost = estimate_usage_cost(model, _usage(1_000, "ultrafast"), provider="openai-codex", base_url=base_url)
     assert cost.status == "included" and cost.pricing_version == "included-route"
 
@@ -185,17 +189,16 @@ def test_codex_stream_assembler_keeps_the_served_tier():
     assert _consume_codex_event_stream(iter(events), model="gpt-6-astra").service_tier == "default"
 
 
-def test_gpt62_ultrafast_promo_rows_are_replaced_when_the_promo_ends():
-    """OpenAI's 3x launch promo for GPT-6.2 Ultrafast ends 2027-02-28 (Pacific); 6x applies from
-    2027-03-01. This goes red on that date so the rows (and ULTRAFAST_MULTIPLE) get the 6x list rates."""
-    import datetime as dt
-    from zoneinfo import ZoneInfo
+@pytest.mark.parametrize("model", ["gpt-6.2-astra", "gpt-6.2-sol"])
+def test_gpt62_ultrafast_promo_expires_at_pacific_midnight(monkeypatch, model):
+    from datetime import UTC, datetime
 
-    today = dt.datetime.now(ZoneInfo("America/Los_Angeles")).date()
-    promo = {m for m in ("gpt-6.2-astra", "gpt-6.2-sol")
-             if "promo" in (_OPENAI_ULTRAFAST_PRICING[m].pricing_version or "")}
-    assert not (promo and today >= dt.date(2027, 3, 1)), (
-        f"GPT-6.2 Ultrafast promo ended; update {sorted(promo)} to 6x Standard")
+    standard = estimate_usage_cost(model, _usage(400_000), provider="openai-api")
+    for hour, minute, multiplier in [(7, 59, 3), (8, 0, 6)]:
+        monkeypatch.setattr("agent.usage_pricing._UTC_NOW", lambda: datetime(2027, 3, 1, hour, minute, tzinfo=UTC))
+        ultra = estimate_usage_cost(model, _usage(400_000, "ultrafast"), provider="openai-api")
+        assert ultra.status == "estimated"
+        assert ultra.amount_usd == standard.amount_usd * multiplier
 
 
 def test_gpt62_sol_standard_price_matches_61_sol_at_both_context_tiers():

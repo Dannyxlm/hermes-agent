@@ -13,7 +13,7 @@ def unborn_paths(store: Path, working_dir: str, index_file: Path) -> list[str]:
     filenames when its contents were already tracked before `git init`. Avoid
     walking every cached file (and changing the coverage of those directories).
     """
-    from tools import checkpoint_manager as cm
+    from agent.checkpoints import manager as cm
 
     ok, names, err = cm._run_git(
         ["ls-files", "--others", "--exclude-standard", "-z"],
@@ -47,7 +47,7 @@ def unborn_paths(store: Path, working_dir: str, index_file: Path) -> list[str]:
 
 def stage_current(store: Path, working_dir: str, index_file: Path) -> tuple[bool, str]:
     """Diff/planning must still see oversized files, but not unborn repo gaps."""
-    from tools import checkpoint_manager as cm
+    from agent.checkpoints import manager as cm
 
     excluded = unborn_paths(store, working_dir, index_file)
     args = cm._stage_all_args(store.parent, working_dir)
@@ -61,7 +61,7 @@ def stage_current(store: Path, working_dir: str, index_file: Path) -> tuple[bool
 
 def checkpoint_exclusions(store: Path, working_dir: str, commit_hash: str) -> list[str]:
     """Read the checkpoint-bound gap even after the nested .git marker disappears."""
-    from tools import checkpoint_manager as cm
+    from agent.checkpoints import manager as cm
 
     ok, body, err = cm._run_git(["log", "-1", "--format=%B", commit_hash], store, working_dir)
     if not ok:
@@ -83,7 +83,7 @@ def checkpoint_exclusions(store: Path, working_dir: str, commit_hash: str) -> li
 
 
 def restore_exclusions(store: Path, working_dir: str, commit_hash: str, tree: str) -> list[str]:
-    from tools import checkpoint_manager as cm
+    from agent.checkpoints import manager as cm
 
     excluded = checkpoint_exclusions(store, working_dir, commit_hash)
     # The pre-rollback take normally repairs the project index. Inspect through
@@ -112,7 +112,7 @@ def filter_selection(selected: list[str] | None, excluded: list[str]) -> list[st
 
 
 def warn_once(manager, working_dir: str, excluded: list[str]) -> None:
-    from tools import checkpoint_manager as cm
+    from agent.checkpoints import manager as cm
 
     key = (working_dir, tuple(excluded))
     if excluded and key not in manager._warned_unborn:

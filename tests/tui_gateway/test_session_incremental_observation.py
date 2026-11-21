@@ -4,7 +4,8 @@ import sqlite3
 
 import pytest
 
-from hermes_state import SessionDB
+from hermes_cli import sqlite_safe_read
+from tests.persistence_sqlite.core._fork_store import SessionDB
 from tui_gateway import server, session_change_cursor
 
 
@@ -25,8 +26,7 @@ def store(tmp_path, monkeypatch):
 
 
 def test_single_row_edits_and_unrelated_commits_have_bounded_observation_work(store, monkeypatch):
-    import hermes_state
-    real = hermes_state._connect_tracked_db
+    real = sqlite_safe_read.connect_tracked
     work = []
 
     def connect(*args, **kwargs):
@@ -34,7 +34,7 @@ def test_single_row_edits_and_unrelated_commits_have_bounded_observation_work(st
         conn.set_progress_handler(lambda: work.append(1) or 0, 100)
         return conn
 
-    monkeypatch.setattr(hermes_state, "_connect_tracked_db", connect)
+    monkeypatch.setattr(sqlite_safe_read, "connect_tracked", connect)
     server._session_db_content_sig(store)
     cursor = session_change_cursor.current_cursor(store)
     before = server._session_db_content_sig(store)

@@ -15,7 +15,9 @@ from gateway.session import SessionSource
 from gateway.session_authority import LiveSession, SessionAuthority
 from gateway.session_contract import SessionRef
 from gateway.session_settlement_recovery import commit_and_publish
-from hermes_state_runtime import admit_session_input, begin_runtime_epoch, claim_session_input
+from persistence.sqlite.authority._admission_store import admit_session_input, claim_session_input
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
+from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
 from tests.tools.test_thread_tool import DANNY, _db, call, thread
 from tests.tools.test_thread_tool import owner as owner  # noqa: PLC0414 -- pytest fixture re-export
 from tools import thread_state as ts
@@ -36,7 +38,8 @@ def settlement(home):
         thread(db, 'child')
         epoch = begin_runtime_epoch(db, instance_id='hint-fixture')
         runner = SimpleNamespace(_draining=False)
-        authority = SessionAuthority(runner, profile_id=str(home), instance_id='hint-fixture', db=db, epoch=epoch)
+        authority = SessionAuthority(runner, profile_id=str(home), instance_id='hint-fixture', persistence=storage_handle(home), epoch=epoch)
+        authority.db = db  # raw SQL access for the fixture, not an authority dependency
         for sid in ('parent', 'child'):
             authority.sessions[sid] = LiveSession(
                 SessionSource(platform=Platform.TELEGRAM, chat_id=sid, user_id=DANNY), sid)
@@ -219,7 +222,7 @@ def test_hint_never_scans_unserved_profiles(home, owner, settlement, monkeypatch
 
 
 def test_stale_epoch_cannot_commit_or_signal_completion(home, owner, settlement, monkeypatch):
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal as RuntimeStoreError
     row = claimed(settlement, 'child')
     begin_runtime_epoch(settlement.db, instance_id='replacement')
     signals = []

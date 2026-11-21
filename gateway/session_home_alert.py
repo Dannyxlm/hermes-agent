@@ -30,24 +30,24 @@ def needs_you_body(content) -> str | None:
     return text[len(NEEDS_YOU):].strip()
 
 
-def _canonical_root(db, session_id) -> str | None:
+def _canonical_root(store, session_id) -> str | None:
     """The canonical Bot Chat's root when ``session_id`` is that chat's current tip.
 
     The identity the mobile roster and push scope use (``methods_mobile._mobile_canonical_identity``):
     one titled, unarchived root whose compression chain ends at an unarchived tip. A reset, branched
     or retitled session is not Home, and an ambiguous title is no one's."""
-    from hermes_state import SessionDB
-    with db._lock:
-        rows = db._conn.execute("SELECT id FROM sessions WHERE title = ? LIMIT 2",
-                                (SessionDB.CANONICAL_BOT_CHAT_TITLE,)).fetchall()
-    if len(rows) != 1:
+    from persistence.conversation.sessions import CANONICAL_BOT_CHAT_TITLE
+
+    root = store.sessions.get_by_title(CANONICAL_BOT_CHAT_TITLE)
+    if root is None or root.archived:
         return None
-    root = db.get_session(rows[0][0])
-    chain = (db.get_compression_chain(root["id"]) or [root["id"]]) if root and not root.get("archived") else None
-    if not chain or chain[0] != root["id"] or chain[-1] != session_id:
+    if store.sessions.title_holder(CANONICAL_BOT_CHAT_TITLE, excluding=root.id) is not None:
         return None
-    tip = db.get_session(session_id)
-    return root["id"] if tip and not tip.get("archived") else None
+    chain = store.lineage.lineage(root.id)
+    if not chain or chain[0] != root.id or chain[-1] != session_id:
+        return None
+    tip = store.sessions.get(chain[-1])
+    return root.id if tip is not None and not tip.archived else None
 
 
 def _profile(home: Path):
@@ -68,14 +68,16 @@ def push_service():
 
 def record_needs_you(authority, ref, body) -> bool:
     """Record the alert run for the reply the turn on ``ref`` gave; False when nothing was recorded."""
+    from gateway.session_persistence import authority_persistence
     from tui_gateway.mobile_push_payloads import AlertPreview, Scope, agent_name
-    db = authority.db
+
+    store = authority_persistence(authority)
     # The physical session the turn ended in: its compression tip, after any mid-turn compression.
-    root = _canonical_root(db, authority.physical_target(ref))
+    root = _canonical_root(store, authority.physical_target(ref))
     if root is None:
         return False
     service = push_service()
-    profile = _profile(Path(db.db_path).parent) if service is not None else None
+    profile = _profile(store.scope.profile_dir) if service is not None else None
     if profile is None:
         return False
     # A profile with no presentation name is titled by its agent ("default" is Ava), never its id.
@@ -89,7 +91,7 @@ def record_needs_you(authority, ref, body) -> bool:
 async def notify_if_needed(authority, ref, content) -> None:
     """Best effort, for a producer turn's final reply: a failed projection never fails the turn."""
     body = needs_you_body(content)
-    if body is None or getattr(authority, "db", None) is None:
+    if body is None or getattr(authority, "persistence", None) is None:
         return
     try:
         await asyncio.to_thread(record_needs_you, authority, ref, body)

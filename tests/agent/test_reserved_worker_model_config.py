@@ -8,9 +8,12 @@ import pytest
 from agent.runtime_session_store import RuntimeSessionStore
 from agent.session_source import session_source_for
 from hermes_cli.profiles import get_active_profile_name
-from hermes_state import SessionDB
-from hermes_state_runtime import begin_runtime_epoch, mutate_worker_execution, register_worker_execution
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
+from persistence.sqlite.workers._executions import register_worker_execution
+from persistence.sqlite.workers._receipt import mutate_worker_execution
 from run_agent import AIAgent
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 
 
 @pytest.mark.parametrize('worker', [False, True])
@@ -21,7 +24,7 @@ def test_first_turn_completes_reserved_route_without_losing_lineage(tmp_path, wo
         db.create_session('parent', 'cli')
         db.create_session('reserved', session_source_for('cli'), model_config={'_delegate_from': 'parent'},
                           parent_session_id='parent', cwd=str(Path.cwd()), profile_name=get_active_profile_name())
-        session_db = db
+        session_db = storage_handle(tmp_path)
         if worker:
             epoch = begin_runtime_epoch(db, instance_id='fixture')
             scope = dict(epoch=epoch, execution_id='worker', session_id='reserved', generation=0)

@@ -81,7 +81,7 @@ def test_wake_cannot_claim_foreign_unbound_legacy_history(tmp_path, subject_kind
     from gateway.session_local_migration import (bind_native_transport, require_history_claim,
                                                  adopt_legacy_session, unbind_native_transport)
     from hermes_state import SessionDB
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal as RuntimeStoreError
 
     subject = (host_owner_subject() if subject_kind == 'host-owner' else
                authenticated_subject({'provider': 'basic', 'user_id': 'alice'}))

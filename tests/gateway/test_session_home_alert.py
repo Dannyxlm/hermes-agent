@@ -35,15 +35,14 @@ async def _home(tmp_path, monkeypatch, *, categories=("attention",), title='Bot 
     from gateway.session_authority import SessionAuthority, initialize_session_authority
     from gateway.session_local import create_local_session
     from gateway.session_local_title import title_new_session
-    from hermes_state import SessionDB
+    from persistence_assembly import open_persistence, profile_scope
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setattr(SessionAuthority, '_schedule', lambda self, ref: None)  # the test drains
     monkeypatch.setattr('gateway.session_bot._watch_reply', lambda *args: None)
     runner = GatewayRunner(GatewayConfig(sessions_dir=tmp_path / 'sessions'))
-    db = SessionDB(tmp_path / 'state.db')
-    runner.session_store._db = db
-    runner._session_db = db
-    authority = await initialize_session_authority(runner, profile_id='default', instance_id='needs-you', db=db)
+    db = open_persistence(profile_scope(home=tmp_path))
+    authority = await initialize_session_authority(
+        runner, profile_id='default', instance_id='needs-you', persistence=db)
     ref = create_local_session(authority, ACTOR, dict(request_id='bot', source='gui', model='fixture', toolsets=[]))
     title_new_session(authority, ref, title)
     authority.sessions[ref.session_id].subscribers['viewer'] = ACTOR  # Home is open somewhere
@@ -139,15 +138,14 @@ def test_only_the_canonical_chats_current_tip_is_home(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_broken_outbox_never_fails_the_turn(tmp_path, monkeypatch):
-    from hermes_state_runtime import list_session_admissions
     home = await _home(tmp_path, monkeypatch)
     try:
         def broken():
             raise OSError('disk gone')
         monkeypatch.setattr(session_home_alert, 'push_service', broken)
         assert await _producer_turn(home, '[NEEDS YOU] still delivered') == []
-        rows = list_session_admissions(home.db, session_id=home.ref.session_id, pending_only=False)
-        assert [row['outcome'] for row in rows] == ['completed']
+        rows = home.db.admissions.list(session_id=home.ref.session_id, pending_only=False)
+        assert [row.outcome for row in rows] == ['completed']
     finally:
         home.service.close()
         home.db.close()

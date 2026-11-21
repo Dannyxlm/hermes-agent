@@ -21,7 +21,7 @@ def _(rid, params):
     import sqlite3
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    from hermes_state_holders import read_only_db_uri
+    from persistence.sqlite._state.holders import read_only_db_uri
     from hermes_state_rollup import read_usage_rollup
     try:
         zone = ZoneInfo(params.get("timezone", "UTC"))

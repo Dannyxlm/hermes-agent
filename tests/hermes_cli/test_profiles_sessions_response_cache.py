@@ -271,7 +271,7 @@ def test_full_mode_is_fresh_and_preserves_blobs(stores):
 
 def test_storage_state_and_error_recovery(route, stores, monkeypatch):
     from hermes_cli.web_routers import profiles
-    from hermes_state_health import mark_storage_corrupt, reset_storage_state
+    from persistence.sqlite._state.health import mark_storage_corrupt, reset_storage_state
 
     warm = _get(route)
     mark_storage_corrupt(stores.home / "state.db", "test damage")

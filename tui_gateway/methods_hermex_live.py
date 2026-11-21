@@ -19,7 +19,7 @@ def _hermex_rpc(name, operation):
     def handler(rid, params):
         import sqlite3
         from tui_gateway.server import ProfileUnavailableError
-        from hermes_state import SessionDB
+        from persistence.sqlite._holder import StoreHolder
         from hermex_live_reads import LiveConflict
         from pydantic import ValidationError
         from tui_gateway.contracts import METHODS
@@ -33,7 +33,7 @@ def _hermex_rpc(name, operation):
             if _response_profile_name(profile) != profile or not (home / "state.db").is_file():
                 raise ValueError("profile unavailable")
             with _session_profile_runtime_scope({"profile_home": str(home)}):
-                with SessionDB(db_path=home / "state.db", read_only=True) as db:
+                with StoreHolder(home / "state.db", read_only=True) as db:
                     result = operation(db, home, params, _hermex_principal())
             return _ok(rid, result)
         except LiveConflict as exc:
@@ -60,7 +60,8 @@ def _hermex_window(db, home, params, principal):
 def _hermex_changes(db, home, params, principal):
     from hermex_skill_changes import list_changes
     from tui_gateway.mobile_session_scope import live_draft
-    if db.get_session(params['session_id']) is None and live_draft(home, params['session_id']) is not None:
+    from persistence.sqlite.conversation._store.sessions import get_session
+    if get_session(db, params['session_id']) is None and live_draft(home, params['session_id']) is not None:
         if params.get('cursor'):
             from hermex_live_reads import LiveConflict
             raise LiveConflict("cursor expired or scope changed")

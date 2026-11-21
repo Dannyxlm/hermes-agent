@@ -51,8 +51,8 @@ def test_store_failure_warning_is_bounded_across_runtimes_and_requests(tmp_path,
 
 @pytest.mark.parametrize("invalid", ["cycle", "deep"])
 def test_invalid_lineage_does_not_hide_healthy_projection(tmp_path, monkeypatch, caplog, invalid):
-    import hermes_state_compression
-    monkeypatch.setattr(hermes_state_compression, "_CHAIN_CAP", 4)
+    from persistence.sqlite.conversation._store import compression
+    monkeypatch.setattr(compression, "_CHAIN_CAP", 4)
     home = tmp_path / "launch"
     monkeypatch.setenv("HERMES_HOME", str(home))
     with SessionDB(db_path=home / "state.db") as db:

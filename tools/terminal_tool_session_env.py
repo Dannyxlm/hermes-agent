@@ -7,6 +7,7 @@ Snapshot contents never enter command strings, logs, or tool results.
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import tempfile
@@ -14,9 +15,16 @@ import threading
 from weakref import WeakKeyDictionary
 
 
+@dataclass(frozen=True)
+class _SnapshotSeed:
+    data: bytes = field(repr=False)
+    generation: str
+    declarations: dict[str, str] = field(repr=False)
+
+
 _snapshot_binding: ContextVar[tuple[object, str] | None] = ContextVar("terminal_snapshot", default=None)
 _snapshots = WeakKeyDictionary()
-_seeds: dict[str, bytes] = {}
+_seeds: dict[str, _SnapshotSeed] = {}
 _lock = threading.Lock()
 
 
@@ -25,14 +33,17 @@ def _local_snapshot(env, key: str) -> str:
     with _lock:
         paths = _snapshots.setdefault(env, {})
         if key not in paths:
-            data = _seeds.get(key)
-            if data is None:
-                data = Path(env._snapshot_path).read_bytes()
+            seed = _seeds.get(key)
+            handoff = getattr(env, "_secret_handoff", None)
+            if seed is None:
+                seed = _read_seed(env._snapshot_path, handoff)
             fd, path = tempfile.mkstemp(prefix="hermes-session-", suffix=".sh",
                                         dir=os.path.dirname(env._snapshot_path))
             try:
                 with os.fdopen(fd, "wb") as stream:
-                    stream.write(data)
+                    stream.write(seed.data)
+                if handoff is not None:
+                    handoff.seed(path, seed.generation, seed.declarations)
             except BaseException:
                 os.unlink(path)
                 raise
@@ -76,7 +87,13 @@ def snapshot_key(task_id, session_key) -> str:
     return tt._qualify_task_key(str(task_id if is_child else (session_key or task_id or "default")))
 
 
-def capture_session_environment(task_id, session_key=""):
+def _read_seed(path: str, handoff) -> _SnapshotSeed:
+    with open(path, "rb") as source:
+        generation, declarations = handoff.capture(path, source.fileno()) if handoff is not None else ("", {})
+        return _SnapshotSeed(source.read(), generation, declarations)
+
+
+def capture_session_environment(task_id, session_key="") -> _SnapshotSeed | None:
     """Read the parent's last atomic publication, without creating an environment."""
     from tools import terminal_tool as tt
     from tools.environments.local import LocalEnvironment
@@ -86,10 +103,10 @@ def capture_session_environment(task_id, session_key=""):
     if not isinstance(env, LocalEnvironment) or not env._snapshot_ready:
         return None
     path = _local_snapshot(env, snapshot_key(task_id, session_key))
-    return Path(path).read_bytes()
+    return _read_seed(path, getattr(env, "_secret_handoff", None))
 
 
-def seed_session_environment(key: str, snapshot: bytes | None) -> None:
+def seed_session_environment(key: str, snapshot: _SnapshotSeed | None) -> None:
     if snapshot is not None:
         with _lock:
             _seeds[key] = snapshot
@@ -98,17 +115,19 @@ def seed_session_environment(key: str, snapshot: bytes | None) -> None:
 def clear_session_environment(key: str) -> None:
     with _lock:
         _seeds.pop(key, None)
-        paths = [entries.pop(key) for entries in _snapshots.values() if key in entries]
+        paths = [(env, entries.pop(key)) for env, entries in _snapshots.items() if key in entries]
     _remove_snapshots(paths)
 
 
 def cleanup_environment_snapshots(env) -> None:
     with _lock:
-        paths = list(_snapshots.pop(env, {}).values())
+        paths = [(env, path) for path in _snapshots.pop(env, {}).values()]
     _remove_snapshots(paths)
 
 
 def _remove_snapshots(paths) -> None:
-    for path in paths:
+    for env, path in paths:
+        if (handoff := getattr(env, "_secret_handoff", None)) is not None:
+            handoff.discard_snapshot(path)
         for artifact in (Path(path), *Path(path).parent.glob(Path(path).name + ".tmp.*")):
             artifact.unlink(missing_ok=True)

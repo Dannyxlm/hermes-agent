@@ -1,8 +1,8 @@
 """A list request shares lineage work, never a later request/profile/writer cut."""
 import json
 
-from hermes_state import SessionDB
-import hermes_state_local as local
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from persistence.sqlite.conversation._store import local
 from hermes_cli.web_routers import sessions
 
 

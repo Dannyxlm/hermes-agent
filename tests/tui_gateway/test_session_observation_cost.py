@@ -11,9 +11,9 @@ import threading
 
 import pytest
 
-from hermes_state import SessionDB
-from tests.tui_gateway.test_inbox_summaries import inbox  # fixture
-from tests.tui_gateway.test_methods_mobile import mobile_home  # fixture
+from hermes_cli import sqlite_safe_read
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.tui_gateway.test_inbox_summaries import inbox, mobile_home  # fixtures
 from tests.tui_gateway.test_session_change_cursor import PHONE_EXCLUDES
 from tui_gateway import server, session_change_cursor
 
@@ -32,9 +32,8 @@ class FlakyConnection(sqlite3.Connection):
 
 @pytest.fixture
 def flaky(monkeypatch):
-    import hermes_state
-    real = hermes_state._connect_tracked_db
-    monkeypatch.setattr(hermes_state, "_connect_tracked_db",
+    real = sqlite_safe_read.connect_tracked
+    monkeypatch.setattr(sqlite_safe_read, "connect_tracked",
                         lambda *args, **kwargs: real(*args, **{**kwargs, "factory": FlakyConnection}))
     FlakyConnection.fail_on = None
     yield FlakyConnection
@@ -53,8 +52,7 @@ def clean_journal(monkeypatch):
 @pytest.fixture
 def scans(monkeypatch):
     """Every full ``sessions`` read any watcher/list connection runs."""
-    import hermes_state
-    real = hermes_state._connect_tracked_db
+    real = sqlite_safe_read.connect_tracked
     seen = []
 
     def tracked(*args, **kwargs):
@@ -62,7 +60,7 @@ def scans(monkeypatch):
         conn.set_trace_callback(lambda sql: seen.append(sql) if sql.startswith("SELECT id, source,") else None)
         return conn
 
-    monkeypatch.setattr(hermes_state, "_connect_tracked_db", tracked)
+    monkeypatch.setattr(sqlite_safe_read, "connect_tracked", tracked)
     return seen
 
 
@@ -221,7 +219,7 @@ def _release_for_raw_access(path):
 def test_the_watchers_probe_does_not_stop_a_repair_copy(tmp_path, live_watcher):
     """``_backup_db_file`` refuses while this process holds a connection to the store, and a refused backup
     is a hard stop for repair. The watcher's idle probe is closed on demand instead of counting."""
-    from hermes_state_repair import _backup_db_file
+    from persistence.sqlite._state.repair import _backup_db_file
     path = _store(tmp_path)
     server._session_db_content_sig(path)
 
@@ -231,7 +229,7 @@ def test_the_watchers_probe_does_not_stop_a_repair_copy(tmp_path, live_watcher):
 
 
 def test_another_live_connection_still_stops_a_repair_copy(tmp_path, live_watcher):
-    from hermes_state_repair import _backup_db_file
+    from persistence.sqlite._state.repair import _backup_db_file
     path = _store(tmp_path)
     server._session_db_content_sig(path)
     with SessionDB(db_path=path):

@@ -30,7 +30,7 @@ import sqlite3
 from typing import Literal
 
 from hermes_cli.sqlite_safe_read import connect_tracked
-from hermes_state_holders import read_only_db_uri
+from persistence.sqlite._state.holders import read_only_db_uri
 
 
 _ADMISSION_COLUMNS = ('admission_id', 'target_session_id', 'lineage_json', 'intent',

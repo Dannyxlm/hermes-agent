@@ -5,9 +5,31 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hermes_state import SessionDB
-from tests.tui_gateway.test_methods_mobile import mobile_home, peer, rpc
+from persistence.conversation.sessions import NewSession
+from persistence.sqlite._holder import StoreHolder
+from persistence_assembly import open_persistence, profile_scope
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.tui_gateway.test_methods_mobile import peer, rpc
 from tui_gateway import server, server_requests
+
+
+@pytest.fixture
+def mobile_home(tmp_path, monkeypatch):
+    server_requests.reset_for_tests()
+    home = tmp_path / ".hermes"
+    ops = home / "profiles" / "ops"
+    ops.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(server, "_hermes_home", home)
+    monkeypatch.setattr(server, "_sessions", {})
+    for profile_home, session_id in [(home, "root"), (ops, "ops-root")]:
+        with open_persistence(profile_scope(home=profile_home)) as store:
+            store.sessions.create(NewSession(session_id=session_id, source="desktop"))
+            store.sessions.set_title(session_id, "Bot Chat")
+    with open_persistence(profile_scope(home=home)) as launch_store:
+        monkeypatch.setattr(server, "_get_db", lambda: launch_store)
+        yield home
+    server_requests.reset_for_tests()
 
 
 @pytest.fixture
@@ -15,7 +37,6 @@ def inbox(mobile_home, monkeypatch):
     from hermes_cli import web_server
     from hermes_cli.web_routers import sessions
     monkeypatch.setattr(web_server, "_SESSION_TOKEN", "inbox-token")
-    monkeypatch.setattr("hermes_state._default_db_path", lambda: mobile_home / "state.db")
     monkeypatch.setattr(server, "_resolve_model", lambda: "fixture")
     monkeypatch.setattr("hermes_cli.web_server_sessions._maybe_auto_archive_for_profile", lambda profile: None)
     for profile, home in [("default", mobile_home), ("ops", mobile_home / "profiles" / "ops")]:
@@ -117,11 +138,11 @@ def test_final_reply_is_page_batched_and_profile_isolated(inbox, mobile_home, mo
             db.create_session(f"extra-{i}", "desktop")
             db.append_message(f"extra-{i}", "assistant", "reply", timestamp=120 + i)
     queries = []
-    read_all = SessionDB._read_all
+    read_all = StoreHolder._read_all
     def counted(self, sql, *args, **kwargs):
         queries.append(sql)
         return read_all(self, sql, *args, **kwargs)
-    monkeypatch.setattr(SessionDB, "_read_all", counted)
+    monkeypatch.setattr(StoreHolder, "_read_all", counted)
     response = inbox.get("/api/sessions", params={"profile": "ops"}).json()
     summaries = [r for r in response["sessions"] if "last_assistant_reply" in r]
     assert len(summaries) == 6

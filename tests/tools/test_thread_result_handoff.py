@@ -17,16 +17,19 @@ def test_same_epoch_unknown_is_uncertain_not_proof_of_restart(home):
     from types import SimpleNamespace
     from gateway.session_settlement_recovery import _mark_unknown
     from gateway.thread_wake import render
-    from hermes_state_runtime import begin_runtime_epoch, get_session_admission
+    from persistence.sqlite.authority._admission_store import get_session_admission
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
 
-    with _db(home) as db:
+    from persistence_assembly import open_persistence, profile_scope
+
+    with _db(home) as db, open_persistence(profile_scope(home=home)) as persistence:
         epoch = begin_runtime_epoch(db, instance_id='still-alive')
         thread(db, 'child')
         admit(db, 'child', 'uncertain', 'started')
         db._write_sql('UPDATE session_admissions SET owner_epoch=?', (epoch,))
         row = get_session_admission(db, admission_id='uncertain')
         assert row is not None
-        assert _mark_unknown(SimpleNamespace(db=db, epoch=epoch, sessions={}), row) == 'unknown'
+        assert _mark_unknown(SimpleNamespace(persistence=persistence, epoch=epoch, sessions={}), row) == 'unknown'
         current = get_session_admission(db, admission_id='uncertain')
         assert current is not None and current['owner_epoch'] == epoch
     result = call(action='wait', thread_id='child', admission_id='uncertain')['threads'][0]

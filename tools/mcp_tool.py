@@ -356,6 +356,10 @@ def _resolve_parked_retry_interval(config: dict) -> float:
 
 
 _PARKED_RETRY_INTERVAL = 300
+# Cap for the parked self-probe backoff: each consecutive still-failed probe doubles the wait from
+# _PARKED_RETRY_INTERVAL up to this ceiling, so a server whose failure is provably persistent (a
+# duplicate stdio instance holding a single-writer lock) stops re-spawning a doomed child forever.
+_PARKED_PROBE_BACKOFF_MAX = 3600
 # Bounded wait for a respawned stdio child when a call finds it dead (gateway restarts kill
 # every MCP child); bounded so a broken server still parks via run()'s rapid-drop budget.
 _STDIO_RESPAWN_WAIT_SEC = 15.0
@@ -474,6 +478,13 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         # Digest of the resolved inputs the transport last connected with; a cross-profile adopter
         # must resolve the same digest in its own scope. None until the transport publishes it.
         self._resolved_identity: Optional[str] = None
+        # True when this stdio server must have exactly ONE live child system-wide (a single-writer
+        # datastore). A non-owner that finds the resource taken parks quietly instead of self-probing.
+        self._single_instance: bool = False
+        # Consecutive park revivals that came back still-broken; drives the parked-probe backoff.
+        self._parked_probe_failures: int = 0
+        # True while parked with no timed self-probe (single_instance conflict).
+        self._park_quiet: bool = False
         # In-flight RPC tasks so a deliberate teardown fails them fast; _reconnecting is True
         # during that teardown so _track_inflight_rpc turns the cancel into a retryable error.
         # In-flight RPC bookkeeping (#48069 salvage): user-visible requests registered while running so a

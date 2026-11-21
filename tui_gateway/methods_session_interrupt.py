@@ -131,12 +131,12 @@ def _(rid, params: dict) -> dict:
 
 def _forwarded_control(rid, sid, session, verb, admission_id, generation=None, *, stop=False):
     from tui_gateway.owner_forward import cached_blocking_unknown, control_forwarded, pending_submissions
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
     from hermes_cli.gateway_client import GatewayClientError, GatewayRPCError
     from websockets.exceptions import WebSocketException
     try:
         result = control_forwarded(session, verb, admission_id, generation, stop=stop)
-    except RuntimeStoreError as exc:
+    except AuthorityRefusal as exc:
         return _err(rid, 4090, exc.reason, data={"reason": exc.reason})
     except GatewayRPCError as exc:
         return _err(rid, 4090, str(exc), data=exc.data)
