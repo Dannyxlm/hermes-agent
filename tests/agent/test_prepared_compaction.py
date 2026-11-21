@@ -181,6 +181,33 @@ def test_gates_start_no_pass(setup):
     assert cc.calls == []
 
 
+def test_native_compaction_flag_does_not_block_non_native_models():
+    """codex_responses_native=True in config must not silently disable prepare_ahead on Opus/Sol/Gemini."""
+    cc = _compressor()
+    agent = _agent(cc)
+    agent.codex_responses_native_compaction = True
+    agent.provider = "anthropic"
+    agent.model = "claude-opus-5-5"
+    agent.runtime_capabilities = {"native_compaction": False}
+    thread = pc.maybe_prepare(agent, _messages(30), origin="test")
+    assert thread is not None
+    thread.join(timeout=5)
+    assert len(cc.calls) == 1
+
+
+def test_native_compaction_blocks_when_active_for_model():
+    """When native compaction actually owns the active Codex model, prepare_ahead stays out of the way."""
+    cc = _compressor()
+    agent = _agent(cc)
+    agent.codex_responses_native_compaction = True
+    agent.provider = "openai-codex"
+    agent.model = "gpt-6-astra"
+    agent.base_url = "https://chatgpt.com/backend-api/codex"
+    agent.runtime_capabilities = {"native_compaction": True}
+    assert pc.maybe_prepare(agent, _messages(30), origin="test") is None
+    assert cc.calls == []
+
+
 @pytest.mark.parametrize("agent_attrs", [
     {"platform": "cron"}, {"platform": "subagent"}, {"_delegate_depth": 1}, {"_oneshot_session": True},
 ], ids=["cron", "subagent-platform", "delegated-child", "one-shot"])
