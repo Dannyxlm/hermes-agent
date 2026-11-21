@@ -168,6 +168,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title_source TEXT,
     last_activity_at REAL,
     last_activity_description TEXT,
+    last_activity_kind TEXT,
+    last_activity_tool TEXT,
     last_activity_provenance TEXT,
     api_call_count INTEGER DEFAULT 0,
     handoff_state TEXT,

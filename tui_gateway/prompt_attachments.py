@@ -189,9 +189,10 @@ def _attachment_operation_store(session: dict, params: dict):
     if not key:
         raise ValueError("attachment operation requires a durable session identity")
     if (home / "state.db").is_file():
-        from hermes_state import SessionDB
-        with SessionDB(db_path=home / "state.db", read_only=True) as db:
-            key = db.get_compression_chain(key)[0]
+        from persistence_assembly import open_persistence_reader
+
+        with open_persistence_reader(home / "state.db") as persistence:
+            key = persistence.lineage.chain(key)[0]
     return AttachmentOperations(_session_images_dir(session), key)
 
 

@@ -10,8 +10,21 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from contextlib import contextmanager
 
+from persistence.sqlite._backend import SQLiteStore
 from persistence.sqlite._state.common import LEGACY_QUEUE_RECEIPT_PREFIX as _PREFIX
+from persistence.sqlite.conversation._store.compression import get_compression_lineage
+from tui_gateway.store_handles import borrow_persistence
+
+
+@contextmanager
+def _receipt_holder(db):
+    with borrow_persistence(db) as persistence:
+        store = persistence._bound_store() if persistence is not None else None
+        if not isinstance(store, SQLiteStore):
+            raise RuntimeError("local queue receipts require SQLite session storage")
+        yield store.holder()
 
 
 def _key(receipt):
@@ -26,9 +39,10 @@ def accept(db, session, envelope):
                'session_id': existing['session_id'] if existing else session['session_key'],
                'runtime_id': session.setdefault('_queue_owner', uuid.uuid4().hex),
                'status': 'queued', 'outcome': None, 'user': envelope['text'], **_writer_identity()}
-    db._execute_write(lambda conn: conn.execute(
-        'INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-        (_key(receipt), json.dumps(receipt))))
+    with _receipt_holder(db) as holder:
+        holder._execute_write(lambda conn: conn.execute(
+            'INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            (_key(receipt), json.dumps(receipt))))
     envelope['_queue_receipt'] = receipt
     return receipt
 
@@ -46,7 +60,8 @@ def disposition(db, envelope, outcome):
             return stored  # A lost dispatch acknowledgement cannot undo an already committed completion.
         conn.execute('UPDATE state_meta SET value=? WHERE key=?', (json.dumps(updated), _key(receipt)))
         return updated
-    envelope['_queue_receipt'] = db._execute_write(write)
+    with _receipt_holder(db) as holder:
+        envelope['_queue_receipt'] = holder._execute_write(write)
 
 
 def snapshot(db, session_id, live_sessions):
@@ -55,8 +70,6 @@ def snapshot(db, session_id, live_sessions):
     A same-process detached runtime is still an owner; a new window with the same stored
     session id cannot inherit an old promise. A foreign writer must be provably dead.
     """
-    lineage = db.get_compression_lineage(session_id) or [session_id]
-
     def read(conn):
         from tui_gateway.turn_marker import marker_writer_state
         out = []
@@ -85,4 +98,6 @@ def snapshot(db, session_id, live_sessions):
             out.append({k: v for k, v in receipt.items()
                         if k not in ('runtime_id', 'writer_pid', 'writer_start_time')})
         return out
-    return db._execute_write(read)
+    with _receipt_holder(db) as holder:
+        lineage = get_compression_lineage(holder, session_id) or [session_id]
+        return holder._execute_write(read)

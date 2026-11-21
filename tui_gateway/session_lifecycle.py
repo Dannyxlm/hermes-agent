@@ -962,17 +962,20 @@ def _interrupt_session_turn(
 
 def _session_control_info(session):
     """Receipt projection shared by cold and warm resume; no replay or transcript inference."""
-    from tui_gateway.owner_forward import blocking_unknown, pending_submissions
-    from tui_gateway.local_queue_receipts import snapshot
     import sqlite3
+    from persistence.core.errors import STORE_FAILURES
+    from tui_gateway.local_queue_receipts import snapshot
+    from tui_gateway.owner_forward import blocking_unknown, pending_submissions
+    from tui_gateway.store_handles import borrow_persistence
+
     info = {"pending_submissions": pending_submissions(session), "blocking_unknown": blocking_unknown(session)}
     lineage = {session['session_key']}
     try:
-        with _session_db(session) as db:
-            if db is not None:
-                lineage.update(db.get_compression_lineage(session['session_key']) or [])
-                info["queue_receipts"] = snapshot(db, session["session_key"], _sessions)
-    except (OSError, RuntimeError, sqlite3.Error):
+        with _session_db(session) as db, borrow_persistence(db) as persistence:
+            if persistence is not None:
+                lineage.update(persistence.lineage.lineage(session['session_key']))
+                info["queue_receipts"] = snapshot(persistence, session["session_key"], _sessions)
+    except (OSError, RuntimeError, sqlite3.Error, *STORE_FAILURES):
         logger.warning('Local queue receipt projection unavailable', exc_info=True)
     with session['history_lock']:
         unresolved = [{**envelope['_queue_receipt'], 'status': 'unknown', 'outcome': None}

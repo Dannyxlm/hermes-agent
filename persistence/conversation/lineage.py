@@ -56,7 +56,7 @@ class LineageAdoption:
 class LineageRepository(Protocol):
     """Lineage walks and the compression write side over one scope's session tree."""
 
-    def publish_compression_child(self, parent_session_id: SessionId, child: CompressionChild, handoff: Sequence[NewMessage], *, compression_lock_holder: Optional[str] = None, require_compression_lease: bool = True, require_lease_refresh: bool = False, lease_ttl_seconds: float = 300.0, watermark: Optional[MessageId] = None, watermark_ceiling: Optional[MessageId] = None) -> tuple[RowStamp, ...]:
+    def publish_compression_child(self, parent_session_id: SessionId, child: CompressionChild, handoff: Sequence[NewMessage], *, compression_lock_holder: Optional[str] = None, require_compression_lease: bool = True, require_lease_refresh: bool = False, lease_ttl_seconds: float = 300.0, watermark: Optional[MessageId] = None, watermark_ceiling: Optional[MessageId] = None, turn_lease_holder: Optional[str] = None) -> tuple[RowStamp, ...]:
         """End the parent by compression and publish ``child`` carrying ``handoff`` as its transcript, plus the parent's active rows in ``(watermark, watermark_ceiling]`` cloned after it, in one transaction; returns one ``RowStamp`` per handoff row. A lease not held by ``compression_lock_holder`` (refreshed first with ``require_lease_refresh``) raises ``CompressionBusy``; a missing parent, a parent ended deliberately (an automatic end stamp is cleared instead), an empty handoff or a parent closed concurrently raises ``CompressionPublishRefused``; a child id that already exists raises ``Conflict`` on the session."""
         ...
 

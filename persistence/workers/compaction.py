@@ -61,7 +61,7 @@ class WorkerArchiveResult:
 
 @dataclass(frozen=True, slots=True)
 class WorkerCompressionPublication:
-    """A ``compression.publish`` payload: the fourteen keys of ``publish_compression_child`` without the parent, which is the worker's session. :meth:`payload` sends all fourteen."""
+    """A ``compression.publish`` payload for the worker's session, optionally fenced to its turn lease."""
 
     child_session_id: SessionId
     source: str
@@ -77,9 +77,10 @@ class WorkerCompressionPublication:
     lease_ttl_seconds: float = 300.0
     watermark: int | None = None
     watermark_ceiling: int | None = None
+    turn_lease_holder: str | None = None
 
     def payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "child_session_id": self.child_session_id, "source": self.source, "messages": _rows(self.messages),
             "model": self.model, "model_config": None if self.model_config is None else dict(self.model_config),
             "system_prompt": self.system_prompt, "cwd": self.cwd, "profile_name": self.profile_name,
@@ -87,6 +88,10 @@ class WorkerCompressionPublication:
             "require_lease_refresh": self.require_lease_refresh, "lease_ttl_seconds": self.lease_ttl_seconds,
             "watermark": self.watermark, "watermark_ceiling": self.watermark_ceiling,
         }
+        # Keep the original digest for a retry of an unfenced typed publication.
+        if self.turn_lease_holder is not None:
+            payload["turn_lease_holder"] = self.turn_lease_holder
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

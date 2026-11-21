@@ -44,7 +44,7 @@ class SQLiteLineageRepository:
         self, parent_session_id: SessionId, child: CompressionChild, handoff: Sequence[NewMessage], *,
         compression_lock_holder: Optional[str] = None, require_compression_lease: bool = True,
         require_lease_refresh: bool = False, lease_ttl_seconds: float = 300.0, watermark: Optional[MessageId] = None,
-        watermark_ceiling: Optional[MessageId] = None,
+        watermark_ceiling: Optional[MessageId] = None, turn_lease_holder: Optional[str] = None,
     ) -> tuple[RowStamp, ...]:
         holder = self._store.holder()
         messages = [_message_dict(message) for message in handoff]
@@ -59,7 +59,8 @@ class SQLiteLineageRepository:
                     require_compression_lease=require_compression_lease, require_lease_refresh=require_lease_refresh,
                     lease_ttl_seconds=lease_ttl_seconds,
                     watermark=int(watermark) if watermark is not None else None,
-                    watermark_ceiling=int(watermark_ceiling) if watermark_ceiling is not None else None)
+                    watermark_ceiling=int(watermark_ceiling) if watermark_ceiling is not None else None,
+                    turn_lease_holder=turn_lease_holder)
             except sqlite3.IntegrityError as exc:
                 if "sessions.id" not in str(exc):
                     raise

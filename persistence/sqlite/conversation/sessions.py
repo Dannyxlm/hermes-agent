@@ -195,6 +195,8 @@ def session_record(row: Mapping[str, Any]) -> SessionRecord:
         title_source=_TITLE_SOURCES.get(row.get("title_source")),
         last_activity_at=row.get("last_activity_at"),
         last_activity_description=row.get("last_activity_description"),
+        last_activity_kind=row.get("last_activity_kind"),
+        last_activity_tool=row.get("last_activity_tool"),
         last_activity_provenance=row.get("last_activity_provenance"),
         handoff_state=row.get("handoff_state"),
         handoff_platform=row.get("handoff_platform"),
@@ -663,10 +665,13 @@ class SQLiteSessionRepository:
         *,
         description: Optional[str] = None,
         provenance: Optional[str] = None,
+        step_kind: Optional[str] = None,
+        step_tool: Optional[str] = None,
     ) -> None:
         holder = self._store.holder()
         with refusals(holder, session_id):
-            touch_session_activity(holder, session_id, at, description=description, provenance=provenance)
+            touch_session_activity(holder, session_id, at, description=description, provenance=provenance,
+                                   step_kind=step_kind, step_tool=step_tool)
 
     def clear_activity_labels(self, session_id: SessionId) -> None:
         holder = self._store.holder()

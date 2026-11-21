@@ -18,6 +18,7 @@ from session_rules.onboarding_flow import (
     Applied, End, Event, Facts, Step, applies_to, apply, is_active, new_record,
 )
 from agent.onboarding_text import reminder
+from persistence.conversation.sessions import parse_model_config
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,12 @@ def load(db, session_id: str, *, persistence=None) -> dict | None:
     if db is None or not session_id:
         return None
     store = _reader(db, persistence)
-    record = (store.sessions.get_model_config_value(session_id, KEY) if store is not None
-              else db.get_session_model_config_value(session_id, KEY))
+    if store is not None:
+        record = store.sessions.get_model_config_value(session_id, KEY)
+    else:
+        # Client stores expose the session row, not the retired SessionDB key reader.
+        row = db.get_session(session_id) or {}
+        record = parse_model_config(row.get("model_config")).get(KEY)
     return record if isinstance(record, dict) else None
 
 

@@ -385,6 +385,11 @@ def _project_tree_inputs(
             store.holder(), limit=session_limit, order_by_last_active=True, min_message_count=1,
             include_children=False, exclude_sources=_PROJECT_TREE_EXCLUDED_SOURCES,
             include_archived=False, compact_rows=True, exclude_threads=True)
+        # The SQLite listing annotates only rows with a lineage. Match the sidebar's
+        # nullable shape without discarding compression or local-reset annotations.
+        for row in sessions:
+            row.setdefault("_lineage_root_id", None)
+            row.setdefault("_lineage_ids", None)
     else:
         rows = persistence.sessions.list_sessions(
             SessionQuery(order=SessionOrder.LAST_ACTIVE, min_message_count=1, include_children=False,

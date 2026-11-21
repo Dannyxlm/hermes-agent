@@ -251,9 +251,18 @@ class SQLiteBackend:
             if current is not None and (self.read_only or not reacquire):
                 return current
         with translated(), _home_bound(path.parent):
-            fresh = (StoreHolder(path, read_only=True, read_patience_s=self._read_patience_s,
-                                 check_drift=self._check_drift) if self.read_only
-                     else _registry.acquire(path))
+            if self.read_only:
+                try:
+                    path.stat()
+                except FileNotFoundError as exc:
+                    # An uninitialized profile is unavailable, not an empty membership result.
+                    raise StoreUnavailable("Session store does not exist") from exc
+                except OSError as exc:
+                    raise StoreUnavailable("Session store cannot be accessed") from exc
+                fresh = StoreHolder(path, read_only=True, read_patience_s=self._read_patience_s,
+                                    check_drift=self._check_drift)
+            else:
+                fresh = _registry.acquire(path)
         with self._lock:
             current = self._holders.get(key)
             closed = self._closed

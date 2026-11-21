@@ -218,6 +218,8 @@ class SQLiteWorkerExecutionRepository:
 
     def touch_session_activity(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int, activity: WorkerActivity) -> None:
         payload = {'ts': activity.ts, 'description': activity.description, 'provenance': activity.provenance}
+        if activity.step_kind is not None or activity.step_tool is not None:
+            payload.update(step_kind=activity.step_kind, step_tool=activity.step_tool)
         self._value('session.activity', payload, epoch, execution_id, session_id, generation, sequence)
 
     def clear_session_activity(self, *, epoch: AuthorityEpoch, execution_id: WorkerExecutionId, session_id: SessionId, generation: ExecutionGeneration, sequence: int) -> None:

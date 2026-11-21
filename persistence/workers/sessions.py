@@ -91,6 +91,8 @@ class WorkerActivity:
     ts: float | None
     description: str | None
     provenance: str | None
+    step_kind: str | None = None
+    step_tool: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -779,7 +779,7 @@ def get_session(holder: StoreHolder, session_id: str) -> Optional[dict[str, Any]
     if row is None:
         return None
     record = _session_row_dict(row)
-    if 'last_activity_kind' not in record or 'last_activity_tool' not in record:
+    if record.get('last_activity_kind') is None and record.get('last_activity_tool') is None:
         from .activity_steps import read_step
         with holder._read_ctx() as conn:
             record['last_activity_kind'], record['last_activity_tool'] = read_step(conn, session_id, record)

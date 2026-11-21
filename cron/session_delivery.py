@@ -20,24 +20,24 @@ def session_target(token: str) -> str | None:
 
 def resolve_session(session_id: str, home: Path | None = None) -> str:
     """An exact id must exist in this profile's store, never title/prefix/global lookup."""
-    from hermes_state import SessionDB
+    from persistence.core.identity import SessionId
+    from persistence_assembly import open_persistence_reader
 
     home = home if home is not None else get_hermes_home().resolve()
+    path = home / "state.db"
     error = (
         f"Invalid session:<id> delivery target {session_id!r}: session must exist in the same profile. "
         "Use an exact ID from `hermes sessions list` in this profile, or select the owning profile first.")
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id) is None or not (home / "state.db").is_file():
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id) is None or not path.is_file():
         raise ValueError(error)
-    db = SessionDB(db_path=home / "state.db", read_only=True)
-    try:
-        if db.get_session(session_id) is None:
+    sid = SessionId(session_id)
+    with open_persistence_reader(path) as store:
+        if store.sessions.get(sid) is None:
             raise ValueError(error)
-        tip = db.get_compression_tip(session_id)
-        if tip is None or db.get_session(tip) is None:
+        tip = store.lineage.tip(sid)
+        if store.sessions.get(tip) is None:
             raise ValueError(error)
         return tip
-    finally:
-        db.close()
 
 
 def validate_delivery(value):
@@ -70,26 +70,24 @@ def _wake_subject(home: Path, session_id: str, *, host_unstamped: bool = False) 
     # Job creation is host-equivalent; the wake acts for the target row's owner.
     # Multi-login job isolation would require a creator principal stamped at creation.
     from gateway.session_identity import authenticated_subject, parse_authenticated_subject
-    from hermes_state import SessionDB
-    from hermes_state_local_migration import LEGACY_LOCAL_SOURCES, legacy_account_label
+    from persistence.authority.vocabulary import LEGACY_LOCAL_SOURCES
+    from persistence.core.identity import SessionId
+    from persistence_assembly import open_persistence_reader
+    from session_rules.legacy_local import legacy_account_label, login_label
 
-    db = SessionDB(db_path=home / "state.db", read_only=True)
-    try:
-        row = db.get_session(session_id)
-    finally:
-        db.close()
-    if not row or row['source'] not in LEGACY_LOCAL_SOURCES | {'local'}:
+    with open_persistence_reader(home / "state.db") as store:
+        row = store.sessions.get(SessionId(session_id))
+    if row is None or row.source not in LEGACY_LOCAL_SOURCES | {'local'}:
         return None
-    owner = row.get('user_id')
+    owner = row.user_id
     if parse_authenticated_subject(owner) is not None:
         return owner
-    if (row['source'] in {'tui', 'gui', 'desktop'} and isinstance(owner, str)
-            and not legacy_account_label(row)):
+    if (row.source in {'tui', 'gui', 'desktop'} and isinstance(owner, str)
+            and not legacy_account_label({'source': row.source, 'user_id': owner})):
         provider, sep, user = owner.partition(':')
         if sep and provider and user and provider not in {'uid', 'auth', 'local'}:
             subject = authenticated_subject({'provider': provider, 'user_id': user})
-            from hermes_state_mutation_binding import _login_label
-            if _login_label(subject) == owner:
+            if login_label(subject) == owner:
                 return subject
     from gateway.owner_identity import host_owner_subject
     if owner == host_owner_subject() or (host_unstamped and not owner):
@@ -168,8 +166,7 @@ def transfer_pending(path: Path, record: dict) -> bool:
     """Admit or observe an exact-session wake under the pending-record lock, never a CLI writer."""
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
-    # Read-only SessionDB opens also consult profile configuration. Bind the whole
-    # observation, not just the RPC, before a caller's profile can leak into it.
+    # Bind the whole observation, not just the RPC, to the pending record's profile.
     token = set_hermes_home_override(Path(record["home"]).resolve())
     try:
         return _transfer_pending(path, record)

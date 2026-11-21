@@ -156,7 +156,7 @@ SESSION_ROW_COLUMNS: tuple[str, ...] = (
     "reasoning_tokens", "cwd", "git_branch", "git_repo_root", "git_metadata_generation", "billing_provider",
     "billing_base_url", "billing_mode", "estimated_cost_usd", "actual_cost_usd", "cost_status", "cost_source",
     "pricing_version", "title", "title_source", "last_activity_at", "last_activity_description",
-    "last_activity_provenance", "api_call_count", "handoff_state", "handoff_platform", "handoff_error",
+    "last_activity_kind", "last_activity_tool", "last_activity_provenance", "api_call_count", "handoff_state", "handoff_platform", "handoff_error",
     "compression_failure_cooldown_until", "compression_failure_error", "compression_fallback_streak",
     "compression_ineffective_count", "compression_recovery_deadline", "compression_overload_streak", "profile_name",
     "transport_profile", "rewind_count", "archived", "auto_archived", "pinned", "hidden", "last_read_at",
@@ -466,6 +466,8 @@ class SessionRecord:
     tool_names: Optional[str] = None
     #: The stored prompt-cache clock, the JSON text of the last applied usage delta that carried one (``None`` when none did).
     prompt_cache_clock: Optional[str] = None
+    last_activity_kind: Optional[str] = None
+    last_activity_tool: Optional[str] = None
 
     def as_session_row(self) -> dict[str, JsonValue]:
         return {**self._row_cells(), **self._marker_cells()}
@@ -1082,6 +1084,8 @@ class SessionRepository(Protocol):
         *,
         description: Optional[str] = None,
         provenance: Optional[str] = None,
+        step_kind: Optional[str] = None,
+        step_tool: Optional[str] = None,
     ) -> None:
         """Stamp ``last_activity_at`` (default now) with its labels when it is newer than the stored stamp. Waits at most the activity patience (``StoreContention``)."""
         ...

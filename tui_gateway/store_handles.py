@@ -74,6 +74,22 @@ def _release_persistence(handle) -> None:
 
 
 @contextlib.contextmanager
+def borrow_persistence(db):
+    """Borrow the caller's handle without opening a separate store or changing access mode."""
+    from hermes_state import _SessionDB
+
+    if isinstance(db, _SessionDB):
+        # Pin the facade's handle for the duration of the call, like its own methods do.
+        db._enter()
+        try:
+            yield db._store
+        finally:
+            db._leave()
+    else:
+        yield db if _is_handle(db) else None
+
+
+@contextlib.contextmanager
 def _persistence_for(db):
     """``db`` for one call when it is a handle (a store is its own, in its own access mode); None otherwise."""
     yield db if _is_handle(db) else None

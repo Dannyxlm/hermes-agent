@@ -380,7 +380,7 @@ def _publish_compression_child_on_conn(
         turn_lease_holder: Optional[str] = None) -> None:
     """:meth:`publish_compression_child` on the caller's write transaction (never commits). The
     owner and the worker/canonical-mutation verbs share this one body so they cannot drift."""
-    if turn_lease_holder:
+    if turn_lease_holder is not None:
         _assert_session_turn_lease_holder_on_conn(holder, conn, [parent_session_id], turn_lease_holder)
     from persistence.sqlite._state.errors import CompressionSessionBusyError
     from persistence.sqlite.conversation._store.sessions import _unarchive_auto_archived_lineage
