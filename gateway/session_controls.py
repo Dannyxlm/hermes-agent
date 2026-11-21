@@ -720,7 +720,10 @@ class AuthorityConnection:
             await refresh_resumed_policy(self.authority, ref, attached=ref.session_id in self.subscriptions)
         # ``omit_messages``: the client pages the transcript itself (Desktop over REST), so the attach reads no
         # compression lineage (a whole-lineage read here made every open of a long chat cost seconds).
+        # ``omit_info``: internal callers (thread_wake / thread_tool) only need session_id/revision to submit
+        # a turn, so skip the banner inventory (skills walk, toolset probes, git, usage) and hook re-sync.
         omit = params.get('omit_messages') is True
+        omit_info = params.get('omit_info') is True
         replay_from = replay_from if ref.session_id == requested else None
         # A client opening the session (not a poll on its attachment, not a reconnect): the open is queued
         # before the attach yields, so no turn another viewer submits meanwhile runs ahead of it.
@@ -732,7 +735,8 @@ class AuthorityConnection:
             snapshot = await self.authority.attach(self.actor, ref, history=not omit, replay_from=replay_from)
             self.subscriptions[ref.session_id] = snapshot.subscription_id
             self.handed_back.discard(ref.session_id)
-            self._spawn_notice(ref)
+            if not omit_info:
+                self._spawn_notice(ref)
             # Only local routes have a frozen local launch policy to project; with it, main's banner and
             # status-bar inventory (tools, skills, MCP, version, branch) for that policy.
             info = {'desktop_protocol': CANONICAL_GATEWAY_PROTOCOL}
@@ -740,10 +744,12 @@ class AuthorityConnection:
             if live.source is not None and live.source.platform == Platform.LOCAL:
                 from gateway.session_policy import policy_for_source, refresh_profile_hooks
                 policy = policy_for_source(self.authority.runner, live.source)
-                await asyncio.to_thread(refresh_profile_hooks, policy)
+                if not omit_info:
+                    await asyncio.to_thread(refresh_profile_hooks, policy)
                 if opening is not None:
                     opening.fire(policy, live.route)
-                info = await snapshot_info(self.authority, snapshot.handle.ref)
+                if not omit_info:
+                    info = await snapshot_info(self.authority, snapshot.handle.ref)
         finally:
             if opening is not None:  # not fired (a refusal, a messaging lane, a history mount): nothing waits
                 opening.release()

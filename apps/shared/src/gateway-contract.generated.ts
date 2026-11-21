@@ -3105,6 +3105,7 @@ export interface SessionResumeParams {
   lazy?: boolean
   defer_history?: boolean
   omit_messages?: boolean
+  omit_info?: boolean
   eager_build?: boolean
   close_on_disconnect?: boolean
   inline_images?: boolean
@@ -7016,6 +7017,7 @@ export interface CanonicalResumeParams {
   api_key?: string | null
   defer_history?: boolean
   omit_messages?: boolean
+  omit_info?: boolean
   cols?: number | null
   display_projection?: boolean
 }

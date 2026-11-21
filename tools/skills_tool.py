@@ -235,9 +235,17 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
     collecting candidates, so it asks for hidden rows too."""
     from agent.skill_utils import (
         TIER_PROJECT, is_disabled_entry, iter_project_skill_files, iter_skill_index_files, resolve_skill_catalog)
-    cache_key = ("with_disabled" if skip_disabled else "filtered", include_hidden)
+    from tools.kanban_toolset_context import kanban_toolset_requested
     disabled = set() if skip_disabled else _get_disabled_skill_names()
-    roots, _ = skill_search_dirs()
+    roots, active_skills_dir = skill_search_dirs()
+    # Scope the cache key by active skills dir (so multiplexed profiles don't evict each other)
+    # and kanban selection (so CLI kanban scans stay cached without poisoning non-CLI views).
+    cache_key = (
+        "with_disabled" if skip_disabled else "filtered",
+        include_hidden,
+        str(active_skills_dir.resolve()),
+        kanban_toolset_requested(),
+    )
     signature = _skills_scan_signature([d for _t, d in roots], disabled)
     now = time.monotonic()
     cached = _SKILLS_CACHE.get(cache_key)

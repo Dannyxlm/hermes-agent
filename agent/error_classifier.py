@@ -1260,7 +1260,28 @@ def _status_404(c: _Ctx) -> Verdict:
     return _V_MODEL_NOT_FOUND if _model_id_missing_known_prefix(c.model_slug, c.provider_slug) else _V_UNKNOWN
 
 
+def _is_model_credits_entitlement_429(c: _Ctx) -> bool:
+    """Anthropic 429 ``credits_required`` when the plan has no included allowance for this model
+    (``exhausted_included_allowance`` is explicitly ``False`` and ``details.model`` names it).
+
+    Included-allowance exhaustion (``exhausted_included_allowance: True``) stays on the normal
+    rate-limit path; fast-mode ``credits_required`` carries no ``details.model`` and is handled
+    before classification.
+    """
+    details = _error_obj(c.body).get("details")
+    return (
+        isinstance(details, dict)
+        and str(details.get("error_code") or "").strip().lower() == "credits_required"
+        and details.get("exhausted_included_allowance") is False
+        and bool(str(details.get("model") or "").strip())
+    )
+
+
 def _status_429(c: _Ctx) -> Verdict:
+    # Plan lacks included allowance for this model (e.g. Anthropic ``credits_required`` with
+    # ``exhausted_included_allowance: false``): model-scoped entitlement bench + immediate rotation.
+    if _is_model_credits_entitlement_429(c):
+        return _V_MODEL_ENTITLEMENT
     # A structured billing code is decisive: LiteLLM stamps
     # ``terminal_quota_exhausted`` (a hard cap, not throttling) on 429s, and
     # this handler always returns, so _by_error_code never sees the code.
