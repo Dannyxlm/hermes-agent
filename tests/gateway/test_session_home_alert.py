@@ -121,19 +121,16 @@ async def test_a_viewer_turn_never_takes_the_producer_path(tmp_path, monkeypatch
 
 
 def test_only_the_canonical_chats_current_tip_is_home(tmp_path):
-    from hermes_state import SessionDB
-    db = SessionDB(tmp_path / 'state.db')
-    try:
-        db.create_session('root', source='tui')
-        db.set_session_title('root', 'Bot Chat')
-        db.create_session('other', source='tui')
+    from persistence.conversation.sessions import NewSession
+    from persistence_assembly import open_persistence, profile_scope
+    with open_persistence(profile_scope(home=tmp_path)) as db:
+        db.sessions.create(NewSession(session_id='root', source='tui'))
+        db.sessions.set_title('root', 'Bot Chat')
+        db.sessions.create(NewSession(session_id='other', source='tui'))
         assert session_home_alert._canonical_root(db, 'root') == 'root'
         assert session_home_alert._canonical_root(db, 'other') is None, 'another chat is not Home'
-        db._conn.execute("UPDATE sessions SET archived=1 WHERE id='root'")
-        db._conn.commit()
+        db.sessions.set_archived('root', True)
         assert session_home_alert._canonical_root(db, 'root') is None, 'an archived Home alerts no one'
-    finally:
-        db.close()
 
 
 @pytest.mark.asyncio

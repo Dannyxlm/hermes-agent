@@ -762,13 +762,17 @@ async def get_session_list_membership(profile: str = Query(..., min_length=1), i
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     def read_membership():
+        from persistence.core.errors import StoreUnavailable
         from persistence_assembly import open_persistence_reader
 
         path = _session_db_path_for_profile(profile)
-        with corrupt_store_as_status(path), open_persistence_reader(path) as store:
-            parents = _thread_parents(store, stored_ids)
-            return {"profile": store.sessions.store_owner() or "default",
-                    "thread_session_ids": [sid for sid in stored_ids if sid in parents]}
+        try:
+            with corrupt_store_as_status(path), open_persistence_reader(path) as store:
+                parents = _thread_parents(store, stored_ids)
+                return {"profile": store.sessions.store_owner() or "default",
+                        "thread_session_ids": [sid for sid in stored_ids if sid in parents]}
+        except StoreUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Session store unavailable") from exc
 
     return await asyncio.to_thread(read_membership)
 

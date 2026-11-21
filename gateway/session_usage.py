@@ -88,10 +88,23 @@ def billing_usage(agent) -> dict:
     with contextlib.suppress(Exception):
         db = getattr(agent, "_session_db", None)
         sid = getattr(agent, "session_id", None)
-        row = db._read_one(
-            "SELECT estimated_cost_usd, actual_cost_usd, cost_status FROM sessions WHERE id = ?",
-            (sid,)) if db is not None and sid else None
-        row = dict(row) if row is not None else None
+        row = None
+        if db is not None and sid:
+            sessions = getattr(db, "sessions", None)
+            if sessions is not None and callable(getattr(sessions, "get", None)):
+                rec = sessions.get(sid)
+                if rec is not None:
+                    row = {
+                        "estimated_cost_usd": getattr(rec, "estimated_cost_usd", None),
+                        "actual_cost_usd": getattr(rec, "actual_cost_usd", None),
+                        "cost_status": getattr(rec, "cost_status", None),
+                    }
+            elif callable(getattr(db, "_read_one", None)):
+                raw = db._read_one(
+                    "SELECT estimated_cost_usd, actual_cost_usd, cost_status FROM sessions WHERE id = ?",
+                    (sid,),
+                )
+                row = dict(raw) if raw is not None else None
         if row and (row.get("actual_cost_usd") is not None
                     or cost["cost_status"] in (None, "unknown")):
             cost = {field: row.get(field) for field in cost}

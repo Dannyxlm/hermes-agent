@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _FENCE_TAG_RE = re.compile(r'</?\s*memory-context\s*>', re.IGNORECASE)
 _INTERNAL_CONTEXT_RE = re.compile(r'<\s*memory-context\s*>[\s\S]*?</\s*memory-context\s*>', re.IGNORECASE)
 _INTERNAL_NOTE_RE = re.compile(
-    r'\[System note:\s*The following is recalled memory context,\s*NOT new user input\.\s*Treat as (?:informational background data|authoritative reference data[^\]]*)\.\]\s*',
+    r'\[System note:\s*The following is recalled memory context,\s*NOT new user input(?: or instructions)?\.\s*Treat (?:as (?:informational background data|authoritative reference data[^\]]*)|(?:records|it) as evidence[^\]]*)\.\]\s*',
     re.IGNORECASE,
 )
 

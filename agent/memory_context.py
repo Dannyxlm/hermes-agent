@@ -12,19 +12,12 @@ import re
 
 logger = logging.getLogger(__name__)
 
-_FENCE_TAG_RE = re.compile(r'</?\s*memory-context\s*>', re.IGNORECASE)
-_INTERNAL_CONTEXT_RE = re.compile(r'<\s*memory-context\s*>[\s\S]*?</\s*memory-context\s*>', re.IGNORECASE)
-_INTERNAL_NOTE_RE = re.compile(
-    r'\[System note:\s*The following is recalled memory context,\s*NOT new user input(?: or instructions)?\.\s*Treat (?:as (?:informational background data|authoritative reference data[^\]]*)|(?:records|it) as evidence[^\]]*)\.\]\s*',
-    re.IGNORECASE,
+from session_rules.turns import (
+    _FENCE_TAG_RE,
+    _INTERNAL_CONTEXT_RE,
+    _INTERNAL_NOTE_RE,
+    sanitize_context,
 )
-
-
-def sanitize_context(text: str) -> str:
-    """Strip fence tags, injected context blocks, and system notes from provider output."""
-    for pattern in (_INTERNAL_CONTEXT_RE, _INTERNAL_NOTE_RE, _FENCE_TAG_RE):
-        text = pattern.sub('', text)
-    return text
 
 
 def fence_recalled_context(text: str) -> str:
