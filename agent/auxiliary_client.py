@@ -7952,6 +7952,19 @@ def _plan_aux_call(
                 f"fallback=False requires an explicit provider for task={task or 'call'}; "
                 "set auxiliary.<task>.provider (or pass provider=/base_url=)")
         if not pinned_base_url and _normalize_aux_provider(pinned_provider) == "custom":
+            _alias_id = raw_pinned.removeprefix("custom:")
+            _has_named_local = False
+            if _alias_id in _LOCAL_SERVER_ALIASES:
+                with contextlib.suppress(ImportError):
+                    from hermes_cli.runtime_provider import _get_named_custom_provider
+                    _has_named_local = bool(
+                        _get_named_custom_provider(raw_pinned)
+                        or _get_named_custom_provider(_alias_id)
+                    )
+                if not _has_named_local:
+                    from agent.auxiliary_local_runtime import bare_llamacpp_endpoint
+                    _local = bare_llamacpp_endpoint(raw_pinned, None, None)
+                    _has_named_local = bool(_local and _local[0])
             _main_has_custom = bool(
                 main_runtime
                 and str(main_runtime.get("base_url") or "").strip()
@@ -7964,7 +7977,7 @@ def _plan_aux_call(
                 _cfg_base and _cfg_key
                 and not _cfg_base.lower().startswith(_CODEX_AUX_BASE_URL.lower())
             )
-            if not (_main_has_custom or _has_custom_cfg):
+            if not (_has_named_local or _main_has_custom or _has_custom_cfg):
                 raise AuxiliaryClientUnavailable(
                     f"fallback=False requires an explicit provider or configured custom endpoint "
                     f"for task={task or 'call'} (provider={pinned_provider!r} has no custom endpoint)")

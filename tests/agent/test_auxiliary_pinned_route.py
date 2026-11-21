@@ -242,6 +242,36 @@ def test_pinned_bare_custom_or_unset_main_refuses_api_key_discovery(tmp_path, mo
         srv[0].server_close()
 
 
+@pytest.mark.parametrize("prov", ["ollama", "custom:ollama"])
+def test_pinned_named_local_alias_provider_runs_on_its_own_endpoint(tmp_path, monkeypatch, prov):
+    """A configured providers.ollama entry is a concrete named route and must not be refused by the custom guard."""
+    import asyncio
+
+    aux.shutdown_cached_clients()
+    aux._reset_aux_unhealthy_cache()
+    requests: list[tuple[str, str]] = []
+    srv = _serve("ollama", requests, lambda body: (200, _completion(body.get("model")), 0))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("OLLAMA_TEST_KEY", "ollama-key")
+    cfg = {
+        "model": {"default": ""},
+        "providers": {"ollama": {"base_url": srv[2], "key_env": "OLLAMA_TEST_KEY"}},
+        "auxiliary": {"t": {"provider": prov, "model": PINNED_MODEL}},
+    }
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    try:
+        r1 = aux.call_llm(task="t", messages=MESSAGES, timeout=1.0, fallback=False)
+        r2 = asyncio.run(aux.async_call_llm(task="t", messages=MESSAGES, timeout=1.0, fallback=False))
+        assert r1.choices[0].message.content == f"from {PINNED_MODEL}"
+        assert r2.choices[0].message.content == f"from {PINNED_MODEL}"
+        assert requests == [("ollama", PINNED_MODEL), ("ollama", PINNED_MODEL)]
+    finally:
+        aux.shutdown_cached_clients()
+        srv[0].shutdown()
+        srv[0].server_close()
+
+
 @pytest.mark.parametrize("value", [0, None, "false", 1])
 def test_fallback_must_be_a_bool(routes, value):
     """A falsy non-bool must not quietly run the fallback ladder (or quietly pin)."""
