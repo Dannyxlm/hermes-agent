@@ -7867,7 +7867,9 @@ def call_llm(
     ``fallback=False`` pins the request to the provider and model it resolved: no task
     ``fallback_chain``, main-agent model or discovery candidate is tried, at resolution or after
     a failure. Same-route recovery (parameter repairs, credential refresh, pool rotation) still
-    runs while the provider and model stay unchanged; otherwise the route's own error is raised."""
+    runs while the provider and model stay unchanged; otherwise the route's own error is raised.
+    A pinned call needs an explicit provider (argument or ``auxiliary.<task>.provider``): the
+    ``auto`` route raises ``AuxiliaryClientUnavailable`` up front. ``fallback`` must be a bool."""
     queue_started_at = time.monotonic()
     semaphore = _acquire_sync_aux_semaphore(task)
     if semaphore is not None:
@@ -7933,7 +7935,19 @@ def _plan_aux_call(
     drivers pass to ``_retry_same_provider_*`` / ``_call_fallback_candidate_*``. One immutable
     runtime snapshot for keying/resolution/retries/fallbacks, so a concurrent /model switch
     can't mix key and client from different runtimes."""
+    if not isinstance(fallback, bool):
+        raise TypeError(f"fallback must be a bool, got {type(fallback).__name__}")
     main_runtime = _normalize_main_runtime(main_runtime)
+    if fallback is False:
+        # A pinned call must name its route. The auto route walks the main provider, the
+        # task/top-level fallback chains and discovery, and a pool-rotation rebuild of "auto"
+        # can resolve to another backend, so none of it can honor the pin: fail closed.
+        pinned_provider, _m, pinned_base_url, _k, _a = _resolve_task_provider_model(
+            task, provider, model, base_url, api_key)
+        if not pinned_base_url and (pinned_provider or "").strip().lower() in {"", "auto"}:
+            raise AuxiliaryClientUnavailable(
+                f"fallback=False requires an explicit provider for task={task or 'call'}; "
+                "set auxiliary.<task>.provider (or pass provider=/base_url=)")
     req = _prepare_aux_request(
         task, provider=provider, model=model, base_url=base_url, api_key=api_key,
         main_runtime=main_runtime, messages=messages, temperature=temperature,
@@ -8019,7 +8033,8 @@ def _pin_ladder_route(ladder, first_err: aux_errors.Failure, req: _PreparedAuxRe
         if step.kind == "wait":
             return True
         if step.kind == "retry_same_provider":
-            return _normalize_aux_provider(step.args[0]) in providers and step.args[1] in models
+            # A rebuild on the same explicit provider; a missing model keeps the resolved one.
+            return _normalize_aux_provider(step.args[0]) in providers and (step.args[1] is None or step.args[1] in models)
         if step.kind == "call":
             client, kwargs = step.args
             same_client = client is req.client or bool(endpoint and _client_endpoint(client) == endpoint)

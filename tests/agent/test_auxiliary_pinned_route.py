@@ -180,6 +180,37 @@ def test_pinned_task_whose_client_cannot_be_built_sends_nothing(routes, monkeypa
     assert requests == [("main", MAIN_MODEL)]
 
 
+@pytest.mark.parametrize("task_config", [
+    None,  # no task config: the main agent's route ("auto")
+    {"auto_task": {"provider": "auto", "model": PINNED_MODEL,
+                   "fallback_chain": [{"provider": "custom:mainp", "model": MAIN_MODEL}]}},
+])
+def test_pinned_auto_route_is_refused_before_any_request(routes, task_config):
+    """The auto route walks main, fallback chains and discovery, so a pin there fails closed."""
+    import asyncio
+
+    configure, requests = routes
+    configure("server_error", task_config=task_config)
+    task = "auto_task" if task_config else None
+    with pytest.raises(aux.AuxiliaryClientUnavailable, match="explicit provider"):
+        aux.call_llm(task=task, messages=MESSAGES, timeout=1.0, fallback=False)
+    with pytest.raises(aux.AuxiliaryClientUnavailable, match="explicit provider"):
+        asyncio.run(aux.async_call_llm(task=task, messages=MESSAGES, timeout=1.0, fallback=False))
+    with pytest.raises(aux.AuxiliaryClientUnavailable, match="explicit provider"):
+        aux.call_llm(task="vision", messages=MESSAGES, timeout=1.0, fallback=False)
+    assert requests == []
+
+
+@pytest.mark.parametrize("value", [0, None, "false", 1])
+def test_fallback_must_be_a_bool(routes, value):
+    """A falsy non-bool must not quietly run the fallback ladder (or quietly pin)."""
+    configure, requests = routes
+    configure("server_error")
+    with pytest.raises(TypeError):
+        aux.call_llm(provider="custom:pinnedp", model=PINNED_MODEL, messages=MESSAGES, timeout=1.0, fallback=value)
+    assert requests == []
+
+
 # The async path always retries a transient failure once on the same provider.
 @pytest.mark.parametrize("kind, status, attempts", [("payment", 402, 1), ("server_error", 500, 2)])
 def test_async_pinned_call_raises_its_own_error_without_leaving_the_route(routes, kind, status, attempts):

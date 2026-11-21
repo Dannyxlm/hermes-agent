@@ -300,7 +300,12 @@ one same-credential retry after a rate limit, and same-provider retries
 for transient errors. Any step that would change the provider, the
 model or the endpoint is not sent. A route whose client can't be built
 (no credentials) raises `AuxiliaryClientUnavailable` without trying the
-task's `fallback_chain`. `fallback=False` only narrows routing, so it
+task's `fallback_chain`. A pinned call needs an explicit route: when the
+task resolves to `auto` (no `provider` argument and no
+`auxiliary.<task>.provider`), `fallback=False` raises
+`AuxiliaryClientUnavailable` before sending anything, because the auto
+route itself walks the fallback chains and discovery. `fallback` must be
+a real `bool`. `fallback=False` only narrows routing, so it
 needs no trust grant. `call_llm()` and `async_call_llm()` take the same
 argument.
 
