@@ -85,9 +85,20 @@ def stamp_stop(agent, cause):
 def finish_child(child, *, result=None, cause=None):
     lid, db = getattr(child, '_launch_id', None), getattr(child, '_session_db', None)
     if isinstance(lid, str) and lid and db is not None:
+        terminal_cause = cause or result_cause(
+            result, stop_cause=getattr(child, '_launch_stop_cause', None))
         from agent.runtime_session_store import call_off_event_loop
-        call_off_event_loop(db.finish_launch, lid, cause or result_cause(
-            result, stop_cause=getattr(child, '_launch_stop_cause', None)))
+        finish = getattr(db, 'finish_launch', None)
+        if not callable(finish):
+            sessions = getattr(db, 'sessions', None)
+            finish = getattr(sessions, 'finish_launch', None)
+        if callable(finish):
+            call_off_event_loop(finish, lid, terminal_cause)
+        else:
+            bound = getattr(db, '_bound_store', None)
+            if callable(bound):
+                from persistence.sqlite.conversation._store.launches import finish_stored_launch
+                call_off_event_loop(finish_stored_launch, bound().holder(), lid, terminal_cause)
 
 
 def process_cause(session):

@@ -41,13 +41,14 @@ def _canonical_root(store, session_id) -> str | None:
     root = store.sessions.get_by_title(CANONICAL_BOT_CHAT_TITLE)
     if root is None or root.archived:
         return None
-    if store.sessions.title_holder(CANONICAL_BOT_CHAT_TITLE, excluding=root.id) is not None:
+    root_id = root.session_id
+    if store.sessions.title_holder(CANONICAL_BOT_CHAT_TITLE, excluding=root_id) is not None:
         return None
-    chain = store.lineage.lineage(root.id)
-    if not chain or chain[0] != root.id or chain[-1] != session_id:
+    chain = store.lineage.lineage(root_id)
+    if not chain or chain[0] != root_id or chain[-1] != session_id:
         return None
     tip = store.sessions.get(chain[-1])
-    return root.id if tip is not None and not tip.archived else None
+    return root_id if tip is not None and not tip.archived else None
 
 
 def _profile(home: Path):
