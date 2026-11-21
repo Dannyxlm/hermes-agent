@@ -101,7 +101,7 @@ def process_owner(pid=None):
     """``pid:start-ticks``: a recycled PID never inherits another process's runs."""
     pid = os.getpid() if pid is None else pid
     try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         return f"{pid}:{stat.rsplit(')', 1)[1].split()[19]}"
     except (OSError, IndexError):
         return f"{pid}:"
@@ -638,7 +638,11 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                 closed += 1
         return closed
 
-    def record(self, scope, run_id, event_id, status, *, preview=None):
+    def record(self, scope, run_id, event_id, status, *, preview=None, category=None):
+        """``category`` overrides the alert category the status implies (a reply that needs the
+        user completes its run yet alerts as attention)."""
+        if category not in {None, "attention", "completion"}:
+            raise ValueError("invalid notification category")
         if status not in LABELS or not isinstance(event_id, str) or not 1 <= len(event_id) <= 512:
             raise ValueError("invalid canonical event")
         # Namespacing means a producer cannot collide with another run's request IDs.
@@ -687,12 +691,12 @@ class PushStore(ActivityPushStore, WidgetPushStore):
                         and sub["expires_at"] > now + 120):
                     self._enqueue(db, sub, run, scope, event_id, preview=preview)
                 elif sub["kind"] == "alert":
-                    category = _notification_category(status)
-                    if (status in ATTENTION or status in TERMINAL) and category in json.loads(sub["categories"]):
-                        self._enqueue(db, sub, run, scope, event_id, preview=preview)
+                    alert_category = category or _notification_category(status)
+                    if (status in ATTENTION or status in TERMINAL) and alert_category in json.loads(sub["categories"]):
+                        self._enqueue(db, sub, run, scope, event_id, preview=preview, category=alert_category)
             return True
 
-    def _enqueue(self, db, sub, run, scope, event_id, *, preview=None):
+    def _enqueue(self, db, sub, run, scope, event_id, *, preview=None, category=None):
         if sub["kind"] == "alert" and sub["scope"] == scope.key and self._foreground(db, sub):
             return  # this device is already displaying the destination
         run = dict(run)
@@ -734,7 +738,7 @@ class PushStore(ActivityPushStore, WidgetPushStore):
             expires = min(expires, request_deadline)
         if expires <= now:
             return
-        category = _notification_category(run["status"])
+        category = category or _notification_category(run["status"])
         db.execute("""INSERT OR IGNORE INTO outbox
             (job_id, subscription_id, event_id, run_id, payload, urgent, collapse_id, expires_at, next_attempt, category)
             VALUES (?,?,?,?,?,?,?,?,?,?)""", (str(uuid.uuid4()), sub["id"], event_id, run["run_id"],

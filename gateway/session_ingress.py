@@ -390,6 +390,11 @@ async def execute_admission(authority, ref, row):
                 if is_api or (row['payload'].get('finite') is True and not event.get_command()):
                     result = {'final_response': '', 'messages': [], 'failed': True, 'completed': False,
                               'error': response or 'The admitted turn failed.'}
+            if not is_api and response and not result.get('failed') and not is_viewer_input(row):
+                # A producer turn's final reply (a scheduled report, a DM, a background completion)
+                # has no push projection; only one that needs the user alerts (session_home_alert).
+                from gateway.session_home_alert import notify_if_needed
+                await notify_if_needed(authority, ref, response)
             # The drain commits this under the stream lock so no viewer reads `terminal`
             # before the completion event exists in the replay ring.
             authority.pending_results[row['admission_id']] = {

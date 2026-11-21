@@ -94,8 +94,8 @@ class PushService:
         run = self.store.current_run(scope)
         return {key: run[key] for key in ("run_id", "status", "started_at", "updated_at")} if run else None
 
-    def record(self, scope, run_id, event_id, status, *, preview=None):
-        result = self.store.record(scope, run_id, event_id, status, preview=preview)
+    def record(self, scope, run_id, event_id, status, *, preview=None, category=None):
+        result = self.store.record(scope, run_id, event_id, status, preview=preview, category=category)
         self._wake.set()
         return result
 

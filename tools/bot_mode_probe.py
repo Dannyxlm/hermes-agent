@@ -21,9 +21,8 @@ from pathlib import Path
 _PROTOCOL_HEADING = "## Messaging other agents"
 # The legacy section through the next H2 heading (or EOF), plus the blank lines before it.
 _LEGACY_PROTOCOL_RE = re.compile(r"\n*" + re.escape(_PROTOCOL_HEADING) + r"[ \t]*\n.*?(?=\n## |\Z)", re.DOTALL)
-# v3: the single-reply contract (final response captured by the transport) replaced the
-# "reply concisely via message_agent" bounce that double-delivered every teammate DM.
-_BOT_MODE_PROTOCOL_VERSION = 3
+# v4: added the [NEEDS YOU] Home alert marker rule so eternal Bot Chats adopt it once.
+_BOT_MODE_PROTOCOL_VERSION = 4
 # Leads a notify-only DM's body (after the attribution colon, so every sender-card parser keeps it).
 NO_REPLY_MARKER = "[no reply needed]"
 
@@ -286,6 +285,7 @@ def _peer_paragraph(root: Path) -> str:
 
 
 def _build_section(home: Path) -> str:
+    from gateway.session_home_alert import NEEDS_YOU
     root = _hermes_root(home)
     me = _profile_name(home)
     if not _any_managed(root):
@@ -326,6 +326,11 @@ def _build_section(home: Path) -> str:
         "with an intentional silence token "
         "([SILENT] or NO_REPLY) — the transport swallows it, so the sender gets "
         "no acknowledgement ping-pong.\n"
+        "This Bot Chat is also the user's conversation on their phone, where a new message you "
+        "post on your own (a scheduled report, a DM, a background result) only shows as unread. "
+        f"When the user must decide or act on it, open that message with {NEEDS_YOU} (nothing "
+        "before it): only that sends a push notification. Never mark routine reports, summaries "
+        "or FYIs with it. A reply to the user's own message needs no marker.\n"
         f"You are `@{_handle(me, names)}`. Your teammates (live roster; roles from their "
         "profiles):\n"
         f"{roster_block}"
