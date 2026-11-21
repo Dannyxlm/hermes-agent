@@ -222,6 +222,29 @@ def _blocked_for_platform(agent: Any, origin: str) -> bool:
     return agent_is_oneshot(agent)  # ``chat -q``: the agent is released right after the reply
 
 
+def _native_compaction_active(agent: Any) -> bool:
+    """True only when server-side Codex Responses compaction actually owns this agent's route.
+
+    ``compression.codex_responses_native`` is a profile-wide setting, while native compaction only
+    runs on eligible OpenAI/Codex models (e.g. gpt-5.6 / gpt-6-astra). Checking only the global
+    flag silently disabled ``prepare_ahead`` on Anthropic, Gemini, and non-eligible Codex chats.
+    """
+    if not getattr(agent, "codex_responses_native_compaction", False):
+        return False
+    capabilities = getattr(agent, "runtime_capabilities", None)
+    if isinstance(capabilities, dict) and not capabilities.get("native_compaction", False):
+        return False
+    model = getattr(agent, "model", None)
+    if model:
+        from agent.native_compaction import is_native_compaction_model
+        return is_native_compaction_model(
+            model,
+            provider=getattr(agent, "provider", None),
+            base_url=getattr(agent, "base_url", None),
+        )
+    return True  # minimal mock without model or capabilities preserves opt-out
+
+
 class PreparedCompaction:
     """Prepared-summary state owned by one ``ContextCompressor``."""
 
@@ -377,7 +400,7 @@ class PreparedCompaction:
             return True  # compression off, or a background-review fork of the live session
         if (
             getattr(agent, "api_mode", None) == "codex_app_server"
-            or getattr(agent, "codex_responses_native_compaction", False)
+            or _native_compaction_active(agent)
             or getattr(compressor, "_micro_compact_enabled", False)
         ):
             return True  # another path owns compaction, or history is rewritten every turn
