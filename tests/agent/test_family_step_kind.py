@@ -48,7 +48,8 @@ def test_typed_steps_share_existing_heartbeat_window_and_clear_to_idle(tmp_path,
 
 
 def test_worker_activity_has_closed_step_fields_and_preserves_generation_fence(tmp_path):
-    from hermes_state_runtime import RuntimeStoreError, mutate_worker_execution
+    from persistence.core.errors import AuthorityRefusal as RuntimeStoreError
+    from persistence.sqlite.workers._receipt import mutate_worker_execution
     db, store, scope = setup_store(tmp_path)
     try:
         store.touch_session_activity('owned', description='not parsed', step_kind='waiting_helpers')

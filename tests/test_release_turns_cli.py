@@ -11,8 +11,15 @@ import sys
 
 import pytest
 
-from hermes_state import SessionDB
-import hermes_state_runtime as rt
+from tests.persistence_sqlite.core._fork_runtime import admit_session_input
+from tests.persistence_sqlite.core._fork_store import MEDIA_ROOT, SessionDB
+from persistence.sqlite.authority._admission_store import (
+    claim_session_input,
+    settle_session_input,
+    steer_session_input,
+)
+from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
+from persistence.sqlite.workers._executions import register_worker_execution
 import hermes_state_release as release
 
 
@@ -45,21 +52,21 @@ def test_isolated_command_raw_abi_nullable_queue_claim_steering_worker_tombstone
     home.mkdir()
     path = home / 'state.db'
     with SessionDB(path) as db:
-        epoch = rt.begin_runtime_epoch(db, instance_id='test-command-owner')
+        epoch = begin_runtime_epoch(db, instance_id='test-command-owner')
         for sid in ('work', 'lead', 'historical-idle'):
             db.create_session(sid, source='api_server')
         for sid in ('work', 'lead'):
-            rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id=sid,
+            admit_session_input(db, epoch=epoch, principal_id='api', session_id=sid,
                 request_id=sid, payload={'text': 'SECRET CONTENT'})
-        claim = rt.claim_session_input(db, epoch=epoch, session_id='work')
-        rt.register_worker_execution(db, epoch=epoch, execution_id='worker',
+        claim = claim_session_input(db, epoch=epoch, session_id='work')
+        register_worker_execution(db, epoch=epoch, execution_id='worker',
             session_id='work', generation=claim['generation'], kind='compute',
             adoption_secret='SECRET ADOPTION')
-        steering = rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
+        steering = admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
             request_id='steer', payload={'text': 'SECRET STEER'}, intent='steer')
-        rt.steer_session_input(db, epoch=epoch, admission_id=steering['admission_id'],
+        steer_session_input(db, epoch=epoch, admission_id=steering['admission_id'],
             generation=claim['generation'])
-        queued = rt.admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
+        queued = admit_session_input(db, epoch=epoch, principal_id='api', session_id='work',
             request_id='queue', payload={'text': 'SECRET QUEUE'})
         proc, wire = invoke(tmp_path, snapshot_request(home))
         assert proc.returncode == 0 and proc.stderr == b''
@@ -72,10 +79,10 @@ def test_isolated_command_raw_abi_nullable_queue_claim_steering_worker_tombstone
         queue_key = next(key for key in saved if key['id'] == queued['admission_id'])
         assert queue_key['generation'] is None and queue_key['owner_epoch'] == epoch
         assert next(row for row in actual['rows'] if row['key']['id'] == steering['admission_id'])['outcome'] == 'steering'
-        rt.settle_session_input(db, epoch=epoch, admission_id=claim['admission_id'],
+        settle_session_input(db, epoch=epoch, admission_id=claim['admission_id'],
             generation=claim['generation'], outcome='completed', _transfers={steering['admission_id']: True})
-        next_epoch = rt.begin_runtime_epoch(db, instance_id='test-command-next-owner')
-        next_claim = rt.claim_session_input(db, epoch=next_epoch, session_id='work')
+        next_epoch = begin_runtime_epoch(db, instance_id='test-command-next-owner')
+        next_claim = claim_session_input(db, epoch=next_epoch, session_id='work')
         request = snapshot_request(home) | {'operation': 'lookup',
             'keys': [{'profile': 'default', 'key': key} for key in saved]}
         proc, during = invoke(tmp_path, request)
@@ -84,10 +91,10 @@ def test_isolated_command_raw_abi_nullable_queue_claim_steering_worker_tombstone
         queue_row = next(row for row in rows if row['key']['id'] == queued['admission_id'])
         assert queue_row['status'] == 'started' and queue_row['key']['owner_epoch'] == next_epoch
         assert queue_key['generation'] is None  # captured raw key is not rewritten
-        rt.settle_session_input(db, epoch=next_epoch, admission_id=next_claim['admission_id'],
+        settle_session_input(db, epoch=next_epoch, admission_id=next_claim['admission_id'],
             generation=next_claim['generation'], outcome='completed')
-        from hermes_state_mutation_retirement import retire_terminal_receipts
-        db._execute_write(lambda c: retire_terminal_receipts(c, ['work']))
+        from persistence.sqlite.conversation._store.retirement import retire_terminal_receipts
+        db._execute_write(lambda c: retire_terminal_receipts(c, ['work'], media_root=MEDIA_ROOT))
         proc, retired = invoke(tmp_path, request)
         batch = retired['profiles'][0]['batch']
         assert proc.returncode == 0 and proc.stderr == b''
@@ -154,7 +161,7 @@ def test_missing_authority_and_oversized_response_are_not_success_proofs(tmp_pat
         assert proc.returncode == 0 and proc.stderr == b''
         batch = wire['profiles'][0]['batch']
         assert batch['authority_epoch'] is None and batch['issues'] == ['authority_unavailable']
-        rt.begin_runtime_epoch(db, instance_id='synthetic')
+        begin_runtime_epoch(db, instance_id='synthetic')
         # Exercise the output cap against actual SQLite metadata, not a fake
         # producer result. Malformed/oversized stores cannot flood the wire.
         db._execute_write(lambda c: c.execute('UPDATE runtime_epoch SET instance_id=?',

@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from gateway.session_identity import authenticated_subject
-from hermes_state import SessionDB
-from hermes_state_terminal import RESULT_PREFIX, encode_result
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, encode_result
 
 DANNY = authenticated_subject({"provider": "basic", "user_id": "danny"})
 MALLORY = authenticated_subject({"provider": "basic", "user_id": "mallory"})

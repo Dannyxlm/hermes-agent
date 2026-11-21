@@ -2,12 +2,12 @@
 import asyncio
 from functools import partial
 from pathlib import Path
-import sqlite3
 
 from gateway.session_contract import SessionRef
+from gateway.session_persistence import authority_persistence
 from hermes_family import Family, read_profile
 from hermes_family_runtime import resident_signals
-from hermes_state_runtime import RuntimeStoreError
+from persistence.core.errors import AuthorityRefusal
 
 
 def handlers(connection):
@@ -18,7 +18,7 @@ def _connections(connection):
     from gateway.session_authorities import local_bots, served_profile_name, require_serving
     require_serving(connection.authority)
     if "session:read" not in connection.actor.capabilities or connection.actor.profile_id != connection.authority.profile_id:
-        raise RuntimeStoreError("permission_denied")
+        raise AuthorityRefusal("permission_denied")
     own = served_profile_name(connection.authority.profile_id)
     allowed, unavailable = {own: connection}, []
     from hermes_cli.profiles import list_profile_names
@@ -29,7 +29,7 @@ def _connections(connection):
             continue
         try:
             sibling = connection._sibling_for(bot.name)
-        except RuntimeStoreError:
+        except AuthorityRefusal:
             unavailable.append(bot.name)
             continue
         if sibling is None or bot.problem or bot.retiring:
@@ -87,7 +87,7 @@ def _resident_sessions(connections):
         for sid, live in tuple(authority.sessions.items()):
             try:
                 authority.authorize(connection.actor, SessionRef(authority.profile_id, sid), "session:read")
-            except RuntimeStoreError:
+            except AuthorityRefusal:
                 continue
             allowed.append((sid, live))
         residents[profile] = allowed
@@ -156,9 +156,12 @@ def _filter_principal(snapshot, connection):
 
 def _read_profiles(connections, *, root=None, since=None):
     from hermes_family_storage import launch_probe, read_graph
-    paths = {p: Path(c.authority.db.db_path) for p, c in connections.items()}
+    stores = {profile: authority_persistence(c.authority) for profile, c in connections.items()}
+    holders = {profile: store._bound_store().holder() for profile, store in stores.items()}
+    paths = {profile: holder.db_path for profile, holder in holders.items()}
+
     def probe(profile, seeds):
-        with connections[profile].authority.db._read_ctx() as conn:
+        with holders[profile]._read_ctx() as conn:
             return launch_probe(conn, seeds)
     return read_graph(paths, read_profile, root=root, since=since, probe=probe,
                       filter_snapshot=lambda snapshot: _filter_principal(snapshot, connections[snapshot.name]))
@@ -170,7 +173,7 @@ async def read(connection, ref, params, *, overview=False):
     try:
         params = (FamilyOverviewParams if overview else FamilySessionParams).model_validate(params, strict=True).model_dump()
     except ValidationError as exc:
-        raise RuntimeStoreError("invalid_params") from exc
+        raise AuthorityRefusal("invalid_params") from exc
     import time
     from gateway.session_authorities import served_profile_name
     profile = served_profile_name(connection.authority.profile_id)
@@ -182,9 +185,9 @@ async def read(connection, ref, params, *, overview=False):
     unavailable += failed
     if not overview:
         if profile in failed:
-            raise RuntimeStoreError("storage_unavailable")
+            raise AuthorityRefusal("storage_unavailable")
         if profile not in profiles or params["session_id"] not in profiles[profile].sessions:
-            raise RuntimeStoreError("not_found")
+            raise AuthorityRefusal("not_found")
         # Stored IDs are the wire identity. Live local receipt IDs are not substituted.
         sid = params["session_id"]
         logical = next((key for key, target in profiles[profile].aliases.items() if target == sid), sid)

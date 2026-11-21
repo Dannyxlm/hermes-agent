@@ -11,7 +11,7 @@ pytest_plugins = ['tests.hermes_cli.test_profiles_sidebar_scope']
 
 @pytest.mark.parametrize('corruption', ['cycle', 'depth'])
 def test_invalid_lineage_is_bounded_without_poisoning_other_ids(client, profiles_on_disk, monkeypatch, corruption):
-    import hermes_state_compression
+    from persistence.sqlite.conversation._store import compression
     with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
         db.create_session('root', 'desktop')
         launch(db, 'root')
@@ -25,7 +25,7 @@ def test_invalid_lineage_is_bounded_without_poisoning_other_ids(client, profiles
             db._write_sql("UPDATE sessions SET parent_session_id='tip' WHERE id='root'")
             db.end_session('tip', end_reason='compression')
         else:
-            monkeypatch.setattr(hermes_state_compression, '_CHAIN_CAP', 2)
+            monkeypatch.setattr(compression, '_CHAIN_CAP', 2)
     response = membership(client, ['tip', 'good'])
     assert response.status_code == 200, response.text
     assert response.json()['thread_session_ids'] == ['good']

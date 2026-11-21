@@ -102,7 +102,7 @@ def _marks(ids) -> str:
 
 def lineage(conn, session_id: str) -> frozenset:
     """The session plus its compression continuations, in both directions (one conversation)."""
-    from hermes_state_sessions import _expand_compression_lineage_ids
+    from persistence.sqlite.conversation._store.sessions import _expand_compression_lineage_ids
     seen, frontier = {session_id}, [session_id]
     for _ in range(32):
         frontier = [sid for sid in _expand_compression_lineage_ids(conn, frontier) if sid not in seen]
@@ -115,7 +115,7 @@ def lineage(conn, session_id: str) -> frozenset:
 def tip(conn, session_id: str) -> str:
     """The live end of a compression chain, walked forward with the store's own chain step
     (``SessionDB.get_compression_tip`` semantics) on this connection."""
-    from hermes_state_compression import _CHAIN_STEP_SQL
+    from persistence.sqlite.conversation._store.compression import _CHAIN_STEP_SQL
     current, seen = session_id, {session_id}
     for _ in range(64):
         row = conn.execute(_CHAIN_STEP_SQL, (current,)).fetchone()
@@ -209,7 +209,7 @@ def last_reply(conn, ids) -> str:
 
 def outcome(conn, admission: dict, ids) -> dict:
     """What a settled admission produced: its final reply, error and usage, from the committed result."""
-    from hermes_state_terminal import RESULT_PREFIX, load_result
+    from persistence.sqlite.conversation._store.terminal import RESULT_PREFIX, load_result
     saved = conn.execute("SELECT value FROM state_meta WHERE key=?",
                          (RESULT_PREFIX + admission["admission_id"],)).fetchone()
     saved = load_result(saved[0]) if saved else None

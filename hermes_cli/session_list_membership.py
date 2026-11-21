@@ -1,8 +1,14 @@
 """Bounded, read-only provenance for client-cached session IDs (not access control)."""
 import json
 import sqlite3
+from pathlib import Path
 
 from fastapi import HTTPException
+
+from persistence.sqlite._holder import StoreHolder
+from persistence.sqlite.conversation._store.compression import _CHAIN_CAP, _CHAIN_STEP_SQL
+from persistence.sqlite.conversation._store.launches import thread_parents
+from persistence.sqlite.conversation._store.sessions import _own_profile_name
 
 
 def requested_ids(raw):
@@ -29,9 +35,6 @@ def trusted_thread_parents(db, ids):
     ancestor. The selected-step predicate also rejects ordinary branch/reset children
     and unselected siblings. Cycles and depth-capped walks provide no evidence.
     """
-    from hermes_state_compression import _CHAIN_CAP, _CHAIN_STEP_SQL
-    from hermes_state_launches import thread_parents
-
     if not ids:
         return {}
     step = _CHAIN_STEP_SQL.replace('parent.id = ?', 'parent.id = p.id')
@@ -52,19 +55,18 @@ def trusted_thread_parents(db, ids):
     lineages = {}
     for row in rows:
         lineages.setdefault(row['key'], []).append(row['id'])
-    return thread_parents(db, db._own_profile_name() or 'default', lineages)
+    return thread_parents(db, _own_profile_name(db) or 'default', lineages)
 
 
 def read_membership(db_path, ids):
     """Strict mode=ro: unlike general browse reads, never reconcile schema drift."""
     from hermes_cli.web_routers._common import corrupt_store_as_status
-    from hermes_state import SessionDB
 
     with corrupt_store_as_status(db_path):
         try:
-            with SessionDB(db_path=db_path, read_only=True) as db:
+            with StoreHolder(Path(db_path), read_only=True) as db:
                 parents = trusted_thread_parents(db, ids)
-                return {'profile': db._own_profile_name() or 'default',
+                return {'profile': _own_profile_name(db) or 'default',
                         'thread_session_ids': [sid for sid in ids if sid in parents]}
         except sqlite3.OperationalError as exc:
             raise HTTPException(status_code=503, detail='Session store unavailable; membership is unknown') from exc

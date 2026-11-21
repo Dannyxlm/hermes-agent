@@ -11,7 +11,7 @@ import json
 import os
 import uuid
 
-from hermes_state_common import LEGACY_QUEUE_RECEIPT_PREFIX as _PREFIX
+from persistence.sqlite._state.common import LEGACY_QUEUE_RECEIPT_PREFIX as _PREFIX
 
 
 def _key(receipt):

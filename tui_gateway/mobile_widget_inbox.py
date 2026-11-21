@@ -74,15 +74,15 @@ def _cursor_offset(cursor, grant, revision, epoch):
 
 
 def _signature(db):
-    from hermes_state_sessions import _session_filter_where
-    from hermes_state_common import _SQL_IN_WINDOW, _sql_json_extract
+    from persistence.sqlite.conversation._store.sessions import _session_filter_where
+    from persistence.sqlite.conversation._store.sql_common import _SQL_IN_WINDOW, _sql_json_extract
 
     clauses, params = _session_filter_where(exclude_children=True)
     clauses.append("s.hidden = 0")
     # Metadata and indexed timestamp/reply-head seeks, never previews or reply grouping.
     # Include linked segments (even hidden ones) because reply/local-lineage
     # projection can depend on them. UNION also bounds malformed cycles.
-    rows = db._conn.execute(f"""
+    rows = db._read_all(f"""
         WITH RECURSIVE members(id) AS (
             SELECT s.id FROM sessions s WHERE {' AND '.join(clauses)}
             UNION
@@ -108,7 +108,7 @@ def _signature(db):
               AND length(trim(COALESCE(r.content, ''), char(9)||char(10)||char(13)||' ')) > 0
             ORDER BY r.id DESC LIMIT 1)
         ORDER BY s.id
-    """, params).fetchall()
+    """, params)
     return tuple(tuple(row) for row in rows)
 
 
@@ -154,12 +154,14 @@ def _retained(home, revision):
 
 
 def _projection(db, home):
+    from persistence.sqlite.conversation._store.sessions import list_sessions_rich
+
     with _PROJECTION_LOCK:
         stamp = _store_stamp(home)
         cut = _PROJECTIONS.get(home)
         signature = cut.signature if cut is not None and stamp is not None and cut.stamp == stamp else _signature(db)
         if cut is None or cut.signature != signature:
-            rows = db.list_sessions_rich(limit=-1, compact_rows=True,
+            rows = list_sessions_rich(db, limit=-1, compact_rows=True,
                 order_by_last_active=True, include_pinned=False)
             cut = _Projection(signature, rows, _replies(rows, signature))
         attention = page_attention(cut.rows, home)
@@ -193,7 +195,7 @@ def _items(rows, replies, attention):
 
 
 def inbox_snapshot(store, token, cursor=None):
-    from hermes_state import SessionDB
+    from persistence.sqlite._holder import StoreHolder
     from . import server
     grant = store.widget_inbox_grant(token)
     home = profile_home(grant['profile'])
@@ -208,9 +210,11 @@ def inbox_snapshot(store, token, cursor=None):
         items, revision = _retained(home, value['revision'])
     else:
         with server._session_profile_runtime_scope({"profile_home": str(home)}, hydrate_secrets=False):
-            with SessionDB(db_path=path, read_only=True) as db:
-                # One read transaction covers membership, order, lineage and replies.
-                db._conn.execute("BEGIN")
+            with StoreHolder(path, read_only=True) as db:
+                # This private read-only holder has one connection. Release its lock
+                # before nested store reads, but keep the transaction until close.
+                with db._read_ctx() as conn:
+                    conn.execute("BEGIN")
                 items, revision = _projection(db, home)
     if summary_scope(grant['profile']).get('pending_epoch') != epoch:
         raise WidgetInboxChanged("Inbox changed while reading")

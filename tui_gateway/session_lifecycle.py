@@ -153,15 +153,7 @@ def _ensure_active_session_slot(sid: str, session: dict) -> str | None:
     return limit_message
 
 
-# Unknown in either ledger pauses the whole FIFO, even when queued followers exist.
-_CANONICAL_PENDING_SQL = """SELECT status,admission_id FROM (
-    SELECT status,admission_id,seq FROM session_admissions WHERE target_session_id=? AND status!='terminal'
-    UNION ALL SELECT status,NULL,0 FROM worker_executions WHERE session_id=? AND status!='terminal'
-    ) ORDER BY CASE status WHEN 'unknown' THEN 0 WHEN 'started' THEN 1 WHEN 'running' THEN 1
-        WHEN 'registered' THEN 2 ELSE 3 END, admission_id IS NULL, seq LIMIT 1"""
-
-
-def _end_unless_ledger_busy(db, session_id: str, session_key, end_reason: str) -> bool:
+def _end_unless_ledger_busy(persistence, session_id: str, session_key, end_reason: str) -> bool:
     """End *session_id*'s row unless the gateway's durable ledger still holds work for it; True when
     the row may end (ended now, or already ended). The check and the stamp share one write txn.
 
@@ -170,29 +162,27 @@ def _end_unless_ledger_busy(db, session_id: str, session_key, end_reason: str) -
     route as stale (#54878) and replace the conversation (#140642). The ledger names a local session
     by its logical id (the row's ``chat_id``), so the physical id, the key and that id are checked: a
     ``local-`` id, or the lineage owner its receipt names (an adopted conversation keeps its legacy id)."""
-    execute_write = getattr(db, "_execute_write", None)
-    if execute_write is None:
-        db.end_session(session_id, end_reason)
-        return True
-
-    def write(conn):
-        row = conn.execute("SELECT chat_id FROM sessions WHERE id=?", (session_id,)).fetchone()
-        ids = {session_id, str(session_key or "")}
-        if row is not None and str(row[0] or "").startswith("local-"):
-            ids.add(str(row[0]))
-        from hermes_state_local import local_lineage_owner
-        ids.add(local_lineage_owner(conn, session_id))
-        for sid in filter(None, ids):
-            if conn.execute(_CANONICAL_PENDING_SQL, (sid, sid)).fetchone() is not None:
-                return False
-        db._end_and_bump(conn, "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL",
-                         (time.time(), end_reason, session_id), session_id, end_reason)
-        return True
-
-    if execute_write(write):
+    if persistence.runtime.end_unless_ledger_busy(session_id, session_key=session_key, end_reason=end_reason):
         return True
     logger.info("Preserving session %s during %s: the gateway's ledger still holds its turn", session_id, end_reason)
     return False
+
+
+def _prioritized_ledger_status(persistence, key):
+    """Unknown work in either ledger takes priority over a queued admission; carry its public receipt ID."""
+    from persistence.sqlite._backend import SQLiteStore
+    from persistence_assembly import Persistence
+
+    store = persistence._bound_store() if isinstance(persistence, Persistence) else None
+    if not isinstance(store, SQLiteStore):
+        return persistence.runtime.pending_ledger_status(key), None
+    with store.holder()._read_ctx() as conn:
+        row = conn.execute("""SELECT status,admission_id FROM (
+            SELECT status,admission_id,seq FROM session_admissions WHERE target_session_id=? AND status!='terminal'
+            UNION ALL SELECT status,NULL,0 FROM worker_executions WHERE session_id=? AND status!='terminal'
+            ) ORDER BY CASE status WHEN 'unknown' THEN 0 WHEN 'started' THEN 1 WHEN 'running' THEN 1
+                WHEN 'registered' THEN 2 ELSE 3 END, admission_id IS NULL, seq LIMIT 1""", (key, key)).fetchone()
+    return tuple(row) if row is not None else (None, None)
 
 
 def _canonical_ledger_refusal(session: dict):
@@ -203,37 +193,39 @@ def _canonical_ledger_refusal(session: dict):
     resolves it), queued input or a running worker; a legacy turn would run past that barrier
     and write the transcript beside the canonical FIFO. Checked on every turn, not only at the
     first claim, because a gateway may admit work while this backend still holds its lease."""
-    import sqlite3
     from hermes_cli.active_sessions import (
         ActiveSessionRefusal, SESSION_COORDINATION_UNAVAILABLE, SESSION_NOT_OWNED)
+    import sqlite3
+    from persistence.core.errors import STORE_FAILURES
     key = str(session.get("session_key") or "")
     if not key:
         return None
+    admission_id = None
+    if session.get("_compute_host_completing"):
+        status = "unknown"
+    else:
+        status = None
     try:
-        with _session_db(session) as db:
-            read_ctx = getattr(db, "_read_ctx", None)
-            if read_ctx is None:
-                return None
-            with read_ctx() as conn:
-                row = next(iter(conn.execute(_CANONICAL_PENDING_SQL, (key, key))), None)
-            if session.get('_compute_host_completing'):
-                row = ('unknown', None)
-            if row is None and session.get('_unsettled_local_queue'):
-                row = ('unknown', None)
-    except sqlite3.Error:
+        if status is None:
+            with _session_db(session) as db, _persistence_for(db) as persistence:
+                if persistence is not None:
+                    status, admission_id = _prioritized_ledger_status(persistence, key)
+        if status is None and session.get("_unsettled_local_queue"):
+            status = "unknown"
+    except (*STORE_FAILURES, sqlite3.Error):
         logger.warning("canonical ledger read failed for %s", key, exc_info=True)
         return ActiveSessionRefusal(_SESSION_OWNERSHIP_UNAVAILABLE, SESSION_COORDINATION_UNAVAILABLE)
-    if row is None:
+    if status is None:
         return None
-    logger.info("Refusing legacy turn for %s: canonical ledger holds %s work", key, row[0])
+    logger.info("Refusing legacy turn for %s: canonical ledger holds %s work", key, status)
     refusal = ActiveSessionRefusal(
-        f"Session {key} has {'outcome-unknown' if row[0] == 'unknown' else 'pending'} work in the gateway's "
+        f"Session {key} has {'outcome-unknown' if status == 'unknown' else 'pending'} work in the gateway's "
         "durable queue. Resume it through the gateway (hermes chat --resume, Desktop or the TUI) to "
         "resolve it; nothing was run here.", SESSION_NOT_OWNED)
     # prompt.submit forwards a typed prompt to the owner's FIFO for work that ends on its own
     # (tui_gateway/owner_forward.py); an ``unknown`` admission is never forwarded past.
-    refusal.ledger_status = row[0]
-    refusal.ledger_admission_id = row[1]
+    refusal.ledger_status = status
+    refusal.ledger_admission_id = admission_id
     return refusal
 
 
@@ -593,18 +585,18 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
             logger.info("Preserving session %s during %s: another backend owns an active lease", session_id, end_reason)
         if session_id:
             # The *session's* profile state.db (app-global remote mode), not the launch profile's.
-            with contextlib.suppress(Exception), _session_db(session) as db:
-                if db is not None:
+            with contextlib.suppress(Exception), _session_db(session) as db, _persistence_for(db) as persistence:
+                if persistence is not None:
                     # Never end gateway-originated sessions: Groundhog Day loop (gateway self-heals to the parent,
                     # compression splits back to the reaped child, forever).
-                    if _is_gateway_owned_source((db.get_session(session_id) or {}).get("source", "")):
+                    if _is_gateway_owned_source(getattr(persistence.sessions.get(session_id), "source", "")):
                         _tui_owns_lifecycle = False
                     elif _tui_owns_lifecycle and not _desktop_automatic_cleanup:
                         # Automatic Desktop cleanup (ws_orphan_reap, idle_timeout, etc.) reclaims
                         # runtime but must not end the durable row — the conversation stays open
                         # and resumable until the user explicitly closes or archives it.  #105588
                         # A turn the gateway's ledger still holds keeps the row open too (#140642).
-                        if not _end_unless_ledger_busy(db, session_id, session_key, end_reason):
+                        if not _end_unless_ledger_busy(persistence, session_id, session_key, end_reason):
                             _tui_owns_lifecycle = False
     # ``_teardown_session`` follows with ``agent.close()``, whose ``_finalize_owned_session_row`` ends the row as
     # ``agent_close`` through the agent's own handle — every spare decision above would be undone one call later.
@@ -1014,8 +1006,9 @@ def _session_has_active_delegations(sid: str, session: dict | None = None) -> bo
         # viewer there). Unknown DB state -> assume ownership.
         # The row lives in the session's OWN store (a named-profile session's row is invisible to
         # the launch handle, which would leave this guard permanently dead).
-        with contextlib.suppress(Exception), _session_db(session) as db:
-            if db is not None and _is_gateway_owned_source((db.get_session(session_id) or {}).get("source", "")):
+        with contextlib.suppress(Exception), _session_db(session) as db, _persistence_for(db) as persistence:
+            if persistence is not None and _is_gateway_owned_source(
+                    getattr(persistence.sessions.get(session_id), "source", "")):
                 owned_session_key = ""
     if not own_sid and not owned_session_key:
         return False
@@ -1324,7 +1317,7 @@ def _close_sessions_for_transport(transport, *, end_reason: str = "ws_disconnect
     return reaped, detached
 
 
-def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool = False,
+def _schedule_tip_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool = False, persistence=None,
                                model_history_only: bool = False, tip_only: bool = False) -> None:
     """Load a cold resume's transcript off the JSON-RPC response path."""
 
@@ -1338,17 +1331,19 @@ def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool =
             # the first real turn (prompt.submit) reopens it. But a restart discarded the
             # busy-queue, so retire never-drained accept rows (#125577) before the read —
             # with #128508 the reopen (and its retire) no longer runs on this path.
-            # Best-effort like the resume guard: a handle without the method skips it.
-            retire = getattr(db, "retire_undrained_queue_rows", None)
-            if callable(retire):
-                retire(stored_id)
-            if tip_only:
-                # Native display reads its own bounded pages. Restore only the active model segment;
-                # deferring an unbounded lineage read would still exhaust memory on a cold open.
-                raw_history = db.get_messages_as_conversation(stored_id, repair_alternation=True, include_row_ids=True)
-                display_history, prefix = raw_history, []
-            else:
-                raw_history, display_history, prefix = _load_resume_transcript(db, stored_id, model_history_only=model_history_only)
+            from persistence.conversation.messages import ConversationRequest
+
+            with contextlib.nullcontext(persistence) if persistence is not None else _persistence_for(db) as handle:
+                handle.sessions.retire_undrained_queue_rows(stored_id)
+                if tip_only:
+                    # Native display pages independently; restore only the active model segment.
+                    request = ConversationRequest(repair_alternation=True, include_row_ids=True)
+                    raw_history = [message.as_openai_message() for message in
+                                   handle.messages.read_conversation(stored_id, request)]
+                    display_history, prefix = raw_history, []
+                else:
+                    raw_history, display_history, prefix = _load_resume_transcript(
+                        handle, stored_id, model_history_only=model_history_only)
             # Preserve display history; canonicalize the model replay consistently across surfaces.
             history = canonicalize_replay_history(raw_history)
             if _sessions.get(sid) is not session:
@@ -1366,7 +1361,7 @@ def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool =
                   {"message_count": session["resume_message_count"], "phase": "history", "status": "complete"})
             _maybe_schedule_auto_continue(sid, session, stored_id)
             _start_agent_build(sid, session)
-        except Exception as exc:
+        except (Exception, ConfigBackendUnavailable) as exc:
             if _sessions.get(sid) is not session:
                 return
             message = resume_failed_message(exc)
@@ -1385,6 +1380,7 @@ def _schedule_resume_hydration(sid: str, stored_id: str, db, *, close_db: bool =
                     db.close()
                 except Exception:
                     logger.debug("failed to close resume db for %s", sid, exc_info=True)
+            _release_persistence(persistence)
     threading.Thread(target=_run, daemon=True).start()
 
 

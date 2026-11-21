@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from hermes_state_runtime import get_session_admission
+from persistence.sqlite.authority._admission_store import get_session_admission
 from tests.tools.test_thread_control_races import add_thread, admit, call
 
 pytest_plugins = ['tests.tools.test_thread_control_races']

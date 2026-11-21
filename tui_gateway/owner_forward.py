@@ -241,7 +241,7 @@ def blocking_unknown(session: dict, refusal=None) -> list[dict]:
     from tui_gateway import server
     from tui_gateway.contracts.common import BlockingUnknownAdmission
     from hermes_cli.gateway_client import GatewayClientError
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
     from pydantic import ValidationError
     from websockets.exceptions import WebSocketException
 
@@ -262,7 +262,7 @@ def blocking_unknown(session: dict, refusal=None) -> list[dict]:
             receipt = await client.rpc('prompt.receipt', session_id=target, admission_id=aid)
         if (receipt.get('admission_id') != aid or receipt.get('ref') != {
                 'session_id': target, 'profile_id': endpoint.profile_id}):
-            raise RuntimeStoreError('profile_mismatch')
+            raise AuthorityRefusal('profile_mismatch')
         shaped = BlockingUnknownAdmission.model_validate({
             key: receipt.get(key, [] if key == 'controls' else None) for key in (
                 'admission_id', 'ref', 'status', 'execution_generation', 'controls')}).model_dump()
@@ -279,7 +279,7 @@ def blocking_unknown(session: dict, refusal=None) -> list[dict]:
             return await refresh()
     try:
         return asyncio.run(refresh_bounded())
-    except (GatewayClientError, RuntimeStoreError, ValidationError, OSError, RuntimeError,
+    except (GatewayClientError, AuthorityRefusal, ValidationError, OSError, RuntimeError,
             TimeoutError, WebSocketException):
         logger.debug('Owner could not verify unknown admission for %s', target, exc_info=True)
         return []
@@ -316,37 +316,37 @@ def control_forwarded(session: dict, method: str, admission_id: str, generation=
     The owner's cancel handles queued→claimed races; Stop/Discard always carry the observed generation.
     """
     from tui_gateway import server
-    from hermes_state_runtime import RuntimeStoreError
+    from persistence.core.errors import AuthorityRefusal
     with session["history_lock"]:
         record = session.get("_forwarded_admissions", {}).get(admission_id)
         if record is None:
-            raise RuntimeStoreError("not_found")
+            raise AuthorityRefusal("not_found")
         home = Path(session.get("profile_home") or server._hermes_home).resolve()
         if home != record["home"]:
-            raise RuntimeStoreError("profile_mismatch")
+            raise AuthorityRefusal("profile_mismatch")
         target, expected_ref = record["target"], record["receipt"].get("ref")
         if record.get('observed_only') and target != session.get('session_key'):
-            raise RuntimeStoreError('not_found')
+            raise AuthorityRefusal('not_found')
 
     async def call():
         endpoint = discover_owner(home)
         async with connect_owner(home, endpoint) as client:
             receipt = await client.rpc("prompt.receipt", session_id=target, admission_id=admission_id)
             if receipt.get("ref") != expected_ref:
-                raise RuntimeStoreError("profile_mismatch")
+                raise AuthorityRefusal("profile_mismatch")
             with session["history_lock"]:
                 record["endpoint"], record["receipt"] = endpoint, receipt
             if method == "prompt.receipt":
                 return receipt
             if record.get('observed_only') and (stop or method != 'prompt.resolve_unknown'
                     or 'resolve_unknown' not in (receipt.get('controls') or [])):
-                raise RuntimeStoreError('permission_denied')
+                raise AuthorityRefusal('permission_denied')
             verb = method
             if stop:
                 if receipt["status"] == "terminal":
                     return receipt
                 if receipt["status"] == "unknown":
-                    raise RuntimeStoreError("unknown_execution")  # Stop is never human Discard.
+                    raise AuthorityRefusal("unknown_execution")  # Stop is never human Discard.
                 verb = "session.interrupt" if receipt["status"] == "started" else "prompt.cancel"
             params = {"session_id": target}
             if verb != "session.interrupt":
@@ -354,9 +354,9 @@ def control_forwarded(session: dict, method: str, admission_id: str, generation=
             if verb in ("session.interrupt", "prompt.resolve_unknown"):
                 observed = receipt.get("execution_generation")
                 if generation is not None and generation != observed:
-                    raise RuntimeStoreError("stale_generation")
+                    raise AuthorityRefusal("stale_generation")
                 if observed is None or receipt["status"] not in ("started", "unknown"):
-                    raise RuntimeStoreError("stale_generation")
+                    raise AuthorityRefusal("stale_generation")
                 params["execution_generation"] = observed
             result = await client.rpc(verb, **params)
             refreshed = await client.rpc("prompt.receipt", session_id=target, admission_id=admission_id)

@@ -5,7 +5,7 @@ from functools import lru_cache
 from agent.api_value_pricing import estimate_aggregate_api_value_decimal, get_api_value_rates
 from agent.usage_pricing import CanonicalUsage
 from hermes_state_rollup import _COUNTERS, _PROVIDER, _SUMS, _metrics, _usd_sum, follows_usage_parent
-from hermes_state_usage import AUXILIARY_USAGE_TASKS
+from persistence.sqlite.conversation._store.usage import AUXILIARY_USAGE_TASKS
 
 _SESSION_COUNTERS = """WITH RECURSIVE routes AS MATERIALIZED (
     SELECT s.id, CASE WHEN p.id IS NOT NULL

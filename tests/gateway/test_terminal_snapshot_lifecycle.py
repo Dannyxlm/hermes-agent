@@ -241,7 +241,6 @@ def test_exports_survive_normal_turn_release_rotation_and_cache_rebuild(terminal
 async def test_real_viewer_close_reclaims_snapshot_only_when_fifo_is_idle(terminal_sessions, tmp_path, monkeypatch):
     from tests.gateway.test_viewer_close_lifecycle import _owner, _open, _call
     from gateway.session_contract import SessionRef
-    from hermes_state_runtime import admit_session_input, cancel_session_input
     from tests.waiting import async_wait_until
 
     run, _, _ = terminal_sessions
@@ -255,11 +254,11 @@ async def test_real_viewer_close_reclaims_snapshot_only_when_fifo_is_idle(termin
     calls.clear()  # discard the terminal output-transform hook observed by the lifecycle spy
     qualified = tt._qualify_task_key(route)
     path = next(Path(entries[qualified]) for entries in snapshots._snapshots.values() if qualified in entries)
-    row = admit_session_input(db, epoch=authority.epoch, principal_id="native", session_id="chat",
+    row, _ = db.admissions.admit(epoch=authority.epoch, principal_id="native", session_id="chat",
                               request_id="r1", payload={"text": "pending"})
     await _call(viewer, "session.detach", session_id="chat", subscription_id=subscription, end_reason="cli_close")
     assert path.exists() and calls == []
-    cancel_session_input(db, epoch=authority.epoch, admission_id=row["admission_id"])
+    db.admissions.cancel(epoch=authority.epoch, admission_id=row.admission_id)
     authority._schedule(SessionRef(authority.profile_id, "chat"))
     await async_wait_until(lambda: len(calls) == 2)
     assert not path.exists()

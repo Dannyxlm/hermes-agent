@@ -8,14 +8,13 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-
-from hermes_state_common import stat_db_file_identity
+from persistence.sqlite._holder import StoreHolder
+from persistence.sqlite._state.common import stat_db_file_identity
 
 
 @dataclass
 class _DatabasePages:
-    db: Any
+    db: StoreHolder
     identity: tuple[int, int]
     version: int = -1
     pages: OrderedDict = field(default_factory=OrderedDict)
@@ -31,7 +30,7 @@ class HistoryPageCache:
     """Keep at most eight read handles and 2 MiB of page data per database.
 
     A dedicated mode=ro connection makes data_version comparable across the short-lived
-    SessionDB handles used by mobile reads. It never holds a transaction between calls.
+    SQLite holders used by mobile reads. It never holds a transaction between calls.
     Cache lookup/publication are locked; the expensive history query runs outside that
     lock. A commit during the query prevents publication under an older version.
     """
@@ -51,10 +50,10 @@ class HistoryPageCache:
                 del self._databases[path]
                 entry.db.close()
 
-    def lookup(self, db, key: tuple):
-        """Return a publication token and cached rows; caller holds db._lock."""
-        # A writer's uncommitted rows are visible only to that connection.
-        if db._conn.in_transaction:
+    def lookup(self, db: StoreHolder, conn: sqlite3.Connection, key: tuple):
+        """Return a publication token and cached rows for the borrowed connection."""
+        # An open transaction can see a different cut from the version watcher.
+        if conn.in_transaction:
             return None, None
         path = Path(db.db_path).resolve()
         with self._lock:
@@ -69,9 +68,8 @@ class HistoryPageCache:
                     entry.db.close()
                     entry = None
                 if entry is None:
-                    from hermes_state import SessionDB
-                    entry = _DatabasePages(SessionDB(db_path=path, read_only=True), identity)
-                version = entry.db._conn.execute("PRAGMA data_version").fetchone()[0]
+                    entry = _DatabasePages(StoreHolder(path, read_only=True), identity)
+                version = entry.db._read_one("PRAGMA data_version")[0]
                 # Bind the watcher to the same generation, including races while it opens.
                 if entry.db._db_file_identity != identity or stat_db_file_identity(path) != identity:
                     entry.db.close()
@@ -106,7 +104,7 @@ class HistoryPageCache:
             if self._databases.get(path) is not entry:
                 return
             try:
-                current_version = entry.db._conn.execute("PRAGMA data_version").fetchone()[0]
+                current_version = entry.db._read_one("PRAGMA data_version")[0]
                 if stat_db_file_identity(path) != entry.identity or current_version != version:
                     entry.invalidate(current_version)
                     return

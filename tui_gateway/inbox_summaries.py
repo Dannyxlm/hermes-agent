@@ -40,7 +40,7 @@ def _warn_unavailable(error):
 
 def _runs_readonly(path, keys):
     import sqlite3
-    from hermes_state_holders import read_only_db_uri
+    from persistence.sqlite._state.holders import read_only_db_uri
     db = sqlite3.connect(read_only_db_uri(path), uri=True)
     try:
         db.execute('PRAGMA query_only=ON')
@@ -58,8 +58,9 @@ def _runs_readonly(path, keys):
 def live_projections(entries, launch_home):
     """One metadata/reply read per profile and one run read for the whole list."""
     import sqlite3
-    from hermes_state import SessionDB
-    from hermes_state_launches import thread_parents
+    from persistence.sqlite._holder import StoreHolder
+    from persistence.sqlite.conversation._store.launches import thread_parents
+    from persistence.sqlite.conversation._store.sessions import _own_profile_name
     from .mobile_session_scope import projection_destinations
 
     result = {sid: {} for sid, _key, _session in entries}
@@ -75,8 +76,8 @@ def live_projections(entries, launch_home):
         if not path.is_file():
             continue
         try:
-            with SessionDB(db_path=path, read_only=True) as db:
-                profile = db._own_profile_name() or 'default'
+            with StoreHolder(path, read_only=True) as db:
+                profile = _own_profile_name(db) or 'default'
                 destinations = projection_destinations(db, profile, list(dict.fromkeys(key for _, key, _ in members)))
                 roots = {dest['root']['id']: dest['root'] for dest in destinations.values()}
                 replies = page_replies(db, list(roots.values()))
@@ -164,17 +165,20 @@ def live_reply(session, launch_home, stored_id):
     """Project the durable reply without hydrating a runtime or creating a store."""
     import logging
     import sqlite3
-    from hermes_state import SessionDB
+    from persistence.sqlite._holder import StoreHolder
+
+    from persistence.sqlite.conversation._store.compression import get_compression_lineage
+    from persistence.sqlite.conversation._store.sessions import get_session
 
     path = Path(session.get("profile_home") or launch_home) / "state.db"
     if not path.is_file():
         return None
     try:
-        with SessionDB(db_path=path, read_only=True) as db:
-            chain = db.get_compression_lineage(stored_id)
+        with StoreHolder(path, read_only=True) as db:
+            chain = get_compression_lineage(db, stored_id)
             if not chain:
                 return None
-            root = db.get_session(chain[0])
+            root = get_session(db, chain[0])
             if root is None:
                 return None
             root["_lineage_ids"] = chain

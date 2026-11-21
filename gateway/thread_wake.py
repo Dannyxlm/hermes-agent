@@ -270,7 +270,8 @@ def admit_display(authority, actor, request) -> dict:
     A copied wake can only replay that same admission; it cannot type the caller's own text.
     """
     from gateway.session_display import admit_display as admit_client_display
-    from hermes_state_runtime import RuntimeStoreError, find_session_admission
+    from gateway.session_persistence import authority_persistence
+    from persistence.core.errors import AuthorityRefusal
     from tools.thread_tool import _subject
     from gateway.owner_identity import same_owner
 
@@ -279,11 +280,11 @@ def admit_display(authority, actor, request) -> dict:
         return admit_client_display(params)
     home = Path(authority.profile_id)
     profile = ts.profile_of(home)
-    admitted = find_session_admission(authority.db, principal_id=actor.subject,
-        session_id=request.ref.session_id, request_id=request.request_id)
-    if admitted is not None and (admitted['payload'].get('display_v1') or {}).get('kind') == 'internal_notification':
+    admitted = next(iter(authority_persistence(authority).admissions.match(
+        principal_id=actor.subject, session_id=request.ref.session_id, request_id=request.request_id)), None)
+    if admitted is not None and (admitted.payload.get('display_v1') or {}).get('kind') == 'internal_notification':
         # Settlement retires the pending file, never the durable exact-replay receipt.
-        record = {'key': request.request_id.removeprefix(SUBMISSION_PREFIX), 'text': admitted['payload']['text']}
+        record = {'key': request.request_id.removeprefix(SUBMISSION_PREFIX), 'text': admitted.payload['text']}
     else:
         with ts.reader(home) as conn:
             record = _load(home, _root(conn, ts.lineage(conn, request.ref.session_id))) if conn else None
@@ -292,7 +293,7 @@ def admit_display(authority, actor, request) -> dict:
             or params != {"text": record.get("text"), "finite": True, "display_kind": "internal_notification",
                           "turn_author": {"id": f"bot:{profile}", "name": "Thread update", "is_bot": True}}
             or not same_owner(_subject(home, request.ref.session_id), actor.subject)):
-        raise RuntimeStoreError("invalid_params")
+        raise AuthorityRefusal("invalid_params")
     return admit_client_display(params, thread_notice=True)
 
 

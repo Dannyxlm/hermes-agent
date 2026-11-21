@@ -17,8 +17,17 @@ import time
 import sqlite3
 from contextlib import contextmanager
 
-from hermes_state_messages import DISPLAY_VISIBLE_SQL
-from hermes_state_compression import SessionCompressionMixin
+from types import SimpleNamespace
+
+from persistence.conversation.sessions import INTERNAL_LISTING_SOURCES
+from persistence.sqlite.conversation._store.compression import _compression_lineage_on
+from persistence.sqlite.conversation._store.identity import _stable_tool_key
+from persistence.sqlite.conversation._store.messages import _display_dedupe_key, _row_to_message_dict
+from persistence.sqlite.conversation._store.messages_sql import DISPLAY_VISIBLE_SQL
+from persistence.sqlite.conversation._store.search import (
+    _compile_like_boolean_query, _contains_cjk, _flatten_text, _sanitize_fts5_query,
+)
+from persistence.sqlite.conversation._store.timeline import _snapshot
 
 _CURSOR_KEY = secrets.token_bytes(32)
 _CATALOGS = OrderedDict()
@@ -90,33 +99,17 @@ def _file_hash(path, stat):
     return value
 
 
-class _SnapshotLineage(SessionCompressionMixin):
-    """Run the canonical compression walker on one already-borrowed read connection."""
-
-    def __init__(self, db, conn):
-        self.db, self.conn = db, conn
-
-    def get_session(self, session_id):
-        row = self.conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
-        return dict(row) if row is not None else None
-
-    @contextmanager
-    def _read_ctx(self):
-        yield self.conn
-
-    def _is_explicit_fork_child_row(self, row, *, include_reset=False):
-        return self.db._is_explicit_fork_child_row(row, include_reset=include_reset)
-
-
 def owned_lineage(db, session_id, profile, *, conn=None):
-    from hermes_state_sessions import INTERNAL_LISTING_SOURCES
-    chain = _SnapshotLineage(db, conn).get_compression_chain(session_id) if conn else db.get_compression_chain(session_id)
+    if conn is None:
+        with _snapshot(db) as conn:
+            return owned_lineage(db, session_id, profile, conn=conn)
+    chain = _compression_lineage_on(db, conn, session_id)
     if session_id not in chain:
         raise ValueError("session unavailable")
     for sid in chain:
-        row = dict(conn.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone() or {}) if conn else db.get_session(sid)
-        if (not row or row.get("profile_name") not in (None, profile)
-                or str(row.get("source") or "").strip().lower() in INTERNAL_LISTING_SOURCES):
+        row = conn.execute("SELECT profile_name, source FROM sessions WHERE id=?", (sid,)).fetchone()
+        if (not row or row["profile_name"] not in (None, profile)
+                or str(row["source"] or "").strip().lower() in INTERNAL_LISTING_SOURCES):
             raise ValueError("session unavailable")
     return chain
 
@@ -213,15 +206,13 @@ def lineage_rows_sql(db, conn, chain):
 
 
 def _register_lineage_functions(db, conn):
-    from hermes_state_identity import _stable_tool_key
-
     def stable_calls(calls):
         key = _stable_tool_key({"role": "assistant", "tool_calls": calls,
                                 "timestamp": None, "tool_call_id": None, "tool_name": None})
         return json.dumps(key[4]) if key is not None else None
 
     def user_content(content, kind, metadata):
-        return db._display_dedupe_key({"role": "user", "content": content, "display_kind": kind,
+        return _display_dedupe_key(db, {"role": "user", "content": content, "display_kind": kind,
             "display_metadata": metadata, "timestamp": None, "tool_call_id": None,
             "tool_calls": None, "tool_name": None})[1]
 
@@ -275,12 +266,11 @@ def _lineage_index(db, conn, home, chain):
 
 def _display_messages(db, rows, home):
     from hermes_cli.web_routers.sessions import _project_for_display
-    messages = [db._row_to_message_dict(row, warn_context="Hermex window", summary_flag=True) for row in rows]
+    messages = [_row_to_message_dict(db, row, warn_context="Hermex window", summary_flag=True) for row in rows]
     return _project_for_display(messages, home=home, inline_images=False)
 
 
 def _snippet(message, query):
-    from hermes_state_search import _flatten_text
     text = _flatten_text(message.get("display_content", message.get("content")))
     terms = [token.strip('"').rstrip("*") for token in re.findall(r'"[^"]*"|\S+', query)
              if token.upper() not in {"AND", "OR", "NOT", "NEAR"}]
@@ -351,7 +341,6 @@ _SEARCH_BUDGET = 1.5
 
 @contextmanager
 def _search_snapshot(db, principal, home):
-    from hermes_state_timeline import _snapshot
     cancelled = threading.Event()
     key = (principal, str(home))
     with _SEARCH_LOCK:
@@ -422,14 +411,16 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
         cache.update({sid: target_chain for sid in target_chain})
     next_position = None
     if phase == "messages":
-        prefix = db._sanitize_fts5_query(" ".join(
+        search_sql = SimpleNamespace(_fts_enabled=db._fts_enabled, _fts_stale=db._fts_stale,
+                                     _contains_cjk=_contains_cjk, _compile_like_boolean_query=_compile_like_boolean_query)
+        prefix = _sanitize_fts5_query(" ".join(
             token if token.startswith('"') or token.endswith("*") or token.upper() in {"AND", "OR", "NOT"}
             else token + "*" for token in re.findall(r'"[^"]*"|\S+', query.strip())))
         while consumed < 1000 and time.monotonic() < deadline - 0.15:
             batch = min(64, 1000 - consumed)
             try:
                 hits, examined, exhausted = candidates(
-                    db, conn, prefix, target_chain, after, high_water,
+                    search_sql, conn, prefix, target_chain, after, high_water,
                     deadline=deadline, cancelled=cancelled, batch=batch)
             except sqlite3.OperationalError as exc:
                 if str(exc) != "interrupted" or cancelled.is_set():
@@ -490,7 +481,6 @@ def _search_page(db, conn, home, params, principal, deadline, cancelled):
 
 
 def window(db, home, params, principal):
-    from hermes_state_timeline import _snapshot
     with _snapshot(db) as conn:
         chain = owned_lineage(db, params["session_id"], params["profile"], conn=conn)
         revision_key = (digest(_revision_scope(principal, params["profile"], home)), params["expected_revision"])

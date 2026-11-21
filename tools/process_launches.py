@@ -26,7 +26,7 @@ def finish_process_launch(session, cause=None):
         return
     from agent.runtime_session_store import is_worker_process
     if cause is None:
-        from hermes_state_launch_causes import process_cause
+        from persistence.sqlite.conversation._store.launch_causes import process_cause
         with session._lock:
             # The signal receipt, not a raced reader exit, owns an in-progress kill's cause.
             if session._launch_pending_kills:

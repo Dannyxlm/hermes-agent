@@ -1,7 +1,10 @@
 """Stored ordinary-session destinations; canonical Bot Chat authority stays separate."""
 from pathlib import Path
 
-from hermes_state import SessionDB
+from persistence.conversation.sessions import CANONICAL_BOT_CHAT_TITLE
+from persistence.sqlite._holder import StoreHolder
+from persistence.sqlite.conversation._store.compression import get_compression_lineage
+from persistence.sqlite.conversation._store.sessions import get_session
 from .mobile_push_payloads import Scope
 
 
@@ -13,8 +16,8 @@ def projection_destinations(db, profile, stored_ids):
     Missing or depth-capped lineages are omitted, never partially projected;
     one invalid destination must not discard evidence for the rest of the page.
     """
-    from hermes_state_compression import _CHAIN_CAP, _CHAIN_STEP_SQL
-    from hermes_state_common import _RESET_CHILD_SQL, _sql_json_extract
+    from persistence.sqlite.conversation._store.compression import _CHAIN_CAP, _CHAIN_STEP_SQL
+    from persistence.sqlite._schema_ddl import _RESET_CHILD_SQL, _sql_json_extract
 
     if not stored_ids:
         return {}
@@ -51,7 +54,7 @@ def projection_destinations(db, profile, stored_ids):
         if chain[-1]['depth'] >= _CHAIN_CAP:
             continue
         root, tip = chain[0], chain[-1]
-        canonical = root['title'] == SessionDB.CANONICAL_BOT_CHAT_TITLE
+        canonical = root['title'] == CANONICAL_BOT_CHAT_TITLE
         # Canonical Bot Chats have their own producer surface, not native_session.
         try:
             scope = Scope('native' if canonical else 'native_session', profile, root['id'])
@@ -83,7 +86,7 @@ def live_draft(home, stored_id):
                     or not owner or session.get('auth_user_id') != owner
                     or not server._session_transport_contains(session, peer)
                     or session.get('history') or session.get('parent_session_id')
-                    or session.get('pending_title') == SessionDB.CANONICAL_BOT_CHAT_TITLE):
+                    or session.get('pending_title') == CANONICAL_BOT_CHAT_TITLE):
                 continue
             return {'id': stored_id, 'source': session.get('source'), 'user_id': owner,
                     'title': session.get('pending_title'), 'started_at': session['created_at'],
@@ -96,18 +99,18 @@ def resolve_destination(profile, home, stored_id):
     path = Path(home) / "state.db"
     if not path.is_file():
         raise FileNotFoundError("profile state unavailable")
-    with SessionDB(db_path=path, read_only=True) as db:
-        row = db.get_session(stored_id)
+    with StoreHolder(path, read_only=True) as db:
+        row = get_session(db, stored_id)
         if not row:
             draft = live_draft(home, stored_id)
             if draft is not None:
                 return Scope("native_session", profile, stored_id), stored_id, draft.get('title') or "Hermex Ava"
             raise ValueError("unknown stored session")
-        chain = db.get_compression_chain(stored_id)
+        chain = get_compression_lineage(db, stored_id)
         if not chain:
             raise ValueError("unknown lineage")
-        root, tip = db.get_session(chain[0]), db.get_session(chain[-1])
-        if not root or not tip or any(r.get("title") == SessionDB.CANONICAL_BOT_CHAT_TITLE for r in (root, tip)):
+        root, tip = get_session(db, chain[0]), get_session(db, chain[-1])
+        if not root or not tip or any(r.get("title") == CANONICAL_BOT_CHAT_TITLE for r in (root, tip)):
             raise ValueError("Bot Chat requires canonical registration")
         return Scope("native_session", profile, root["id"]), tip["id"], tip.get("title") or "Hermex Ava"
 
@@ -133,8 +136,8 @@ def listed_chat(home, root_id):
     path = Path(home) / "state.db"
     if not path.is_file():
         return False
-    with SessionDB(db_path=path, read_only=True) as db:
-        row = db.get_session(root_id)
+    with StoreHolder(path, read_only=True) as db:
+        row = get_session(db, root_id)
     if not row:
         return False
     if str(row.get("source") or "").strip().lower() in UNLISTED_SOURCES:

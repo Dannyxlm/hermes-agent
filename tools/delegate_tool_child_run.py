@@ -56,11 +56,10 @@ def _reserve_child_transcript(child: Any) -> None:
         # the moment its id is published. The first turn merges the rest of the
         # constructor config in (``AIAgent._ensure_db_session``); the prompt stays unset.
         parent_sid = child._parent_session_id
-        db.create_session(
-            session_id=child.session_id, source="subagent",
-            parent_session_id=parent_sid,
-            model_config={"_delegate_from": parent_sid} if parent_sid else None,
-        )
+        from persistence.conversation.sessions import NewSession
+        child.persistence.sessions.create(NewSession(
+            session_id=child.session_id, source="subagent", parent_session_id=parent_sid,
+            model_config={"_delegate_from": parent_sid} if parent_sid else None))
         child._session_db_reserved = True
     except BaseException:
         # Ownership has transferred, but the child is not attached or published yet.
@@ -128,7 +127,7 @@ def _append_missed_steer(entry: dict[str, Any], late_steer: Optional[str]) -> No
 def _close_child(child: Any, log_message: str) -> None:
     """Best-effort ``child.close()`` (tool sandboxes, browser daemons, httpx clients)."""
     with _quiet(log_message, exc_info=True):
-        from hermes_state_launch_causes import finish_child
+        from persistence.sqlite.conversation._store.launch_causes import finish_child
         if not getattr(child, "_launch_executed", False):
             # A queued child stopped before it ran keeps the stop's cause (parent_stop, user_stop);
             # only a child nothing stopped failed to start.
@@ -190,7 +189,7 @@ def _signal_child_stop(child: Any, *reason: str, tool_reason: str = "parent dele
     fixed cause the child's tools see (a pending approval wait reports it instead of a user deny)."""
     with _quiet(None):
         if child is not None:
-            from hermes_state_launch_causes import stamp_stop
+            from persistence.sqlite.conversation._store.launch_causes import stamp_stop
             stamp_stop(child, terminal_cause)
         if (child is not None and not request_hard_interrupt(child, *reason, tool_reason=tool_reason)
                 and hasattr(child, "_interrupt_requested")):
@@ -686,7 +685,7 @@ def _build_result_entry(
         # The loop's final_response is a placeholder here ("Operation interrupted…", also appended as the closing
         # assistant row); the completion must carry what the child actually had so far — its last real assistant
         # text — and keep the placeholder as the error.
-        from agent.message_content import flatten_message_text
+        from session_rules.turns import flatten_message_text
         placeholders = {"", summary.strip(), "Operation interrupted."}
         partial = next((t for m in reversed(result.get("messages") or []) if m.get("role") == "assistant"
                         and (t := flatten_message_text(m.get("content")).strip()) not in placeholders), "")
@@ -964,7 +963,7 @@ class _ChildRun:
     ) -> dict[str, Any]:
         """Shared tail of every failure path: emit ``subagent.complete`` (``status`` defaults to the entry's), note
         the steer text that won the race with the failure, report the worktree."""
-        from hermes_state_launch_causes import finish_child
+        from persistence.sqlite.conversation._store.launch_causes import finish_child
         finish_child(self.child, cause=getattr(self.child, "_launch_stop_cause", None) or "error")
         _safe_progress(
             self.child_progress_cb, "subagent.complete", preview=redact_child_text(preview, force=False), status=status or entry["status"],
@@ -1214,7 +1213,7 @@ class _ChildRun:
     def emit_complete(self, result: dict[str, Any], entry: dict[str, Any], duration: float) -> None:
         """Fire ``subagent.complete`` with the per-branch observability payload (tokens, cost, files touched,
         tool-output tail); every field is optional and degrades gracefully on the client."""
-        from hermes_state_launch_causes import finish_child
+        from persistence.sqlite.conversation._store.launch_causes import finish_child
         finish_child(self.child, result=result)
         if not self.child_progress_cb:
             return

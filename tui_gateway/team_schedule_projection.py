@@ -57,7 +57,7 @@ def profile_homes(names):
 
 @contextmanager
 def _read_store(path):
-    from hermes_state_holders import read_only_db_uri
+    from persistence.sqlite._state.holders import read_only_db_uri
     conn = sqlite3.connect(read_only_db_uri(path), uri=True, timeout=0.2)
     deadline = time.monotonic() + 2
     conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
@@ -115,7 +115,7 @@ def _session_activity(home, profile, runtimes):
                        "started_at": _epoch(runtimes[0].get("turn_started_at")), "open_chat": None}
         return last, current
     from tui_gateway.mobile_session_scope import UNLISTED_SOURCES
-    from hermes_state_common import _sql_json_extract
+    from persistence.sqlite._schema_ddl import _sql_json_extract
     hidden = tuple(sorted(UNLISTED_SOURCES | {"unknown"}))
     with _read_store(path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}

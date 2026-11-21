@@ -9,7 +9,7 @@ turn that was still running. Rows keep ``server._session_live_item``'s shape; ``
 """
 from __future__ import annotations
 
-from hermes_state_runtime import RuntimeStoreError
+from persistence.core.errors import AuthorityRefusal
 
 
 def _status(live, handle, pending) -> str:
@@ -24,29 +24,31 @@ def _status(live, handle, pending) -> str:
     return 'starting' if any(row['status'] == 'queued' for row in pending) else 'idle'
 
 
-def _thread_parents(db, session_ids):
-    from hermes_state_launches import thread_parents
-    from tui_gateway.mobile_session_scope import projection_destinations
-    profile = db._own_profile_name() or 'default'
-    destinations = projection_destinations(db, profile, session_ids)
-    return thread_parents(db, profile,
-                          {key: dest['root']['_lineage_ids'] for key, dest in destinations.items()})
+def _thread_parents(store, session_ids):
+    from persistence.sqlite.conversation._store.launches import thread_parents
+    from persistence_assembly import store_owner_name
+
+    if not session_ids:
+        return {}
+    profile = store_owner_name(store.scope.profile_dir) or 'default'
+    lineages = {sid: store.lineage.lineage(sid) for sid in session_ids}
+    return thread_parents(store._bound_store().holder(), profile, lineages)
 
 
 async def active_list(connection, ref, params):
     if set(params) - {'profile', 'current_session_id'}:
-        raise RuntimeStoreError('invalid_params')
+        raise AuthorityRefusal('invalid_params')
     if 'session:read' not in connection.actor.capabilities:
-        raise RuntimeStoreError('permission_denied')
+        raise AuthorityRefusal('permission_denied')
     import asyncio
     from gateway.session_live_listing import live_entries, _readable
-    from hermes_state_sessions import INTERNAL_LISTING_SOURCES
+    from persistence.conversation.sessions import INTERNAL_LISTING_SOURCES
     current = str(params.get('current_session_id') or '')
     # Same population as the live session.list feed, hidden chats included. Only visible
     # candidates need provenance; finished internal jobs can dominate the authority registry.
     entries = [entry for entry in await live_entries(connection.authority, connection.actor)
                if entry.row.get('source') not in INTERNAL_LISTING_SOURCES and not entry.closed]
-    parents = await asyncio.to_thread(_thread_parents, connection.authority.db,
+    parents = await asyncio.to_thread(_thread_parents, connection.authority.persistence,
                                      [entry.session_id for entry in entries])
     if connection.authority.retiring or connection.authority.retired:
         return {'sessions': []}

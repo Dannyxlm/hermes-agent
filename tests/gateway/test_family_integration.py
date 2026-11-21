@@ -13,7 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 from tests.hermes_cli.test_finite_chat_delegation import (
     test_finite_chat_joins_parallel_children_before_final_response as finite_chat,
 )
@@ -97,10 +98,10 @@ def test_real_producers_agree_with_family_dispatchers(tmp_path, monkeypatch):
 async def _assert_recorded_fanout(home, root):
     from gateway.session_authority import SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     with SessionDB(home / "state.db") as db:
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home),
-            instance_id="fanout", db=db, epoch=begin_runtime_epoch(db, instance_id="fanout"))
+            instance_id="fanout", persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="fanout"))
         connection = AuthorityConnection(authority, object(), native_identity(authority, db.get_session(root)["user_id"]))
         try:
             response = await connection.dispatch({"id": 1, "method": "session.family", "params": {
@@ -192,7 +193,7 @@ async def _assert_rpc(home, other, root, job, run, process):
     from gateway.session_authorities import SessionAuthorities
     from gateway.session_authority import SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     registry = SessionAuthorities(home, multiplexed=True)
     runner = SimpleNamespace(_draining=False, session_authorities=registry)
     root_id = identity("default", root)
@@ -201,7 +202,7 @@ async def _assert_rpc(home, other, root, job, run, process):
                   for name, path in (("default", home), ("iris", other))}
         for name, path in (("default", home), ("iris", other)):
             db = stores[name]
-            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, db=db,
+            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, persistence=storage_handle(Path(db.db_path).parent),
                                          epoch=begin_runtime_epoch(db, instance_id=name))
             registry.add(path, authority, name=None if name == "default" else name)
             if name == "default":

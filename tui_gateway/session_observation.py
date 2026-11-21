@@ -5,8 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from hermes_state_common import _id_chunks, _placeholders
-from hermes_state_session_changes import SESSION_SIGNATURE_FIELDS, changed_ids, journal_available, journal_window
+from persistence.sqlite._session_changes import SESSION_SIGNATURE_FIELDS, changed_ids, journal_available, journal_window
+from persistence.sqlite.conversation._store.sql_common import _id_chunks, _placeholders
 
 
 @dataclass

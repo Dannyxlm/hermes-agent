@@ -72,7 +72,7 @@ async def authority_route(monkeypatch, instance_id, executed, hold=None):
         assert runner._shutdown_executor(drain_timeout=10) == 0
         runner.session_store.close_all_db_handles()
         runner.close_all_session_db_handles()
-        authority.db.close()
+        authority.persistence.close()
 
 
 async def stop_route(runner, adapter, authority):
@@ -95,10 +95,11 @@ async def stop_route(runner, adapter, authority):
 
 
 def admission_rows(runner, authority, source):
-    from hermes_state_runtime import list_session_admissions
+    from gateway.session_authority import admission_row
 
     owner = runner.session_store.peek_session_id(runner.session_store._generate_session_key(source))
-    return list_session_admissions(authority.db, session_id=owner, pending_only=False)
+    return [admission_row(row) for row in authority.persistence.admissions.list(
+        session_id=owner, pending_only=False)]
 
 
 def admissions(runner, authority, source):
@@ -113,11 +114,10 @@ def wake_runs(executed):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("busy", [False, True], ids=["idle", "busy"])
 async def test_authority_route_runs_a_wake_receipted_before_drain_once_after_restart(monkeypatch, busy):
-    from gateway import session_authority
+    from persistence.sqlite.authority.admissions import SQLiteAdmissionRepository
     from gateway.platforms.event import MessageEvent
     from gateway.run_runtime import drain_gateway_runtime, recover_profile_native_sessions
     from gateway.wake import deliver_wake
-    from hermes_state_runtime import get_session_admission
 
     executed, hold = [], Hold() if busy else None
     async with authority_route(monkeypatch, "owner", executed, hold) as (runner, adapter, authority, source):
@@ -130,19 +130,19 @@ async def test_authority_route_runs_a_wake_receipted_before_drain_once_after_res
                 what="the human turn to settle",
             )
         claiming, release = asyncio.Event(), threading.Event()
-        loop, claim, epoch = asyncio.get_running_loop(), session_authority.claim_session_input, authority.epoch
+        loop, claim, epoch = asyncio.get_running_loop(), SQLiteAdmissionRepository.claim, authority.epoch
 
-        def before_claim(db, **kwargs):
+        def before_claim(repository, **kwargs):
             head = kwargs.get("head")
-            row = get_session_admission(db, admission_id=head) if head else None
-            if kwargs["epoch"] == epoch and row and row["principal_id"].startswith("automation:"):
+            row = repository.get(admission_id=head) if isinstance(head, str) else None
+            if kwargs["epoch"] == epoch and row and row.principal_id.startswith("automation:"):
                 # The loop-side gate passed, but the real transaction (and its drain guard) has
                 # not started. Merely awaiting deliver_wake cannot establish this ordering.
                 loop.call_soon_threadsafe(claiming.set)
                 assert release.wait(10)
-            return claim(db, **kwargs)
+            return claim(repository, **kwargs)
 
-        monkeypatch.setattr(session_authority, "claim_session_input", before_claim)
+        monkeypatch.setattr(SQLiteAdmissionRepository, "claim", before_claim)
         try:
             await asyncio.wait_for(deliver_wake(adapter, text=WAKE, source=source), 10)  # receipt: no resend
             if hold is not None:
@@ -232,7 +232,7 @@ async def test_claimed_wake_settles_before_restart_transfers_its_epoch(monkeypat
             stopping = asyncio.create_task(run_runtime.settle_gateway_runtime(runner))
             await asyncio.wait_for(settling.wait(), 10)
             assert not stopping.done(), "restart released an unsettled claim"
-            assert authority.db._read_one("SELECT epoch FROM runtime_epoch WHERE singleton=1")[0] == authority.epoch
+            assert authority.persistence.runtime.current_epoch() == authority.epoch
             release.set()
             await asyncio.wait_for(stopping, 10)
             await stop_route(runner, adapter, authority)

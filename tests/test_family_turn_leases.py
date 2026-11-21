@@ -6,7 +6,7 @@ import time
 import pytest
 
 from hermes_family import Family, read_profile
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
 
 
 @pytest.mark.parametrize("case,expected", [
@@ -35,7 +35,7 @@ def test_family_turn_lease(tmp_path, case, expected):
             db._write_sql("UPDATE sessions SET last_activity_at=? WHERE id=?", (now - 1300, tip))
         if case in {"terminal", "restart"}:
             db.finish_launch("lane", "owner_restart" if case == "restart" else "success")
-        from hermes_state_pidns import holder_namespace_token
+        from process_identity import holder_namespace_token
         holder = f"pid={os.getpid()}{holder_namespace_token()}:family-reader"
         if case == "dead":
             holder = f"pid=2147483647{holder_namespace_token()}:family-reader"

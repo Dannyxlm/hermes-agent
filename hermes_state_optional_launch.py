@@ -25,7 +25,7 @@ def warn(operation, exc):
 
 def log_lock_holders(db_path, patience_s):
     if patience_s:
-        from hermes_state_lockowners import log_write_lock_holders
+        from persistence.sqlite._state.lockowners import log_write_lock_holders
         log_write_lock_holders(db_path, patience_s)
 
 

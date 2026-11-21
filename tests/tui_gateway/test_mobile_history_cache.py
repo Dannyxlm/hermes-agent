@@ -4,9 +4,18 @@ import sqlite3
 
 import pytest
 
-from hermes_state import SessionDB
-from tui_gateway import mobile_history_cache, server
+from persistence.sqlite._holder import StoreHolder
+from session_rules import turns
+from tests.hermes_cli import test_sessions_messages_paging
 from tests.hermes_cli.test_sessions_messages_paging import lineage, legacy_lineage
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tui_gateway import mobile_history_cache, server
+
+
+@pytest.fixture(autouse=True)
+def lineage_store(monkeypatch):
+    # The shared paging fixtures seed SQL directly, including a legacy schema.
+    monkeypatch.setattr(test_sessions_messages_paging, "SessionDB", SessionDB)
 
 
 def test_readonly_legacy_mobile_pages_use_computed_identity(legacy_lineage, history_cache):
@@ -34,16 +43,17 @@ def test_long_lineage_mobile_exact_pages(lineage, history_cache, size):
 def test_mobile_materializes_only_page_plus_lookahead(lineage, history_cache):
     db, expected = lineage
     rows_read = []
-    factory = db._conn.row_factory
-    def count(cursor, row):
-        if 'content' in [col[0] for col in cursor.description]:
-            rows_read.append(1)
-        return factory(cursor, row)
-    db._conn.row_factory = count
-    try:
-        page = server._mobile_history_page(db, 'tip', ['root', 'middle', 'tip'], {'limit': 100})
-    finally:
-        db._conn.row_factory = factory
+    with db.transcript_read_snapshot(), db._read_ctx() as conn:
+        factory = conn.row_factory
+        def count(cursor, row):
+            if 'content' in [col[0] for col in cursor.description]:
+                rows_read.append(1)
+            return factory(cursor, row)
+        conn.row_factory = count
+        try:
+            page = server._mobile_history_page(db, 'tip', ['root', 'middle', 'tip'], {'limit': 100})
+        finally:
+            conn.row_factory = factory
     assert [(m['row_id'], m['text']) for m in page['messages']] == expected[-100:]
     assert len(rows_read) == 101
 
@@ -64,14 +74,12 @@ def _page(home, *, tip="root", chain=None, **params):
 
 @pytest.mark.parametrize('indexed', [False, True])
 def test_repeated_pages_skip_lineage_work_but_commits_refresh_every_byte(tmp_path, monkeypatch, history_cache, indexed):
-    from agent import context_compressor
-
     visits = []
-    split = context_compressor.split_user_originated_turn
+    split = turns.split_user_originated_turn
     def count_decode(message):
         visits.append(message["content"])
         return split(message)
-    monkeypatch.setattr(context_compressor, "split_user_originated_turn", count_decode)
+    monkeypatch.setattr(turns, "split_user_originated_turn", count_decode)
     text = "complete original text " * 1000
     with SessionDB(db_path=tmp_path / "state.db") as writer:
         writer.create_session("root", "desktop")
@@ -142,7 +150,11 @@ def test_cache_never_publishes_racing_uncommitted_or_replaced_data(tmp_path, mon
         # An uncommitted writer read must not consume or populate committed page entries.
         writer._conn.execute("BEGIN")
         writer._conn.execute("UPDATE messages SET content='uncommitted text'")
-        assert server._mobile_history_page(writer, "root", ["root"], {})["messages"][0]["text"] == "uncommitted text"
+        with monkeypatch.context() as patch:
+            # Force the holder's real writer-read fallback: a pooled reader
+            # intentionally cannot see the uncommitted writer transaction.
+            patch.setattr(writer, "_checkout_read_conn", lambda: None)
+            assert server._mobile_history_page(writer, "root", ["root"], {})["messages"][0]["text"] == "uncommitted text"
         writer._conn.execute("ROLLBACK")
         assert _page(tmp_path)["messages"][0]["text"] == "committed during read"
 
@@ -197,7 +209,7 @@ def test_replacement_during_handle_open_closes_mismatched_reader(tmp_path, monke
             writer.append_message("root", "user", text)
 
     opened = []
-    initialize = SessionDB.__init__
+    initialize = StoreHolder.__init__
     def replace_after_open(db, *args, **kwargs):
         initialize(db, *args, **kwargs)
         if kwargs.get("read_only") and not opened:
@@ -205,12 +217,12 @@ def test_replacement_during_handle_open_closes_mismatched_reader(tmp_path, monke
             replacement.replace(path)
 
     if replace_during == "reader":
-        monkeypatch.setattr(SessionDB, "__init__", replace_after_open)
+        monkeypatch.setattr(StoreHolder, "__init__", replace_after_open)
         with pytest.raises(RuntimeError, match="replaced during open"):
             _page(tmp_path)
     else:
         with server._mobile_read_db(tmp_path) as reader:
-            monkeypatch.setattr(SessionDB, "__init__", replace_after_open)
+            monkeypatch.setattr(StoreHolder, "__init__", replace_after_open)
             assert server._mobile_history_page(reader, "root", ["root"], {})["messages"][0]["text"] == "original file"
 
     assert opened[0]._conn is None  # The mismatched read-only handle must not leak.

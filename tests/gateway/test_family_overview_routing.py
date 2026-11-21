@@ -1,9 +1,12 @@
 """Overview's routing envelope is strict and never grants another profile or principal."""
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 from tests.test_hermes_family import LAUNCH_DDL, NOW, launch
 
 
@@ -14,7 +17,7 @@ async def test_overview_profile_envelope_uses_real_sibling_dispatch(tmp_path, mo
     from gateway.owner_identity import principal_subject
     from gateway.session_authority import SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     secondary = home / "profiles" / "reviewer"
     secondary.mkdir(parents=True)
@@ -34,7 +37,7 @@ async def test_overview_profile_envelope_uses_real_sibling_dispatch(tmp_path, mo
                                      user_id=principal_subject({"provider": "local", "user_id": "somebody-else"}) if visibility == "private" else None)
                 launch(store._conn, child, profile=name, launcher=root, launcher_profile=name, cause="success", finished=NOW - 1)
             store._conn.commit()
-            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, db=store,
+            authority = SessionAuthority(runner, profile_id=str(path), instance_id=name, persistence=storage_handle(Path(store.db_path).parent),
                 epoch=begin_runtime_epoch(store, instance_id=name))
             registry.add(path, authority, name=None if name == "default" else name)
             authorities.append(authority)

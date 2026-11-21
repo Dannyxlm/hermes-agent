@@ -45,7 +45,7 @@ def test_constructing_delegate_cannot_clear_workers_and_releases_fence(client, w
 def test_async_admission_pending_is_scoped_and_clears_when_settled(client, workers, monkeypatch,
                                                                runner_fails, home_binding):
     import sqlite3
-    from hermes_state_schema import SCHEMA_SQL
+    from persistence.sqlite._schema_ddl import SCHEMA_SQL
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
     from tools import async_delegation as delegation
     c, home = client

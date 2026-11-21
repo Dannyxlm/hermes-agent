@@ -24,7 +24,7 @@ def test_native_read_unread_roundtrip_stamps_root_tip_not_branch(read_client, mo
         db.create_session("branch", "desktop", parent_session_id="same",
                           model_config={"_branched_from": "same"}, profile_name="ops")
     server._sessions["ops"]["session_key"] = "tip"
-    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 200)
+    monkeypatch.setattr("persistence.sqlite.authority._mutation_read.time.time", lambda: 200)
     for index, (sid, unread) in enumerate([("tip", True), ("same", False), ("same", True), ("tip", False)]):
         response = patch_sidebar(read_client, sid, request_id=f"read-{index}", unread=unread)
         assert response.status_code == 200, response.text
@@ -91,7 +91,7 @@ def _stamps(home):
 
 def test_read_through_stamps_the_displayed_reply_not_the_clock(read_client, replied_family, monkeypatch):
     home, rows = replied_family
-    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 300)
+    monkeypatch.setattr("persistence.sqlite.authority._mutation_read.time.time", lambda: 300)
     response = patch_sidebar(read_client, "tip", request_id="through", unread=False, read_through_row_id=rows["seen"])
     assert response.status_code == 200, response.text
     assert _stamps(home) == {"same": 150, "tip": 150, "branch": None}
@@ -102,7 +102,7 @@ def test_read_through_stamps_the_displayed_reply_not_the_clock(read_client, repl
 
 def test_read_through_never_stamps_past_now(read_client, replied_family, monkeypatch):
     home, rows = replied_family
-    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 300)
+    monkeypatch.setattr("persistence.sqlite.authority._mutation_read.time.time", lambda: 300)
     assert patch_sidebar(read_client, "tip", request_id="future", unread=False,
                          read_through_row_id=rows["future"]).status_code == 200
     assert _stamps(home)["tip"] == 300
@@ -112,7 +112,7 @@ def test_read_through_never_stamps_past_now(read_client, replied_family, monkeyp
 def test_read_through_row_outside_the_lineage_behaves_like_a_plain_read(read_client, replied_family,
                                                                          monkeypatch, which):
     home, rows = replied_family
-    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 300)
+    monkeypatch.setattr("persistence.sqlite.authority._mutation_read.time.time", lambda: 300)
     row_id = rows["elsewhere"] if which == "elsewhere" else 10**9
     assert patch_sidebar(read_client, "tip", request_id="foreign", unread=False,
                          read_through_row_id=row_id).status_code == 200
@@ -131,7 +131,7 @@ def test_a_read_never_lowers_the_watermark(read_client, replied_family, monkeypa
     home, rows = replied_family
     with SessionDB(db_path=home / "state.db") as db:
         newest = db.append_message("tip", "assistant", "newest", timestamp=260)
-    monkeypatch.setattr("hermes_state_mutation_read.time.time", lambda: 300)
+    monkeypatch.setattr("persistence.sqlite.authority._mutation_read.time.time", lambda: 300)
     for index, row_id in enumerate((newest, rows["seen"])):
         assert patch_sidebar(read_client, "tip", request_id=f"through-{index}", unread=False,
                              read_through_row_id=row_id).status_code == 200

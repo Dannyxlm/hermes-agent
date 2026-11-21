@@ -8,8 +8,9 @@ import pytest
 
 from gateway.session_authority import SessionAuthority
 from gateway.session_controls import AuthorityConnection
-from hermes_state import SessionDB
-from hermes_state_runtime import begin_runtime_epoch
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
+from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
 from tests.waiting import async_wait_until
 
 pytestmark = pytest.mark.platforms("linux")
@@ -56,7 +57,7 @@ async def test_native_systemd_family_signals(tmp_path, monkeypatch, fake_systemc
         db.record_launch("unit", kind="process", launcher_profile="default", launcher_session_id="root",
                          child_profile="default", backend_ref="systemd:example")
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="test",
-                                     db=db, epoch=begin_runtime_epoch(db, instance_id="test"))
+                                     persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="test"))
         conn = AuthorityConnection(authority, object(), {"user_id": "owner"}, operator=True)
         async def read():
             return await conn.dispatch({"id": 1, "method": "session.family", "params": {

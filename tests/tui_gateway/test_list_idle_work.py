@@ -3,7 +3,8 @@ import sqlite3
 
 import pytest
 
-from hermes_state import SessionDB
+from hermes_cli import sqlite_safe_read
+from tests.persistence_sqlite.core._fork_store import SessionDB
 from tui_gateway import server, session_change_cursor
 from tui_gateway.inbox_summaries import page_replies
 
@@ -14,15 +15,14 @@ def test_watcher_observes_only_with_ui_demand(tmp_path, monkeypatch, stdio, peer
     with sqlite3.connect(path) as conn:
         conn.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT)")
         conn.execute("INSERT INTO sessions VALUES ('one', 'Original')")
-    import hermes_state
     opened = []
-    connect = hermes_state._connect_tracked_db
+    connect = sqlite_safe_read.connect_tracked
 
     def track(*args, **kwargs):
         opened.append(args[0])
         return connect(*args, **kwargs)
 
-    monkeypatch.setattr(hermes_state, "_connect_tracked_db", track)
+    monkeypatch.setattr(sqlite_safe_read, "connect_tracked", track)
     monkeypatch.setattr(server, "_watcher_home", lambda: tmp_path)
     monkeypatch.setattr(server, "_served_profile_homes", set())
     monkeypatch.setattr(server, "_sessions_db_sig_cache", {})

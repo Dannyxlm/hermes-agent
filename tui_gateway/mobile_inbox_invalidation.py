@@ -191,11 +191,11 @@ def _run_profiles(store, now) -> set[str]:
 def _new_reply(db_path: str, ids: list) -> bool:
     """True when one of ``ids`` has a final assistant reply this process has not seen (one indexed
     query). An unseen session counts only when its reply is newer than this process."""
-    from hermes_state import SessionDB
+    from persistence.sqlite._holder import StoreHolder
     from .inbox_summaries import page_replies
     ids = ids[:_REPLY_CHECK_LIMIT]
     replies: dict = {}
-    with SessionDB(db_path=Path(db_path), read_only=True) as db:
+    with StoreHolder(Path(db_path), read_only=True) as db:
         replies = page_replies(db, [{"id": sid, "_lineage_ids": [sid], "last_read_at": None} for sid in ids])
     found = False
     for sid in ids:

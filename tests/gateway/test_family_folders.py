@@ -1,10 +1,13 @@
 """Family Inbox rows carry the same folder identity as ordinary chat summaries."""
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
 from hermes_cli import projects_db as pdb
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 from tests.test_hermes_family import NOW, launch
 
 
@@ -13,7 +16,7 @@ from tests.test_hermes_family import NOW, launch
 async def test_teammate_inbox_folder(tmp_path, monkeypatch, folder):
     from gateway.session_authority import LiveSession, SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
 
     home = tmp_path / "home"
     home.mkdir()
@@ -32,7 +35,7 @@ async def test_teammate_inbox_folder(tmp_path, monkeypatch, folder):
         launch(db._conn, "child", kind="teammate", cause="error", finished=NOW - 1)
         db._conn.commit()
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home),
-            instance_id="folders", db=db, epoch=begin_runtime_epoch(db, instance_id="folders"))
+            instance_id="folders", persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="folders"))
         authority.sessions["root"] = LiveSession(None, "root-route")
         connection = AuthorityConnection(authority, object(), {"user_id": "owner"})
         try:

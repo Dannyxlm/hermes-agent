@@ -5,9 +5,12 @@ import sqlite3
 import threading
 from types import SimpleNamespace
 
+from pathlib import Path
+
 import pytest
 
-from hermes_state import SessionDB
+from tests.persistence_sqlite.core._fork_store import SessionDB
+from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
 from tests.test_hermes_family import LAUNCH_DDL, NOW, launch
 
 
@@ -35,7 +38,7 @@ def loaded_rows(monkeypatch):
 def reader(tmp_path, monkeypatch):
     from gateway.session_authority import SessionAuthority
     from gateway.session_controls import AuthorityConnection
-    from hermes_state_runtime import begin_runtime_epoch
+    from persistence.sqlite.authority._runtime_ends import begin_runtime_epoch
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("hermes_cli.profiles._get_default_hermes_home", lambda: home)
@@ -43,7 +46,7 @@ def reader(tmp_path, monkeypatch):
         db.create_session("root", source="test")
         db._conn.executescript(LAUNCH_DDL)
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id=str(home), instance_id="review",
-                                    db=db, epoch=begin_runtime_epoch(db, instance_id="review"))
+                                    persistence=storage_handle(Path(db.db_path).parent), epoch=begin_runtime_epoch(db, instance_id="review"))
         connection = AuthorityConnection(authority, object(), {"user_id": "owner", "profile_scope": "host"})
         yield db, authority, connection
 

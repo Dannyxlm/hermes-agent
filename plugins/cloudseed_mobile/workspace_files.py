@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
 from hermes_cli.config import load_config, read_raw_config_readonly
 from hermes_constants import get_hermes_home, get_default_hermes_root
-from hermes_state_holders import read_only_db_uri
+from persistence.sqlite._state.holders import read_only_db_uri
 from plugins.cloudseed_mobile.scope import profile_id
 
 PREVIEW_BYTES = 512 * 1024

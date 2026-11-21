@@ -11,9 +11,7 @@ from hermes_state import SessionDB
 
 def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    import hermes_state
     db_path = tmp_path / "state.db"
-    monkeypatch.setattr(hermes_state, "_default_db_path", lambda: db_path)
     monkeypatch.setattr(analytics, "_usage_caches", {})
     db = SessionDB(db_path=db_path)
     db.create_session("s1", source="cli", model="m")

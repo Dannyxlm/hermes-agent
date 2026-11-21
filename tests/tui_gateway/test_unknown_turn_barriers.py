@@ -7,11 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_cli.active_sessions import ActiveSessionRefusal, SESSION_NOT_OWNED
-from hermes_state import SessionDB
-from hermes_state_runtime import (
-    admit_session_input, begin_runtime_epoch, claim_session_input, list_session_admissions,
-    recover_session_inputs, register_worker_execution,
-)
+from gateway.session_authority import admission_row
+from persistence_assembly import open_persistence, profile_scope
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_seed import seed_session
 from tests.tui_gateway.test_auto_continue import _session
 from tests.tui_gateway.test_legacy_submit_forwards_to_owner import _legacy, _owner, _OwnerClient
 from tui_gateway import owner_forward, server
@@ -23,7 +22,7 @@ pytest_plugins = ["tests.tui_gateway.test_auto_continue"]
 @pytest.mark.parametrize('entry', ['info', 'cold_resume', 'refusal'])
 def test_owner_transport_restart_preserves_reads_and_unknown_barrier(monkeypatch, tmp_path, entry):
     from hermes_cli.gateway_client import GatewayClientError
-    with SessionDB(db_path=tmp_path / 'state.db') as db:
+    with open_persistence(profile_scope(home=tmp_path)) as db:
         sid, key, turns, _emitted = _legacy(monkeypatch, db)
         _unknown_owner(monkeypatch, db, key)
 
@@ -55,7 +54,7 @@ def test_owner_transport_restart_preserves_reads_and_unknown_barrier(monkeypatch
 
 @pytest.mark.parametrize("unknown_table", ["admission", "worker"])
 def test_unknown_barrier_dominates_queued_followers(monkeypatch, tmp_path, unknown_table):
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path))
     sid, key, turns, _emitted = _legacy(monkeypatch, db)
     def no_ready_owner(home):
         raise owner_forward.OwnerNotRunning('synthetic unavailable owner')
@@ -63,18 +62,18 @@ def test_unknown_barrier_dominates_queued_followers(monkeypatch, tmp_path, unkno
     forwarded = []
     monkeypatch.setattr(owner_forward, "forward_prompt", lambda *a: forwarded.append(a) or {})
     try:
-        db.create_session(key, "test")
-        epoch = begin_runtime_epoch(db, instance_id="first")
+        seed_session(db, key, "test")
+        epoch = db.runtime.begin_epoch(instance_id="first")
         if unknown_table == "admission":
-            admit_session_input(db, epoch=epoch, principal_id="owner", session_id=key,
+            db.admissions.admit(epoch=epoch, principal_id="owner", session_id=key,
                                 request_id="lost", payload={"text": "may have run"})
-            claim_session_input(db, epoch=epoch, session_id=key)
+            db.admissions.claim(epoch=epoch, session_id=key)
         else:
-            register_worker_execution(db, epoch=epoch, execution_id="lost-worker", session_id=key,
+            db.worker_executions.register(epoch=epoch, execution_id="lost-worker", session_id=key,
                                       generation=0, kind="compute", adoption_secret="fixture-only")
-        epoch = begin_runtime_epoch(db, instance_id="replacement")
-        recover_session_inputs(db, epoch=epoch)
-        admit_session_input(db, epoch=epoch, principal_id="owner", session_id=key,
+        epoch = db.runtime.begin_epoch(instance_id="replacement")
+        db.admissions.recover(epoch=epoch)
+        db.admissions.admit(epoch=epoch, principal_id="owner", session_id=key,
                             request_id="follower", payload={"text": "queued behind unknown"})
         refusal = server._canonical_ledger_refusal(server._sessions[sid])
         assert refusal.ledger_status == "unknown"
@@ -90,15 +89,15 @@ def test_unknown_barrier_dominates_queued_followers(monkeypatch, tmp_path, unkno
 
 
 def test_unavailable_ledger_owner_has_distinct_rpc_reason(monkeypatch, tmp_path):
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path))
     sid, key, turns, _emitted = _legacy(monkeypatch, db)
     def unavailable(home):
         raise owner_forward.OwnerNotRunning("no ready owner")
     monkeypatch.setattr(owner_forward, "discover_owner", unavailable)
     try:
-        db.create_session(key, "test")
-        epoch = begin_runtime_epoch(db, instance_id="first")
-        admit_session_input(db, epoch=epoch, principal_id="owner", session_id=key,
+        seed_session(db, key, "test")
+        epoch = db.runtime.begin_epoch(instance_id="first")
+        db.admissions.admit(epoch=epoch, principal_id="owner", session_id=key,
                             request_id="queued", payload={"text": "waiting"})
         reply = server.handle_request({"id": "send", "method": "prompt.submit",
             "params": {"session_id": sid, "text": "do not run here"}})
@@ -110,7 +109,7 @@ def test_unavailable_ledger_owner_has_distinct_rpc_reason(monkeypatch, tmp_path)
 
 
 def test_foreign_live_lease_has_distinct_rpc_reason(monkeypatch, tmp_path):
-    db = SessionDB(db_path=tmp_path / "state.db")
+    db = open_persistence(profile_scope(home=tmp_path))
     sid, _key, turns, _emitted = _legacy(monkeypatch, db)
     monkeypatch.setattr(server, "_claim_active_session_slot", lambda *a, **kw:
                         (None, ActiveSessionRefusal("Session already has a live owner", SESSION_NOT_OWNED)))
@@ -147,19 +146,19 @@ def _deny_admission_bodies(db):
 
 
 def _unknown_owner(monkeypatch, db, key, *, principal_id='bot'):
-    db.create_session(key, 'test')
-    first = begin_runtime_epoch(db, instance_id='lost-owner')
-    admit_session_input(db, epoch=first, principal_id=principal_id, session_id=key,
+    seed_session(db, key, 'test')
+    first = db.runtime.begin_epoch(instance_id='lost-owner')
+    db.admissions.admit(epoch=first, principal_id=principal_id, session_id=key,
                         request_id='private-request', payload={'text': 'private unknown body'})
-    claimed = claim_session_input(db, epoch=first, session_id=key)
-    epoch = begin_runtime_epoch(db, instance_id='replacement')
-    recover_session_inputs(db, epoch=epoch)
+    claimed = admission_row(db.admissions.claim(epoch=first, session_id=key))
+    epoch = db.runtime.begin_epoch(instance_id='replacement')
+    db.admissions.recover(epoch=epoch)
     return _owner(monkeypatch, db, key, epoch), claimed
 
 
 @pytest.mark.parametrize('entry', ['refusal', 'info', 'warm_resume', 'cold_resume'])
 def test_unknown_identity_is_owner_verified_and_explicit_discard_never_replays(monkeypatch, tmp_path, entry):
-    with SessionDB(db_path=tmp_path / 'state.db') as db:
+    with open_persistence(profile_scope(home=tmp_path)) as db:
         sid, key, turns, emitted = _legacy(monkeypatch, db)
         _authority, claimed = _unknown_owner(monkeypatch, db, key)
         seen = []
@@ -173,7 +172,7 @@ def test_unknown_identity_is_owner_verified_and_explicit_discard_never_replays(m
             if entry == 'cold_resume':
                 server._sessions.pop(sid)
                 monkeypatch.setattr(server, '_enable_gateway_prompts', lambda: None)
-            with _deny_admission_bodies(db):
+            with _deny_admission_bodies(raw_holder(db)):
                 if entry == 'refusal':
                     reply = server.handle_request({'id': 'refused', 'method': 'prompt.submit',
                         'params': {'session_id': sid, 'text': 'never submitted'}})
@@ -194,7 +193,7 @@ def test_unknown_identity_is_owner_verified_and_explicit_discard_never_replays(m
             assert blockers == [expected]
             assert all(method == 'prompt.receipt' for method, _ in seen), seen
             assert all(params == {'session_id': key, 'admission_id': claimed['admission_id']} for _, params in seen)
-            assert len(list_session_admissions(db, session_id=key)) == 1 and turns == []
+            assert len(db.admissions.list(session_id=key)) == 1 and turns == []
             session = server._sessions[sid]
             assert 'private unknown body' not in str(blockers) and 'private-request' not in str(blockers)
             assert session['_forwarded_admissions'][claimed['admission_id']]['observed_only'] is True
@@ -218,12 +217,12 @@ def test_unknown_identity_is_owner_verified_and_explicit_discard_never_replays(m
             wrong = server.handle_request({'id': 'cancel', 'method': 'prompt.cancel', 'params': {
                 'session_id': sid, 'admission_id': claimed['admission_id']}})
             assert wrong['error']['data']['reason'] == 'permission_denied'
-            assert list_session_admissions(db, session_id=key)[0]['status'] == 'unknown'
+            assert db.admissions.list(session_id=key)[0].status == 'unknown'
             assert not any(method == 'prompt.resolve_unknown' for method, _ in seen)
             result = server.handle_request({'id': 'explicit-discard', 'method': 'prompt.resolve_unknown', 'params': control})
             assert result['result']['status'] == 'terminal' and result['result']['outcome'] == 'interrupted', result
             assert emitted[-1][2]['blocking_unknown'] == []
-            assert len(list_session_admissions(db, session_id=key, pending_only=False)) == 1
+            assert len(db.admissions.list(session_id=key, pending_only=False)) == 1
             assert turns == [] and not any(method == 'prompt.submit' for method, _ in seen)
             # Only a subsequent human send starts new work; the refused body was never retained.
             reply = server.handle_request({'id': 'new-human-input', 'method': 'prompt.submit',
@@ -240,7 +239,7 @@ def test_unknown_identity_is_owner_verified_and_explicit_discard_never_replays(m
 @pytest.mark.parametrize('access', ['offline', 'no_control', 'other_user', 'foreign_profile', 'wrong_target', 'old_owner'])
 def test_unknown_recovery_never_invents_control_or_crosses_owner_scope(monkeypatch, tmp_path, access):
     from gateway.config import Platform
-    with SessionDB(db_path=tmp_path / 'state.db') as db:
+    with open_persistence(profile_scope(home=tmp_path)) as db:
         sid, key, turns, _emitted = _legacy(monkeypatch, db)
         identity = {'user_id': 'desktop'}
         from gateway.owner_identity import principal_subject
@@ -292,8 +291,8 @@ def test_unknown_recovery_never_invents_control_or_crosses_owner_scope(monkeypat
             else:
                 assert blockers == []
             assert set(seen) <= {'prompt.receipt'}
-            assert list_session_admissions(db, session_id=key)[0]['status'] == 'unknown'
-            assert len(list_session_admissions(db, session_id=key)) == 1 and turns == []
+            assert db.admissions.list(session_id=key)[0].status == 'unknown'
+            assert len(db.admissions.list(session_id=key)) == 1 and turns == []
         finally:
             server._sessions.pop(sid, None)
 

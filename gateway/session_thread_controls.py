@@ -2,7 +2,9 @@
 import asyncio
 from dataclasses import asdict
 
-from hermes_state_runtime import RuntimeStoreError
+from gateway.session_persistence import authority_persistence
+from persistence.core.errors import AuthorityRefusal
+from persistence.sqlite.conversation._store.launches import thread_launch
 
 
 def _check_thread(authority, ref, control):
@@ -11,18 +13,17 @@ def _check_thread(authority, ref, control):
     row = next((row for row in authority._pending_rows(ref)
                 if row['admission_id'] == control['admission_id'] and row['status'] == 'started'), None)
     if row is None:
-        raise RuntimeStoreError('stale_admission')
+        raise AuthorityRefusal('stale_admission')
     if not (tool_sent(row) or control['force']):
-        raise RuntimeStoreError('permission_denied')
-    launch = authority.db._read_one(
-        'SELECT child_session_id, launcher_profile, launcher_session_id FROM work_launches WHERE launch_id=?',
-        (control['launch_id'],))
-    lineage = authority.db.get_compression_lineage(ref.session_id) or [ref.session_id]
+        raise AuthorityRefusal('permission_denied')
+    store = authority_persistence(authority)
+    launch = thread_launch(store._bound_store().holder(), control['launch_id'])
+    lineage = store.lineage.lineage(ref.session_id) or (ref.session_id,)
     if (not control['launch_id'].startswith(LAUNCH_PREFIX) or launch is None
             or launch['child_session_id'] not in lineage
             or launch['launcher_profile'] != control['launcher_profile']
             or launch['launcher_session_id'] != control['launcher_session_id']):
-        raise RuntimeStoreError('permission_denied')
+        raise AuthorityRefusal('permission_denied')
     return row
 
 
@@ -34,7 +35,7 @@ async def interrupt_thread(authority, actor, ref, generation, control):
     try:
         control = CanonicalThreadControl.model_validate(control, strict=True).model_dump()
     except ValidationError as exc:
-        raise RuntimeStoreError('invalid_params') from exc
+        raise AuthorityRefusal('invalid_params') from exc
     return asdict(await interrupt(authority, actor, ref, generation, control=control))
 
 
@@ -53,7 +54,7 @@ async def interrupt(authority, actor, ref, generation, *, control=None):
                 with live.event_stream.lock:
                     authority.authorize(actor, ref, 'session:control')
                     if _check_thread(authority, ref, control)['generation'] != generation:
-                        raise RuntimeStoreError('stale_generation')
+                        raise AuthorityRefusal('stale_generation')
                     from gateway.session_managed_worker import interrupt_managed
                     if interrupt_managed(authority, actor, ref, generation):
                         return authority._handle(ref)
@@ -74,10 +75,10 @@ def _interrupt(authority, actor, ref, generation, control):
         with live.event_stream.lock:
             authority.authorize(actor, ref, 'session:control')
             if control is not None and _check_thread(authority, ref, control)['generation'] != generation:
-                raise RuntimeStoreError('stale_generation')
+                raise AuthorityRefusal('stale_generation')
             handle = authority._handle(ref)
             if handle.execution_generation != generation:
-                raise RuntimeStoreError('stale_generation')
+                raise AuthorityRefusal('stale_generation')
             agent = None
             if handle.execution_state == 'running':
                 adopted_generation, agent = authority.adopted.get(ref.session_id, (None, None))
@@ -91,7 +92,7 @@ def _interrupt(authority, actor, ref, generation, control):
                     authority.delivered_stops[ref.session_id] = generation
         if agent is not None:
             from agent.interrupt_compat import request_hard_interrupt
-            from hermes_state_launch_causes import stamp_stop
+            from persistence.sqlite.conversation._store.launch_causes import stamp_stop
             stamp_stop(agent, 'user_stop')
             request_hard_interrupt(agent)
         return authority._handle(ref)

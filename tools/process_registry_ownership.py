@@ -39,11 +39,10 @@ class ProcessOwnershipMixin:
     def _spawn_job(self, session: Any, argv: list[str], persist_on_release: bool, **popen_kwargs) -> subprocess.Popen:
         """Start a pipe job in its own session, owned unless ``_owns_job`` says it must outlive us."""
         if self._owns_job(persist_on_release):
-            proc = spawn_owned(argv, purpose="terminal-background", **popen_kwargs)
+            proc = spawn_owned(argv, purpose="terminal-background", stdin=subprocess.DEVNULL, **popen_kwargs)
             session._owned_pgid = proc.pid
             return proc
-        # noqa: subprocess-stdin — a forwarder: spawn_local passes stdin=DEVNULL in popen_kwargs
-        return subprocess.Popen(argv, start_new_session=True, **popen_kwargs)  # detached-spawn: ok — see _owns_job
+        return subprocess.Popen(argv, start_new_session=True, stdin=subprocess.DEVNULL, **popen_kwargs)  # detached-spawn: ok — see _owns_job
 
     def _own_pty_job(self, session: Any, pty_proc: Any) -> None:
         """The PTY child leads its own session and group (pty.fork). Its hangup reaches only jobs that

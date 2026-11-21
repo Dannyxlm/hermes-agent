@@ -632,7 +632,7 @@ export interface SessionInfo extends SessionListMembership {
    *  as visible. */
   hidden?: boolean
   /** Derived read state (backend watermark: `last_read_at` vs `last_active`,
-   *  see `SessionDB.session_unread`). True when the conversation was
+   *  see `session_unread` in persistence/sqlite/conversation/_store/sessions.py). True when the conversation was
    *  explicitly marked unread or a response arrived after it was last read.
    *  Undefined against a backend predating the flag; treat as read. */
   unread?: boolean
@@ -1423,6 +1423,8 @@ export interface ComputerUseStatus {
 }
 
 export interface SessionSearchResult {
+  /** Whether the matched session is archived. Older gateways may omit it. */
+  archived?: boolean
   /** Recency of the matched conversation, straight from the sessions row —
    *  present on hits backed by a rich row (the search endpoint fills it).
    *  Used to order unloaded hits honestly; falls back to session_started. */

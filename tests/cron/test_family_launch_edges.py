@@ -6,7 +6,7 @@ import pytest
 
 from gateway.session_context import scoped_current_session_id
 from hermes_state import SessionDB
-from hermes_state_runtime import RuntimeStoreError
+from persistence.core.errors import AuthorityRefusal as RuntimeStoreError
 
 
 def writer(db):
@@ -39,7 +39,7 @@ def test_worker_can_refresh_shared_job_but_not_a_foreign_profile(tmp_path, monke
         assert db._read_one('SELECT next_run_at FROM work_launches WHERE backend_ref=?', (second['id'],))[0] is not None
         db.record_launch('foreign-profile-job', kind='check_in', launcher_profile='foreign',
                          launcher_session_id='foreign', child_profile='foreign', backend_ref='foreign-job')
-        from hermes_state_runtime import mutate_worker_execution
+        from persistence.sqlite.workers._receipt import mutate_worker_execution
         with pytest.raises(RuntimeStoreError, match='permission_denied'):
             mutate_worker_execution(db, **scope, sequence=store.journal['next_sequence'],
                 operation='launch.schedule', payload={'launch_id': 'foreign-profile-job', 'next_run_at': None})

@@ -4,7 +4,6 @@ task proof as an in-process-only Python object that JSON clients cannot forge.""
 
 from __future__ import annotations
 
-import contextlib
 import itertools
 import threading
 from collections.abc import Mapping, Sequence
@@ -12,7 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
-from gateway import hosted_room_driver as state
+from persistence.gateway.hosted_rooms import HostedTaskIdentity
 from tui_gateway.transport import bind_transport, reset_transport
 
 _LockType = type(threading.Lock())
@@ -50,7 +49,8 @@ class HostedRoomSessionError(RuntimeError):
 class HostedRoomServerRPC:
     """Normalize the installed server handlers for :class:`HostedRoomRuntime`."""
 
-    def __init__(self, server: ModuleType, *, db_path: Path | str | None = None) -> None:
+    def __init__(self, server: ModuleType, *, db_path: Path | str | None = None, root: Path | None = None,
+                 placement: str | None = None) -> None:
         self.server = server
         self._ids = itertools.count(1)
         self._transport = _HostedRoomTransport()
@@ -58,6 +58,10 @@ class HostedRoomServerRPC:
         # store there is nothing to resolve them from, so the driver refuses the turn by name.
         self.db_path = Path(db_path) if db_path is not None else None
         self.accepts_attachments = self.db_path is not None
+        # The room store the attachment reads open: its profile folder and which of its two placements it is.
+        self.root = root if root is not None else (self.db_path.parent if self.db_path is not None else None)
+        self.placement = placement or ("profile" if self.db_path is not None and self.db_path.name == "state.db"
+                                       else "shared")
 
     def _call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         token = bind_transport(self._transport)
@@ -99,7 +103,7 @@ class HostedRoomServerRPC:
             "profile": profile, "session_id": session_id, "omit_messages": True, "source": source})
 
     def submit(
-        self, *, profile: str, session_id: str, prompt: str, source: str, task: state.TaskIdentity,
+        self, *, profile: str, session_id: str, prompt: str, source: str, task: HostedTaskIdentity,
         execution_generation: int, on_terminal: Callable[[Mapping[str, Any]], None], member_id: str,
         attachments: Sequence[Mapping[str, Any]] | None = None,
     ) -> Mapping[str, Any]:
@@ -118,7 +122,7 @@ class HostedRoomServerRPC:
             token = set_hermes_home_override(str(home)) if home is not None else None
             try:
                 inputs = prepare_before_submit(lambda: bound_submission_payload(
-                    self.db_path, room_id=task.room_id, member_id=member_id, prompt=prompt,
+                    self, room_id=task.room_id, member_id=member_id, prompt=prompt,
                     attachments=list(attachments)))
             finally:
                 if token is not None:
@@ -158,7 +162,7 @@ class HostedRoomServerRPC:
             return next((c for c in self.server._sessions.values()
                          if str(c.get("session_key") or "") == session_id), None)
 
-    def active_session_for(self, task: state.TaskIdentity) -> str | None:
+    def active_session_for(self, task: HostedTaskIdentity) -> str | None:
         """Return the live runtime id only for this exact hosted task."""
 
         with self.server._sessions_lock:
@@ -205,7 +209,7 @@ class HostedRoomServerRPC:
 
     def approve(self, *, session_id: str, request_id: str, choice: str,
                 task_id: str | None = None, execution_generation: int | None = None,
-                room_id: str | None = None, member_id: str | None = None, room_db_path=None,
+                room_id: str | None = None, member_id: str | None = None, room_store=None, room_placement=None,
                 scoped_approval_response: int | None = None, request_epoch: str | None = None,
                 request_revision: int | None = None, reason: str | None = None, auth: str | None = None,
                 expected_authority_gateway_id: str | None = None,
@@ -223,25 +227,24 @@ class HostedRoomServerRPC:
             with record["history_lock"]:
                 if self.server._sessions.get(session_id) is not record:
                     raise RuntimeError("local room approval runtime changed")
-                with contextlib.ExitStack() as fence:
-                    if enhanced:
-                        task = record.get("_hosted_room_task") or {}
-                        if (not room_db_path or not room_id or not member_id
-                                or (task.get("room_id"), task.get("member_id"), task.get("task_id"), task.get("execution_generation"))
-                                != (room_id, member_id, task_id, execution_generation)):
-                            raise RuntimeError("local room approval task changed")
-                        # Serialize authority/task mutations through the canonical room transaction
-                        # until the exact approval commits. Cached matching alone cannot fence takeover.
-                        fence.enter_context(state._transaction(room_db_path))
-                        from tui_gateway.hosted_room_service import require_current_approval_authority
-                        require_current_approval_authority(room_db_path, room_id, member_id, task_id,
-                            execution_generation, expected_authority_gateway_id, expected_authority_epoch)
+                def answer():
                     envelope = self.server._mobile_approval_respond(
                         f"hosted-room-{next(self._ids)}", record, request_id, choice,
                         params=params, expected_sid=session_id)
                     if "error" in envelope:
                         raise HostedRoomSessionError("room.approval", envelope["error"]["code"], envelope["error"]["message"])
                     return envelope["result"]
+
+                if not enhanced:
+                    return answer()
+                task = record.get("_hosted_room_task") or {}
+                if (room_store is None or room_placement is None or not room_id or not member_id
+                        or (task.get("room_id"), task.get("member_id"), task.get("task_id"), task.get("execution_generation"))
+                        != (room_id, member_id, task_id, execution_generation)):
+                    raise RuntimeError("local room approval task changed")
+                from tui_gateway.hosted_room_service import with_current_approval_authority
+                return with_current_approval_authority(room_store, room_placement, room_id, member_id, task_id,
+                    execution_generation, expected_authority_gateway_id, expected_authority_epoch, answer)
 
     def interrupt(
         self, *, profile: str, session_id: str, source: str, expected_task_id: str

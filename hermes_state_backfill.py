@@ -1,7 +1,7 @@
 """Session-start cohort residuals for the gap before timestamped collection."""
 from hermes_state_alltime import session_counter_cte
 from hermes_state_rollup import _COUNTERS
-from hermes_state_usage import AUXILIARY_USAGE_TASKS
+from persistence.sqlite.conversation._store.usage import AUXILIARY_USAGE_TASKS
 
 
 def backfill_usage_cte(*, session_id=None):

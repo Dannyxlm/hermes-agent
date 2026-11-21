@@ -38,7 +38,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from hermes_state_common import stat_db_file_identity
+from persistence.sqlite._state.common import stat_db_file_identity
 
 logger = logging.getLogger(__name__)
 

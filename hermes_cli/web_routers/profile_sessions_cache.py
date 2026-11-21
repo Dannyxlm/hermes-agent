@@ -17,7 +17,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.responses import JSONResponse, Response
 
 from hermes_cli.session_listing import subagent_listing_scope
-from hermes_state_health import storage_state
+from persistence.sqlite._state.health import storage_state
 
 _MAX_ENTRIES = 32
 _MAX_BODY_BYTES = 16 * 1024 * 1024
