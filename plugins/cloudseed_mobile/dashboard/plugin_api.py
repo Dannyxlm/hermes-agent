@@ -13,7 +13,7 @@ import sqlite3
 import stat
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 from hermes_cli.config import load_config
@@ -410,7 +410,8 @@ def machines():
 
 
 @router.get('/provider/accounts')
-def list_accounts():
+def list_accounts(response: Response):
+    response.headers['Cache-Control'] = 'private, no-store'
     return guarded(accounts.get_accounts)
 
 

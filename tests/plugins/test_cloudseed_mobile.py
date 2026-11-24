@@ -49,19 +49,32 @@ def test_api_credit_inventory_is_owner_scoped_metadata_only(client, monkeypatch)
     c, home = client
     profile = home / 'profiles' / 'b'
     profile.mkdir(parents=True)
-    route_ids = ('openai-credit-harbor', 'openai-credit-studio')
-    labels = dict(zip(route_ids, ('Harbor', 'Studio')))
+    (profile / 'config.yaml').write_text('{}')
+    families = {
+        'openai-credit-harbor': ('openai', 'Harbor'), 'openai-credit-studio': ('openai', 'Studio'),
+        'claude-credit-harbor': ('anthropic', 'Harbor'), 'claude-credit-anchor': ('anthropic', 'Anchor'),
+        'claude-credit-studio': ('anthropic', 'Studio'),
+    }
+    labels = {pid: label for pid, (_, label) in families.items()}
     choices = {**labels, 'disabled': 'Disabled', 'other-host': 'Other host', 'inline': 'Inline',
-               'bad-label': 'not-an@example.org', 'missing': 'Missing', 'openai-codex': 'Codex'}
-    direct = {'api': 'https://api.openai.com/v1', 'key_env': 'FIXTURE_KEY'}
+               'bad-label': 'not-an@example.org', 'missing': 'Missing', 'key-command': 'Key command',
+               'openai-codex': 'Codex', 'anthropic': 'Subscription'}
+    openai = {'api': 'https://api.openai.com/v1', 'key_env': 'FIXTURE_KEY'}
+    claude = {'api': 'https://api.anthropic.com', 'key_env': 'FIXTURE_ANTHROPIC_KEY'}
     config = {'cloudseed_mobile': {'api_credit_providers': choices}, 'providers': {
-        route_ids[0]: direct,
-        route_ids[1]: {'base_url': 'https://api.openai.com/v1/', 'api_key': '${OTHER_FIXTURE_KEY}'},
-        'disabled': {**direct, 'enabled': False}, 'other-host': {**direct, 'api': 'https://example.org/v1'},
-        'inline': {'api': direct['api'], 'api_key': 'fictional-inline-value'}, 'bad-label': direct,
-        'openai-codex': direct, 'not-listed': direct,
+        'openai-credit-harbor': openai,
+        'openai-credit-studio': {'base_url': 'https://api.openai.com/v1/', 'api_key': '${OTHER_FIXTURE_KEY}'},
+        'claude-credit-harbor': claude, 'claude-credit-anchor': claude, 'claude-credit-studio': claude,
+        'disabled': {**openai, 'enabled': False}, 'other-host': {**claude, 'api': 'https://example.org/v1'},
+        'inline': {'api': openai['api'], 'api_key': 'fictional-inline-value'}, 'bad-label': openai,
+        'openai-codex': openai, 'anthropic': claude, 'not-listed': openai,
+        'key-command': {**openai, 'key_cmd': 'must-not-run'},
     }}
+    url = P + '/provider/accounts'
     config_path = home / 'config.yaml'
+    # Exercise the normal profile setup before enabling the optional projection.
+    assert c.get(url, params={'profile': 'default'}).json()['api_credit_accounts'] == []
+    assert c.get(url, params={'profile': 'b'}).json()['api_credit_accounts'] == []
     config_path.write_text(json.dumps(config))
     (profile / 'config.yaml').write_text(config_path.read_text())
 
@@ -72,13 +85,15 @@ def test_api_credit_inventory_is_owner_scoped_metadata_only(client, monkeypatch)
     monkeypatch.setattr(account_usage, '_get_json', unexpected)
     monkeypatch.setattr(provider_accounts, '_probe_usage', unexpected)
     files_before = {p.relative_to(home): p.read_bytes() for p in home.rglob('*') if p.is_file()}
-    url = P + '/provider/accounts'
     result = c.get(url + '?profile=default')
     assert result.status_code == 200
-    assert result.json()['api_credit_accounts'] == [{'id': pid, 'label': label} for pid, label in labels.items()]
+    assert result.headers['cache-control'] == 'private, no-store'
+    assert result.json()['api_credit_accounts'] == [
+        {'id': pid, 'label': label, 'family': family} for pid, (family, label) in families.items()
+    ]
     assert [pool['id'] for pool in result.json()['providers']] == ['anthropic', 'openai-codex', 'xai-oauth']
     assert c.get(url + '?profile=b').json()['api_credit_accounts'] == []
-    for provider_id in route_ids:
+    for provider_id in families:
         assert c.get(url + '/usage', params={'provider': provider_id, 'refresh': 1}).status_code == 400
         assert c.post(url + '/primary', json={'provider': provider_id, 'account_id': provider_id,
                      'profile_id': 'default', 'revision': 'fixture'}).status_code == 400

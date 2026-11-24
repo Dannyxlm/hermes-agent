@@ -207,10 +207,11 @@ be <=256000 serialized UTF-8 bytes. There is no remote HTTP enqueue endpoint.
 ### Accounts
 
 - GET `/provider/accounts`: `{ok,profile_id,generated_at,providers:[...],api_credit_accounts:[...]}`.
-  `api_credit_accounts` is a separate, read-only list of `{id,label}` in the
-  owner's `default` profile. Opt in by mapping named `providers:` keys to short
-  display labels in `cloudseed_mobile.api_credit_providers`. An entry must be
-  enabled, point at `https://api.openai.com/v1`, and use an environment reference
+  `api_credit_accounts` is a separate, read-only list of `{id,label,family}` in
+  the owner's `default` profile. Opt in by mapping named `providers:` keys to
+  short display labels in `cloudseed_mobile.api_credit_providers`. An entry must
+  be enabled, point at `https://api.openai.com/v1` (`openai`) or
+  `https://api.anthropic.com` (`anthropic`), and use an environment reference
   (`key_env`, `api_key_env` or `api_key: "${VARIABLE}"`), not an inline key or a
   command. The inventory does not resolve the references, verify credentials,
   or fetch balances. Named API accounts are not supported by either pool control.
