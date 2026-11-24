@@ -206,9 +206,17 @@ be <=256000 serialized UTF-8 bytes. There is no remote HTTP enqueue endpoint.
 
 ### Accounts
 
-- GET `/provider/accounts`: `{ok,profile_id,generated_at,providers:[...]}`.
+- GET `/provider/accounts`: `{ok,profile_id,generated_at,providers:[...],api_credit_accounts:[...]}`.
+  `api_credit_accounts` is a separate, read-only list of `{id,label,family}` in
+  the owner's `default` profile. Opt in by mapping named `providers:` keys to
+  short display labels in `cloudseed_mobile.api_credit_providers`. An entry must
+  be enabled, point at `https://api.openai.com/v1` (`openai`) or
+  `https://api.anthropic.com` (`anthropic`), and use an environment reference
+  (`key_env`, `api_key_env` or `api_key: "${VARIABLE}"`), not an inline key or a
+  command. The inventory does not resolve the references, verify credentials,
+  or fetch balances. Named API accounts are not supported by either pool control.
 - GET `/provider/accounts/usage?provider=anthropic|openai-codex|xai-oauth&refresh=1`:
-  same inventory shape with each account's quota windows; explicit bounded probe,
+  subscription inventory with each account's quota windows (no `api_credit_accounts` field); explicit bounded probe,
   never inference, credential seed/heal/refresh or token fallback.
   Grok (`xai-oauth`) reports used credits for the current week (or current period)
   and the period end from the official billing endpoint, only for saved accounts

@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -19,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 PROVIDERS = {"anthropic": "Anthropic", "openai-codex": "Codex", "xai-oauth": "Grok"}
+_API_CREDIT_FAMILIES = {"https://api.openai.com/v1": "openai", "https://api.anthropic.com": "anthropic"}
 _USAGE_TTL = 60
 _USAGE_RETRY = 15
 _USAGE_CAPACITY = 128
@@ -196,10 +198,58 @@ def _section(provider, profile_id, home, auth):
             "accounts": accounts}
 
 
+def _api_credit_accounts(profile_id):
+    # Unlike subscription accounts, these are opt-in root config metadata only.
+    # Use the raw view so neither key_env nor ${...} references are resolved.
+    if profile_id != "default":
+        return []
+    from hermes_cli.config import read_user_config_raw
+    from plugins.cloudseed_mobile.account_render import _valid_display_label
+
+    try:
+        cfg = read_user_config_raw()
+    except Exception:  # health: allow BLE001 -- optional config inventory must not fail subscription reads or expose parse errors
+        return []
+    mobile = cfg.get("cloudseed_mobile")
+    providers = cfg.get("providers")
+    selections = mobile.get("api_credit_providers") if isinstance(mobile, dict) else None
+    if not isinstance(selections, dict) or not isinstance(providers, dict):
+        return []
+
+    accounts = []
+    for provider_id, label in selections.items():
+        if (not isinstance(provider_id, str) or provider_id in PROVIDERS
+                or not re.fullmatch(r"(?!sk-)[a-z][a-z0-9-]{0,39}", provider_id)
+                or not _valid_display_label(label)):
+            continue
+        provider = providers.get(provider_id)
+        family = _api_credit_family(provider) if isinstance(provider, dict) else None
+        if family:
+            accounts.append({"id": provider_id, "label": label.strip(), "family": family})
+    return accounts
+
+
+def _api_credit_family(provider):
+    from hermes_cli.config import is_provider_enabled
+
+    # Same URL precedence as the named provider resolver. A config reference is
+    # not a credential, and this check makes no claim that its key is valid.
+    url = provider.get("api") or provider.get("url") or provider.get("base_url")
+    family = _API_CREDIT_FAMILIES.get(url.strip().rstrip("/")) if isinstance(url, str) else None
+    if not family or not is_provider_enabled(provider) or provider.get("key_cmd"):
+        return None
+    key_env = provider.get("key_env") or provider.get("api_key_env")
+    key_ref = provider.get("api_key", "")
+    env_ref = isinstance(key_env, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_env.strip())
+    value_ref = isinstance(key_ref, str) and re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", key_ref.strip())
+    return family if value_ref or (env_ref and not key_ref) else None
+
+
 def get_accounts():
     with _scope() as (profile_id, home, auth):
         return {"ok": True, "profile_id": profile_id, "generated_at": _now(),
-                "providers": [_section(p, profile_id, home, auth) for p in PROVIDERS]}
+                "providers": [_section(p, profile_id, home, auth) for p in PROVIDERS],
+                "api_credit_accounts": _api_credit_accounts(profile_id)}
 
 
 def _valid_provider(provider):
