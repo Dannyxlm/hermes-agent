@@ -41,6 +41,55 @@ def post(c, domain, op, **extra):
     return c.post(f'{P}/{domain}/{op}', json={'profile': 'default', 'device_id': DEVICE, 'secret': SECRET, **extra})
 
 
+def test_api_credit_inventory_is_owner_scoped_metadata_only(client, monkeypatch):
+    import json
+    from agent import account_usage, credential_pool
+    from plugins.cloudseed_mobile import provider_accounts
+
+    c, home = client
+    profile = home / 'profiles' / 'b'
+    profile.mkdir(parents=True)
+    route_ids = ('openai-credit-harbor', 'openai-credit-studio')
+    labels = dict(zip(route_ids, ('Harbor', 'Studio')))
+    choices = {**labels, 'disabled': 'Disabled', 'other-host': 'Other host', 'inline': 'Inline',
+               'bad-label': 'not-an@example.org', 'missing': 'Missing', 'openai-codex': 'Codex'}
+    direct = {'api': 'https://api.openai.com/v1', 'key_env': 'FIXTURE_KEY'}
+    config = {'cloudseed_mobile': {'api_credit_providers': choices}, 'providers': {
+        route_ids[0]: direct,
+        route_ids[1]: {'base_url': 'https://api.openai.com/v1/', 'api_key': '${OTHER_FIXTURE_KEY}'},
+        'disabled': {**direct, 'enabled': False}, 'other-host': {**direct, 'api': 'https://example.org/v1'},
+        'inline': {'api': direct['api'], 'api_key': 'fictional-inline-value'}, 'bad-label': direct,
+        'openai-codex': direct, 'not-listed': direct,
+    }}
+    config_path = home / 'config.yaml'
+    config_path.write_text(json.dumps(config))
+    (profile / 'config.yaml').write_text(config_path.read_text())
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('Inventory must not load credentials or make provider requests')
+
+    monkeypatch.setattr(credential_pool, 'load_pool', unexpected)
+    monkeypatch.setattr(account_usage, '_get_json', unexpected)
+    monkeypatch.setattr(provider_accounts, '_probe_usage', unexpected)
+    files_before = {p.relative_to(home): p.read_bytes() for p in home.rglob('*') if p.is_file()}
+    url = P + '/provider/accounts'
+    result = c.get(url + '?profile=default')
+    assert result.status_code == 200
+    assert result.json()['api_credit_accounts'] == [{'id': pid, 'label': label} for pid, label in labels.items()]
+    assert [pool['id'] for pool in result.json()['providers']] == ['anthropic', 'openai-codex', 'xai-oauth']
+    assert c.get(url + '?profile=b').json()['api_credit_accounts'] == []
+    for provider_id in route_ids:
+        assert c.get(url + '/usage', params={'provider': provider_id, 'refresh': 1}).status_code == 400
+        assert c.post(url + '/primary', json={'provider': provider_id, 'account_id': provider_id,
+                     'profile_id': 'default', 'revision': 'fixture'}).status_code == 400
+    c.headers.pop('Authorization')
+    assert c.get(url).status_code == 401
+    c.headers['Authorization'] = 'Bearer fixture'
+    monkeypatch.setattr(api, 'owner_config', lambda: {'owner_user_id': 'another', 'owner_provider': 'basic'})
+    assert c.get(url).status_code == 403
+    assert {p.relative_to(home): p.read_bytes() for p in home.rglob('*') if p.is_file()} == files_before
+
+
 def test_session_activity_profile_scope_and_metadata_only(client):
     from tui_gateway.side_task_activity import registry
     c, home = client
