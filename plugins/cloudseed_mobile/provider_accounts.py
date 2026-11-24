@@ -203,10 +203,13 @@ def _api_credit_accounts(profile_id):
     # Use the raw view so neither key_env nor ${...} references are resolved.
     if profile_id != "default":
         return []
-    from hermes_cli.config import read_raw_config_readonly
+    from hermes_cli.config import read_user_config_raw
     from plugins.cloudseed_mobile.account_render import _valid_display_label
 
-    cfg = read_raw_config_readonly()
+    try:
+        cfg = read_user_config_raw()
+    except Exception:  # health: allow BLE001 -- optional config inventory must not fail subscription reads or expose parse errors
+        return []
     mobile = cfg.get("cloudseed_mobile")
     providers = cfg.get("providers")
     selections = mobile.get("api_credit_providers") if isinstance(mobile, dict) else None

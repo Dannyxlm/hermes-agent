@@ -44,12 +44,13 @@ def post(c, domain, op, **extra):
 def test_api_credit_inventory_is_owner_scoped_metadata_only(client, monkeypatch):
     import json
     from agent import account_usage, credential_pool
+    from hermes_cli import config as hermes_config
+    from hermes_cli.config_backups import backup_config
     from plugins.cloudseed_mobile import provider_accounts
 
     c, home = client
     profile = home / 'profiles' / 'b'
     profile.mkdir(parents=True)
-    (profile / 'config.yaml').write_text('{}')
     families = {
         'openai-credit-harbor': ('openai', 'Harbor'), 'openai-credit-studio': ('openai', 'Studio'),
         'claude-credit-harbor': ('anthropic', 'Harbor'), 'claude-credit-anchor': ('anthropic', 'Anchor'),
@@ -72,11 +73,16 @@ def test_api_credit_inventory_is_owner_scoped_metadata_only(client, monkeypatch)
     }}
     url = P + '/provider/accounts'
     config_path = home / 'config.yaml'
-    # Exercise the normal profile setup before enabling the optional projection.
+    # Exercise the root profile setup before enabling the optional projection.
     assert c.get(url, params={'profile': 'default'}).json()['api_credit_accounts'] == []
-    assert c.get(url, params={'profile': 'b'}).json()['api_credit_accounts'] == []
     config_path.write_text(json.dumps(config))
     (profile / 'config.yaml').write_text(config_path.read_text())
+    # The existing dashboard/pool config loader keeps a last-known-good copy
+    # on first load of changed bytes. Seed that housekeeping before the read.
+    backup_config(config_path, 'good')
+    borrowed = c.get(url, params={'profile': 'b'})
+    assert borrowed.status_code == 200
+    assert borrowed.json()['api_credit_accounts'] == []
 
     def unexpected(*args, **kwargs):
         pytest.fail('Inventory must not load credentials or make provider requests')
@@ -97,6 +103,15 @@ def test_api_credit_inventory_is_owner_scoped_metadata_only(client, monkeypatch)
         assert c.get(url + '/usage', params={'provider': provider_id, 'refresh': 1}).status_code == 400
         assert c.post(url + '/primary', json={'provider': provider_id, 'account_id': provider_id,
                      'profile_id': 'default', 'revision': 'fixture'}).status_code == 400
+
+    def unavailable():
+        raise OSError('fixture unreadable')
+
+    monkeypatch.setattr(hermes_config, 'read_user_config_raw', unavailable)
+    failed = c.get(url, params={'profile': 'default'})
+    assert failed.status_code == 200
+    assert failed.json()['api_credit_accounts'] == []
+    assert failed.json()['providers'] == result.json()['providers']
     c.headers.pop('Authorization')
     assert c.get(url).status_code == 401
     c.headers['Authorization'] = 'Bearer fixture'
