@@ -1463,8 +1463,18 @@ def _scan_written_bodies(
     return len(bodies) > 1 and recurse("".join(bodies), cwd, executed)
 
 
+def _strict_media_scan(script_path: Path, explicit_shell: bool) -> bool:
+    """True unless *script_path* is eligible for non-executable media exemption."""
+    return explicit_shell or script_path.suffix.lower() not in _NON_EXECUTABLE_MEDIA_EXTENSIONS
+
+
+def _already_visited(visited: set[tuple[Path, bool]], resolved: Path, strict_scan: bool) -> bool:
+    """True when *resolved* was already scanned at least as strictly as *strict_scan*."""
+    return (resolved, True) in visited or (not strict_scan and (resolved, False) in visited)
+
+
 def _contains_unsafe_gateway_action(
-    command: str, *, cwd: Optional[str], depth: int, visited: set[Path], budget: _LifecycleScanBudget,
+    command: str, *, cwd: Optional[str], depth: int, visited: set[tuple[Path, bool]], budget: _LifecycleScanBudget,
     read_remote_script: Optional[_ReadRemoteScriptFn] = None, executed: bool = True,
     written: Optional[dict[Path, list[str]]] = None, charge: bool = True,
     gateway_pid: Optional[int] = None,
@@ -1530,13 +1540,14 @@ def _contains_unsafe_gateway_action(
                 )
             continue
         resolved = _resolve_lenient(script_path)
-        if resolved in visited:
+        strict_scan = _strict_media_scan(script_path, explicit_shell)
+        if _already_visited(visited, resolved, strict_scan):
             continue
         if not budget.charge_path():
             if candidate_executed:
                 return _budget_exhausted(budget, "paths", depth)
             break  # remaining candidates are all mentions
-        visited.add(resolved)
+        visited.add((resolved, strict_scan))
         # Never read more than the walk can still afford to tokenize; a file larger than the
         # remainder fails closed exactly like an oversized one.
         script_text, unsafe = _read_referenced_script(

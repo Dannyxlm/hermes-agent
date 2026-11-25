@@ -70,3 +70,40 @@ def test_shebang_or_executable_or_explicit_shell_media_extension_still_blocks(tm
     big_sh.chmod(0o644)
     unsafe4, refusal4 = scan_gateway_lifecycle(f"echo ok; {big_sh}")
     assert unsafe4 is True and refusal4 is not None
+
+
+def test_media_token_before_explicit_shell_does_not_bypass_scan(tmp_path):
+    # Regression: a non-shell media-path token seen first must not poison visited
+    # and suppress a subsequent explicit shell invocation of the same file.
+    evil_large = tmp_path / "payload_large.wav"
+    evil_large.write_bytes(b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * (1024 * 1024 + 64))
+    evil_large.chmod(0o644)
+    unsafe_large, refusal_large = scan_gateway_lifecycle(
+        f"ffmpeg -i ({evil_large}) && bash {evil_large}"
+    )
+    assert unsafe_large is True and refusal_large is not None
+
+    evil_small = tmp_path / "payload_small.wav"
+    evil_small.write_text("systemctl restart hermes-gateway\n", encoding="utf-8")
+    evil_small.chmod(0o644)
+    for shell_cmd in (f"bash {evil_small}", f"source {evil_small}"):
+        unsafe_small, _ = scan_gateway_lifecycle(
+            f"ffmpeg -i ({evil_small}) && {shell_cmd}"
+        )
+        assert unsafe_small is True
+
+    # Symlink with a media extension pointing to a non-media script must not suppress scanning the target.
+    real_sh = tmp_path / "real_restart.sh"
+    real_sh.write_text("systemctl restart hermes-gateway\n", encoding="utf-8")
+    real_sh.chmod(0o644)
+    alias_wav = tmp_path / "alias.wav"
+    alias_wav.symlink_to(real_sh)
+    unsafe_sym, _ = scan_gateway_lifecycle(f"ffmpeg -i ({alias_wav}) && echo ok; {real_sh}")
+    assert unsafe_sym is True
+
+    # Repeated non-shell media path tokens remain exempt.
+    benign = tmp_path / "benign.wav"
+    benign.write_bytes(b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * (1024 * 1024 + 64))
+    benign.chmod(0o644)
+    unsafe_ok, refusal_ok = scan_gateway_lifecycle(f"ffmpeg -i ({benign}) && ffmpeg -i ({benign})")
+    assert unsafe_ok is False and refusal_ok is None
