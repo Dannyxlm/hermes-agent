@@ -369,6 +369,14 @@ _BINARY_MAGICS = (
     b"PK\x03\x04",           # zip (also .jar/.whl/.egg)
 )
 
+# Non-executable binary media/model extensions exempt from referenced-script scanning when
+# encountered as path tokens (not explicitly executed via bash/sh/source, no `#!` shebang, no +x).
+_NON_EXECUTABLE_MEDIA_EXTENSIONS = frozenset({
+    ".wav", ".mp4", ".mov", ".m4a", ".mp3",
+    ".png", ".jpg", ".jpeg", ".webp",
+    ".npy", ".onnx",
+})
+
 
 # --- profile identity -------------------------------------------------------------------------
 
@@ -1148,8 +1156,8 @@ def _iter_option_values(segment: list[str], start: int, option: str) -> Iterator
             yield token[len(prefix):]
 
 
-def _references_at(segment: list[str], index: int, cwd: Optional[str]) -> Iterator[Path]:
-    """Yield the scripts the token at *index* executes, if any."""
+def _references_with_mode(segment: list[str], index: int, cwd: Optional[str]) -> Iterator[tuple[Path, bool]]:
+    """Yield ``(path, explicit_shell)`` for scripts the token at *index* references."""
     if index >= len(segment):
         return
     executable = segment[index]
@@ -1157,7 +1165,8 @@ def _references_at(segment: list[str], index: int, cwd: Optional[str]) -> Iterat
 
     if executable_name in {".", "source"}:
         if len(segment) > index + 1:
-            yield from _resolved_or_nothing(segment[index + 1], cwd)
+            for resolved in _resolved_or_nothing(segment[index + 1], cwd):
+                yield resolved, True
         return
 
     if executable_name in _SHELL_EXECUTABLES:
@@ -1178,27 +1187,35 @@ def _references_at(segment: list[str], index: int, cwd: Optional[str]) -> Iterat
                 continue
             break
         if arg_index < len(arguments) and arguments[arg_index] not in _SHELL_COMMAND_FLAGS:
-            yield from _resolved_or_nothing(arguments[arg_index], cwd)
+            for resolved in _resolved_or_nothing(arguments[arg_index], cwd):
+                yield resolved, True
         return
 
     # A bare "/" is pathlib's division operator in Python sources, not an executable; resolving it
     # hits the filesystem root and fails the regular-file check, hard-blocking innocent .py scripts.
     if executable.strip("/") and ("/" in executable or executable.endswith((".sh", ".bash", ".zsh"))):
-        yield from _resolved_or_nothing(executable, cwd)
+        for resolved in _resolved_or_nothing(executable, cwd):
+            yield resolved, False
 
 
-def _iter_referenced_shell_scripts(command: str, *, cwd: Optional[str] = None) -> Iterator[Path]:
-    """Yield scripts executed directly or through a POSIX shell. Each segment is read at the
-    original token AND at the peeled wrapper target — additive on purpose: peeling must never REMOVE
-    a reference (a local ``./timeout`` is a script, not the coreutils wrapper)."""
+def _iter_referenced_shell_scripts_with_mode(
+    command: str, *, cwd: Optional[str] = None
+) -> Iterator[tuple[Path, bool]]:
+    """Yield ``(path, explicit_shell)`` for scripts referenced directly or via a POSIX shell."""
     for segment in _iter_command_segments(command):
         index = _command_token_index(segment)
         if index is None:
             continue
-        yield from _references_at(segment, index, cwd)
+        yield from _references_with_mode(segment, index, cwd)
         peeled = _peel_transparent_prefixes(segment, index)
         if peeled != index:
-            yield from _references_at(segment, peeled, cwd)
+            yield from _references_with_mode(segment, peeled, cwd)
+
+
+def _iter_referenced_shell_scripts(command: str, *, cwd: Optional[str] = None) -> Iterator[Path]:
+    """Yield scripts executed directly or through a POSIX shell."""
+    for path, _ in _iter_referenced_shell_scripts_with_mode(command, cwd=cwd):
+        yield path
 
 
 def _iter_shell_command_payloads(command: str) -> Iterator[str]:
@@ -1264,13 +1281,20 @@ def _collect_heredoc_written_scripts(
     return written
 
 
-def _walk_candidates(command: str, walk_command: str, cwd: Optional[str], executed: bool) -> list[tuple[Path, bool]]:
-    """Referenced-script candidates: executed-view paths first, then paths only mentioned in masked
-    bodies. A heredoc body written to a candidate path is that script's text (see the walk); a body
-    that is only written stays documentation (#88336)."""
-    candidates = [(path, executed) for path in _iter_referenced_shell_scripts(walk_command, cwd=cwd)]
+def _walk_candidates(
+    command: str, walk_command: str, cwd: Optional[str], executed: bool
+) -> list[tuple[Path, bool, bool]]:
+    """Referenced-script candidates ``(path, executed, explicit_shell)``: executed-view paths first,
+    then paths only mentioned in masked bodies (#88336)."""
+    candidates = [
+        (path, executed, explicit_shell)
+        for path, explicit_shell in _iter_referenced_shell_scripts_with_mode(walk_command, cwd=cwd)
+    ]
     if walk_command != command:
-        candidates += [(path, False) for path in _iter_referenced_shell_scripts(command, cwd=cwd)]
+        candidates += [
+            (path, False, explicit_shell)
+            for path, explicit_shell in _iter_referenced_shell_scripts_with_mode(command, cwd=cwd)
+        ]
     return candidates
 
 
@@ -1286,8 +1310,17 @@ def _has_binary_magic(data: bytes) -> bool:
     return data.startswith(_BINARY_MAGICS)
 
 
+def _is_non_executable_media_file(path: Path, metadata: os.stat_result, prefix: bytes) -> bool:
+    """True when *path* is a non-executable binary media/model file without a ``#!`` shebang."""
+    return (
+        not prefix.startswith(b"#!")
+        and (metadata.st_mode & 0o111) == 0
+        and path.suffix.lower() in _NON_EXECUTABLE_MEDIA_EXTENSIONS
+    )
+
+
 def _read_referenced_script(
-    path: Path, *, max_bytes: Optional[int] = None
+    path: Path, *, max_bytes: Optional[int] = None, skip_media_extensions: bool = False
 ) -> tuple[Optional[str], bool]:
     """Read a referenced script without racing SQLite connection lifecycle.
 
@@ -1300,7 +1333,9 @@ def _read_referenced_script(
 
     try:
         with offline_file_access(path, what="read referenced script"):
-            return _read_referenced_script_unlocked(path, max_bytes=max_bytes)
+            return _read_referenced_script_unlocked(
+                path, max_bytes=max_bytes, skip_media_extensions=skip_media_extensions
+            )
     except LiveConnectionError:
         return None, True
     except (OSError, ValueError):
@@ -1309,7 +1344,7 @@ def _read_referenced_script(
 
 
 def _read_referenced_script_unlocked(
-    path: Path, *, max_bytes: Optional[int] = None
+    path: Path, *, max_bytes: Optional[int] = None, skip_media_extensions: bool = False
 ) -> tuple[Optional[str], bool]:
     """Return ``(text, unsafe)`` using bounded, regular-file-only reads.
 
@@ -1347,7 +1382,7 @@ def _read_referenced_script_unlocked(
         # straight past an embedded NUL, so NUL-bearing text must fall through to the magic-number check +
         # NUL-strip below.
         data = os.read(descriptor, _BINARY_SNIFF_BYTES)
-        if _has_binary_magic(data):
+        if _has_binary_magic(data) or (skip_media_extensions and _is_non_executable_media_file(path, metadata, data)):
             return None, False
         # A regular file whose size already exceeds the cap fails closed without reading it (the
         # walk budget can be far below 1 MiB).
@@ -1482,7 +1517,7 @@ def _contains_unsafe_gateway_action(
     # `/x/restart.sh` to os.system() executes it. Only the fail-closed verdicts (cloud placeholder,
     # oversized/binary, budget) stay restricted to the executed view — a mere data mention must not
     # trip them. Executed candidates come first so a mention never starves a real script's budget.
-    for script_path, candidate_executed in _walk_candidates(command, walk_command, cwd, executed):
+    for script_path, candidate_executed, explicit_shell in _walk_candidates(command, walk_command, cwd, executed):
         if _scan_written_bodies(written.pop(_resolve_lenient(script_path), []), recurse, cwd, candidate_executed):
             return True
         # Do not touch a FileProvider path even to discover whether the file is hydrated.
@@ -1504,7 +1539,9 @@ def _contains_unsafe_gateway_action(
         visited.add(resolved)
         # Never read more than the walk can still afford to tokenize; a file larger than the
         # remainder fails closed exactly like an oversized one.
-        script_text, unsafe = _read_referenced_script(script_path, max_bytes=budget.bytes_remaining)
+        script_text, unsafe = _read_referenced_script(
+            script_path, max_bytes=budget.bytes_remaining, skip_media_extensions=not explicit_shell
+        )
         if unsafe:
             if candidate_executed:
                 return _refuse_unreadable(budget, script_path, _unreadable_reason(script_path))
