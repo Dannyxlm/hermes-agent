@@ -6,7 +6,7 @@ import datetime
 import json
 import os
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
 DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
@@ -24,29 +24,33 @@ def has_xai_credentials() -> bool:
     Deliberately avoids :func:`resolve_xai_http_credentials` (disk locks, OAuth network
     refresh) — hot-paint callers and ``WebSearchProvider.is_available()`` must not do network
     I/O. Checks, fast-to-slow: ``XAI_API_KEY``; ``providers.xai-oauth.tokens.access_token`` in
-    ``auth.json``; any ``credential_pool.xai-oauth`` entry with an ``access_token`` (pool-only
-    multi-account grants never write the providers singleton). Returns False on any exception
-    so a corrupted auth store can't block other availability scans.
+    the profile's ``auth.json``; any ``credential_pool.xai-oauth`` entry with an ``access_token``,
+    honoring the pool's root fallback. Returns False if the store cannot be read.
     """
     from agent.secret_scope import get_secret
 
     if (get_secret("XAI_API_KEY", "") or "").strip():
         return True
     try:
+        from hermes_cli.auth import read_credential_pool
         from hermes_constants import get_hermes_home
+
         auth_path = get_hermes_home() / "auth.json"
-        if not auth_path.exists():
-            return False
-        store = json.loads(auth_path.read_text(encoding="utf-8-sig"))
-        tokens = _dict_get(_dict_get(_dict_get(store, "providers"), "xai-oauth"), "tokens")
-        if str(_dict_get(tokens, "access_token") or "").strip():
-            return True
-        entries = _dict_get(_dict_get(store, "credential_pool"), "xai-oauth")
-        return isinstance(entries, list) and any(
-            isinstance(e, dict) and str(e.get("access_token", "") or "").strip() for e in entries
-        )
+        if auth_path.exists():
+            store = json.loads(auth_path.read_text(encoding="utf-8-sig"))
+            tokens = _dict_get(_dict_get(_dict_get(store, "providers"), "xai-oauth"), "tokens")
+            if str(_dict_get(tokens, "access_token") or "").strip():
+                return True
+            entries = _dict_get(_dict_get(store, "credential_pool"), "xai-oauth")
+            if isinstance(entries, list) and _pool_has_access_token(entries):
+                return True
+        return _pool_has_access_token(read_credential_pool("xai-oauth", backup_corrupt=False))
     except Exception:
         return False
+
+
+def _pool_has_access_token(entries: Iterable[Any]) -> bool:
+    return any(str(_dict_get(entry, "access_token") or "").strip() for entry in entries)
 
 
 def hermes_xai_user_agent() -> str:
