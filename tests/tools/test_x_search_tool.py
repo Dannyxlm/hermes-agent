@@ -195,6 +195,7 @@ def test_x_search_uses_xai_oauth_when_only_oauth_available(monkeypatch):
     monkeypatch.setattr(
         "tools.x_search_tool.resolve_xai_http_credentials", _fake_resolve
     )
+    monkeypatch.setattr("tools.x_search_tool.has_xai_credentials", lambda: True)
     invalidate_check_fn_cache()
 
     assert check_x_search_requirements() is True
@@ -230,6 +231,7 @@ def test_x_search_returns_tool_error_when_no_credentials(monkeypatch):
     monkeypatch.setattr(
         "tools.x_search_tool.resolve_xai_http_credentials", _fake_resolve
     )
+    monkeypatch.setattr("tools.x_search_tool.has_xai_credentials", lambda: False)
     invalidate_check_fn_cache()
 
     assert check_x_search_requirements() is False

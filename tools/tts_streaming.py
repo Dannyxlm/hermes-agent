@@ -415,10 +415,8 @@ class XAIStreamer(StreamingTTSProvider):
     @staticmethod
     def available() -> bool:
         try:
-            from tools.xai_http import resolve_xai_http_credentials
-            # Same ordering as the sync path: the subscription OAuth bearer
-            # authorizes but 403s on metered TTS, so an explicit key wins (#87045).
-            return bool(str(resolve_xai_http_credentials(prefer_api_key=True).get("api_key") or "").strip())
+            from tools.xai_http import has_xai_credentials
+            return has_xai_credentials()
         except Exception:
             return False
 

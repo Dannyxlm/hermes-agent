@@ -619,8 +619,18 @@ class PromptCacheWarmer:
             _remember_missed_route(b["session_id"], self._missed_route)
         logger.info("%sprompt cache warming disabled for session: keep-alive missed", self._prefix())
 
-    def _send(self, run: _Run) -> Any:
-        client = run.client
+    @staticmethod
+    def _is_auth_401(exc: Exception) -> bool:
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        return status == 401
+
+    def _live_client(self, run: _Run) -> Any:
+        attr = "_anthropic_client" if run.api_mode == "anthropic_messages" else "client"
+        return getattr(self.agent, attr, None) or run.client
+
+    def _send_once(self, run: _Run, client: Any) -> Any:
         with_options = getattr(client, "with_options", None)
         if callable(with_options):
             client = with_options(max_retries=0, timeout=WARM_REQUEST_TIMEOUT_S)
@@ -640,6 +650,23 @@ class PromptCacheWarmer:
             run, client, kwargs,
             lambda: create_anthropic_message(client, kwargs, log_prefix=self._prefix(), prefer_stream=False),
         )
+
+    def _send(self, run: _Run) -> Any:
+        client = self._live_client(run)
+        run.client = client
+        try:
+            return self._send_once(run, client)
+        except Exception as exc:
+            if run.api_mode != "anthropic_messages" or not self._is_auth_401(exc):
+                raise
+            refresh = getattr(self.agent, "_try_refresh_anthropic_client_credentials", None)
+            if not (callable(refresh) and refresh()):
+                raise
+            refreshed = self._live_client(run)
+            if refreshed is client:
+                raise
+            run.client = refreshed
+            return self._send_once(run, refreshed)
 
     def _with_aux_hooks(self, run: _Run, client: Any, kwargs: dict[str, Any], call: Callable[[], Any]) -> Any:
         """One keep-alive attempt between ``pre_auxiliary_call`` and ``post_auxiliary_call``

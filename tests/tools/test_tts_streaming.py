@@ -221,43 +221,27 @@ def _sd_mock():
 
 
 
-def test_xai_available_uses_oauth_credential_resolver(monkeypatch):
+def test_xai_available_uses_readonly_has_xai_credentials(monkeypatch):
     import sys
     import types
 
     fake = types.ModuleType("tools.xai_http")
-    fake.resolve_xai_http_credentials = lambda **kw: {"api_key": "xai-key"}
+    fake.has_xai_credentials = lambda: True
+    fake.resolve_xai_http_credentials = lambda **kw: (_ for _ in ()).throw(AssertionError("must not resolve"))
     monkeypatch.setitem(sys.modules, "tools.xai_http", fake)
     assert ts.XAIStreamer.available() is True
-    fake.resolve_xai_http_credentials = lambda **kw: {"api_key": ""}
-    assert ts.XAIStreamer.available() is False
-
-
-def test_xai_streaming_prefers_explicit_api_key(monkeypatch):
-    """Metered TTS 403s on the subscription OAuth bearer — the streaming path must
-    resolve credentials with prefer_api_key=True like the sync path (#87045)."""
-    import sys
-    import types
-
-    calls = []
-
-    fake = types.ModuleType("tools.xai_http")
-    fake.resolve_xai_http_credentials = lambda **kw: calls.append(kw) or {"api_key": "k"}
-    monkeypatch.setitem(sys.modules, "tools.xai_http", fake)
-
-    ts.XAIStreamer.available()
-    assert calls and all(c.get("prefer_api_key") is True for c in calls)
 
     # The tts_tool availability probe (wired as _BUILTIN_REQUIREMENTS["xai"]) must
-    # resolve key-first too, or a configured key still spends the OAuth pool (#113727).
+    # stay read-only via has_xai_credentials() so tool discovery never spends OAuth refresh tokens.
     from tools import tts_tool
 
-    calls.clear()
     assert tts_tool._xai_requirements() is True
-    assert calls and all(c.get("prefer_api_key") is True for c in calls)
+    fake.has_xai_credentials = lambda: False
+    assert ts.XAIStreamer.available() is False
+    assert tts_tool._xai_requirements() is False
 
-    # stream() resolves before websockets.connect; an empty key raises first.
-    calls.clear()
+    # stream() still resolves key-first before websockets.connect; an empty key raises first.
+    calls: list[dict] = []
     ws_fake = types.ModuleType("websockets")
     monkeypatch.setitem(sys.modules, "websockets", ws_fake)
     fake.resolve_xai_http_credentials = lambda **kw: calls.append(kw) or {"api_key": ""}
