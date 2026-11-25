@@ -44,10 +44,15 @@ const RERUN_DELAY_MS = 5_000
 // exactly the boot 404s this prune exists to remove. With expiry, a later
 // sweep re-probes and heals it within one TTL.
 const ALIVE_TTL_MS = 10 * 60_000
+// How long a multi-source uncovered verdict is cached so sidebar refreshes do
+// not re-sweep an unprunable id every few seconds.
+const UNKNOWN_TTL_MS = 15 * 60_000
 
 // Ids verified ALIVE this app session, id -> verdict expiry timestamp — later
 // sweeps skip re-probing ids whose verdict is still fresh.
 const alive = new Map<string, number>()
+// Ids whose multi-connection topology prevents proving 'dead', id -> retry at.
+const unknown = new Map<string, number>()
 // Ids currently mid-probe, so overlapping sweeps don't double-probe.
 const inFlight = new Set<string>()
 
@@ -60,10 +65,18 @@ let epoch = 0
 let sweepDueAt = 0
 let sweepTimer: ReturnType<typeof setTimeout> | undefined
 
-type Verdict = 'alive' | 'dead' | 'unknown'
+type Verdict = 'alive' | 'dead' | 'uncovered' | 'unknown'
 
 function isNotFoundError(error: unknown): boolean {
   return /session not found/i.test(error instanceof Error ? error.message : String(error))
+}
+
+function isMultiSourceUncovered(id: string): boolean {
+  const owner = knownOwnerForSession(id)
+  const exactConnection = isSessionOwnerRoute(owner) && Boolean(owner.connectionId.trim())
+  const registry = $connectionsRegistry.get()
+
+  return !exactConnection && hasRegistryTopology() && (!registry || registry.connections.length !== 1)
 }
 
 /**
@@ -80,15 +93,17 @@ function isNotFoundError(error: unknown): boolean {
  */
 async function sessionVerdict(id: string): Promise<Verdict> {
   const activeKey = normalizeProfileKey($activeGatewayProfile.get())
-  // getSession follows this same owner ladder. Without an exact connection,
-  // profile-only misses cannot rule out an unlisted worker on another source.
-  const owner = knownOwnerForSession(id)
-  const exactConnection = isSessionOwnerRoute(owner) && Boolean(owner.connectionId.trim())
 
   // No known profiles → another profile we can't rule out might own the id.
   // Skip the probe entirely; there is nothing to gain from a lone unscoped hit.
   if ($profiles.get().length === 0) {
     return 'unknown'
+  }
+
+  // Without an exact connection on a multi-source registry, profile-only 404s on
+  // the active connection can never prove 'dead' — skip the per-profile fan-out.
+  if (isMultiSourceUncovered(id)) {
+    return 'uncovered'
   }
 
   try {
@@ -123,10 +138,8 @@ async function sessionVerdict(id: string): Promise<Verdict> {
     }
   }
 
-  const registry = $connectionsRegistry.get()
-
-  if (!exactConnection && hasRegistryTopology() && (!registry || registry.connections.length !== 1)) {
-    return 'unknown'
+  if (isMultiSourceUncovered(id)) {
+    return 'uncovered'
   }
 
   return 'dead'
@@ -174,10 +187,26 @@ function collectCandidates(): string[] {
     }
   }
 
+  const now = Date.now()
+
   return [...candidates].filter(id => {
     const expiresAt = alive.get(id)
 
-    return !(expiresAt !== undefined && Date.now() < expiresAt) && !inFlight.has(id)
+    if (expiresAt !== undefined && now < expiresAt) {
+      return false
+    }
+
+    const unknownUntil = unknown.get(id)
+
+    if (unknownUntil !== undefined && now < unknownUntil) {
+      if (isMultiSourceUncovered(id)) {
+        return false
+      }
+
+      unknown.delete(id)
+    }
+
+    return !inFlight.has(id)
   })
 }
 
@@ -247,11 +276,15 @@ async function sweepOnce(requireLoaded = true): Promise<void> {
       }
 
       if (verdict === 'alive') {
+        unknown.delete(id)
         alive.set(id, Date.now() + ALIVE_TTL_MS)
+      } else if (verdict === 'uncovered') {
+        unknown.set(id, Date.now() + UNKNOWN_TTL_MS)
       } else if (verdict === 'dead') {
+        unknown.delete(id)
         dropDeadId(id)
       }
-      // 'unknown' — neither cached nor dropped; a later sweep retries it.
+      // 'unknown' — transient failure or unloaded profiles; a later sweep retries it.
     })
   } finally {
     for (const id of candidates) {
@@ -315,6 +348,7 @@ export function watchDeadSessionPrune(): () => void {
 export function resetDeadSessionPrune(): void {
   epoch += 1
   alive.clear()
+  unknown.clear()
   inFlight.clear()
   listLoaded = false
 
