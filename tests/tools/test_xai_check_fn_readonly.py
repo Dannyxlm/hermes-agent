@@ -48,7 +48,7 @@ def test_all_five_xai_availability_checks_are_readonly(tmp_path, monkeypatch):
 
 def test_root_xai_grant_offers_tools_in_a_named_profile(tmp_path, monkeypatch):
     import plugins.image_gen.xai as xai_image
-    from hermes_cli.config import load_config
+    from hermes_cli.config import atomic_config_write, load_config
     from hermes_cli.tools_config import _get_platform_tools
     from model_tools import get_tool_definitions
     from tools.transcription_cloud import _has_xai_stt_credentials
@@ -71,6 +71,7 @@ def test_root_xai_grant_offers_tools_in_a_named_profile(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
+    atomic_config_write(profile / "config.yaml", {"tools": {"tool_search": {"enabled": "off"}}})
     toolsets = _get_platform_tools(load_config(), "cli", include_default_mcp_servers=False)
     definitions = get_tool_definitions(enabled_toolsets=sorted(toolsets), quiet_mode=True)
     assert "x_search" in {definition["function"]["name"] for definition in definitions}
