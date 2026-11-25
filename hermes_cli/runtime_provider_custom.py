@@ -637,12 +637,35 @@ def _owning_entry_credential(rp, base_url: str) -> tuple[bool, Any]:
     return True, _entry_credential(rp, entry, str(entry.get("name") or "custom"))
 
 
+def _is_canonical_builtin_url(rp, provider: str, base_url: str) -> bool:
+    """True when *base_url* is *provider*'s own canonical built-in endpoint (not a proxy/mirror)."""
+    cleaned = _route_key(base_url)
+    if not cleaned:
+        return False
+    norm = str(provider or "").strip().lower()
+    canonicals = {"https://api.openai.com/v1"} if norm == "openai" else (
+        {"https://openrouter.ai/api/v1"} if norm == "openrouter" else set()
+    )
+    if norm == "anthropic":
+        default = _route_key(getattr(rp, "_ANTHROPIC_DEFAULT_BASE_URL", "https://api.anthropic.com"))
+        if default:
+            canonicals.update((default, f"{default}/v1"))
+    pconfig = rp.PROVIDER_REGISTRY.get(norm)
+    if pconfig is not None and (p_url := _route_key(getattr(pconfig, "inference_base_url", ""))):
+        canonicals.add(p_url)
+        if norm == "anthropic" and p_url.endswith("/v1"):
+            canonicals.add(p_url[:-3])
+    return cleaned in canonicals
+
+
 def owned_config_url_credential(base_url: str, model_cfg: dict[str, Any], provider: str) -> tuple[bool, Any]:
     """:func:`_owning_entry_credential` for a built-in route running on ``model.base_url``: an entry
-    that owns that URL and declares a credential supplies it, never the built-in's env/pool key."""
+    that owns that URL and declares a credential supplies it, never the built-in's env/pool key.
+    Canonical built-in endpoints (e.g. ``https://api.anthropic.com``) are never hijacked by
+    ``providers.<alias>`` entries when the caller runs the built-in provider."""
     rp = _rp()
     cfg_url = rp._config_base_url_for_provider(model_cfg, provider)
-    if not cfg_url or cfg_url != _clean(base_url).rstrip("/"):
+    if not cfg_url or cfg_url != _clean(base_url).rstrip("/") or _is_canonical_builtin_url(rp, provider, base_url):
         return False, ""
     return _owning_entry_credential(rp, base_url)
 

@@ -1020,3 +1020,88 @@ def test_gateway_housekeeping_runs_the_sweeper_inside_its_own_lifetime(home, mon
     runner = SimpleNamespace(config=SimpleNamespace(multiplex_profiles=False), adapters=None)
     gateway_run._start_gateway_housekeeping(Ticks(), interval=0, runner=runner)
     assert started["homes"] == [home] and started["joined_after_stop"] is True
+
+
+def test_create_defaults_to_build_and_honors_explicit_deep_and_config_override(home, owner, monkeypatch):
+    from hermes_cli import models
+    from tools.thread_tool import _caller, _route
+
+    monkeypatch.setattr(models, "provider_model_ids", lambda provider: {
+        "anthropic": ["claude-haiku-5-5", "claude-opus-5-5"],
+        "openai-codex": ["gpt-6.2-sol"],
+    }.get(provider, []))
+    base_cfg = (
+        "agent:\n  name: Ava\n"
+        "model:\n  default: claude-opus-5-5\n  provider: anthropic\n"
+        "delegation:\n  backends:\n    model_map:\n      default: build\n      options:\n"
+        "        - {name: fast, model: claude-haiku-5-5, provider: anthropic, reasoning_effort: medium}\n"
+        "        - {name: build, model: gpt-6.2-sol, provider: openai-codex, reasoning_effort: high, service_tier: normal}\n"
+        "        - {name: deep, model: claude-opus-5-5, provider: anthropic, reasoning_effort: high}\n"
+        "    profile_routes:\n      profiles:\n        - {name: iris, description: QA}\n"
+    )
+    (home / "config.yaml").write_text(base_cfg)
+
+    # 1. Omitted option defaults to build (gpt-6.2-sol), not caller Opus.
+    default_out = call(action="create", title="Build task", brief="Implement fix.")
+    assert (default_out["success"], default_out["option"]) == (True, "build"), default_out
+    default_create = [params for method, params in owner.calls if method == "session.create"][-1]
+    assert (default_create["model"], default_create["provider"], default_create["reasoning"],
+            default_create["service_tier"]) == ("gpt-6.2-sol", "openai-codex", "high", "normal")
+    menu = call(action="collaborators")
+    assert menu["default_option"] == "build" and "defaults to 'build'" in menu["note"]
+
+    # 2. Explicit option="deep" still selects Opus cleanly.
+    deep_out = call(action="create", title="Deep task", brief="Review design.", option="deep")
+    assert (deep_out["success"], deep_out["option"]) == (True, "deep"), deep_out
+    deep_create = [params for method, params in owner.calls if method == "session.create"][-1]
+    assert (deep_create["model"], deep_create["provider"], deep_create["reasoning"]) == (
+        "claude-opus-5-5", "anthropic", "high")
+
+    # 3. Explicit threads.default_option override selects the configured option.
+    (home / "config.yaml").write_text(base_cfg + "threads:\n  default_option: fast\n")
+    caller = _caller(SimpleNamespace(session_id="parent"))
+    assert _route(caller, {}) == {
+        "profile": "default", "option": "fast",
+        "model": "claude-haiku-5-5", "provider": "anthropic", "reasoning": "medium",
+    }
+    assert call(action="collaborators")["default_option"] == "fast"
+
+    # 4. Empty or null threads.default_option disables default and inherits caller profile model.
+    for disabled in ("''", "null"):
+        (home / "config.yaml").write_text(base_cfg + f"threads:\n  default_option: {disabled}\n")
+        assert _route(caller, {}) == {"profile": "default"}
+        disabled_menu = call(action="collaborators")
+        assert disabled_menu["default_option"] is None
+        assert "profile model" in disabled_menu["note"]
+
+    # 5. Missing build entry in model_map falls back cleanly to profile model.
+    (home / "config.yaml").write_text(
+        "agent:\n  name: Ava\ndelegation:\n  backends:\n    model_map:\n      options:\n"
+        "        - {name: fast, model: claude-haiku-5-5, provider: anthropic}\n"
+    )
+    assert _route(caller, {}) == {"profile": "default"}
+
+
+def test_teammate_profile_and_explicit_model_do_not_inject_default_option(home, owner):
+    from hermes_cli.config import _validate_config_key
+    from tools.thread_tool import _caller, _route
+
+    caller = _caller(SimpleNamespace(session_id="parent"))
+    # Teammate profile keeps its own default model when option is omitted.
+    assert _route(caller, {"profile": "iris"}) == {"profile": "iris"}
+    teammate_out = call(action="create", title="Iris QA", brief="Verify screen.", profile="iris")
+    assert teammate_out["success"] is True and "option" not in teammate_out, teammate_out
+    teammate_create = [params for method, params in owner.calls if method == "session.create"][-1]
+    assert not any(k in teammate_create for k in ("model", "provider", "reasoning", "service_tier"))
+
+    # Explicit option with teammate profile still applies the requested option.
+    assert _route(caller, {"profile": "iris", "option": "build"})["option"] == "build"
+    # Explicit model/provider without option does not inject build provider/service_tier.
+    assert _route(caller, {"model": "claude-opus-5-5"}) == {"profile": "default", "model": "claude-opus-5-5"}
+    # Reasoning-only override on same-profile thread still defaults to build.
+    assert _route(caller, {"reasoning": "xhigh"}) == {
+        "profile": "default", "option": "build",
+        "model": "gpt-6.1-sol", "provider": "openai-codex", "reasoning": "xhigh", "service_tier": "fast",
+    }
+    # Config CLI recognizes threads.default_option.
+    assert _validate_config_key("threads.default_option") == (True, None)

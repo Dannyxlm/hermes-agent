@@ -547,11 +547,8 @@ def _minimax_requirements() -> bool:
 
 def _xai_requirements() -> bool:
     try:
-        from tools.xai_http import resolve_xai_http_credentials
-        # Same ordering as _generate_xai_tts / XAIStreamer: an explicit key wins over the
-        # subscription OAuth bearer (which 403s on metered /v1/tts) — never touch the OAuth
-        # pool for an availability probe when a key is configured. See #87045, #113727.
-        return bool(resolve_xai_http_credentials(prefer_api_key=True).get("api_key"))
+        from tools.xai_http import has_xai_credentials
+        return has_xai_credentials()
     except Exception:
         return False
 

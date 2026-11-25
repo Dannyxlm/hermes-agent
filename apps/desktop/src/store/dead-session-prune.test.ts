@@ -286,6 +286,46 @@ describe('__runDeadSessionPrunePass', () => {
     expect(getSessionMock).toHaveBeenCalledWith('orphan-pin', undefined)
   })
 
+  it('avoids per-profile 404 storms and caches uncovered multi-connection verdicts', async () => {
+    vi.useFakeTimers()
+
+    try {
+      $connectionsRegistry.set({
+        version: 1,
+        primary: 'local',
+        secureTokenStorage: true,
+        connections: ['local', 'remote'].map(id => ({
+          id,
+          kind: id === 'local' ? 'local' : 'remote',
+          label: id,
+          tokenSet: false,
+          tokenPreview: null
+        }))
+      })
+      $profiles.set([profile('default'), profile('work'), profile('eval-1'), profile('eval-2')])
+      $sessions.set([row('unrelated')])
+      $pinnedSessionIds.set(['orphan-multi'])
+      getSessionMock.mockRejectedValue(notFound())
+
+      // Repeated sweeps on a multi-connection registry without an exact owner must not fan out 404s.
+      await __runDeadSessionPrunePass()
+      await __runDeadSessionPrunePass()
+      await __runDeadSessionPrunePass()
+
+      expect(getSessionMock).not.toHaveBeenCalled()
+      expect($pinnedSessionIds.get()).toEqual(['orphan-multi'])
+
+      // Once an exact owner hint arrives (even within the unknown TTL), the next sweep probes and prunes.
+      setSessionOwnerHint('orphan-multi', { connectionId: 'remote', profile: 'default' })
+      await __runDeadSessionPrunePass()
+
+      expect(getSessionMock).toHaveBeenCalled()
+      expect($pinnedSessionIds.get()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('re-probes an alive id once its verdict TTL expires', async () => {
     vi.useFakeTimers()
 

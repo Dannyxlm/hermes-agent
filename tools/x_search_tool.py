@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from tools.registry import registry, tool_error
-from tools.xai_http import DEFAULT_XAI_BASE_URL, hermes_xai_user_agent, resolve_xai_http_credentials
+from tools.xai_http import DEFAULT_XAI_BASE_URL, has_xai_credentials, hermes_xai_user_agent, resolve_xai_http_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +77,8 @@ def _resolve_xai_bearer() -> tuple[str, str, str]:
 
 
 def check_x_search_requirements() -> bool:
-    """True when xAI credentials resolve to a non-empty bearer (OAuth auto-refreshed)."""
-    return bool(str(resolve_xai_http_credentials().get("api_key") or "").strip())
+    """Passive check: True when xAI credentials are configured without acquiring pool locks or refreshing."""
+    return has_xai_credentials()
 
 
 def _normalize_handles(handles: Optional[list[str]], field_name: str) -> list[str]:

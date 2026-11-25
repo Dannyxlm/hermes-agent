@@ -34,8 +34,8 @@ _ASR_TEXT_RE = re.compile(
 
 
 def _has_xai_stt_credentials() -> bool:
-    from tools.xai_http import resolve_xai_http_credentials
-    return bool(resolve_xai_http_credentials().get("api_key"))
+    from tools.xai_http import has_xai_credentials
+    return has_xai_credentials()
 
 
 def _with_openai_client(api_key: str, base_url: Optional[str], file_path: str, log_label: str, body):

@@ -290,8 +290,40 @@ def _stamp_or_none() -> VersionInfo | None:
         return None
 
 
+def _managed_release_version_info() -> VersionInfo | None:
+    """Fallback provenance from ``.hermes-release.json`` on managed immutable releases."""
+    release_file = Path(project_root_str()) / ".hermes-release.json"
+    if not release_file.is_file():
+        return None
+    try:
+        data = json.loads(release_file.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    commit = str(data.get("integration_revision") or data.get("official_revision") or "").strip() or None
+    if commit and set(commit) == {"0"}:
+        commit = None
+    tag = str(data.get("official_release_tag") or "").strip()
+    if STABLE_TAG_RE.fullmatch(tag):
+        base_version = tag[1:]
+    else:
+        raw_ver = str(data.get("hermes_version") or "").strip()
+        base_version = raw_ver if (raw_ver and raw_ver != "0.0.0" and STABLE_TAG_RE.fullmatch(f"v{raw_ver}")) else "unknown"
+    if base_version == "unknown" and not commit:
+        return None
+    raw_dist = data.get("carried_commit_count")
+    distance = raw_dist if isinstance(raw_dist, int) and not isinstance(raw_dist, bool) and raw_dist >= 0 else None
+    short_commit = commit[:7] if commit else None
+    derived = f"git.{short_commit}" if base_version == "unknown" and short_commit else _derived_version(
+        base_version, distance, dirty=False, short_commit=short_commit
+    )
+    branch = str(data.get("integration_branch") or data.get("official_branch") or "").strip() or None
+    return VersionInfo(base_version, derived, distance, commit, branch, "build")
+
+
 def get_version_info() -> VersionInfo:
-    """Return cached provenance from install stamp, git, or unknown."""
+    """Return cached provenance from install stamp, git, managed release metadata, or unknown."""
     global _cached_version_info
     if _cached_version_info is not None:
         return _cached_version_info
@@ -305,7 +337,11 @@ def get_version_info() -> VersionInfo:
         if repo_dir is not None:
             info = _git_version_info(repo_dir)
 
-    # 3. Unknown — no stamp, no git
+    # 3. Managed immutable release metadata (.hermes-release.json)
+    if info is None:
+        info = _managed_release_version_info()
+
+    # 4. Unknown — no stamp, no git, no managed release metadata
     if info is None:
         info = VersionInfo("unknown", "unknown", None, None, None, "unknown")
 

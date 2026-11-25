@@ -300,3 +300,49 @@ def test_a_timed_out_status_probe_never_strands_index_lock(tmp_path):
     _git_version_info(tmp_path, include_untracked=True)
 
     assert not (tmp_path / ".git" / "index.lock").exists()
+
+
+def test_managed_release_json_fallback_when_stamp_and_git_absent(tmp_path, monkeypatch):
+    (tmp_path / ".hermes-release.json").write_text(
+        json.dumps({
+            "schema_version": "cloudseed-hermes-release.v1",
+            "install_mode": "managed-immutable",
+            "hermes_version": "0.0.0",
+            "official_release_tag": "v0.23.3",
+            "carried_commit_count": 887,
+            "integration_branch": "main",
+            "integration_revision": "12d973d4a2cb4affbcf5cd0a7bab897da0ab9212",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: None)
+    monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: None)
+    monkeypatch.setattr("hermes_cli.version_info.project_root_str", lambda: str(tmp_path))
+
+    info = get_version_info()
+
+    assert info.base_version == "0.23.3"
+    assert info.display_version == "0.23.3+887"
+    assert info.derived_version == "0.23.3+887.g12d973d"
+    assert info.commit == "12d973d4a2cb4affbcf5cd0a7bab897da0ab9212"
+    assert info.branch == "main"
+    assert info.source == "build"
+
+
+def test_managed_release_json_fallback_handles_commit_only_and_malformed(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: None)
+    monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: None)
+    monkeypatch.setattr("hermes_cli.version_info.project_root_str", lambda: str(tmp_path))
+
+    (tmp_path / ".hermes-release.json").write_text("{not json", encoding="utf-8")
+    assert get_version_info().base_version == "unknown"
+
+    _reset_version_info_cache()
+    (tmp_path / ".hermes-release.json").write_text(
+        json.dumps({"integration_revision": "abcdef1234567890" + "0" * 24, "hermes_version": "0.0.0"}),
+        encoding="utf-8",
+    )
+    info = get_version_info()
+    assert info.base_version == "unknown"
+    assert info.display_version == "git.abcdef1"
+    assert info.commit == "abcdef1234567890" + "0" * 24
