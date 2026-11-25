@@ -1046,6 +1046,40 @@ def _record_delivery_verification(job: dict, unverified_targets: list) -> None:
         logger.debug("Job '%s': could not record delivery verification: %s", job.get("id"), exc)
 
 
+def _note_live_delivery_receipt(t: "_TargetDelivery", message_id: Any) -> None:
+    """Remember one confirmed live-adapter send for this run (persisted by
+    ``_record_live_delivery_receipt``). Until now the platform message id lived only in the log line."""
+    from datetime import datetime, timezone
+    t.job.setdefault("_live_delivery_receipts", {})[t.where] = {
+        "message_id": None if message_id is None else str(message_id),
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _record_live_delivery_receipt(job: dict, *, for_failure: bool) -> None:
+    """Persist ``last_delivery_receipt`` for the run that just delivered over the live adapter.
+
+    The receipt names its run (``execution_id`` and ``scheduled_for``), so a reader can never take an
+    earlier run's receipt for a later run's send: a run that delivers nothing leaves the previous
+    receipt in place, still naming the previous run. A receipt proves the platform accepted the message,
+    not that anyone read it. Never raises."""
+    receipts = job.pop("_live_delivery_receipts", None)
+    if not receipts:
+        return
+    value = {
+        "execution_id": job.get("execution_id") or None,
+        "scheduled_for": job.get("_scheduled_instant") or None,
+        "failure_notice": bool(for_failure),
+        "targets": receipts,
+    }
+    job["last_delivery_receipt"] = value
+    try:
+        from cron.jobs import update_job
+        update_job(job["id"], {"last_delivery_receipt": value})
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Job '%s': could not record delivery receipt: %s", job.get("id"), exc)
+
+
 @dataclass
 class _TargetDelivery:
     """Per-target delivery state shared by the live-adapter and standalone lanes."""
@@ -1500,6 +1534,7 @@ def _deliver_via_live_adapter(
                 route_thread_id if route_thread_id is not None else "-",
                 delivered_message_id if delivered_message_id is not None else "-")
             delivered = True
+            _note_live_delivery_receipt(t, delivered_message_id)
             _seed_live_delivery_sessions(t, delivered_message_id)
     except Exception as e:
         err_msg = f"live adapter delivery to {t.where} failed: {e}"
@@ -1724,6 +1759,7 @@ def _deliver_result(
     ``failure_deliver`` override when present (NS-788). Returns None on success, else an error."""
     job.pop("_bot_chat_delivery_receipts", None)
     job.pop("_notification_all_targets_suppressed", None)
+    job.pop("_live_delivery_receipts", None)
     targets = _resolve_delivery_targets(job, for_failure=for_failure)
     if not targets:
         job["_delivery_reached_none"] = (outcome := _unresolved_delivery_outcome(job, for_failure)) is not None
@@ -1879,6 +1915,7 @@ def _deliver_result(
         delivery_errors.extend(policy_drop_errors)
     job["_delivery_reached_none"] = bool(delivery_errors) and not reached
     _record_delivery_verification(job, unverified_targets)
+    _record_live_delivery_receipt(job, for_failure=for_failure)
     return "; ".join(delivery_errors) if delivery_errors else None
 
 
