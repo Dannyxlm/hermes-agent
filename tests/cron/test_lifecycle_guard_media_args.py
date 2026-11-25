@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import wave
+
 import pytest
 
 from cron.lifecycle_guard import _iter_referenced_shell_scripts, scan_gateway_lifecycle
@@ -101,9 +103,26 @@ def test_media_token_before_explicit_shell_does_not_bypass_scan(tmp_path):
     unsafe_sym, _ = scan_gateway_lifecycle(f"ffmpeg -i ({alias_wav}) && echo ok; {real_sh}")
     assert unsafe_sym is True
 
-    # Repeated non-shell media path tokens remain exempt.
+    # Repeated non-shell media path tokens remain exempt, including a real WAV file.
     benign = tmp_path / "benign.wav"
-    benign.write_bytes(b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * (1024 * 1024 + 64))
+    with wave.open(str(benign), "wb") as wav:
+        wav.setparams((1, 1, 8_000, 0, "NONE", "not compressed"))
+        wav.writeframes(b"\x80" * (1024 * 1024))
     benign.chmod(0o644)
     unsafe_ok, refusal_ok = scan_gateway_lifecycle(f"ffmpeg -i ({benign}) && ffmpeg -i ({benign})")
     assert unsafe_ok is False and refusal_ok is None
+
+
+@pytest.mark.parametrize("shape", ["chmod-then-invoke", "heredoc-reference"])
+def test_small_media_named_text_is_still_scanned(tmp_path, shape):
+    script = tmp_path / "sample.wav"
+    # Inert even if executed: the scanner should still see the unreachable command.
+    script.write_text("exit 0\nhermes gateway restart\n", encoding="utf-8")
+    script.chmod(0o644)
+
+    if shape == "chmod-then-invoke":
+        command = f"chmod +x {script} && {script}"
+    else:
+        command = f"python3 - <<'PY'\npath = (\n{str(script)!r}\n)\nPY"
+
+    assert scan_gateway_lifecycle(command, cwd=str(tmp_path)) == (True, None)
