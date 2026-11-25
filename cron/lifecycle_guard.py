@@ -369,8 +369,8 @@ _BINARY_MAGICS = (
     b"PK\x03\x04",           # zip (also .jar/.whl/.egg)
 )
 
-# Non-executable binary media/model extensions exempt from referenced-script scanning when
-# encountered as path tokens (not explicitly executed via bash/sh/source, no `#!` shebang, no +x).
+# Media/model extensions eligible for the oversized-file exemption when sniffed as binary
+# and not explicitly invoked through a shell (no `#!` shebang or executable mode bits).
 _NON_EXECUTABLE_MEDIA_EXTENSIONS = frozenset({
     ".wav", ".mp4", ".mov", ".m4a", ".mp3",
     ".png", ".jpg", ".jpeg", ".webp",
@@ -1313,7 +1313,8 @@ def _has_binary_magic(data: bytes) -> bool:
 def _is_non_executable_media_file(path: Path, metadata: os.stat_result, prefix: bytes) -> bool:
     """True when *path* is a non-executable binary media/model file without a ``#!`` shebang."""
     return (
-        not prefix.startswith(b"#!")
+        b"\x00" in prefix
+        and not prefix.startswith(b"#!")
         and (metadata.st_mode & 0o111) == 0
         and path.suffix.lower() in _NON_EXECUTABLE_MEDIA_EXTENSIONS
     )
@@ -1382,12 +1383,13 @@ def _read_referenced_script_unlocked(
         # straight past an embedded NUL, so NUL-bearing text must fall through to the magic-number check +
         # NUL-strip below.
         data = os.read(descriptor, _BINARY_SNIFF_BYTES)
-        if _has_binary_magic(data) or (skip_media_extensions and _is_non_executable_media_file(path, metadata, data)):
+        if _has_binary_magic(data):
             return None, False
-        # A regular file whose size already exceeds the cap fails closed without reading it (the
-        # walk budget can be far below 1 MiB).
+        # Fail closed above the scan cap (or remaining walk budget), except for media that sniffs
+        # as binary. Smaller files still need scanning regardless of their extension.
         if metadata.st_size > byte_limit:
-            return None, True
+            binary_media = skip_media_extensions and _is_non_executable_media_file(path, metadata, data)
+            return None, not binary_media
         # Read the remainder (bounded); loop because os.read may return short.
         while len(data) <= byte_limit:
             chunk = os.read(descriptor, byte_limit + 1 - len(data))
