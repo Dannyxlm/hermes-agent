@@ -62,6 +62,7 @@ PREVIEW_CAP = 200
 READ_DEFAULT, READ_MAX = 10, 50
 WAIT_MANY_MAX = 12
 RUN_BUDGET_DEFAULT_S, RUN_BUDGET_MIN_S, RUN_BUDGET_MAX_S = 7_200, 60, 28_800
+DEFAULT_THREAD_OPTION = "build"
 REASONING = ["none", "minimal", "low", "medium", "high", "xhigh"]
 ACTIVE = {"running", "queued", "paused"}
 _ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -335,16 +336,37 @@ def _profile_model(home: Path) -> dict:
     return {"model": model} if isinstance(model, str) else {}
 
 
+def _default_option(cfg: dict, options: dict) -> str | None:
+    """Default collaborator option for same-profile ``thread create`` when ``option`` is omitted.
+
+    Reads ``threads.default_option`` (default ``"build"``). Empty or null disables the default
+    (inherit the caller's profile model). Missing ``model_map`` entries fall back cleanly to
+    ``None`` so installs without that collaborator menu keep inheriting the profile model.
+    """
+    threads_cfg = cfg.get("threads")
+    if isinstance(threads_cfg, dict) and "default_option" in threads_cfg:
+        raw = threads_cfg.get("default_option")
+        name = raw.strip() if isinstance(raw, str) else ""
+    else:
+        name = DEFAULT_THREAD_OPTION
+    return name if name and name in options else None
+
+
 def _collaborators(caller: Caller, args: dict) -> dict:
-    options, default, teammates = _menu(_config())
+    cfg = _config()
+    options, _, teammates = _menu(cfg)
+    default = _default_option(cfg, options)
     homes = ts.homes()
+    default_note = (
+        f"create with no option defaults to {default!r} (configurable via threads.default_option); "
+        if default else "create with no option runs on this chat's profile model; "
+    )
     return {
         "options": [{"option": name, "model": o.get("model"), "provider": o.get("provider"),
                      "reasoning": o.get("reasoning_effort"), "for": o.get("description")} for name, o in options.items()],
         "default_option": default,
-        "note": ("create with no option runs on this chat's profile model; option picks one of these; model, provider "
-                 "and reasoning override any of it. profile opens the thread as that teammate (their own memory, "
-                 "skills and model)."),
+        "note": (default_note + "option picks one of these; model, provider and reasoning override any of it. "
+                 "profile opens the thread as that teammate (their own memory, skills and model)."),
         "teammates": [{"profile": name, "for": t.get("description"), **_profile_model(homes[name])}
                       for name, t in teammates.items() if name in homes and name != caller.profile],
         "this_profile": {"profile": caller.profile, **_profile_model(caller.home)},
@@ -352,9 +374,19 @@ def _collaborators(caller: Caller, args: dict) -> dict:
 
 
 def _route(caller: Caller, args: dict) -> dict:
-    options, _, teammates = _menu(_config())
+    cfg = _config()
+    options, _, teammates = _menu(cfg)
     route: dict = {"profile": caller.profile}
+    profile = args.get("profile")
+    teammate = profile is not None and profile != caller.profile
+    if teammate:
+        if profile not in teammates or profile not in ts.homes():
+            raise ThreadError("invalid_request", "profile must be one of the teammates: "
+                              f"{', '.join(n for n in teammates if n != caller.profile) or '(none configured)'}.")
+        route["profile"] = profile
     option = args.get("option")
+    if option is None and not teammate and args.get("model") is None and args.get("provider") is None:
+        option = _default_option(cfg, options)
     if option is not None:
         if option not in options:
             raise ThreadError("invalid_request", f"option must be one of: {', '.join(options) or '(none configured)'}.")
@@ -371,12 +403,6 @@ def _route(caller: Caller, args: dict) -> dict:
             route[key] = value.strip()
     if route.get("reasoning") is not None and route["reasoning"] not in REASONING:
         raise ThreadError("invalid_request", f"reasoning must be one of: {', '.join(REASONING)}.")
-    profile = args.get("profile")
-    if profile is not None and profile != caller.profile:
-        if profile not in teammates or profile not in ts.homes():
-            raise ThreadError("invalid_request", "profile must be one of the teammates: "
-                              f"{', '.join(n for n in teammates if n != caller.profile) or '(none configured)'}.")
-        route["profile"] = profile
     return route
 
 
@@ -1025,7 +1051,7 @@ THREAD_SCHEMA = {
             "title": _p("string", f"create, rename: a short title (max {TITLE_MAX} chars), shown with a {MARK} prefix."),
             "brief": _p("string", "create: everything the thread needs. It knows nothing else."),
             "option": _p("string", "create: a collaborator option from collaborators (a model, provider and reasoning "
-                         "preset)."),
+                         "preset; defaults to threads.default_option, 'build', for same-profile threads)."),
             "profile": _p("string", "create: open it as a teammate profile from collaborators."),
             "model": _p("string", "create: a model id (overrides option and the profile default)."),
             "provider": _p("string", "create: the provider for model."),
