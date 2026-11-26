@@ -5,7 +5,8 @@ import subprocess
 
 import pytest
 
-from tools import checkpoint_manager as cm
+from agent.checkpoints import manager as cm
+from agent.checkpoints.undo_hint import _changed_files
 from utils import rmtree_readonly
 
 
@@ -45,7 +46,7 @@ def test_parent_snapshot_and_restore_preserve_uncaptured_repo(tmp_path, monkeypa
     before = tree_bytes(nested)
     metadata_before = tree_bytes(metadata) if gitfile else None
     mgr = cm.CheckpointManager(enabled=True, max_file_size_mb=size_cap)
-    with caplog.at_level(logging.WARNING, logger=cm.__name__):
+    with caplog.at_level(logging.WARNING, logger=cm.logger.name):
         assert mgr.ensure_checkpoint(str(work), "baseline")
         entry = mgr.list_checkpoints(str(work))[0]
         assert "uncaptured unborn repos kept" in entry["reason"]
@@ -56,7 +57,6 @@ def test_parent_snapshot_and_restore_preserve_uncaptured_repo(tmp_path, monkeypa
         assert mgr.ensure_checkpoint(str(work), "second")
         diff = mgr.diff(str(work), entry["hash"])
         assert diff["success"] and "agent edit" in diff["diff"]
-        from tools.checkpoint_undo_hint import _changed_files
         assert "packages/" + name + "/" not in _changed_files(str(work), entry["hash"])
         assert mgr.restore(str(work), entry["hash"], safe=safe)["success"]
     assert notes.read_text() == "before\n"

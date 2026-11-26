@@ -5,8 +5,8 @@ import time
 
 import pytest
 
+from agent.checkpoints import manager as cm
 from hermes_cli import gitlock
-from tools import checkpoint_manager as cm
 
 
 @pytest.fixture()

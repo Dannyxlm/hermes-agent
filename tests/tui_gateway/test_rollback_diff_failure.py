@@ -1,7 +1,7 @@
 """A refused checkpoint diff is an RPC error, never a successful empty comparison."""
 from types import SimpleNamespace
 
-from tools.checkpoint_manager import CheckpointManager
+from agent.checkpoints import manager as cm
 from tui_gateway import server
 
 
@@ -9,12 +9,11 @@ def test_rollback_diff_reports_staging_failure(tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
     (work / "a.txt").write_text("original\n", encoding="utf-8")
-    manager = CheckpointManager(enabled=True)
+    manager = cm.CheckpointManager(enabled=True)
     assert manager.ensure_checkpoint(str(work), "before edit")
     target = manager.list_checkpoints(str(work))[0]["hash"]
     (work / "a.txt").write_text("edited\n", encoding="utf-8")
     # Use a real Git index failure: unborn nested repositories are supported.
-    from tools import checkpoint_manager as cm
     cm._index_path(cm._store_path(), cm._project_hash(str(work))).write_bytes(b"invalid index\n")
     monkeypatch.setitem(server._sessions, "diff-failure", {
         "agent": SimpleNamespace(_checkpoint_mgr=manager),
