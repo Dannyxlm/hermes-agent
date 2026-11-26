@@ -730,6 +730,7 @@ const LIVE_SESSION_STATUS_BACKSTOP_INTERVAL_MS = 30_000
 // full list refresh is heavier than the active_list snapshot. Trailing-edge
 // scheduled, so the burst's last write always lands.
 const SESSIONS_LIST_TICK_GAP_MS = 10_000
+const CRON_CHANGE_TICK_GAP_MS = 15_000
 // A typing burst keeps the composer's contentEditable input handling on the
 // same renderer main thread as the list refresh above (#95033): with a large
 // session store, one refresh pass can block keystroke echo long enough that
@@ -1072,7 +1073,6 @@ export function useBackgroundSync({
 }: BackgroundSyncParams): void {
   useLiveWorkRoster()
   const changeEventsAvailable = useStore($changeEventsAvailable)
-  const cronChangeTick = useStore($cronChangeTick)
   const activeTranscriptRefreshPendingRef = useRef<string | null>(null)
   const activeTranscriptReadRef = useRef<{ sessionKey: string; preservePending: boolean } | null>(null)
   // Tile reconcile state (#93942 slice 1): shared sequence guard + per-tile
@@ -1424,6 +1424,7 @@ export function useBackgroundSync({
     let lastRunAt = 0
     let timer: null | number = null
     let typingDeferTimer: null | number = null
+    let dirtyWhileUnviewed = false
 
     const run = () => {
       lastRunAt = Date.now()
@@ -1482,23 +1483,52 @@ export function useBackgroundSync({
       }
     }
 
-    const unsubscribe = $sessionsChangeTick.listen(() => {
+    const scheduleTickRefresh = () => {
+      if (!windowIsActivelyViewed({ focused: document.hasFocus(), visibilityState: document.visibilityState })) {
+        dirtyWhileUnviewed = true
+
+        return
+      }
+
       const since = Date.now() - lastRunAt
 
       if (since >= SESSIONS_LIST_TICK_GAP_MS) {
+        dirtyWhileUnviewed = false
         runWhenKeyboardQuiet()
       } else if (typingDeferTimer === null && timer === null) {
         // Within the gap a pass is already scheduled — trailing timer or a
         // typing deferral. Arming another one here would stack extra passes.
         timer = window.setTimeout(() => {
           timer = null
+          if (!windowIsActivelyViewed({ focused: document.hasFocus(), visibilityState: document.visibilityState })) {
+            dirtyWhileUnviewed = true
+
+            return
+          }
+
+          dirtyWhileUnviewed = false
           runWhenKeyboardQuiet()
         }, SESSIONS_LIST_TICK_GAP_MS - since)
       }
-    })
+    }
+
+    const flushWhenViewed = () => {
+      if (
+        dirtyWhileUnviewed &&
+        windowIsActivelyViewed({ focused: document.hasFocus(), visibilityState: document.visibilityState })
+      ) {
+        scheduleTickRefresh()
+      }
+    }
+
+    const unsubscribe = $sessionsChangeTick.listen(scheduleTickRefresh)
+    document.addEventListener('visibilitychange', flushWhenViewed)
+    window.addEventListener('focus', flushWhenViewed)
 
     return () => {
       unsubscribe()
+      document.removeEventListener('visibilitychange', flushWhenViewed)
+      window.removeEventListener('focus', flushWhenViewed)
 
       if (timer !== null) {
         window.clearTimeout(timer)
@@ -1538,15 +1568,65 @@ export function useBackgroundSync({
       return
     }
 
-    if (cronChangeTick > 0) {
+    let lastRunAt = 0
+    let timer: null | number = null
+    let dirtyWhileUnviewed = false
+
+    const runCronRefresh = () => {
+      lastRunAt = Date.now()
+      dirtyWhileUnviewed = false
       void refreshCronJobs()
     }
 
-    return visiblePoll(
+    const scheduleCronRefresh = () => {
+      if (!windowIsActivelyViewed({ focused: document.hasFocus(), visibilityState: document.visibilityState })) {
+        dirtyWhileUnviewed = true
+
+        return
+      }
+
+      const since = Date.now() - lastRunAt
+
+      if (since >= CRON_CHANGE_TICK_GAP_MS) {
+        runCronRefresh()
+      } else if (timer === null) {
+        timer = window.setTimeout(() => {
+          timer = null
+          if (!windowIsActivelyViewed({ focused: document.hasFocus(), visibilityState: document.visibilityState })) {
+            dirtyWhileUnviewed = true
+
+            return
+          }
+
+          runCronRefresh()
+        }, CRON_CHANGE_TICK_GAP_MS - since)
+      }
+    }
+
+    const unsubscribe = $cronChangeTick.listen(tick => {
+      if (tick > 0) {
+        scheduleCronRefresh()
+      }
+    })
+
+    const dispose = visiblePoll(
       changeEventsAvailable ? CRON_BACKSTOP_INTERVAL_MS : CRON_POLL_INTERVAL_MS,
-      () => void refreshCronJobs()
+      () => {
+        if (dirtyWhileUnviewed || Date.now() - lastRunAt >= CRON_CHANGE_TICK_GAP_MS) {
+          runCronRefresh()
+        }
+      }
     )
-  }, [changeEventsAvailable, cronChangeTick, gatewayState, refreshCronJobs])
+
+    return () => {
+      unsubscribe()
+      dispose()
+
+      if (timer !== null) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [changeEventsAvailable, gatewayState, refreshCronJobs])
 
   // projects.changed (projects.db moved: a CLI `hermes projects create`, another
   // window's folder picker, a `set_primary` from the workspace settings) refreshes

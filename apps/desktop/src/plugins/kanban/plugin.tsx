@@ -44,10 +44,20 @@ function KanbanCount() {
   const slug = useValue($boardSlug)
 
   // Socket-invalidated like the page (same cache); slow socketless heartbeat.
+  // If the backend does not expose the kanban plugin (404), stop retrying and
+  // polling for this scope so an unused plugin does not hammer the gateway.
+  const isNotFound = (error: unknown): boolean => {
+    const msg = error instanceof Error ? error.message : String(error ?? '')
+    return /(?:^|\b)404(?:\b|:)|not found/i.test(msg)
+  }
+
   const { data: board } = useQuery({
     queryFn: () => fetchBoard(false),
     queryKey: boardKey(scope, slug, false),
-    refetchInterval: 60_000
+    retry: (failureCount, error) => !isNotFound(error) && failureCount < 2,
+    refetchInterval: query => (isNotFound(query.state.error) ? false : 60_000),
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: query => !isNotFound(query.state.error)
   })
 
   if (!board) {

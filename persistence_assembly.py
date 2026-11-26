@@ -137,19 +137,37 @@ def store_owner_name(profile_dir: Path) -> Optional[str]:
     return None
 
 
+_FOREIGN_PROVIDER_LOCK = threading.Lock()
+_FOREIGN_PROVIDER_CACHE_MAX = 256
+_FOREIGN_PROVIDER_CACHE: dict[str, tuple[tuple[int, int, int, int, int], str]] = {}
+
+
 def _provider_for_home(home: Path) -> str:
     """The configured ``persistence.provider`` for ``home``: the process config for the current home, the target's own
     ``config.yaml`` for another one. An absent section or file means ``sqlite``."""
     from hermes_constants import get_hermes_home, hermes_home_key
 
     section: Any = None
-    if hermes_home_key(home) == hermes_home_key(get_hermes_home()):
+    target_key = hermes_home_key(home)
+    cache_key: str | None = None
+    file_sig: tuple[int, int, int, int, int] | None = None
+    if target_key == hermes_home_key(get_hermes_home()):
         from hermes_cli.config import load_config_readonly
 
         section = load_config_readonly().get("persistence")
     else:
         config_path = home / "config.yaml"
-        if config_path.exists():
+        try:
+            st = config_path.stat()
+        except OSError:
+            st = None
+        if st is not None:
+            cache_key = target_key
+            file_sig = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            with _FOREIGN_PROVIDER_LOCK:
+                cached = _FOREIGN_PROVIDER_CACHE.get(cache_key)
+                if cached is not None and cached[0] == file_sig:
+                    return cached[1]
             from utils import fast_safe_load
 
             try:
@@ -166,8 +184,12 @@ def _provider_for_home(home: Path) -> str:
         raise ValueError(
             f"unknown persistence provider {provider!r} for {home} (known: {', '.join(_KNOWN_PROVIDERS)})"
         )
+    if cache_key is not None and file_sig is not None:
+        with _FOREIGN_PROVIDER_LOCK:
+            if len(_FOREIGN_PROVIDER_CACHE) >= _FOREIGN_PROVIDER_CACHE_MAX and cache_key not in _FOREIGN_PROVIDER_CACHE:
+                _FOREIGN_PROVIDER_CACHE.pop(next(iter(_FOREIGN_PROVIDER_CACHE)))
+            _FOREIGN_PROVIDER_CACHE[cache_key] = (file_sig, provider)
     return provider
-
 
 def _assemble(provider: str, stores: Mapping[str, Path], *, read_only: bool = False,
               read_patience_s: Optional[float] = None, check_drift: bool = False) -> Any:

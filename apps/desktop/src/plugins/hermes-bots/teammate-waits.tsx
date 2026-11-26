@@ -212,7 +212,7 @@ export function DeliveryRow({ now, row, sender, roster }: DeliveryRowProps) {
 export function TeammateWaits() {
   const b = useBots()
   const { sessionId, storedSessionId } = useComposerSession()
-  const roster = useRoster().data?.profiles ?? []
+  const roster = useRoster({ pollIntervalMs: 60_000 }).data?.profiles ?? []
   const sender = senderForSession(roster, [storedSessionId, sessionId])
   const dismissed = useValue($dismissedDeliveries)
 
