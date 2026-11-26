@@ -759,6 +759,9 @@ class SessionInterruptParams(SessionParams):
     expected_hosted_task_id: str | None = None  # only interrupt if this hosted task is the running one
     admission_id: str | None = None  # forwarded turn only; never the owner's unrelated turn
     execution_generation: int | None = None
+    #: The caller pauses the turn and continues it itself (a hidden ``prompt.submit``): its ``message.complete``
+    #: says ``paused``. A plain interrupt (the user's Stop) for the same turn wins.
+    resume: bool | None = None
 
 
 class InterruptStatus(WireEnum):

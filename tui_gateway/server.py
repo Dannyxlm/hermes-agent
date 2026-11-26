@@ -670,32 +670,42 @@ def _approval_request_payload(data: dict | None) -> dict:
     from tui_gateway.contracts.server_requests import ApprovalKind
 
     payload = dict(data or {})
-    kind = ApprovalKind.for_context(payload.get("surface"), payload.get("tool_name"),
-                                    payment=payload.get("payment") is not None)
-    consent = (ApprovalKind.payment, ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation)
     declared = payload.get("kind")
-    if declared == ApprovalKind.payment or (kind not in consent and declared in consent):
+    sandbox_kinds = (ApprovalKind.access.value, ApprovalKind.network.value, ApprovalKind.command.value)
+    consent = (ApprovalKind.payment, ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation)
+    if declared in sandbox_kinds:
         kind = ApprovalKind(declared)
-    payload["kind"] = kind.value
-    if kind in consent:
-        payload.update(allow_session=False, allow_permanent=False)
-    if kind in (ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation):
-        _, _, target = str(payload.get("surface") or "").partition("/")
-        if target:
-            payload["mcp_server"] = target
-    if kind == ApprovalKind.payment and isinstance(payload.get("payment"), dict):
-        payload["origin"] = payload["payment"]["origin"]
-    choices = ["once"]
-    if not payload.get("smart_denied") and payload.get("allow_session") is not False:
-        choices.append("session")
-        if payload.get("allow_permanent") is not False:
-            choices.append("always")
-    offered = payload.get("choices", choices + ["deny"])
-    payload["choices"] = [choice for choice in choices + ["deny"] if choice in offered]
-    from gateway.run import _redact_approval_command
-    for key in ("command", "description"):
-        if key in payload:
-            payload[key] = _redact_approval_command(payload[key])
+        payload["kind"] = kind.value
+        if "choices" not in payload:
+            choices = ["once"]
+            if not payload.get("smart_denied") and payload.get("allow_session") is not False:
+                choices.append("session")
+                if payload.get("allow_permanent") is not False:
+                    choices.append("always")
+            payload["choices"] = choices + ["deny"]
+    else:
+        kind = ApprovalKind.for_context(payload.get("surface"), payload.get("tool_name"),
+                                        payment=payload.get("payment") is not None)
+        if declared == ApprovalKind.payment or (kind not in consent and declared in consent):
+            kind = ApprovalKind(declared)
+        payload["kind"] = kind.value
+        if kind in consent:
+            payload.update(allow_session=False, allow_permanent=False)
+        if kind in (ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation):
+            _, _, target = str(payload.get("surface") or "").partition("/")
+            if target:
+                payload["mcp_server"] = target
+        if kind == ApprovalKind.payment and isinstance(payload.get("payment"), dict):
+            payload["origin"] = payload["payment"]["origin"]
+        choices = ["once"]
+        if not payload.get("smart_denied") and payload.get("allow_session") is not False:
+            choices.append("session")
+            if payload.get("allow_permanent") is not False:
+                choices.append("always")
+        offered = payload.get("choices", choices + ["deny"])
+        payload["choices"] = [choice for choice in choices + ["deny"] if choice in offered]
+    from gateway.run import _redact_approval_command  # description too: consent prompts carry MCP/vault text
+    payload.update({k: _redact_approval_command(payload[k]) for k in ("command", "description", "path", "host", "label", "risk") if k in payload})
     return payload
 
 

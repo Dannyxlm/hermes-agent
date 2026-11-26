@@ -1,6 +1,7 @@
 import type { ConnectionRequestPayload, FreeTierChallengePayload, ToolLabel } from '@hermes/shared'
 
 import type { ToolResultMetadata } from '@/lib/tool-result-metadata'
+import type { ApprovalKindFields } from '@/types/hermes-approval'
 
 import type { BackendManagedSourceUpdate } from './hermes-managed-source'
 import type { SessionWriteCapability } from './session-capability'
@@ -808,7 +809,7 @@ export interface SessionResumeResult extends SessionWriteCapability {
   // The oldest gateway approval still waiting for a response. This is returned
   // on resume so a reconnect can restore a prompt whose original event was
   // emitted while the client transport was detached.
-  pending_approval?: {
+  pending_approval?: ApprovalKindFields & {
     allow_permanent?: boolean
     choices?: string[]
     command?: string

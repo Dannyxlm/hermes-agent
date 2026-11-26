@@ -4,6 +4,8 @@ interface ResolvedPrimaryRemote {
   baseUrl: string
   connectionId?: string
   headers?: Record<string, string>
+  /** A desktop plugin's launcher on this computer serves this profile's backend. */
+  launcher?: { plugin: string }
   remoteHermesVersion?: string
   remoteHost?: string
   remoteKind?: 'cloud' | 'ssh' | 'url'
@@ -41,6 +43,7 @@ export function createPrimaryRemoteConnection<State extends object>(
     remoteHermesVersion: remote.remoteHermesVersion,
     ...(remote.connectionId ? { connectionId: remote.connectionId } : {}),
     ...(remote.backendProfile ? { backendProfile: remote.backendProfile } : {}),
+    ...(remote.launcher ? { launcher: remote.launcher } : {}),
     ...(remote.ssh ? { ssh: remote.ssh } : {}),
     // fetchJsonForBackend reads descriptor.headers for every REST call; the
     // WebSocket header store is keyed by exact URL and cannot stand in for it.

@@ -532,7 +532,14 @@ def _(rid, params: dict) -> dict:
     from tui_gateway import cards_capability, server_requests, session_change_cursor
     from tui_gateway.contracts import registry as contracts
     transport = _caller_transport()
-    # Each advertisement updates only the fields it names; Desktop sends these separately.
+    # Each call updates what it names: the Desktop sends ``desktop_local`` on its own, so a backend older
+    # than the field refuses only that call and keeps the ``server_requests`` it already accepted.
+    # A refused ``client`` answers before anything else in the call takes effect.
+    if "client" in params and hasattr(transport, "client_identity"):
+        from gateway.session_client import client_problem, normalized_client
+        if problem := client_problem(params["client"]):
+            return _err(rid, 4001, f"client {problem}")
+        transport.client_identity = normalized_client(params["client"])
     if "server_requests" in params:
         server_requests.advertise(transport, bool(params.get("server_requests")))
     if "session_change_cursor" in params:
@@ -546,13 +553,24 @@ def _(rid, params: dict) -> dict:
             server.begin_local_desktop_boot()
     return _ok(rid, {"server_requests": sorted(contracts.SERVER_REQUESTS), "declines_not_shown": True,
                      "session_change_cursor": 1,
-                     "canonical_clarify_batch": True, "cards": cards_capability.offered_version()})
+                     "canonical_clarify_batch": True, "cards": cards_capability.offered_version(),
+                     "client_activity": getattr(transport, "client_presence", None) is not None})
 
 
 @method("gateway.ping")
 def _(rid, params: dict) -> dict:
     """Dispatcher parity for the Hermex heartbeat handled directly by the WS reader."""
     return _ok(rid, {"ok": True})
+
+
+@method("client.activity")
+def _(rid, params: dict) -> dict:
+    """Whether the user is at the calling client, for the sessions it shows (gateway/session_presence.py).
+    A transport that keeps no presence accepts it and keeps nothing."""
+    from gateway.session_presence import report
+    if problem := report(_caller_transport(), params):
+        return _err(rid, 4001, problem)
+    return _ok(rid, {})
 
 
 @method("ping")
