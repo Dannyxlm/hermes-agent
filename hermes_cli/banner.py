@@ -246,6 +246,7 @@ def format_banner_version_label() -> str:
 
 _update_result: Optional[int] = None
 _update_check_done = threading.Event()
+_update_check_started = False
 
 
 def _daemon(name: Optional[str], target) -> None:
@@ -277,6 +278,8 @@ def prefetch_update_check():
 
     No-op under pytest — see ``_skip_background_prefetch``.
     """
+    global _update_check_started
+    _update_check_started = True
     if _skip_background_prefetch():
         _update_check_done.set()
         return
@@ -314,7 +317,9 @@ def prefetch_banner_data():
 
 
 def get_update_result(timeout: float = 0.5) -> Optional[int]:
-    """Get result of prefetched check. Returns None if not ready."""
+    """Get result of prefetched check. Returns None if not ready or never started."""
+    if not _update_check_started and not _update_check_done.is_set():
+        return _update_result
     _update_check_done.wait(timeout=timeout)
     return _update_result
 

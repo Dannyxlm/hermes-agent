@@ -126,3 +126,90 @@ def test_model_options_invalidates_on_config_yaml_change_and_isolates_copies(tmp
     r3 = server._methods["model.options"](3, {"profile": "work"})["result"]
     assert r3["providers"] == [{"slug": "b-2"}]
     assert len(builds) == 2
+
+
+def test_session_live_title_reads_readonly_without_writer_open(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    conn = _make_wal_db(db_path)
+    try:
+        conn.execute("UPDATE sessions SET title = ? WHERE id = ?", ("Read Only Title", "s1"))
+        conn.commit()
+        monkeypatch.setattr(server, "_session_db", lambda *a, **kw: pytest.fail("should not open writable _session_db"))
+        title = server._session_live_title({"profile_home": str(tmp_path), "pending_title": "Fallback"}, "s1")
+        assert title == "Read Only Title"
+    finally:
+        conn.close()
+
+
+def test_banner_get_update_result_does_not_sleep_when_never_started(monkeypatch):
+    from hermes_cli import banner
+    monkeypatch.setattr(banner, "_update_check_started", False)
+    ev = banner.threading.Event()
+    monkeypatch.setattr(banner, "_update_check_done", ev)
+    t0 = time.monotonic()
+    res = banner.get_update_result(timeout=0.5)
+    assert res is None
+    assert time.monotonic() - t0 < 0.1
+
+
+def test_git_probe_branch_uses_head_file_and_worktree_gitfile(tmp_path, monkeypatch):
+    from tui_gateway import git_probe
+    git_probe.invalidate()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/feat/fast-head\n", encoding="utf-8")
+    monkeypatch.setattr(git_probe, "repo_root", lambda cwd: str(repo) if cwd == str(repo) else "")
+    monkeypatch.setattr(git_probe, "run_git", lambda *a, **kw: pytest.fail("should not spawn git for symbolic HEAD"))
+    assert git_probe.branch(str(repo)) == "feat/fast-head"
+    assert git_probe.branch(str(tmp_path / "not-a-repo")) == ""
+    wt_gitdir = tmp_path / "wt-gitdir"
+    wt_gitdir.mkdir()
+    (wt_gitdir / "HEAD").write_text("ref: refs/heads/wt-branch\n", encoding="utf-8")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {wt_gitdir}\n", encoding="utf-8")
+    monkeypatch.setattr(git_probe, "repo_root", lambda cwd: str(wt) if cwd == str(wt) else "")
+    assert git_probe.branch(str(wt)) == "wt-branch"
+
+
+def test_model_options_stale_while_revalidate_returns_immediately_and_refreshes_bg(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import threading
+    home = tmp_path / "profiles" / "swr"
+    home.mkdir(parents=True)
+    ctx = SimpleNamespace(current_provider="openai", current_model="gpt-5")
+    builds = []
+    refreshed = threading.Event()
+    monkeypatch.setattr(server, "_profile_home", lambda name: home if name == "swr" else None)
+    monkeypatch.setattr(server, "_model_picker_context", lambda agent: ctx)
+    monkeypatch.setattr(server, "_MODEL_OPTIONS_CACHE", {}, raising=False)
+    monkeypatch.setattr(server, "_MODEL_OPTIONS_REVALIDATING", set(), raising=False)
+
+    def build(_ctx, **kwargs):
+        builds.append(kwargs)
+        if len(builds) >= 2:
+            refreshed.set()
+        return {"providers": [{"slug": f"swr-{len(builds)}"}]}
+
+    monkeypatch.setattr("hermes_cli.inventory.build_model_options_payload", build)
+
+    r1 = server._methods["model.options"](1, {"profile": "swr"})["result"]
+    assert r1["providers"] == [{"slug": "swr-1"}]
+    for k, (ts, val) in list(server._MODEL_OPTIONS_CACHE.items()):
+        server._MODEL_OPTIONS_CACHE[k] = (ts - 350.0, val)
+    r2 = server._methods["model.options"](2, {"profile": "swr"})["result"]
+    assert r2["providers"] == [{"slug": "swr-1"}]
+    assert refreshed.wait(timeout=5.0), "background SWR refresh should complete"
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        r3 = server._methods["model.options"](3, {"profile": "swr"})["result"]
+        if r3["providers"] == [{"slug": "swr-2"}]:
+            break
+        time.sleep(0.02)
+    assert r3["providers"] == [{"slug": "swr-2"}]
+
+
+def test_ws_read_lane_includes_session_info_and_mobile_bots_as_fast():
+    from tui_gateway import ws_read_lane
+    assert ws_read_lane.READ_METHODS.get("session.info") == ws_read_lane.FAST
+    assert ws_read_lane.READ_METHODS.get("mobile.bots") == ws_read_lane.FAST

@@ -34,7 +34,39 @@ def run_git(cwd: str, *args: str) -> str:
     return bounded_git_probe(["git", "-C", cwd, *args], timeout=_GIT_TIMEOUT)
 
 
+def _branch_from_head_file(root: str) -> str | None:
+    """Fast-path symbolic branch read from ``<root>/.git/HEAD`` (or gitfile worktree ``gitdir:``).
+    Returns None for detached HEAD or unreadable files so callers fall back to git."""
+    dot_git = os.path.join(root, ".git")
+    git_dir = dot_git
+    if os.path.isfile(dot_git):
+        try:
+            first = open(dot_git, "r", encoding="utf-8").readline().strip()
+        except OSError:
+            return None
+        if not first.startswith("gitdir:"):
+            return None
+        raw = first[len("gitdir:"):].strip()
+        git_dir = raw if os.path.isabs(raw) else os.path.normpath(os.path.join(root, raw))
+    head_path = os.path.join(git_dir, "HEAD")
+    try:
+        with open(head_path, "r", encoding="utf-8") as fh:
+            line = fh.readline().strip()
+    except OSError:
+        return None
+    prefix = "ref: refs/heads/"
+    return line[len(prefix):] if line.startswith(prefix) and len(line) > len(prefix) else None
+
+
 def branch(cwd: str) -> str:
+    if not cwd:
+        return ""
+    root = repo_root(cwd)
+    if not root:
+        return ""
+    fast = _branch_from_head_file(root)
+    if fast is not None:
+        return fast
     return run_git(cwd, "branch", "--show-current") or run_git(cwd, "rev-parse", "--short", "HEAD")
 
 

@@ -661,6 +661,17 @@ def _session_live_status(sid: str, session: dict) -> str:
 
 def _session_live_title(session: dict, key: str) -> str:
     title = str(session.get("pending_title") or "").strip()
+    if profile_home := session.get("profile_home"):
+        state_db = Path(profile_home) / "state.db"
+        if state_db.is_file():
+            import sqlite3
+            with contextlib.suppress(Exception):
+                with contextlib.closing(sqlite3.connect(state_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as conn:
+                    conn.execute("PRAGMA query_only=1")
+                    row = conn.execute("SELECT title FROM sessions WHERE id = ?", (key,)).fetchone()
+                    if row and row[0]:
+                        return str(row[0]).strip() or title
+            return title
     with contextlib.suppress(Exception), _session_db(session) as db, _persistence_for(db) as persistence:
         title = str(persistence.sessions.get_title(key) or title or "").strip() if persistence is not None else title
     return title

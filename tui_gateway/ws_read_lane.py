@@ -55,7 +55,7 @@ READ_METHODS = {
     "profiles.list": SLOW, "session.family": SLOW, "family.overview": SLOW, "model.options": SLOW,
     "skills.changes.list": SLOW, "usage.rollup": SLOW,
     "session.active_list": FAST, "subagent.roster": FAST, "projects.list": FAST, "spawn_tree.list": FAST,
-    "mobile.capabilities": FAST,
+    "mobile.capabilities": FAST, "mobile.bots": FAST, "session.info": FAST,
 }
 # Running reads per socket, per class. The legacy dispatcher runs them on _POOL; the authority's
 # blocking steps share the loop's default executor (min(32, cpus + 4) threads) with its commits.
