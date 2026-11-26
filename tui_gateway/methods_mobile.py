@@ -147,7 +147,8 @@ def _(rid, params):
     from hermes_cli.profiles import list_profiles
     limit = _mobile_limit(params)
     offset = _mobile_limit(params, "offset", 0, 100000, 0)
-    profiles = list_profiles()
+    from tui_gateway.profile_roster_cache import cached_mobile_bot_canonical, cached_ui_meta_fields
+    profiles = list_profiles(lazy_skill_count=True, include_liveness=False, include_aliases=False)
     live_by_profile_and_session = {}
     for session in list(_sessions.values()):
         identity = (Path(session.get("profile_home") or _hermes_home).resolve(), session.get("session_key"))
@@ -155,7 +156,15 @@ def _(rid, params):
     out = []
     for profile in profiles[offset:offset + limit]:
         home = Path(profile.path)
-        raw = _read_profile_yaml(home).get("ui_meta", {})
+        def _read_ui_meta(h=home):
+            raw_meta = _read_profile_yaml(h)
+            ui_meta, revisions = raw_meta.get("ui_meta"), raw_meta.get("_ui_meta_revisions")
+            fields = {"ui_meta_revisions":
+                      _try(lambda: _clean_revisions(revisions), {}) if isinstance(revisions, dict) else {}}
+            if isinstance(ui_meta, dict) and ui_meta:
+                fields["ui_meta"] = json.loads(json.dumps(ui_meta, default=_yaml_scalar_to_json))
+            return fields
+        raw = cached_ui_meta_fields(home, _read_ui_meta).get("ui_meta", {})
         meta = raw.get("hermes-bots", {}) if isinstance(raw, dict) else {}
         meta = meta if isinstance(meta, dict) else {}
         safe_meta = {key: value[:maximum] for key, maximum in (
@@ -166,17 +175,26 @@ def _(rid, params):
                "ui_meta": {"hermes-bots": safe_meta}, "canonical_session": None,
                "has_avatar": any((home / "assets" / f"avatar.{ext}").is_file() for ext in ("png", "jpg", "webp")),
                "working": None}
+        def _read_canonical(h=home):
+            try:
+                with _mobile_read_db(h) as db:
+                    root, tip, _chain = _mobile_canonical_identity(db)
+                    preview, preview_role = _latest_message_preview_and_role(db, tip["id"])
+                    return {"canonical_session": {"id": root["id"], "resolved_id": tip["id"],
+                        "preview": preview, "preview_role": preview_role,
+                        "last_active": tip.get("last_activity_at") or tip.get("started_at") or 0,
+                        "message_count": tip.get("message_count") or 0}}
+            except (ValueError, FileNotFoundError):
+                return {"unavailable_reason": "canonical_unavailable"}
         try:
-            with _mobile_read_db(home) as db:
-                root, tip, _chain = _mobile_canonical_identity(db)
-                preview, preview_role = _latest_message_preview_and_role(db, tip["id"])
-                row["canonical_session"] = {"id": root["id"], "resolved_id": tip["id"],
-                    "preview": preview, "preview_role": preview_role,
-                    "last_active": tip.get("last_activity_at") or tip.get("started_at") or 0,
-                    "message_count": tip.get("message_count") or 0}
-            live = live_by_profile_and_session.get((home.resolve(), tip["id"]))
-            if live is not None:
-                row["working"] = bool(live.get("running"))
+            canonical_fields = cached_mobile_bot_canonical(home, _read_canonical)
+            if "canonical_session" in canonical_fields:
+                row["canonical_session"] = canonical_fields["canonical_session"]
+                live = live_by_profile_and_session.get((home.resolve(), canonical_fields["canonical_session"]["resolved_id"]))
+                if live is not None:
+                    row["working"] = bool(live.get("running"))
+            else:
+                row["unavailable_reason"] = canonical_fields.get("unavailable_reason", "canonical_unavailable")
         except (ValueError, FileNotFoundError, sqlite3.Error, RuntimeError):
             row["unavailable_reason"] = "canonical_unavailable"
         out.append(row)

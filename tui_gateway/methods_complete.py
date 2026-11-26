@@ -67,7 +67,7 @@ def _profile_mention_items(prefix: str) -> list[dict]:
         from hermes_cli.profiles import list_profiles
         seen: set[str] = set()
         # Per keystroke: only name/description are read, so never walk skill trees in-request (#114041).
-        for p in scope_to_launch_profile(list_profiles(lazy_skill_count=True), lambda info: info.name):
+        for p in scope_to_launch_profile(list_profiles(lazy_skill_count=True, include_liveness=False, include_aliases=False), lambda info: info.name):
             if not (name := (p.name or "").strip()):
                 continue
             seen.add(name.lower())
@@ -327,7 +327,7 @@ def _model_skew_err(rid) -> dict | None:
 # the picker is ~1 s of credential-pool and provider probes; the same open within the TTL of unchanged
 # config and credential files is the same answer. ``refresh`` always rebuilds, and stores the result.
 _MODEL_OPTIONS_CACHE: dict = {}
-_MODEL_OPTIONS_TTL_S = 60.0
+_MODEL_OPTIONS_TTL_S = 300.0
 # Locks live only while discovery/requesters hold them; unrelated pickers never queue together.
 _MODEL_OPTIONS_LOCKS = weakref.WeakValueDictionary()
 _MODEL_OPTIONS_LOCKS_GUARD = threading.Lock()
@@ -350,14 +350,15 @@ def _credential_stamp(path: Path):
 
 
 def _model_options_key(home, ctx, params: dict) -> tuple:
-    stamps = tuple(_credential_stamp(Path(home) / name) for name in (".env", "auth.json"))
+    stamps = tuple(_credential_stamp(Path(home) / name) for name in (".env", "auth.json", "config.yaml"))
     return (str(home), stamps, repr(ctx), bool(params.get("explicit_only")), bool(params.get("include_unconfigured")))
 
 
 def _model_options_hit(key, refresh):
     cached = _MODEL_OPTIONS_CACHE.get(key)
     if cached is not None and not refresh and time.monotonic() - cached[0] < _MODEL_OPTIONS_TTL_S:
-        return copy.deepcopy(cached[1])
+        stored = cached[1]
+        return json.loads(stored) if isinstance(stored, str) else copy.deepcopy(stored)
     return None
 
 
@@ -377,7 +378,11 @@ def _cached_model_options(home, ctx, params):
             include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
         if len(_MODEL_OPTIONS_CACHE) >= 16:
             _MODEL_OPTIONS_CACHE.clear()
-        _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), copy.deepcopy(payload))
+        try:
+            stored = json.dumps(payload)
+        except (TypeError, ValueError):
+            stored = copy.deepcopy(payload)
+        _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), stored)
         return payload
 
 
