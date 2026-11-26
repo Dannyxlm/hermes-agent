@@ -25092,6 +25092,11 @@
             "title": "Author",
             "type": "string"
           },
+          "all_profiles": {
+            "default": false,
+            "title": "All Profiles",
+            "type": "boolean"
+          },
           "category": {
             "default": "all",
             "enum": [
@@ -29331,6 +29336,11 @@
             ],
             "title": "Author",
             "type": "string"
+          },
+          "all_profiles": {
+            "default": false,
+            "title": "All Profiles",
+            "type": "boolean"
           }
         },
         "required": [

@@ -246,8 +246,8 @@ def test_attachment_coverage_tracks_only_admitted_attachment_blocks(indexed, rol
     with SessionDB(db_path=home / 'state.db') as db:
         mid = db.append_message('other', role, json.dumps(blocks) if storage == 'content' else 'No user attachment')
         if storage == 'display_metadata':
-            db._conn.execute('UPDATE messages SET display_metadata=? WHERE id=?', (json.dumps({'attachments': blocks}), mid))
-            db._conn.commit()
+            with sqlite3.connect(home / 'state.db') as conn:
+                conn.execute('UPDATE messages SET display_metadata=? WHERE id=?', (json.dumps({'attachments': blocks}), mid))
     refresh(index)
     page = result()
     if role == 'user':

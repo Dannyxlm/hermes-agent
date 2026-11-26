@@ -1686,6 +1686,7 @@ export interface FilesIndexParams {
   snapshot_id?: string | null
   limit?: number
   author?: 'all' | 'agents' | 'me'
+  all_profiles?: boolean
   category?: 'all' | 'media' | 'files'
   include_workspace?: boolean
   directory_path?: string | null
@@ -1746,6 +1747,7 @@ export interface IndexParams {
   snapshot_id?: string | null
   limit?: number
   author?: 'all' | 'agents' | 'me'
+  all_profiles?: boolean
 }
 export interface LinksIndexResult {
   schema_version: 1
