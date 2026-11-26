@@ -140,6 +140,7 @@ describe('useBackgroundSync profile-scoped session refresh', () => {
   })
 
   it('reloads archived sessions after an external session change while the Archived view is open', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true)
     $changeEventsAvailable.set(true)
     $sidebarShowArchived.set(true)
     render('default', 'local', async () => undefined)
@@ -149,6 +150,27 @@ describe('useBackgroundSync profile-scoped session refresh', () => {
     })
 
     expect(loadArchivedSessions).toHaveBeenCalledTimes(1)
+  })
+
+  it('defers heavy session-list refreshes while unfocused and catches up on focus', async () => {
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const refreshSessions = vi.fn(async () => undefined)
+    $changeEventsAvailable.set(true)
+    render('default', 'local', refreshSessions)
+    await act(async () => undefined)
+    refreshSessions.mockClear()
+
+    await act(async () => {
+      $sessionsChangeTick.set(1)
+      $sessionsChangeTick.set(2)
+    })
+    expect(refreshSessions).not.toHaveBeenCalled()
+
+    hasFocus.mockReturnValue(true)
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -177,6 +177,9 @@ class ApprovalChoice(WireEnum):
 
 
 class ApprovalKind(WireEnum):
+    command = "command"
+    access = "access"
+    network = "network"
     terminal = "terminal"
     tool = "tool"
     payment = "payment"
@@ -193,6 +196,11 @@ class ApprovalKind(WireEnum):
         if family == "mcp-elicitation":
             return cls.mcp_elicitation
         return cls.tool if tool_name and tool_name != "terminal" else cls.terminal
+
+
+class ApprovalAccessLevel(WireEnum):
+    read = "read"
+    read_write = "read_write"
 
 
 class PaymentMerchant(Params):
@@ -256,12 +264,24 @@ class PaymentApprovalContext(Params):
 
 
 class ApprovalRequestParams(ServerRequestParams):
-    """``tui_gateway/server.py::_approval_request_payload`` — the command is redacted server-side."""
+    """``tui_gateway/server.py::_approval_request_payload`` — the command is redacted server-side.
+
+    ``kind`` selects the card; absent means ``command``. A sandbox asks for a folder with
+    ``access`` (``path``, and ``access`` read or read_write) and for a site with ``network``
+    (``host``, and an optional display ``label``). ``risk`` is one short line shown under the
+    folder or site. On those two kinds ``once`` allows until the sandbox is switched off and
+    ``always`` saves the rule; a ``deny`` answer may carry the user's ``reason``.
+
+    An ``access`` request without a ``path`` and a ``network`` request without a ``host`` are
+    refused: the desktop answers with an error and shows no card. A card that outlives its turn
+    stays on screen only while its sender lists it in ``approval.pending``: the desktop removes
+    a card that list does not name."""
 
     request_id: str
     kind: ApprovalKind | None = None
-    # Explicit producer risk classification. Missing/old context is not safe quick consent.
-    risk: Literal["read_only", "destructive", "sensitive", "unknown"] = "unknown"
+    # Explicit producer risk classification ("read_only"|"destructive"|"sensitive"|"unknown")
+    # or a short risk line for sandbox access/network cards.
+    risk: str | None = "unknown"
     destructive: bool = False
     sensitive: bool = False
     # Output projection derives this; a producer-supplied True grants nothing.
@@ -279,12 +299,20 @@ class ApprovalRequestParams(ServerRequestParams):
     origin: str | None = None
     mcp_server: str | None = None
     session_id_hint: str | None = Field(default=None, alias="gateway_session_id")
+    path: str | None = None
+    access: ApprovalAccessLevel | None = None
+    host: str | None = None
+    label: str | None = None
     # The approval queue entry carries tool-specific context the card may render; the closed set
     # of keys is owned by tools/approval.py, so it stays open here.
     model_config = Params.model_config | {"extra": "allow"}
 
     @model_validator(mode="after")
     def consent_scopes(self) -> ApprovalRequestParams:
+        if self.kind == ApprovalKind.access and not (self.path or "").strip():
+            raise ValueError("an access request needs a path")
+        if self.kind == ApprovalKind.network and not (self.host or "").strip():
+            raise ValueError("a network request needs a host")
         inferred = ApprovalKind.for_context(self.surface, self.tool_name, payment=self.payment is not None)
         consent = {ApprovalKind.payment, ApprovalKind.mcp_trust, ApprovalKind.mcp_elicitation}
         if inferred in consent or self.kind in consent:
@@ -297,6 +325,8 @@ class ApprovalRequestParams(ServerRequestParams):
 
 
 class ApprovalResult(Result):
+    """``reason``: why the user denied an ``access`` or ``network`` card; command approvals ignore it."""
+
     choice: ApprovalChoice
     all: bool | None = None
     reason: str | None = Field(default=None, max_length=2000)
@@ -310,7 +340,7 @@ class ApprovalResult(Result):
 
 
 server_request("approval", params=ApprovalRequestParams, result=ApprovalResult,
-               doc="An action awaits the user's exact offered consent.")
+               doc="An action, or a sandbox's folder or site request, awaits the user's exact offered consent.")
 
 
 # ── one-string prompts ────────────────────────────────────────────────────────────────────────

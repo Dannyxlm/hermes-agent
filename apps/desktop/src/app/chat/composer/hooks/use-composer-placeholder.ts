@@ -3,17 +3,25 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useI18n } from '@/i18n'
 import { useStoresSelector } from '@/lib/use-session-slice'
+import { $backendTransitions, backendTransitionLabel, transitionProfileKey } from '@/store/backend-transition'
 import { resetBrowseState } from '@/store/composer-input-history'
 import { $activeGatewayProfile } from '@/store/profile'
 import { $cronRunReadOnlyVerdicts, $readOnlyStoredTranscripts, $sessionWriteVerdicts, isStoredTranscriptReadOnly } from '@/store/read-only-transcript'
-import { $connection, $gatewayState, $sessions } from '@/store/session'
+import { $connection, $sessions } from '@/store/session'
 
-import { pickPlaceholder, shouldDisableComposerInput } from '../composer-utils'
+import { pickPlaceholder } from '../composer-utils'
+import { useComposerConnection } from './use-composer-connection'
 
 /** The composer consumes the same authority verdict as submit, before any Send gesture. */
-export function useComposerAvailability(disabledProp: boolean, storedId: string | null, sessionId: string | null | undefined) {
+export function useComposerAvailability(
+  gatewayDisabled: boolean,
+  storedId: string | null,
+  sessionId: string | null | undefined,
+  profile?: null | string
+) {
   const { t } = useI18n()
-  const gatewayState = useStore($gatewayState)
+  const { backendTransition, disabled: connDisabled, inputDisabled: connInputDisabled, reconnecting } =
+    useComposerConnection(gatewayDisabled, profile)
 
   // Subscribe to the verdict itself; the compiler can memoize an imperative store read.
   const readOnly = useStoresSelector(
@@ -21,15 +29,22 @@ export function useComposerAvailability(disabledProp: boolean, storedId: string 
     () => isStoredTranscriptReadOnly(storedId)
   )
 
-  const disabled = disabledProp || readOnly
-  const ordinary = useComposerPlaceholder({ disabled, reconnecting: gatewayState !== 'open', sessionId })
+  const disabled = connDisabled || readOnly
+  const ordinary = useComposerPlaceholder({ disabled, profile, reconnecting, sessionId })
 
-  return { disabled, inputDisabled: readOnly || shouldDisableComposerInput(disabledProp, gatewayState),
-    placeholder: readOnly ? t.desktop.readOnlyTranscriptSendBlocked : ordinary }
+  return {
+    backendTransition,
+    disabled,
+    inputDisabled: readOnly || connInputDisabled,
+    placeholder: readOnly ? t.desktop.readOnlyTranscriptSendBlocked : ordinary,
+    reconnecting
+  }
 }
 
 interface UseComposerPlaceholderOptions {
   disabled: boolean
+  /** The composer's profile; the active gateway profile when absent. */
+  profile?: null | string
   reconnecting: boolean
   sessionId: null | string | undefined
 }
@@ -41,8 +56,15 @@ interface UseComposerPlaceholderOptions {
  * keeps its starter so the text doesn't flip mid-stream. While the transport is
  * down, it swaps to a reconnecting / starting message instead.
  */
-export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: UseComposerPlaceholderOptions): string {
+export function useComposerPlaceholder({
+  disabled,
+  profile,
+  reconnecting,
+  sessionId
+}: UseComposerPlaceholderOptions): string {
   const { t } = useI18n()
+  const activeProfile = useStore($activeGatewayProfile)
+  const transition = useStore($backendTransitions)[transitionProfileKey(profile || activeProfile)] ?? null
   const newSessionPlaceholders = t.composer.newSessionPlaceholders
   const followUpPlaceholders = t.composer.followUpPlaceholders
 
@@ -75,10 +97,14 @@ export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: Us
   // Distinguish a cold start ("Starting Hermes...") from a dropped connection
   // we're trying to restore. During reconnect, keep the textbox editable so a
   // flaky network doesn't block drafting; only submit/backend actions stay
-  // disabled until the gateway is open again.
-  return disabled
-    ? reconnecting
-      ? t.composer.placeholderReconnecting
-      : t.composer.placeholderStarting
-    : restingPlaceholder
+  // disabled until the gateway is open again. A plugin-run profile's planned
+  // start, restart or stop names itself instead, also while the connection is
+  // still open (a start: this computer's backend serves the profile meanwhile).
+  return transition
+    ? backendTransitionLabel(transition, t.sandbox)
+    : disabled
+      ? reconnecting
+        ? t.composer.placeholderReconnecting
+        : t.composer.placeholderStarting
+      : restingPlaceholder
 }

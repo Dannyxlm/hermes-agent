@@ -13,6 +13,7 @@ import { clearSettledClarifyRequest } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
 import { noteFreeTierTurnComplete } from '@/store/free-tier-sign-in'
 import { notify } from '@/store/notifications'
+import { continueReplyPause, endContinuedReplyPause, markReplyPaused } from '@/store/paused-replies'
 import { flashPetActivity, markPetUnread, setPetActivity } from '@/store/pet'
 import { clearAllPrompts } from '@/store/prompts'
 import { providerWaitText, setSessionProviderWait } from '@/store/provider-wait'
@@ -25,8 +26,10 @@ import { lightDesktopMessagingCompletion } from '@/store/session-unread'
 import { pruneFinishedSessionSubagents } from '@/store/subagents'
 import { clearActiveSessionTodos } from '@/store/todos'
 
+import { continueStoppedReply } from '../interrupted-reply'
 import { segmentStamp } from '../segment-identity'
 
+import { oweTurnEndReport } from './turn-end-report'
 import type { GatewayEventContext } from './types'
 
 function firstBillingLine(text: string): string {
@@ -134,6 +137,12 @@ function lightOwnMessagingTurn(runtimeId: string, admissionId: string | undefine
   lightDesktopMessagingCompletion(storedId, admissionId, storedId === $focusedStoredSessionId.get(), profile)
 }
 
+/** The stored chat a runtime session shows (store/paused-replies.ts is keyed by it: a backend restart changes the
+ *  runtime id between a paused turn and its continuation). */
+function chatOf(ctx: GatewayEventContext, runtimeId: string): string {
+  return ctx.deps.sessionStateByRuntimeIdRef.current.get(runtimeId)?.storedSessionId || runtimeId
+}
+
 /** message.start: arm the session for a new turn, unless it re-sends the current one. */
 function handleMessageStart(ctx: GatewayEventContext): boolean {
   const { deps, payload, sessionId, isActiveEvent } = ctx
@@ -166,6 +175,9 @@ function handleMessageStart(ctx: GatewayEventContext): boolean {
   }
 
   pruneFinishedSessionSubagents(sessionId)
+  // The turn a pause was waiting for (or any other) has started: the reply goes on, and a send still
+  // waits for this turn to end (store/paused-replies.ts).
+  continueReplyPause(chatOf(ctx, sessionId))
   setSessionCompacting(sessionId, false)
   compactedTurnRef.current.delete(sessionId)
   nativeSubagentSessionsRef.current.delete(sessionId)
@@ -200,8 +212,9 @@ function handleMessageStart(ctx: GatewayEventContext): boolean {
     }
 
     // A projected queued prompt drawn before this start is this turn's
-    // prompt from here on, even while its row is still on screen.
-    const messages = markQueuedPromptStarted(state.messages)
+    // prompt from here on, even while its row is still on screen. A stopped
+    // reply with nothing visible after it is the reply this turn goes on with.
+    const messages = continueStoppedReply(markQueuedPromptStarted(state.messages), payload)
 
     return {
       ...state,
@@ -409,8 +422,9 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
     // Turn ended — drop any blocking prompt still open for THIS session
     // (e.g. interrupted, or the approval already resolved). Scoped to the
     // session so a background turn finishing can't wipe the active chat's
-    // prompt, and vice versa.
-    clearAllPrompts(sessionId)
+    // prompt, and vice versa. Folder and site cards stay: the sandbox, not
+    // the turn, waits on them.
+    clearAllPrompts(sessionId, 'turn-end')
     clearSettledClarifyRequest(sessionId)
     // Turn ended without a final `todo` update — drop a still-unfinished
     // list so "Tasks N/M" doesn't stay pinned above the composer with the
@@ -426,6 +440,10 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
 
     const finalText = coerceGatewayText(payload?.text) || coerceGatewayText(payload?.rendered)
 
+    // This turn's end-of-turn report is still to come, and may arrive after the
+    // next turn's message.start (turn-end-report.ts).
+    deps.updateSessionState(sessionId, state => oweTurnEndReport(state))
+
     // The view mirrors this runtime only while bound to it (settled-turns.ts).
     noteTurnSettled(sessionId, deps.activeSessionIdRef.current === sessionId)
     completeAssistantMessage(
@@ -440,6 +458,14 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
       payload?.response_reused === true,
       typeof payload?.failure_reason === 'string' ? payload.failure_reason : undefined
     )
+
+    // The continuation a pause waited for has ended: sends held for it go now. Interrupted to be continued
+    // by its interrupter (session.interrupt `resume`, the first pause or another one): paused, not stopped.
+    endContinuedReplyPause(chatOf(ctx, sessionId))
+
+    if (payload?.status === 'interrupted' && payload.paused === true) {
+      markReplyPaused(chatOf(ctx, sessionId))
+    }
 
     if (payload?.status === 'complete') {
       noteFreeTierTurnComplete()

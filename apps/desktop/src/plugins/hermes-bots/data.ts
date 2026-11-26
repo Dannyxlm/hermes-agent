@@ -952,14 +952,30 @@ async function reconcileBotMeta(rows: RosterRow[], fetchedAt: number): Promise<v
   )
 }
 
-export function useRoster() {
+export function useRoster(options?: { pollIntervalMs?: false | number }) {
   const activeConnectionId = useValue(host.state.connectionId)
+  const pollIntervalMs = options?.pollIntervalMs ?? 5000
 
   return useQuery({
     queryKey: [...ROSTER_KEY, activeConnectionId],
     queryFn: () => fetchRosterSnapshot(activeConnectionId),
-    refetchInterval: 5000,
-    staleTime: 5000,
+    refetchInterval: () => {
+      if (pollIntervalMs === false) {
+        return false
+      }
+
+      if (
+        typeof document !== 'undefined' &&
+        (document.visibilityState !== 'visible' ||
+          (typeof document.hasFocus === 'function' && !document.hasFocus()))
+      ) {
+        return Math.max(pollIntervalMs, 60_000)
+      }
+
+      return pollIntervalMs
+    },
+    refetchIntervalInBackground: false,
+    staleTime: typeof pollIntervalMs === 'number' ? Math.min(pollIntervalMs, 30_000) : 30_000,
     retry: ROSTER_QUERY_RETRY,
     retryDelay: attempt => Math.min(15000, 1000 * 2 ** attempt)
   })

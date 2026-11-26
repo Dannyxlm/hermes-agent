@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from tui_gateway import server
 from agent.message_sanitization import _sanitize_surrogates
+from gateway.session_presence import ClientPresence
 from tui_gateway.event_replay import replay_epoch
 from tui_gateway.transport import serialize_frame
 from hermes_cli.route_metrics import client_label, rpc_dispatch_metrics
@@ -152,6 +153,11 @@ class WSTransport:
         #: ``phone``/``desktop``/``widget``/``unknown`` from the upgrade request's user agent (route_metrics' labels).
         self.client = client_label((getattr(ws, "scope", None) or {}).get("headers", ()))[0]
         self.desktop_local = False
+        #: The client label this peer announced (``client.capabilities`` ``client``, unknown kind removed);
+        #: None until it does. Self-declared, attribution only.
+        self.client_identity: dict | None = None
+        #: Which sessions this peer's user touched lately (gateway/session_presence.py); memory only.
+        self.client_presence = ClientPresence()
         #: The served profile home whose skin this peer follows (None = the launch home); see change_watcher.
         self.skin_home: str | None = None
         self._closed = False
