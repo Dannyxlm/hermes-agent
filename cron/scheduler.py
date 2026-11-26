@@ -2741,6 +2741,19 @@ def _run_with_fire_claim_heartbeat(job: dict, run) -> bool:
         heartbeat_thread.join(timeout=1.0)
 
 
+def _stamp_run_start(job: dict, execution_id: str) -> None:
+    """Persist ``last_execution_id`` as the run STARTS. A reader compares it with
+    ``last_delivery_receipt.execution_id``: stamping only at completion would let a run that dies
+    before ``mark_job_run`` leave the previous id in place, matching the previous run's receipt
+    and reading as "the latest run delivered". Never raises."""
+    job["last_execution_id"] = execution_id
+    try:
+        from cron.jobs import update_job
+        update_job(job["id"], {"last_execution_id": execution_id})
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Job '%s': could not stamp run start: %s", job.get("id"), exc)
+
+
 def run_one_job(
     job: dict, *, adapters=None, loop=None, verbose: bool = False,
     extra_prompt: Optional[str] = None, cancel_event: Optional[_CancelEventLike] = None,
@@ -2762,6 +2775,7 @@ def run_one_job(
     note_cron_execution(job)
     external_owner = os.environ.get("_HERMES_CRON_EXTERNAL_WORKER") == execution_id
     if not external_owner:
+        _stamp_run_start(job, execution_id)
         try:
             handed_off = _launch_external_cron_worker(job)
         except Exception as handoff_error:

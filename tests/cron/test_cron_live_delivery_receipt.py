@@ -127,3 +127,73 @@ def test_a_failure_notice_receipt_is_labelled_as_one(tmp_path, monkeypatch):
     _deliver(_run_of(job_id, "exec-mon", None), _SendResult(message_id=9), for_failure=True)
 
     assert _saved(job_id)["last_delivery_receipt"]["failure_notice"] is True
+
+
+# ---------------------------------------------------------------------------
+# Run identity comes from the real scheduler, and is stamped when the run starts
+# ---------------------------------------------------------------------------
+
+class _Killed(BaseException):
+    """A run that dies before delivery and before ``mark_job_run`` (crash, SIGKILL, hang cut off)."""
+
+
+def _real_tick_setup(tmp_path, monkeypatch):
+    from cron import scheduler
+    from gateway.config import GatewayConfig
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = GatewayConfig()
+    config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True)
+    monkeypatch.setattr("gateway.config.load_gateway_config", lambda: config)
+
+    async def send(platform, pconfig, chat_id, text, **kwargs):
+        return {"success": True, "message_id": "r"}
+
+    monkeypatch.setattr("gateway.outbound.send._send_to_platform", send)
+    seen = []
+    real = scheduler._deliver_result
+
+    def spy(job, *args, **kwargs):
+        seen.append(job.get("execution_id"))
+        return real(job, *args, **kwargs)
+
+    monkeypatch.setattr(scheduler, "_deliver_result", spy)
+    return scheduler, seen
+
+
+def test_a_real_scheduler_run_hands_delivery_its_own_execution_id(tmp_path, monkeypatch):
+    from cron import executions
+
+    scheduler, seen = _real_tick_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(scheduler, "run_job", lambda job, **kw: (True, "raw", "the result", None))
+    job = jobs.create_job(prompt="p", schedule="every 1h", deliver=TARGET)
+
+    scheduler.run_one_job(job)
+    scheduler.drain_delivery_queue({}, None)
+
+    latest = executions.latest_execution(job["id"])["id"]
+    assert seen and set(seen) == {latest}               # delivery saw this run's id, set by production code
+    assert _saved(job["id"])["last_execution_id"] == latest
+
+
+def test_a_run_killed_before_delivery_no_longer_matches_the_earlier_receipt(tmp_path, monkeypatch):
+    """Start a run, kill it before delivery: the latest run id moves on, the receipt does not."""
+    import contextlib
+
+    from cron import executions
+
+    scheduler, _ = _real_tick_setup(tmp_path, monkeypatch)
+    job_id = jobs.create_job(prompt="p", schedule="every 1h", deliver=TARGET)["id"]
+    assert _deliver(_run_of(job_id, "exec-mon", None), _SendResult(message_id=4242)) is None
+
+    def killed(job, **kw):
+        raise _Killed()
+
+    monkeypatch.setattr(scheduler, "run_job", killed)
+    with contextlib.suppress(_Killed):
+        scheduler.run_one_job(_saved(job_id))
+
+    saved = _saved(job_id)
+    assert saved["last_delivery_receipt"]["execution_id"] == "exec-mon"
+    assert saved["last_execution_id"] == executions.latest_execution(job_id)["id"]
+    assert saved["last_execution_id"] != saved["last_delivery_receipt"]["execution_id"]
