@@ -54,6 +54,9 @@ class Pruner:
     def reclaim(self) -> None:
         """Full ``git gc`` — tens of seconds on a GB store, so only the periodic prune calls it.
         A ref rewrite that ran without it leaves a marker so the next prune reclaims."""
+        # Retention can already have removed the ref that triggered this run.
+        # Preserve the retry even if there are no more refs to prune next time.
+        self._mark_gc_pending()
         self._git(["reflog", "expire", "--expire=now", "--all"])
         self._git(["gc", "--prune=now", "--quiet"], timeout=self.timeout * 3)
         # Bare stores must remain usable when gc packs all refs.
