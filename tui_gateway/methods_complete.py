@@ -328,9 +328,11 @@ def _model_skew_err(rid) -> dict | None:
 # config and credential files is the same answer. ``refresh`` always rebuilds, and stores the result.
 _MODEL_OPTIONS_CACHE: dict = {}
 _MODEL_OPTIONS_TTL_S = 300.0
+_MODEL_OPTIONS_STALE_S = 1800.0
 # Locks live only while discovery/requesters hold them; unrelated pickers never queue together.
 _MODEL_OPTIONS_LOCKS = weakref.WeakValueDictionary()
 _MODEL_OPTIONS_LOCKS_GUARD = threading.Lock()
+_MODEL_OPTIONS_REVALIDATING: set = set()
 
 
 def _model_options_lock(key):
@@ -354,12 +356,69 @@ def _model_options_key(home, ctx, params: dict) -> tuple:
     return (str(home), stamps, repr(ctx), bool(params.get("explicit_only")), bool(params.get("include_unconfigured")))
 
 
+def _clone_model_options(stored):
+    return json.loads(stored) if isinstance(stored, str) else copy.deepcopy(stored)
+
+
+def _store_model_options(key, payload) -> None:
+    if len(_MODEL_OPTIONS_CACHE) >= 16:
+        _MODEL_OPTIONS_CACHE.clear()
+    try:
+        stored = json.dumps(payload)
+    except (TypeError, ValueError):
+        stored = copy.deepcopy(payload)
+    _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), stored)
+
+
 def _model_options_hit(key, refresh):
     cached = _MODEL_OPTIONS_CACHE.get(key)
     if cached is not None and not refresh and time.monotonic() - cached[0] < _MODEL_OPTIONS_TTL_S:
-        stored = cached[1]
-        return json.loads(stored) if isinstance(stored, str) else copy.deepcopy(stored)
+        return _clone_model_options(cached[1])
     return None
+
+
+def _model_options_stale_hit(key, refresh):
+    # Only serve stale-while-revalidate when TTL is positive (tests that set TTL=0 expect sync expiry).
+    if refresh or _MODEL_OPTIONS_TTL_S <= 0:
+        return None
+    cached = _MODEL_OPTIONS_CACHE.get(key)
+    if cached is None:
+        return None
+    age = time.monotonic() - cached[0]
+    if _MODEL_OPTIONS_TTL_S <= age < _MODEL_OPTIONS_STALE_S:
+        return _clone_model_options(cached[1])
+    return None
+
+
+def _schedule_model_options_revalidate(key, home, ctx, params) -> None:
+    with _MODEL_OPTIONS_LOCKS_GUARD:
+        if key in _MODEL_OPTIONS_REVALIDATING:
+            return
+        _MODEL_OPTIONS_REVALIDATING.add(key)
+
+    explicit_only = bool(params.get("explicit_only"))
+    include_unconfigured = bool(params.get("include_unconfigured"))
+
+    import contextvars
+    copied_ctx = contextvars.copy_context()
+
+    def _refresh_bg():
+        try:
+            from hermes_cli.inventory import build_model_options_payload
+            with _model_options_lock(key):
+                if _model_options_hit(key, False) is not None:
+                    return
+                payload = build_model_options_payload(
+                    ctx, explicit_only=explicit_only,
+                    include_unconfigured=include_unconfigured, refresh=False)
+                _store_model_options(key, payload)
+        except Exception:
+            pass
+        finally:
+            with _MODEL_OPTIONS_LOCKS_GUARD:
+                _MODEL_OPTIONS_REVALIDATING.discard(key)
+
+    threading.Thread(target=lambda: copied_ctx.run(_refresh_bg), name="model-options-swr", daemon=True).start()
 
 
 def _cached_model_options(home, ctx, params):
@@ -369,6 +428,10 @@ def _cached_model_options(home, ctx, params):
     cached = _model_options_hit(key, refresh)
     if cached is not None:
         return cached
+    stale = _model_options_stale_hit(key, refresh)
+    if stale is not None:
+        _schedule_model_options_revalidate(key, home, ctx, params)
+        return stale
     with _model_options_lock(key):
         cached = _model_options_hit(key, refresh)
         if cached is not None:
@@ -376,13 +439,7 @@ def _cached_model_options(home, ctx, params):
         payload = build_model_options_payload(
             ctx, explicit_only=bool(params.get("explicit_only")),
             include_unconfigured=bool(params.get("include_unconfigured")), refresh=refresh)
-        if len(_MODEL_OPTIONS_CACHE) >= 16:
-            _MODEL_OPTIONS_CACHE.clear()
-        try:
-            stored = json.dumps(payload)
-        except (TypeError, ValueError):
-            stored = copy.deepcopy(payload)
-        _MODEL_OPTIONS_CACHE[key] = (time.monotonic(), stored)
+        _store_model_options(key, payload)
         return payload
 
 

@@ -1594,7 +1594,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
         from hermes_cli.config import recommended_update_command
         # Two assignments (not one info.update): if recommended_update_command() raises,
         # update_behind must still be reported, as on main.
-        info["update_behind"] = get_update_result(timeout=0.5)
+        info["update_behind"] = get_update_result(timeout=0.0)
         info["update_command"] = recommended_update_command()
     if live_agent and (warn := _probe_credentials(agent)):
         info["credential_warning"] = warn
