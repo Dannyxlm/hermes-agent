@@ -81,9 +81,38 @@ async def payload(request: Request):
 
 def warm_indexes():
     try:
-        return [deliverable_store(profile_id()), deliverable_store(profile_id(), files_index=True)]
+        indexes = [deliverable_store(profile_id()), deliverable_store(profile_id(), files_index=True)]
     except ValueError:  # an unverified custom home has no Files index to warm
         return []
+    try:
+        import os, re
+        from hermes_constants import get_default_hermes_root, get_hermes_home
+        root = get_default_hermes_root().resolve()
+        if get_hermes_home().resolve() != root:
+            return indexes
+        profiles_dir = root / 'profiles'
+        if not profiles_dir.is_dir():
+            return indexes
+        prev_home = os.environ.get('HERMES_HOME')
+        for entry in sorted(profiles_dir.iterdir(), key=lambda x: x.name):
+            name = entry.name
+            if name.startswith('.') or not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+                continue
+            if entry.is_symlink() or not entry.is_dir() or not (entry / 'state.db').is_file():
+                continue
+            try:
+                os.environ['HERMES_HOME'] = str(entry)
+                indexes.append(deliverable_store(name, files_index=True))
+            except Exception:
+                continue
+            finally:
+                if prev_home is None:
+                    os.environ.pop('HERMES_HOME', None)
+                else:
+                    os.environ['HERMES_HOME'] = prev_home
+    except Exception:
+        pass
+    return indexes
 
 
 @contextlib.asynccontextmanager

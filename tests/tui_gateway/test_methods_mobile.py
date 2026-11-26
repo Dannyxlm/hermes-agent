@@ -36,8 +36,9 @@ def mobile_home(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_sessions", {})
     for path in (home, home / "profiles" / "ops"):
         with SessionDB(db_path=path / "state.db") as db:
-            db.create_session("root" if path == home else "ops-root", "desktop")
-            db._conn.execute("UPDATE sessions SET title = 'Bot Chat'")
+            sid = "root" if path == home else "ops-root"
+            db.create_session(sid, "desktop")
+            db.set_session_title(sid, "Bot Chat")
     launch_db = SessionDB(db_path=home / "state.db")
     monkeypatch.setattr(server, "_get_db", lambda: launch_db)
     def hydration(sid, key, db, *, close_db=False, tip_only=False, model_history_only=False):

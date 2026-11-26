@@ -33,8 +33,10 @@ def indexed(mobile_home, peer):
         db.create_session('tip', 'desktop', parent_session_id='root')
         db.create_session('delegate', 'subagent', parent_session_id='root')
         db.create_session('other', 'desktop')
-        db._conn.execute("UPDATE sessions SET cwd=?,title='Fixture chat ' || id", (str(root),))
-        db._conn.execute("UPDATE sessions SET end_reason='compression' WHERE id='root'")
+    with sqlite3.connect(home / 'state.db') as conn:
+        conn.execute("UPDATE sessions SET cwd=?,title='Fixture chat ' || id", (str(root),))
+        conn.execute("UPDATE sessions SET end_reason='compression' WHERE id='root'")
+    with SessionDB(db_path=home / 'state.db') as db:
         db.append_message('root', 'assistant', 'MEDIA: ' + str(root / 'outputs/report.md'))
         db.append_message('tip', 'user', json.dumps([
             {'type': 'file', 'file': {'path': str(root / 'outputs/hero.png')}},
@@ -146,9 +148,9 @@ def test_display_metadata_attachments_and_canonical_quoted_mentions(indexed):
     target.write_text('report')
     with SessionDB(db_path=home / 'state.db') as db:
         mid = db.append_message('root', 'user', 'See attachment')
-        db._conn.execute('UPDATE messages SET display_metadata=? WHERE id=?',
-                         (json.dumps({'attachments': [{'type': 'file', 'path': str(target)}]}), mid))
-        db._conn.commit()
+    with sqlite3.connect(home / 'state.db') as conn:
+        conn.execute('UPDATE messages SET display_metadata=? WHERE id=?',
+                     (json.dumps({'attachments': [{'type': 'file', 'path': str(target)}]}), mid))
     index.refresh(max_sessions=100)
     page = result(session_id='root', q='a report.md')
     assert len(page['items']) == 1
@@ -164,8 +166,8 @@ def test_bounded_attachment_evidence_reports_unknown_totals(indexed):
     with SessionDB(db_path=home / 'state.db') as db:
         mid = db.append_message('root', 'user', 'Attached')
         metadata = {'attachments': [{'path': str(root / 'outputs/report.md')}] * 513}
-        db._conn.execute('UPDATE messages SET display_metadata=? WHERE id=?', (json.dumps(metadata), mid))
-        db._conn.commit()
+    with sqlite3.connect(home / 'state.db') as conn:
+        conn.execute('UPDATE messages SET display_metadata=? WHERE id=?', (json.dumps(metadata), mid))
     index.refresh(max_sessions=100)
     page = result(session_id='root')
     assert not page['coverage']['complete']

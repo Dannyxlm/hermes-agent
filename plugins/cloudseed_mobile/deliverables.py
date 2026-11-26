@@ -20,8 +20,8 @@ MAX_STRING=1024*1024
 MAX_NODES=512
 MAX_REFERENCES=500
 MUTATIONS={'write_file':'created','write':'created','patch':'edited','edit':'edited','edit_file':'edited','move':'edited','move_file':'edited','delete':'edited','delete_file':'edited','read_file':'read'}
-PRODUCERS={'image_generate','text_to_speech','write_file','pdf','powerpoint','docx','xlsx','browser_vision','capture_screenshot'}
-OUTPUT_KEYS={'path','file_path','output_path','image','image_url','audio_path','video_path','download_url','media','url'}
+PRODUCERS={'image_generate','generate_image','image_gen','text_to_speech','write_file','pdf','render_pdf','render_html','create_chart','powerpoint','docx','xlsx','browser_vision','capture_screenshot','take_screenshot','screenshot'}
+OUTPUT_KEYS={'path','file_path','output_path','output_file','saved_path','screenshot_path','artifact_path','generated_path','image','image_url','audio_path','video_path','download_url','media','url'}
 # These tools echo files, transcripts, page text or arbitrary program stdout.
 # A MEDIA example in that content is not a delivery by the enclosing tool.
 CONTENT_READERS={
@@ -295,6 +295,14 @@ def project(profile,session,messages,workspaces,status=None,reference_limit=MAX_
             name=(m.get('tool_name') or '').split('__')[-1].rsplit('.',1)[-1]
             body=unwrap(m.get('content'))
             if isinstance(body,dict) and (body.get('error') or body.get('success') is False or body.get('verified') is False): continue
+            if isinstance(body,dict) and isinstance(body.get('artifacts'),list):
+                for entry in body['artifacts'][:MAX_NODES]:
+                    if isinstance(entry,str):
+                        add(entry,'created',m,'tool_artifact')
+                    elif isinstance(entry,dict):
+                        val=entry.get('path') or entry.get('file_path') or entry.get('output_path') or entry.get('url')
+                        if isinstance(val,str):
+                            add(val,'created',m,'tool_artifact')
             for key,text in strings(body,status):
                 for value,action in references(text, assistant=True):
                     action='referenced' if not name or name in CONTENT_READERS else action

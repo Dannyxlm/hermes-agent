@@ -16,6 +16,7 @@ class IndexParams(Params):
     snapshot_id: str | None = Field(default=None, max_length=128, strict=True)
     limit: int = Field(default=50, ge=1, le=200, strict=True)
     author: Literal['all', 'agents', 'me'] = 'all'
+    all_profiles: bool = Field(default=False, strict=True)
 
 
 class FilesIndexParams(IndexParams):
