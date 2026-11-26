@@ -37,6 +37,7 @@ from utils import mtime_is_racy
 # profile leaves one stale entry, so a memo is dropped whole once it grows past any plausible fleet.
 _SESSION_CACHE: dict[str, tuple[tuple, dict]] = {}
 _UI_META_CACHE: dict[str, tuple[tuple, dict]] = {}
+_MOBILE_BOT_CANONICAL_CACHE: dict[str, tuple[tuple, dict]] = {}
 # The canonical gateway's rows also depend on who reads them (its owner filter): keyed by
 # (profile path, reader).
 _READER_SESSION_CACHE: dict[tuple, tuple[tuple, dict]] = {}
@@ -92,20 +93,52 @@ def _cached(cache: dict, key: str, signature: Optional[tuple], compute: Callable
             _FLIGHTS.pop(flight_key, None)
 
 
+def wal_shm_header(db_path: Path) -> Optional[bytes]:
+    """Consistent 48-byte SQLite WAL-index header from ``<db>-shm``, or None when absent/mid-write.
+
+    SQLite maintains two copies of the 48-byte WalIndexHdr at offsets 0 and 48 of the ``-shm`` file
+    and updates ``iChange``, ``mxFrame``, ``aSalt``, and ``aFrameCksum`` synchronously on every WAL
+    commit. Matching non-zero copies prove a settled WAL commit state even when ``-wal`` mtime is
+    within the filesystem racy-mtime window.
+    """
+    try:
+        with open(f"{db_path}-shm", "rb") as fh:
+            raw = fh.read(96)
+    except OSError:
+        return None
+    if len(raw) != 96:
+        return None
+    h1, h2 = raw[:48], raw[48:96]
+    if h1 != h2 or not any(h1):
+        return None
+    return h1
+
+
 def store_signature(profile_path: str | Path) -> Optional[tuple]:
     """``(name, mtime_ns, size, inode)`` per store file, or None when absent/racy.
 
     The pair the change watcher already trusts for ``sessions.changed``. None too while a file's
-    mtime is fresh enough that a same-tick, same-size WAL rewrite could still hide behind it.
+    mtime is fresh enough that a same-tick, same-size WAL rewrite could still hide behind it —
+    unless only ``state.db-wal`` is fresh and ``state.db-shm`` provides a consistent WAL-index
+    header that changes on every SQLite commit.
     """
     base = Path(profile_path)
     parts = [p for p in (_file_parts(base / name, with_inode=True) for name in _STORE_FILES) if p is not None]
     # Our own read-only open creates an EMPTY -wal sidecar on a store that never had one; it
     # carries no frames, so it must not read as "the store moved" on the very next poll.
     parts = [p for p in parts if not (p[0].endswith("-wal") and p[2] == 0)]
-    if any(mtime_is_racy(p[1]) for p in parts):
+    if not parts:
         return None
-    return tuple(parts) or None
+    db_part = next((p for p in parts if p[0] == "state.db"), None)
+    if db_part is None or mtime_is_racy(db_part[1]):
+        return None
+    wal_part = next((p for p in parts if p[0] == "state.db-wal"), None)
+    if wal_part is not None and mtime_is_racy(wal_part[1]):
+        hdr = wal_shm_header(base / "state.db")
+        if hdr is None:
+            return None
+        parts.append(("state.db-shm", hdr))
+    return tuple(parts)
 
 
 def profile_yaml_signature(profile_dir: str | Path) -> Optional[tuple]:
@@ -134,12 +167,18 @@ def cached_ui_meta_fields(profile_dir: str | Path, compute: Callable[[], dict]) 
                    compute, copy.deepcopy)
 
 
+def cached_mobile_bot_canonical(profile_path: str | Path, compute: Callable[[], dict]) -> dict[str, Any]:
+    """``compute()``'s canonical Bot Chat fields for ``mobile.bots``, reused while state.db has not moved."""
+    return _cached(_MOBILE_BOT_CANONICAL_CACHE, str(profile_path), store_signature(profile_path),
+                   compute, copy.deepcopy)
+
+
 def invalidate(profile_path: str | Path | None = None) -> None:
     """Drop one profile's memos, or all of them. For tests and for a caller that knows better."""
     global _GENERATION
     with _LOCK:
         _GENERATION += 1
-        for cache in (_SESSION_CACHE, _UI_META_CACHE):
+        for cache in (_SESSION_CACHE, _UI_META_CACHE, _MOBILE_BOT_CANONICAL_CACHE):
             if profile_path is None:
                 cache.clear()
             else:

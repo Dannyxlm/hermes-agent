@@ -307,7 +307,7 @@ def _(rid, params: dict) -> dict:
     include_sessions = is_truthy_value(params.get("include_sessions", True))
     out = []
     # Roster polls this every 5s: ``skill_count`` is the last known value, refreshed off-request.
-    for p in scope_to_launch_profile(list_profiles(lazy_skill_count=True), lambda info: info.name):
+    for p in scope_to_launch_profile(list_profiles(lazy_skill_count=True, include_liveness=False, include_aliases=False), lambda info: info.name):
         row = {"name": p.name, "path": str(p.path), "is_default": bool(p.is_default), "model": p.model,
                "provider": p.provider, "description": p.description or "",
                "display_name": p.display_name or "", "skill_count": p.skill_count or 0,

@@ -11,9 +11,11 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import time
 
 from hermes_family_storage import compression_owners, compression_tips, folder_project_id, read_folder_projects, read_metadata
+from utils import mtime_is_racy
 
 
 LIVE = frozenset({"working", "quiet", "needs_you"})
@@ -39,9 +41,81 @@ class Profile:
     owners: dict[str, str] = field(default_factory=dict)
 
 
+_READ_PROFILE_CACHE: dict[tuple, Profile] = {}
+_READ_PROFILE_CACHE_LOCK = threading.Lock()
+_READ_PROFILE_CACHE_MAX = 256
+
+
+def _wal_shm_header(db_path: Path) -> bytes | None:
+    try:
+        with open(f"{db_path}-shm", "rb") as fh:
+            raw = fh.read(96)
+    except OSError:
+        return None
+    if len(raw) != 96:
+        return None
+    h1, h2 = raw[:48], raw[48:96]
+    return h1 if (h1 == h2 and any(h1)) else None
+
+
+def _db_files_signature(db_path: Path) -> tuple | None:
+    """Stat signature for a SQLite DB and its WAL sidecar, or None if racy/unreadable."""
+    parts: list = []
+    for is_wal, candidate in ((False, db_path), (True, Path(f"{db_path}-wal"))):
+        try:
+            st = candidate.stat()
+        except FileNotFoundError:
+            parts.append(None)
+            continue
+        except OSError:
+            return None
+        # Ignore empty -wal files created by read-only opens.
+        if is_wal and st.st_size == 0:
+            parts.append(None)
+            continue
+        if mtime_is_racy(st.st_mtime_ns):
+            if not is_wal:
+                return None
+            hdr = _wal_shm_header(db_path)
+            if hdr is None:
+                return None
+            parts.append((st.st_mtime_ns, st.st_size, st.st_ino, hdr))
+            continue
+        parts.append((st.st_mtime_ns, st.st_size, st.st_ino))
+    return tuple(parts)
+
+
+def _clone_profile(profile: Profile) -> Profile:
+    return Profile(
+        profile.name,
+        {k: dict(v) for k, v in profile.sessions.items()},
+        [dict(item) for item in profile.launches],
+        dict(profile.aliases),
+        dict(profile.owners),
+    )
+
+
+def invalidate_profile_cache() -> None:
+    with _READ_PROFILE_CACHE_LOCK:
+        _READ_PROFILE_CACHE.clear()
+
+
 def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, walk="descendants") -> Profile:
     """One read-only metadata cut, optionally restricted to an indexed launch graph."""
-    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    resolved = Path(path).resolve()
+    projects_path = resolved.parent / "projects.db"
+    cache_key = None
+    if trace is None:
+        state_sig = _db_files_signature(resolved)
+        projects_sig = _db_files_signature(projects_path)
+        if state_sig is not None and state_sig[0] is not None and projects_sig is not None:
+            seeds_key = None if seeds is None else tuple(tuple(s) for s in seeds)
+            cache_key = (name, str(resolved), state_sig, projects_sig, seeds_key, since, walk)
+            with _READ_PROFILE_CACHE_LOCK:
+                cached = _READ_PROFILE_CACHE.get(cache_key)
+            if cached is not None:
+                return _clone_profile(cached)
+    uri = resolved.as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=2)) as conn:
         conn.row_factory = sqlite3.Row
         if trace is not None:
@@ -59,10 +133,17 @@ def read_profile(name: str, path: Path, *, trace=None, seeds=None, since=None, w
             conn, name, tables, columns, fields, seeds=seeds, since=since, walk=walk,
             admission_columns=frozenset(ledger))
         conn.rollback()
-    folders = read_folder_projects(Path(path).parent / "projects.db")
+    folders = read_folder_projects(projects_path)
     for session in sessions.values():
         session["projectId"] = folder_project_id(session.get("cwd"), folders)
-    return Profile(name, sessions, launches, aliases, owners)
+    result = Profile(name, sessions, launches, aliases, owners)
+    if cache_key is not None:
+        snapshot = _clone_profile(result)
+        with _READ_PROFILE_CACHE_LOCK:
+            if len(_READ_PROFILE_CACHE) >= _READ_PROFILE_CACHE_MAX:
+                _READ_PROFILE_CACHE.clear()
+            _READ_PROFILE_CACHE[cache_key] = snapshot
+    return result
 
 
 def terminal_cause_for(row: dict, live: dict):

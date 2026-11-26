@@ -124,7 +124,7 @@ def _family_read_rpc(rid, params):
             return _err(rid, 4001, "session not found or not owned by this transport")
         import time
         since = params.get("since")
-        since = time.time() - 43200 if since is None else since
+        since = (int(time.time() - 43200) // 60) * 60 if since is None else since
         profiles, unavailable = _family_profiles(root=(profile, sid), since=since)
         if profile in profiles and sid not in profiles[profile].sessions:
             from hermes_cli.profiles import get_profile_dir
@@ -160,7 +160,7 @@ def _family_overview_rpc(rid, params):
             return _err(rid, 4001, "session not found or not owned by this transport")
     import time
     since = params.get("since")
-    since = time.time() - 43200 if since is None else since
+    since = (int(time.time() - 43200) // 60) * 60 if since is None else since
     profiles, unavailable = _family_profiles(since=since)
     signals = _family_live(profiles, unavailable)
     family = Family({p: s for p, s in profiles.items() if p not in unavailable},

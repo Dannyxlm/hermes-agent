@@ -976,20 +976,23 @@ def set_profile_display_name(profile_name: str, display_name: str) -> str:
 # CRUD operations
 
 def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Optional[str] = None,
-                  lazy_skill_count: bool = False) -> ProfileInfo:
+                  lazy_skill_count: bool = False, include_liveness: bool = True,
+                  include_aliases: bool = True) -> ProfileInfo:
     """Build one :class:`ProfileInfo` from a profile directory."""
     model, provider = _read_config_model(path)
     dist_name, dist_version, dist_source = _read_distribution_meta(path)
     meta = read_profile_meta(path)
-    alias_path = _find_our_wrapper(alias_name) if alias_name else None
-    gateway_running = _check_gateway_running(path)
-    # Liveness reports a served profile as running on the multiplexer's PID (#97120), so it cannot
-    # tell "shared" from "own"; only a separate (``--force``-started) gateway counts as owned.
+    alias_path = _find_our_wrapper(alias_name) if (include_aliases and alias_name) else None
+    gateway_running = False
     gateway_shared = False
-    if not is_default and _served_by_running_multiplexer(name):
-        from hermes_cli.web_server_gateway import _has_own_gateway
-        gateway_shared = not _has_own_gateway(path)
-    gateway_running = gateway_running or gateway_shared
+    if include_liveness:
+        gateway_running = _check_gateway_running(path)
+        # Liveness reports a served profile as running on the multiplexer's PID (#97120), so it cannot
+        # tell "shared" from "own"; only a separate (``--force``-started) gateway counts as owned.
+        if not is_default and _served_by_running_multiplexer(name):
+            from hermes_cli.web_server_gateway import _has_own_gateway
+            gateway_shared = not _has_own_gateway(path)
+        gateway_running = gateway_running or gateway_shared
     skill_count = _cached_skill_count(path) if lazy_skill_count else _count_skills(path)
     return ProfileInfo(
         name=name, path=path, is_default=is_default, gateway_running=gateway_running,
@@ -1001,24 +1004,31 @@ def _profile_info(name: str, path: Path, *, is_default: bool, alias_name: Option
     )
 
 
-def list_profiles(*, lazy_skill_count: bool = False) -> list[ProfileInfo]:
+def list_profiles(*, lazy_skill_count: bool = False, include_liveness: bool = True,
+                  include_aliases: bool = True) -> list[ProfileInfo]:
     """Return info for all profiles, including the default.
 
     ``lazy_skill_count=True`` is for POLLED callers (``GET /api/profiles``, ``profiles.list``):
     ``skill_count`` is the last known value, refreshed off-request, so the request never walks
-    a skill tree (#114041). Default ``False`` counts synchronously (CLI, detail views)."""
+    a skill tree (#114041). Default ``False`` counts synchronously (CLI, detail views).
+    ``include_liveness=False`` and ``include_aliases=False`` let RPC callers that omit gateway
+    liveness and wrapper alias fields skip PID/multiplexer probes and alias directory scans."""
     profiles = []
     default_home = _get_default_hermes_home()
     if default_home.is_dir():
         profiles.append(_profile_info("default", default_home, is_default=True,
-                                      lazy_skill_count=lazy_skill_count))
+                                      lazy_skill_count=lazy_skill_count,
+                                      include_liveness=include_liveness,
+                                      include_aliases=include_aliases))
     named = _iter_named_profile_dirs()
     if named:
-        alias_map = build_alias_map()  # ONCE, not per profile (was the dominant cost)
+        alias_map = build_alias_map() if include_aliases else {}  # ONCE, not per profile
         for entry in named:
-            alias_name = alias_map.get(normalize_profile_name(entry.name))
+            alias_name = alias_map.get(normalize_profile_name(entry.name)) if include_aliases else None
             profiles.append(_profile_info(entry.name, entry, is_default=False, alias_name=alias_name,
-                                          lazy_skill_count=lazy_skill_count))
+                                          lazy_skill_count=lazy_skill_count,
+                                          include_liveness=include_liveness,
+                                          include_aliases=include_aliases))
     return profiles
 
 
