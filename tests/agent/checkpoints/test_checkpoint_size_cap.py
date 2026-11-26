@@ -125,6 +125,42 @@ def test_maintenance_stops_on_failed_git_without_losing_a_second_snapshot(histor
         assert result["deleted_stale"] == 0
 
 
+def test_prune_retries_interrupted_gc_after_expiring_the_only_stale_project(history, monkeypatch):
+    import json
+
+    base, project, manager = history
+    store = checkpoints._store_path(base)
+    revision = manager.list_checkpoints(str(project))[0]["hash"]
+    meta = checkpoints._project_meta_path(store, checkpoints._project_hash(str(project)))
+    state = json.loads(meta.read_text(encoding="utf-8"))
+    state["last_touch"] = 1
+    meta.write_text(json.dumps(state), encoding="utf-8")
+    run_git = checkpoint_maintenance._run_git
+    gc_attempts = 0
+
+    def interrupt_first_gc(args, *rest, **kwargs):
+        nonlocal gc_attempts
+        if args[0] == "gc":
+            gc_attempts += 1
+            if gc_attempts == 1:
+                return False, "", "git gc timed out"
+        return run_git(args, *rest, **kwargs)
+
+    def prune():
+        return checkpoint_maintenance.prune_checkpoints(retention_days=1, checkpoint_base=base, max_total_size_mb=0)
+
+    monkeypatch.setattr(checkpoint_maintenance, "_run_git", interrupt_first_gc)
+    first = prune()
+    assert (first["deleted_stale"], first["errors"]) == (1, 1)
+    assert run_git(["cat-file", "-e", revision], store, str(project), allowed_returncodes={1, 128})[0]
+
+    second = prune()
+    assert (second["deleted_stale"], second["errors"], gc_attempts) == (0, 0, 2)
+    assert not run_git(["cat-file", "-e", revision], store, str(project), allowed_returncodes={1, 128})[0]
+    prune()
+    assert gc_attempts == 2
+
+
 def test_snapshot_pruning_stops_at_a_failed_count_rewrite(history, monkeypatch, caplog):
     """A count trim that cannot rewrite its ref aborts the take-path pruning before the size
     round runs — never a partial history, never a second rewrite on top of a failed one."""
