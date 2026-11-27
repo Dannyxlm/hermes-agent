@@ -647,6 +647,19 @@ def _authority_for_ticket_home(authority, home: str):
     return authority_for_home(getattr(authority, 'runner', None), home)
 
 
+def _is_legacy_mobile_ws(ws: WebSocket, *, ticket_home: str | None) -> bool:
+    """True when *ws* is a native Hermex Ava iOS client (``HermesMobile/*``) that speaks
+    the legacy sidecar TUI gateway protocol (``methods_mobile``, ``methods_mobile_push``,
+    ``methods_human_input``, ``attachment_operations``) rather than the canonical
+    ``AuthorityConnection`` protocol used by Hermes Web and Hermes Desktop.
+    Profile-bound Webapp tickets always stay canonical."""
+    if ticket_home:
+        return False
+    headers = getattr(ws, "headers", None)
+    user_agent = (headers.get("user-agent") or "") if headers is not None else ""
+    return user_agent.startswith("HermesMobile/")
+
+
 @router.websocket("/api/ws")
 async def gateway_ws(ws: WebSocket) -> None:
     if not await _close_unless_sidecar_allowed(ws, allow_internal=True, socket=GATEWAY_SOCKET):
@@ -691,6 +704,11 @@ async def gateway_ws(ws: WebSocket) -> None:
             return
         ws.scope['hermes.session_authority'] = served
         identity = {**identity, 'profile_id': served.profile_id, 'instance_id': served.instance_id}
+    if authority is not None and _is_legacy_mobile_ws(ws, ticket_home=ticket_home):
+        # Hermex Ava iOS runs on the unified gateway listener (9120) alongside Hermes Web
+        # and Hermes Desktop, but speaks the legacy sidecar protocol so mobile push,
+        # human-input approvals, canonical Bot Chats, and attachment operations stay intact.
+        ws.scope["hermes.session_authority_disabled"] = True
     # The socket runs in the served profile's scope, as a native ticket's does (``gateway/run_api.py``):
     # legacy handlers (billing, usage, subscription) read that profile's secrets with no scope of
     # their own, and a multiplexed gateway refuses an unscoped read.

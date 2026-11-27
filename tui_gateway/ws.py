@@ -383,8 +383,12 @@ def _disable_nagle(ws: Any) -> None:
 
 def _authority_connection(ws: Any, transport: WSTransport, auth_identity: dict | None, operator: bool):
     """The session-authority connection for this socket (route scope, else app state), or None
-    when this backend has no authority and requests go to the legacy ``server.dispatch``."""
-    authority = (getattr(ws, 'scope', None) or {}).get('hermes.session_authority') or getattr(
+    when this backend has no authority (or the route opted the socket into legacy sidecar
+    dispatch via ``hermes.session_authority_disabled``) and requests go to ``server.dispatch``."""
+    scope = getattr(ws, 'scope', None) or {}
+    if scope.get('hermes.session_authority_disabled'):
+        return None
+    authority = scope.get('hermes.session_authority') or getattr(
         getattr(getattr(ws, 'app', None), 'state', None), 'session_authority', None)
     if authority is None:
         return None
