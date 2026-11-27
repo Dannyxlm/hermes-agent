@@ -2751,7 +2751,7 @@ def _stamp_run_start(job: dict, execution_id: str) -> None:
         from cron.jobs import update_job
         update_job(job["id"], {"last_execution_id": execution_id})
     except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("Job '%s': could not stamp run start: %s", job.get("id"), exc)
+        logger.warning("Job '%s': could not stamp run start: %s", job.get("id"), exc)
 
 
 def run_one_job(
