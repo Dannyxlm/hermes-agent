@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import math
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -395,12 +396,18 @@ def card_files(card: dict) -> list[tuple[str, str]]:
 
 
 def server_file_problem(path: str) -> Optional[str]:
-    """Why the app could not fetch *path* from this server, or None when it can."""
+    """Why the app could not fetch *path* from this server, or None when it can.
+
+    The same predicate gates the fetch: accepting a card grants its files (``file_grants``), and every fetch of a
+    granted file re-runs this check, so a file the validator accepts is one the app can load."""
     from agent.file_safety import get_read_block_error
+    from tools.cards.file_grants import secret_bearing
     from tools.file_tools import _is_blocked_device
     target = Path(path)
     if get_read_block_error(path) or _is_blocked_device(path):  # read_file's two guards, in its order
         return "is not readable through Hermes (credential, device or process path)"
+    if secret_bearing(os.path.realpath(path)):
+        return "has a key or credential name (.ssh, .aws, *.pem, *.key …); cards never show it"
     try:
         if not target.is_file():
             return "does not exist on this server" if not target.exists() else "is not a regular file"

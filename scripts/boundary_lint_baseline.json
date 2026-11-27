@@ -9,6 +9,7 @@
     "plugins/browser/browser_use/provider.py tools.tool_backend_helpers.selection_error": 1,
     "plugins/browser/browserbase/provider.py plugins.browser._common.CloudBrowserProvider": 1,
     "plugins/browser/firecrawl/provider.py plugins.browser._common.CloudBrowserProvider": 1,
+    "plugins/cloudseed_mobile/workspace_files.py tools.cards.file_grants.open_granted_file": 1,
     "plugins/computer_use/cua/__init__.py tools.bot_desktop.placement": 1,
     "plugins/computer_use/cua/__init__.py tools.computer_use.cua_backend.CuaDriverBackend": 1,
     "plugins/computer_use/cua/__init__.py tools.computer_use.cua_backend_driver.cua_driver_binary_available": 1,

@@ -225,7 +225,7 @@ def read_file(profile,wid,path,reveal=False,generation=False):
 
 
 def media_open(profile,path):
-    """Original native attachments, without granting the profile/config tree."""
+    """Original native attachments and accepted Paper card files, without granting the profile/config tree."""
     check_profile(profile)
     target=Path(path)
     if not target.is_absolute(): raise HTTPException(400,'Absolute media path required')
@@ -241,6 +241,13 @@ def media_open(profile,path):
         try: return open_beneath(root,relative)
         except FileNotFoundError: raise HTTPException(404,'File not found') from None
         except OSError: raise HTTPException(403,'File access denied') from None
+    # A Paper card's own files: show_card granted exactly these resolved paths when it accepted the card, and
+    # each open re-runs its validator's predicate without following a symlink. No root is opened to the route.
+    from tools.cards.file_grants import open_granted_file
+    try: fd=open_granted_file(str(target),home=home)
+    except FileNotFoundError: raise HTTPException(404,'File not found') from None
+    except OSError: raise HTTPException(403,'File access denied') from None
+    if fd is not None: return fd
     raise HTTPException(403,'Path outside profile media roots')
 
 

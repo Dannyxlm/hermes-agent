@@ -408,7 +408,15 @@ Supplying multiple target forms is 400. `media_path` is an absolute path restric
 to the selected profile's `images`, `screenshots`, `cache` media types and
 `attachments` directories, including producer-supported `audio_cache`,
 `image_cache`, `video_cache`, `document_cache`, and `browser_screenshots` layouts;
-it does not grant profile configuration or arbitrary host paths. The same descriptor and sensitive-name checks apply. This target lets
+it does not grant profile configuration or arbitrary host paths. The same descriptor and sensitive-name checks apply.
+It also serves **a Paper card's own files**: when `show_card` accepts a card it grants each file the card references
+(gallery `images[].file`, compose `hero.file` and image blocks, link `image`, document/table `file`) under
+`<HERMES_HOME>/card_file_grants/` (one 0600 file per resolved path, `tools/cards/file_grants.py`). A `media_path`
+outside the media roots is served only when its resolved path holds a grant; each open re-runs the card validator's
+predicate (`read_file`'s guards, regular file, no key/credential name such as `.ssh/`, `.aws/`, `*.pem`, `*.key`)
+and walks from `/` with `O_NOFOLLOW`, so a symlink swapped in after the card is refused (403); a granted file that
+is gone is 404. No directory is granted, the grant is per profile, and deleting `card_file_grants/` revokes all. So
+for cards, *accepted by `show_card`* means *fetchable here*: the app keeps sending the card's literal path. This target lets
 transcript attachments reopen before/without a deliverables index entry. Generation-root handles are not independently
 browseable. File-ID lookup is profile/cache-authorized and then re-applies current
 grant, containment and sensitive/private checks at actual open. Deleted/moved
