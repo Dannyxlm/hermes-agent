@@ -23,6 +23,12 @@ from persistence.sqlite._state.holders import read_only_db_uri
 from plugins.cloudseed_mobile.scope import profile_id
 
 PREVIEW_BYTES = 512 * 1024
+THUMB_MAX_SOURCE_BYTES = 32 * 1024 * 1024
+THUMB_MAX_PIXELS = 100_000_000
+THUMB_MIN_WIDTH = 64
+THUMB_MAX_WIDTH = 960
+THUMB_CACHE_MAX_BYTES = 200 * 1024 * 1024
+THUMB_CACHE_MAX_FILES = 3000
 MAX_ENTRIES = 5000
 MAX_DEPTH = 6
 SCAN_SECONDS = 0.25
@@ -287,6 +293,149 @@ def transport(profile,wid,path,reveal=False,range_header=None,head=False,stream=
                 if not chunk: break
                 remaining-=len(chunk); yield chunk
     return StreamingResponse(chunks(),status_code=status,headers=headers,media_type=mime)
+
+
+
+
+def _thumb_cache_dir():
+    return get_hermes_home() / 'cache' / 'mobile_thumbs'
+
+
+def _prune_thumb_cache(cache_dir: Path) -> None:
+    """Best-effort LRU trim when the disk thumbnail cache exceeds its soft budget."""
+    try:
+        entries = []
+        total = 0
+        for p in cache_dir.rglob('*'):
+            if not p.is_file() or p.name.endswith('.tmp'):
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            total += st.st_size
+            entries.append((st.st_mtime, st.st_size, p))
+        if len(entries) <= THUMB_CACHE_MAX_FILES and total <= THUMB_CACHE_MAX_BYTES:
+            return
+        entries.sort(key=lambda item: item[0])
+        target_bytes = int(THUMB_CACHE_MAX_BYTES * 0.75)
+        target_files = int(THUMB_CACHE_MAX_FILES * 0.75)
+        count = len(entries)
+        for _mtime, sz, p in entries:
+            if count <= target_files and total <= target_bytes:
+                break
+            try:
+                p.unlink(missing_ok=True)
+                total -= sz
+                count -= 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def thumbnail_transport(profile, wid, path, reveal=False, width=480, head=False, generation=False, media=False, if_none_match=None):
+    """Descriptor-safe resized WebP/JPEG thumbnail with content-addressed disk cache."""
+    if not isinstance(width, int) or isinstance(width, bool):
+        raise HTTPException(400, 'Invalid thumbnail width')
+    clamped_w = max(THUMB_MIN_WIDTH, min(THUMB_MAX_WIDTH, width))
+    fd = media_open(profile, path) if media else file_open(profile, wid, path, reveal, generation)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size <= 0:
+            raise HTTPException(415, 'Unsupported image for thumbnail')
+        if st.st_size > THUMB_MAX_SOURCE_BYTES:
+            raise HTTPException(413, 'Image too large for thumbnail')
+        key_hex = hashlib.sha256(
+            f'{profile}|{st.st_dev}|{st.st_ino}|{st.st_mtime_ns}|{st.st_size}|{clamped_w}'.encode()
+        ).hexdigest()
+        etag = f'"{key_hex[:32]}"'
+        base_headers = {
+            'ETag': etag,
+            'Cache-Control': 'private, max-age=86400',
+            'X-Content-Type-Options': 'nosniff',
+        }
+        if if_none_match and etag in {tag.strip() for tag in if_none_match.split(',')}:
+            return Response(status_code=304, headers={**base_headers, 'X-Thumb-Cache': 'not-modified'})
+
+        cache_dir = _thumb_cache_dir()
+        bucket = cache_dir / key_hex[:2]
+        webp_path = bucket / f'{key_hex}.webp'
+        jpg_path = bucket / f'{key_hex}.jpg'
+        for cached_path, media_type in ((webp_path, 'image/webp'), (jpg_path, 'image/jpeg')):
+            try:
+                data = cached_path.read_bytes()
+            except OSError:
+                continue
+            headers = {**base_headers, 'Content-Length': str(len(data)), 'X-Thumb-Cache': 'hit'}
+            if head:
+                return Response(status_code=200, headers=headers, media_type=media_type)
+            return Response(content=data, status_code=200, headers=headers, media_type=media_type)
+
+        import io
+        from PIL import Image, ImageOps, UnidentifiedImageError
+        Image.MAX_IMAGE_PIXELS = THUMB_MAX_PIXELS
+        raw = os.fdopen(fd, 'rb')
+        fd = -1
+        try:
+            with raw:
+                src_bytes = raw.read(THUMB_MAX_SOURCE_BYTES + 1)
+            if len(src_bytes) > THUMB_MAX_SOURCE_BYTES:
+                raise HTTPException(413, 'Image too large for thumbnail')
+            with Image.open(io.BytesIO(src_bytes)) as opened:
+                if opened.width * opened.height > THUMB_MAX_PIXELS:
+                    raise HTTPException(413, 'Image dimensions exceed thumbnail limit')
+                im = ImageOps.exif_transpose(opened)
+                if getattr(im, 'is_animated', False):
+                    im.seek(0)
+                    im = im.convert('RGBA')
+                im.thumbnail((clamped_w, clamped_w), Image.Resampling.LANCZOS)
+                out = io.BytesIO()
+                try:
+                    if im.mode not in ('RGB', 'RGBA'):
+                        im = im.convert('RGBA' if 'A' in im.getbands() else 'RGB')
+                    im.save(out, format='WEBP', quality=80, method=4)
+                    media_type, target_path = 'image/webp', webp_path
+                except Exception:
+                    out = io.BytesIO()
+                    if im.mode != 'RGB':
+                        im = im.convert('RGB')
+                    im.save(out, format='JPEG', quality=82, optimize=True)
+                    media_type, target_path = 'image/jpeg', jpg_path
+                data = out.getvalue()
+        except HTTPException:
+            raise
+        except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError) as exc:
+            raise HTTPException(415, 'Unsupported image for thumbnail') from exc
+
+        try:
+            bucket.mkdir(parents=True, exist_ok=True)
+            tmp_path = bucket / f'.{key_hex}.{os.getpid()}.{time.time_ns()}.tmp'
+            tmp_fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(tmp_fd, 'wb') as handle:
+                    handle.write(data)
+                os.replace(tmp_path, target_path)
+            except OSError:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if int(key_hex[:2], 16) < 4:
+                _prune_thumb_cache(cache_dir)
+        except OSError:
+            pass
+
+        headers = {**base_headers, 'Content-Length': str(len(data)), 'X-Thumb-Cache': 'miss'}
+        if head:
+            return Response(status_code=200, headers=headers, media_type=media_type)
+        return Response(content=data, status_code=200, headers=headers, media_type=media_type)
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def listing(profile,wid,path='',q='',cursor=None,limit=50,reveal=False):
