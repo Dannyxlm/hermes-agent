@@ -3,9 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_state import SessionDB
+from persistence import SessionId
+from persistence.conversation.sessions import NewSession
+from persistence_assembly import open_persistence, profile_scope
 from tests.agent.test_session_activity_persist import _agent_with_db
-from tests.hermes_state.test_runtime_worker_lifecycle import setup_store
+from tests.persistence_sqlite.core._fork_runtime import setup_store
 
 
 def test_cached_turn_producer_sets_starting_without_text_classification():
@@ -18,31 +20,38 @@ def test_cached_turn_producer_sets_starting_without_text_classification():
 
 def test_typed_steps_share_existing_heartbeat_window_and_clear_to_idle(tmp_path, monkeypatch):
     agent = _agent_with_db()
-    db = SessionDB(tmp_path / 'state.db')
-    db.create_session('sess-1', 'cli')
-    agent._session_db = db
+    db = open_persistence(profile_scope(home=tmp_path))
+    sid = SessionId('sess-1')
+    db.sessions.create(NewSession(session_id=sid, source='cli'))
+    agent.persistence = db
+
+    def activity():
+        row = db.sessions.get(sid)
+        assert row is not None
+        return row
+
     from agent import activity_tracking
     mono, wall = [1000.0], [1700000000.0]
     monkeypatch.setattr(activity_tracking.time, 'monotonic', lambda: mono[0])
     monkeypatch.setattr(activity_tracking.time, 'time', lambda: wall[0])
     try:
         agent._touch_activity('arbitrary identical text', step_kind='tool', step_tool='terminal')
-        row = db.get_session('sess-1')
-        assert (row['last_activity_kind'], row['last_activity_tool']) == ('tool', 'terminal')
+        row = activity()
+        assert (row.last_activity_kind, row.last_activity_tool) == ('tool', 'terminal')
         mono[0] += 1
         wall[0] += 1
         agent._touch_activity('arbitrary identical text', step_kind='writing')
         assert agent.get_activity_summary()['step_kind'] == 'writing'
-        assert db.get_session('sess-1')['last_activity_kind'] == 'tool'
+        assert activity().last_activity_kind == 'tool'
         mono[0] += 60
         wall[0] += 60
         agent._touch_activity('arbitrary identical text', step_kind='thinking')
-        assert db.get_session('sess-1')['last_activity_kind'] == 'thinking'
+        assert activity().last_activity_kind == 'thinking'
         agent._reset_activity_labels_after_turn()
-        row = db.get_session('sess-1')
-        assert row['last_activity_kind'] == 'idle'
-        assert row['last_activity_tool'] is None
-        assert row['last_activity_at'] == wall[0]
+        row = activity()
+        assert row.last_activity_kind == 'idle'
+        assert row.last_activity_tool is None
+        assert row.last_activity_at == wall[0]
     finally:
         db.close()
 

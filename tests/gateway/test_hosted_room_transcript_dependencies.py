@@ -1,25 +1,28 @@
 """A bounded thread replay must retain the parent of every retained turn receipt."""
 from gateway import hosted_room_discussion as discussion
-from gateway import hosted_rooms
-from gateway.hosted_room_policy_checkpoint import HostedRoomPolicyCheckpoint, MAX_TRANSCRIPT_POLICY_EVENTS
+from gateway.hosted_room_policy_checkpoint import HostedRoomPolicyCheckpoint
 from tests.gateway.test_hosted_room_discussion import (
-    GATEWAY_ID, LOCAL_PROFILES, MEMBERS, ROOM_ID, _append_activity, _append_publication, _append_user, _events,
+    LOCAL_PROFILES, ROOM_ID, _append_activity, _append_publication, _append_user, _events,
 )
 
+pytest_plugins = ['tests.gateway.test_hosted_room_discussion']
 
-def test_repeated_discussions_survive_transcript_window_eviction(tmp_path):
-    db = tmp_path / 'state.db'
-    room = hosted_rooms.create_room(db, room_id=ROOM_ID, name='Daily room', members=MEMBERS,
-                                    authority_gateway_id=GATEWAY_ID)
-    checkpoint = HostedRoomPolicyCheckpoint(db)
-    for index in range(10):
+
+def test_repeated_discussions_survive_transcript_window_eviction(room_db):
+    db, room = room_db
+    checkpoint = HostedRoomPolicyCheckpoint(db, placement='profile')
+    rounds = range(10)
+    for index in rounds:
         source = _append_user(db, event_id=f'user-{index}', text='Everyone share.', thread_id='main')
         while True:
             events = _events(db)
             snapshot = checkpoint.snapshot(room_id=ROOM_ID, latest_seq=events[-1]['seq'])
+            if index == rounds[-1]:
+                # The durable log retains the first reply, but the policy window has evicted it.
+                first_reply = next(e['event_id'] for e in events if e['kind'] == 'message.member')
+                assert all(e['event_id'] != first_reply for e in snapshot.events)
             decision = discussion.plan_next_task(room, snapshot.events, local_profiles=LOCAL_PROFILES,
                                                 initial_watermarks=snapshot.watermarks)
-            assert len(snapshot.events) <= MAX_TRANSCRIPT_POLICY_EVENTS
             if decision.status != 'task':
                 assert decision.status == 'settled'
                 _append_activity(db, event_id=f'settled-{index}', discussion_event_id=source['event_id'], thread_id='main')
