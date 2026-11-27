@@ -2,7 +2,8 @@
 
 The card is the call's arguments (data, never code; ``card.schema.json``). The handler validates and
 refuses with paths the model can repair, derives the plain-words ``alt``, and returns a small receipt.
-Nothing a card holds causes an effect on the server.
+Nothing a card holds causes an effect on the server beyond one: the files an accepted card references become
+fetchable by the profile's authenticated app (``file_grants``), so the card it draws can load them.
 
 Offered only where someone can draw it: ``cards.enabled`` in config (``check_fn``), a session on a
 local chat platform (the toolset's ``platforms``), and a client that advertised ``cards: {v: 1}`` in
@@ -177,6 +178,10 @@ def show_card(card: Any, *, session_id: Optional[str] = None) -> str:
         limit = f"this turn already shows {MAX_CARDS_PER_TURN} cards; say the rest in words"
         return json.dumps({"ok": False, "error": f"card refused: {limit}",
                            "errors": [{"path": "(card)", "message": limit}]}, ensure_ascii=False)
+    # Accepted means drawable: the app fetches these files through the profile's media route, which serves a file
+    # outside Hermes's media roots only when an accepted card granted it (tools/cards/file_grants.py).
+    from tools.cards.file_grants import grant_card_files
+    grant_card_files(card)
     return json.dumps({"ok": True, "card_id": _card_id(card, session_id or "", tool_call_id), "alt": card_alt(card),
                        "warnings": unknown_field_warnings(card)}, ensure_ascii=False)
 

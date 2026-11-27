@@ -251,7 +251,7 @@ _DEFAULT_EXPORT_EXCLUDE_ROOT = DEFAULT_EXPORT_EXCLUDE_ROOT = frozenset({
     # Caches (regenerated on use)
     "image_cache", "audio_cache", "document_cache",
     "browser_screenshots", "checkpoints",
-    "sandboxes",
+    "sandboxes", "card_file_grants",  # card_file_grants: host paths Paper cards showed (tools/cards/file_grants.py)
     "logs",                 # gateway logs
 }) | PM_RUNTIME_ROOT_DIRS
 
