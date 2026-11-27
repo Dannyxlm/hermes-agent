@@ -5,6 +5,7 @@ bodies reference server globals bare (``_ok``, ``_err``, ``_sessions``, ...).
 """
 
 import copy
+import json
 import time
 import threading
 import weakref
