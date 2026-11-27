@@ -1,10 +1,13 @@
 """Owner-only Files read RPCs; WebSocket dispatch already runs in a worker thread."""
 import base64
+from collections import OrderedDict
+import copy
 import hashlib
 import json
 from pathlib import Path
 import re
 import sqlite3
+import threading
 
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -15,6 +18,35 @@ from .contracts.files import FilesIndexParams, IndexParams
 from gateway.session_identity import is_authenticated_identity as _is_authenticated_identity
 
 _PROFILE_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+_ALL_PROFILES_CACHE_MAX = 64
+_ALL_PROFILES_CACHE_LOCK = threading.Lock()
+_ALL_PROFILES_CACHE: OrderedDict = OrderedDict()
+
+
+def _all_profiles_fingerprint(server, profile_names):
+    """Fast stat fingerprint across every profile's index/state/config files (~0.3ms total)."""
+    rows = []
+    for p_name in profile_names:
+        try:
+            home = Path(server._profile_home(p_name) or server._hermes_home)
+        except server.ProfileUnavailableError:
+            rows.append((p_name, None))
+            continue
+        p_stats = []
+        for rel in (
+            'state.db',
+            'state.db-wal',
+            'config.yaml',
+            'plugin_data/cloudseed_mobile/files-index.sqlite3',
+            'plugin_data/cloudseed_mobile/files-index.sqlite3-wal',
+        ):
+            try:
+                st = (home / rel).stat()
+                p_stats.append((st.st_ino, st.st_mtime_ns, st.st_size))
+            except OSError:
+                p_stats.append(None)
+        rows.append((p_name, str(home), tuple(p_stats)))
+    return tuple(rows)
 
 
 def _principal(server):
@@ -94,6 +126,27 @@ def _rpc_all_profiles(server, links, principal, params):
         raise HTTPException(409, 'Cursor query mismatch')
 
     profile_names = _all_profile_names(server, params['profile'])
+    fp = _all_profiles_fingerprint(server, profile_names)
+    ap_cache_key = (
+        principal,
+        bool(links),
+        params['profile'],
+        query_digest,
+        offset,
+        limit,
+        fp,
+    )
+    with _ALL_PROFILES_CACHE_LOCK:
+        cached_ap = _ALL_PROFILES_CACHE.get(ap_cache_key)
+        if cached_ap is not None:
+            _ALL_PROFILES_CACHE.move_to_end(ap_cache_key)
+            cached_ap = copy.deepcopy(cached_ap)
+    if cached_ap is not None:
+        if params.get('snapshot_id') and params['snapshot_id'] != cached_ap['snapshot_id']:
+            raise HTTPException(409, 'Snapshot stale')
+        if cursor_obj and cursor_obj['s'] != cached_ap['snapshot_id']:
+            raise HTTPException(409, 'Cursor snapshot stale')
+        return cached_ap
     per_profile_limit = min(200, offset + limit + 1)
     revisions = []
     merged_items = []
@@ -160,7 +213,7 @@ def _rpc_all_profiles(server, links, principal, params):
     page_items = merged_items[offset:offset + limit]
     has_more = (len(merged_items) > offset + limit) or any_more_upstream
     next_cursor = _encode_all_profiles_cursor(snapshot_id, query_digest, offset + limit) if (has_more and page_items) else None
-    return {
+    result = {
         'schema_version': 1,
         'profile': params['profile'],
         'snapshot_id': snapshot_id,
@@ -174,6 +227,13 @@ def _rpc_all_profiles(server, links, principal, params):
         },
         'items': page_items,
     }
+    if not refresh_pending:
+        with _ALL_PROFILES_CACHE_LOCK:
+            _ALL_PROFILES_CACHE[ap_cache_key] = copy.deepcopy(result)
+            _ALL_PROFILES_CACHE.move_to_end(ap_cache_key)
+            while len(_ALL_PROFILES_CACHE) > _ALL_PROFILES_CACHE_MAX:
+                _ALL_PROFILES_CACHE.popitem(last=False)
+    return result
 
 
 def _rpc(server, links, rid, body):

@@ -362,6 +362,17 @@ def workspace_download(request: Request, profile: str, workspace_id: str | None 
     return guarded(run)
 
 
+@router.api_route('/workspace-files/thumbnail', methods=['GET', 'HEAD'])
+def workspace_thumbnail(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None, w: int = 480):
+    def run():
+        if media_path is not None:
+            if any(value is not None for value in (workspace_id, path, id)): raise HTTPException(400, 'Choose media path or workspace file')
+            return files.thumbnail_transport(profile, None, media_path, width=w, head=request.method == 'HEAD', media=True, if_none_match=request.headers.get('if-none-match'))
+        wid, rel = workspace_target(profile, workspace_id, path, id, reveal)
+        return files.thumbnail_transport(profile, wid, rel, reveal=reveal, width=w, head=request.method == 'HEAD', generation=bool(id), if_none_match=request.headers.get('if-none-match'))
+    return guarded(run)
+
+
 @router.api_route('/workspace-files/stream', methods=['GET', 'HEAD'])
 def workspace_stream(request: Request, profile: str, workspace_id: str | None = None, path: str | None = None, id: str | None = None, reveal: bool = False, media_path: str | None = None):
     def run():

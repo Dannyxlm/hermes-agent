@@ -1,6 +1,9 @@
 """Admitted link evidence and mixed queries over the existing deliverables cache."""
 import base64
+from collections import OrderedDict
+import copy
 import ipaddress
+import threading
 import json
 import math
 import mimetypes
@@ -20,6 +23,46 @@ from plugins.cloudseed_mobile.workspace_files import digest, open_beneath, parts
 
 # SQLite callbacks acquire Python's GIL, including while a projection owns it.
 QUERY_PROGRESS_STEPS = 250_000
+_QUERY_CACHE_MAX = 192
+_QUERY_CACHE_LOCK = threading.Lock()
+_QUERY_CACHE: OrderedDict = OrderedDict()
+_WORKSPACE_COUNTS_CACHE_MAX = 64
+_WORKSPACE_COUNTS_CACHE: OrderedDict = OrderedDict()
+
+
+def _source_db_fingerprint(index):
+    """Fast stat fingerprint of state.db (+ WAL) so session archive/delete invalidates cache immediately."""
+    parts_fp = []
+    source_path = getattr(index, 'source_path', None)
+    if source_path is None:
+        source_path = Path(index.home) / 'state.db'
+    else:
+        source_path = Path(source_path)
+    for candidate in (source_path, Path(str(source_path) + '-wal')):
+        try:
+            st = candidate.stat()
+            parts_fp.append((st.st_ino, st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts_fp.append(None)
+    return tuple(parts_fp)
+
+
+def _cache_get(store: OrderedDict, key):
+    with _QUERY_CACHE_LOCK:
+        hit = store.get(key)
+        if hit is None:
+            return None
+        store.move_to_end(key)
+        return copy.deepcopy(hit)
+
+
+def _cache_put(store: OrderedDict, key, value, max_entries: int):
+    frozen = copy.deepcopy(value)
+    with _QUERY_CACHE_LOCK:
+        store[key] = frozen
+        store.move_to_end(key)
+        while len(store) > max_entries:
+            store.popitem(last=False)
 
 
 def mention(kind, target):
@@ -317,6 +360,13 @@ def workspace_counts(index):
         meta = index.snapshot(db)
         if not (meta.get('generation') and meta.get('source_signature') and meta.get('scan_version') == index.scan_version):
             return counts
+        cache_key = (
+            str(index.home), index.profile, meta.get('index_revision'), meta.get('generation'),
+            digest(index.workspaces), _source_db_fingerprint(index),
+        )
+        cached = _cache_get(_WORKSPACE_COUNTS_CACHE, cache_key)
+        if cached is not None:
+            return cached
         params = dict(session_id=None, workspace_id=None, q='', author='all')
         clauses, values = _admission(db, index, params)
         deadline = time.monotonic() + 0.75
@@ -327,6 +377,7 @@ def workspace_counts(index):
         for wid, count in rows:
             if wid in counts:
                 counts[wid] = count
+        _cache_put(_WORKSPACE_COUNTS_CACHE, cache_key, counts, _WORKSPACE_COUNTS_CACHE_MAX)
     return counts
 
 
@@ -427,6 +478,18 @@ def query_index(index, principal, params, *, links=False):
         after = _decode_cursor(params['cursor'], scope)
         deadline = time.monotonic() + 0.75
         db.set_progress_handler(lambda: int(time.monotonic() > deadline), QUERY_PROGRESS_STEPS)
+        cache_key = (
+            scope,
+            params['cursor'],
+            params['limit'],
+            bool(directory_partial),
+            bool(meta['refresh_pending']),
+            meta.get('updated_at'),
+            _source_db_fingerprint(index),
+        )
+        cached = _cache_get(_QUERY_CACHE, cache_key)
+        if cached is not None:
+            return cached
         args = [meta.get('generation'), *values]
         _materialize(db, clauses, args)
         totals, complete = _totals(db, index, params, meta)
@@ -440,6 +503,8 @@ def query_index(index, principal, params, *, links=False):
             _file_metadata(db, index, items, meta.get('generation'))
         cursor = base64.urlsafe_b64encode(json.dumps({'scope': scope, 'after': page[-1][:3]}).encode()).decode() if len(candidates) > len(page) and page else None
 
-        return {'schema_version': 1, 'profile': index.profile, 'snapshot_id': snapshot, 'index_revision': revision,
-                'items': items, 'next_cursor': cursor, 'totals': totals,
-                'coverage': {'complete': complete and not directory_partial, 'refresh_pending': meta['refresh_pending'], 'updated_at': meta.get('updated_at')}}
+        result = {'schema_version': 1, 'profile': index.profile, 'snapshot_id': snapshot, 'index_revision': revision,
+                  'items': items, 'next_cursor': cursor, 'totals': totals,
+                  'coverage': {'complete': complete and not directory_partial, 'refresh_pending': meta['refresh_pending'], 'updated_at': meta.get('updated_at')}}
+        _cache_put(_QUERY_CACHE, cache_key, result, _QUERY_CACHE_MAX)
+        return result
