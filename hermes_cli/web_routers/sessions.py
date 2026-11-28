@@ -773,6 +773,9 @@ async def get_session_list_membership(profile: str = Query(..., min_length=1), i
                         "thread_session_ids": [sid for sid in stored_ids if sid in parents]}
         except StoreUnavailable as exc:
             raise HTTPException(status_code=503, detail="Session store unavailable") from exc
+        except sqlite3.OperationalError as exc:
+            # This read-only projection can encounter older or incomplete schemas.
+            raise HTTPException(status_code=503, detail="Session store unavailable; membership is unknown") from exc
 
     return await asyncio.to_thread(read_membership)
 

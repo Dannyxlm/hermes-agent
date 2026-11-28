@@ -4,7 +4,9 @@ from urllib.parse import quote
 
 import pytest
 
-from hermes_state import SessionDB
+from persistence_assembly import open_persistence, profile_scope
+from tests.fixtures.storage_holder import raw_holder
+from tests.fixtures.storage_seed import seed_messages, seed_session
 
 pytest_plugins = ['tests.hermes_cli.test_profiles_sidebar_scope']
 URL = '/api/sessions/list-membership'
@@ -16,30 +18,31 @@ def membership(client, ids, profile='default'):
 
 def launch(db, child, *, lid=None, profile='default', launcher='opener', bind=True):
     lid = lid or 'thread:' + child
-    db.record_launch(lid, kind='lane', launcher_profile='default',
+    db.sessions.record_launch(lid, kind='lane', launcher_profile='default',
                      launcher_session_id=launcher, child_profile=profile)
     if bind:
-        db.bind_launch(lid, child_session_id=child)
+        db.sessions.bind_launch(lid, child_session_id=child)
 
 
 def test_selected_ancestors_and_detail_agree_without_hiding_child_reads(client, profiles_on_disk):
-    with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
-        db.create_session('opener', 'desktop')
-        db.create_session('root', 'desktop')
+    with open_persistence(profile_scope(home=profiles_on_disk['default'])) as db:
+        seed_session(db, 'opener', 'desktop')
+        seed_session(db, 'root', 'desktop')
         launch(db, 'root')
-        db.end_session('root', end_reason='compression')
-        db.create_session('middle', 'desktop', parent_session_id='root')
-        db.end_session('middle', end_reason='compression')
-        db.create_session('tip', 'desktop', parent_session_id='middle')
-        db.append_message('tip', 'assistant', 'openable')
-        db.bind_launch('thread:root', child_session_id='middle')
+        db.sessions.end('root', 'compression')
+        seed_session(db, 'middle', 'desktop', parent_session_id='root')
+        db.sessions.end('middle', 'compression')
+        seed_session(db, 'tip', 'desktop', parent_session_id='middle')
+        seed_messages(db, 'tip', {'role': 'assistant', 'content': 'openable'})
+        db.sessions.bind_launch('thread:root', child_session_id='middle')
         for sid, marker in [('branch', '_branched_from'), ('reset', '_reset_from'),
                             ('delegate', '_delegate_from')]:
-            db.create_session(sid, 'desktop', parent_session_id='root', model_config={marker: 'root'})
-        db.create_session('tool-child', 'tool', parent_session_id='root')
-        db.create_session('unselected', 'desktop', parent_session_id='middle')
-        db._write_sql("UPDATE sessions SET started_at=0 WHERE id='unselected'")
-        before = db._conn.total_changes
+            seed_session(db, sid, 'desktop', parent_session_id='root', model_config={marker: 'root'})
+        seed_session(db, 'tool-child', 'tool', parent_session_id='root')
+        seed_session(db, 'unselected', 'desktop', parent_session_id='middle')
+        raw_holder(db)._write_sql("UPDATE sessions SET started_at=0 WHERE id='unselected'")
+        holder = raw_holder(db)
+        before = (holder._conn.total_changes, holder._conn.execute("PRAGMA data_version").fetchone()[0])
         requested = ['root', 'middle', 'tip', 'opener', 'branch', 'reset', 'delegate',
                      'tool-child', 'unselected', 'missing', 'roo']
         response = membership(client, requested)
@@ -53,15 +56,16 @@ def test_selected_ancestors_and_detail_agree_without_hiding_child_reads(client, 
         messages = client.get('/api/sessions/tip/messages', params={'profile': 'default'})
         assert messages.status_code == 200, messages.text
         assert 'openable' in messages.text
-        assert db._conn.total_changes == before
-        assert db._read_one("SELECT child_session_id FROM work_launches WHERE launch_id='thread:root'")[0] == 'root'
+        after = (holder._conn.total_changes, holder._conn.execute("PRAGMA data_version").fetchone()[0])
+        assert after == before
+        assert holder._read_one("SELECT child_session_id FROM work_launches WHERE launch_id='thread:root'")[0] == 'root'
 
 
 def test_descendant_binding_never_relabels_human_ancestor(client, profiles_on_disk):
-    with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
-        db.create_session('human', 'desktop')
-        db.end_session('human', end_reason='compression')
-        db.create_session('bound', 'desktop', parent_session_id='human')
+    with open_persistence(profile_scope(home=profiles_on_disk['default'])) as db:
+        seed_session(db, 'human', 'desktop')
+        db.sessions.end('human', 'compression')
+        seed_session(db, 'bound', 'desktop', parent_session_id='human')
         launch(db, 'bound', launcher='human')
     response = membership(client, ['human', 'bound'])
     assert response.status_code == 200, response.text
@@ -71,11 +75,11 @@ def test_descendant_binding_never_relabels_human_ancestor(client, profiles_on_di
 
 
 def test_only_bound_thread_prefix_with_matching_store_profile_and_launcher(client, profiles_on_disk):
-    with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
+    with open_persistence(profile_scope(home=profiles_on_disk['default'])) as db:
         ids = ['good', 'foreign', 'blank', 'whitespace', 'lane', 'unbound', 'human-title']
         for sid in ids:
-            db.create_session(sid, 'desktop')
-            db.set_session_title(sid, '↳ Thread teammate ' + sid)
+            seed_session(db, sid, 'desktop')
+            db.sessions.set_title(sid, '↳ Thread teammate ' + sid)
         launch(db, 'good')
         launch(db, 'foreign', profile='worker')
         launch(db, 'blank', launcher='')
@@ -95,8 +99,8 @@ def test_only_bound_thread_prefix_with_matching_store_profile_and_launcher(clien
 def test_same_id_different_profile_and_exact_identifier_bytes(client, profiles_on_disk, profile):
     exact = '  exact,雪  '
     for name, home in profiles_on_disk.items():
-        with SessionDB(db_path=home / 'state.db') as db:
-            db.create_session(exact, 'desktop')
+        with open_persistence(profile_scope(home=home)) as db:
+            seed_session(db, exact, 'desktop')
             if name == profile:
                 launch(db, exact, profile=name)
     for name in profiles_on_disk:
@@ -124,8 +128,8 @@ def test_profile_requires_exact_actual_name(client, profile):
 
 @pytest.mark.parametrize('sid', ['embedded\x00nul', 'a/quote"\\雪', 'line\nbreak'])
 def test_stored_identifier_bytes_are_not_repaired(client, profiles_on_disk, sid):
-    with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
-        db.create_session(sid, 'desktop')
+    with open_persistence(profile_scope(home=profiles_on_disk['default'])) as db:
+        seed_session(db, sid, 'desktop')
         launch(db, sid)
     response = membership(client, [sid, sid + ' '])
     assert response.status_code == 200, response.text
@@ -135,9 +139,9 @@ def test_stored_identifier_bytes_are_not_repaired(client, profiles_on_disk, sid)
 def test_required_queries_cap_and_duplicates(client, profiles_on_disk):
     assert client.get(URL, params={'ids': '[]'}).status_code == 422
     assert client.get(URL, params={'profile': 'default'}).status_code == 422
-    with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
+    with open_persistence(profile_scope(home=profiles_on_disk['default'])) as db:
         for sid in ['x' * 256, ' ']:
-            db.create_session(sid, 'desktop')
+            seed_session(db, sid, 'desktop')
             launch(db, sid)
     response = membership(client, ['x' * 256] * 99 + [' '])
     assert response.status_code == 200, response.text
@@ -149,8 +153,8 @@ def test_membership_shares_authenticated_read_gate(client, profiles_on_disk, mon
     from hermes_cli import web_server
     from hermes_cli.dashboard_auth import clear_providers, register_provider
     from plugins.dashboard_auth.session_token import SessionTokenProvider
-    with SessionDB(db_path=profiles_on_disk['default'] / 'state.db') as db:
-        db.create_session('child', 'desktop')
+    with open_persistence(profile_scope(home=profiles_on_disk['default'])) as db:
+        seed_session(db, 'child', 'desktop')
         launch(db, 'child')
     clear_providers()
     register_provider(SessionTokenProvider(token='fixture-read-token'))
