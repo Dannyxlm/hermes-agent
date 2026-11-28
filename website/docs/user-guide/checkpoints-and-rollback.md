@@ -302,7 +302,7 @@ With a container terminal backend (`docker`, `modal`, `daytona`, `vercel_sandbox
 - **Repository size** — directories with more than 50,000 files are skipped. Excluded directories (`node_modules/`, `.venv/`, `build/`, Hermes' own browser profiles and the rest of the exclude list) do not count, so a small project with a large `node_modules` is still checkpointed.
 - **Per-file size cap** — files larger than `max_file_size_mb` (default 10 MB) are excluded from the snapshot. Prevents accidentally swallowing datasets, model weights, or generated media.
 - **Total store size cap** — when the store exceeds `max_total_size_mb` (default 500 MB), the oldest commit per project is dropped round-robin. Each drop is reclaimed before deciding whether another is necessary. Every project keeps at least one snapshot. A failed Git operation stops pruning and is reported; maintenance never discards more history to compensate for failed reclamation.
-- **Real pruning, off the hot path** — `max_snapshots` and the size cap are enforced by rewriting the per-project ref at checkpoint time (cheap); the store is then marked `.gc-pending` and the periodic prune runs `git gc --prune=now` once, so loose objects don't accumulate and a tool call never waits on a full repack.
+- **Git garbage collection runs during maintenance** — at checkpoint time, Hermes can rewrite project refs to enforce `max_snapshots` and the size cap without waiting for a repack. The `.gc-pending` marker tells a later prune to run `git gc --prune=now`. If reclamation fails, the marker remains so a later prune can retry even when no more snapshots need removing.
 - **Concurrent operations** — snapshots, restores, diffs and maintenance use one process-shared store lock. An operation reports a busy store rather than running GC over another process's unpublished objects. A restore applies its selected tree before pruning the safety snapshot's history.
 - **No-change snapshots** — if there are no changes since the last snapshot, the checkpoint is skipped.
 - **Non-fatal errors** — snapshot failures do not block your tools. Pruning failures are logged as warnings; explicit maintenance reports an error count.
@@ -316,7 +316,7 @@ With a container terminal backend (`docker`, `modal`, `daytona`, `vercel_sandbox
   │   ├── refs/hermes/<hash> # per-project branch tip
   │   ├── indexes/<hash>     # per-project git index
   │   ├── projects/<hash>.json  # workdir + created_at + last_touch
-  │   ├── .gc-pending        # refs rewritten since the last gc; cleared by the next prune
+  │   ├── .gc-pending        # garbage collection due; cleared after successful reclamation
   │   └── info/exclude
   ├── .last_prune            # auto-prune idempotency marker
   └── legacy-<ts>/           # archived pre-v2 per-project shadow repos
